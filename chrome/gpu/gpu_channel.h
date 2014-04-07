@@ -4,13 +4,16 @@
 
 #ifndef CHROME_GPU_GPU_CHANNEL_H_
 #define CHROME_GPU_GPU_CHANNEL_H_
+#pragma once
 
 #include <string>
+#include <vector>
 
-#include "base/hash_tables.h"
-#include "base/ref_counted.h"
+#include "base/id_map.h"
 #include "base/scoped_open_process.h"
+#include "base/scoped_ptr.h"
 #include "build/build_config.h"
+#include "chrome/common/gpu_video_common.h"
 #include "chrome/common/message_router.h"
 #include "chrome/gpu/gpu_command_buffer_stub.h"
 #include "gfx/native_widget_types.h"
@@ -63,12 +66,18 @@ class GpuChannel : public IPC::Channel::Listener,
 
   // Message handlers.
   void OnCreateViewCommandBuffer(gfx::NativeViewId view,
+                                 int32 render_view_id,
                                  int32* route_id);
   void OnCreateOffscreenCommandBuffer(int32 parent_route_id,
                                       const gfx::Size& size,
+                                      const std::vector<int32>& attribs,
                                       uint32 parent_texture_id,
                                       int32* route_id);
   void OnDestroyCommandBuffer(int32 route_id);
+
+  void OnCreateVideoDecoder(int32 context_route_id,
+                            int32 decoder_host_id);
+  void OnDestroyVideoDecoder(int32 decoder_id);
 
   scoped_ptr<IPC::SyncChannel> channel_;
 
@@ -88,7 +97,7 @@ class GpuChannel : public IPC::Channel::Listener,
   MessageRouter router_;
 
 #if defined(ENABLE_GPU)
-  typedef base::hash_map<int32, scoped_refptr<GpuCommandBufferStub> > StubMap;
+  typedef IDMap<GpuCommandBufferStub, IDMapOwnPointer> StubMap;
   StubMap stubs_;
 #endif
 

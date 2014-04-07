@@ -9,8 +9,12 @@
 #include <Security/Security.h>
 
 #include "base/base64.h"
+#include "base/crypto/cssm_init.h"
+#include "base/lock.h"
 #include "base/logging.h"
 #include "base/scoped_cftyperef.h"
+#include "base/string_util.h"
+#include "base/sys_string_conversions.h"
 
 // These are in Security.framework but not declared in a public header.
 extern const SecAsn1Template kSecAsn1AlgorithmIDTemplate[];
@@ -23,6 +27,12 @@ namespace net {
 struct PublicKeyAndChallenge {
   CSSM_X509_SUBJECT_PUBLIC_KEY_INFO spki;
   CSSM_DATA challenge_string;
+};
+
+// This is a copy of the built-in kSecAsn1IA5StringTemplate, but without the
+// 'streamable' flag, which was causing bogus data to be written.
+const SecAsn1Template kIA5StringTemplate[] = {
+    { SEC_ASN1_IA5_STRING, 0, NULL, sizeof(CSSM_DATA) }
 };
 
 static const SecAsn1Template kPublicKeyAndChallengeTemplate[] = {
@@ -40,7 +50,7 @@ static const SecAsn1Template kPublicKeyAndChallengeTemplate[] = {
   {
     SEC_ASN1_INLINE,
     offsetof(PublicKeyAndChallenge, challenge_string),
-    kSecAsn1IA5StringTemplate
+    kIA5StringTemplate
   },
   {
     0
@@ -81,29 +91,41 @@ static const SecAsn1Template kSignedPublicKeyAndChallengeTemplate[] = {
 
 
 static OSStatus CreateRSAKeyPair(int size_in_bits,
+                                 SecAccessRef initial_access,
                                  SecKeyRef* out_pub_key,
                                  SecKeyRef* out_priv_key);
 static OSStatus SignData(CSSM_DATA data,
                          SecKeyRef private_key,
                          CSSM_DATA* signature);
 
-
-bool KeygenHandler::KeyLocation::Equals(
-    const KeygenHandler::KeyLocation& location) const {
-  return keychain_path == location.keychain_path;
-}
-
 std::string KeygenHandler::GenKeyAndSignChallenge() {
   std::string result;
   OSStatus err;
+  SecAccessRef initial_access = NULL;
   SecKeyRef public_key = NULL;
   SecKeyRef private_key = NULL;
   SecAsn1CoderRef coder = NULL;
   CSSM_DATA signature = {0, NULL};
 
   {
+    if (url_.has_host()) {
+      // TODO(davidben): Use something like "Key generated for
+      // example.com", but localize it.
+      scoped_cftyperef<CFStringRef> label(
+          base::SysUTF8ToCFStringRef(url_.host()));
+      // Create an initial access object to set the SecAccessRef. This
+      // sets a label on the Keychain dialogs. Pass NULL as the second
+      // argument to use the default trusted list; only allow the
+      // current application to access without user confirmation.
+      err = SecAccessCreate(label, NULL, &initial_access);
+      // If we fail, just continue without a label.
+      if (err)
+        base::LogCSSMError("SecAccessCreate", err);
+    }
+
     // Create the key-pair.
-    err = CreateRSAKeyPair(key_size_in_bits_, &public_key, &private_key);
+    err = CreateRSAKeyPair(key_size_in_bits_, initial_access,
+                           &public_key, &private_key);
     if (err)
       goto failure;
 
@@ -111,14 +133,18 @@ std::string KeygenHandler::GenKeyAndSignChallenge() {
     CFDataRef key_data = NULL;
     err = SecKeychainItemExport(public_key, kSecFormatBSAFE, 0, NULL,
                                 &key_data);
-    if (err)
+    if (err) {
+      base::LogCSSMError("SecKeychainItemExpor", err);
       goto failure;
+    }
     scoped_cftyperef<CFDataRef> scoped_key_data(key_data);
 
     // Create an ASN.1 encoder.
     err = SecAsn1CoderCreate(&coder);
-    if (err)
+    if (err) {
+      base::LogCSSMError("SecAsn1CoderCreate", err);
       goto failure;
+    }
 
     // Fill in and DER-encode the PublicKeyAndChallenge:
     SignedPublicKeyAndChallenge spkac;
@@ -135,8 +161,10 @@ std::string KeygenHandler::GenKeyAndSignChallenge() {
     CSSM_DATA encoded;
     err = SecAsn1EncodeItem(coder, &spkac.pkac,
                             kPublicKeyAndChallengeTemplate, &encoded);
-    if (err)
+    if (err) {
+      base::LogCSSMError("SecAsn1EncodeItem", err);
       goto failure;
+    }
 
     // Compute a signature of the result:
     err = SignData(encoded, private_key, &signature);
@@ -151,8 +179,10 @@ std::string KeygenHandler::GenKeyAndSignChallenge() {
     // DER-encode the entire SignedPublicKeyAndChallenge:
     err = SecAsn1EncodeItem(coder, &spkac,
                             kSignedPublicKeyAndChallengeTemplate, &encoded);
-    if (err)
+    if (err) {
+      base::LogCSSMError("SecAsn1EncodeItem", err);
       goto failure;
+    }
 
     // Base64 encode the result.
     std::string input(reinterpret_cast<char*>(encoded.Data), encoded.Length);
@@ -178,6 +208,8 @@ std::string KeygenHandler::GenKeyAndSignChallenge() {
   free(signature.Data);
   if (coder)
     SecAsn1CoderRelease(coder);
+  if (initial_access)
+    CFRelease(initial_access);
   if (public_key)
     CFRelease(public_key);
   if (private_key)
@@ -186,29 +218,42 @@ std::string KeygenHandler::GenKeyAndSignChallenge() {
 }
 
 
+// Create an RSA key pair with size |size_in_bits|. |initial_access|
+// is passed as the initial access control list in Keychain. The
+// public and private keys are placed in |out_pub_key| and
+// |out_priv_key|, respectively.
 static OSStatus CreateRSAKeyPair(int size_in_bits,
+                                 SecAccessRef initial_access,
                                  SecKeyRef* out_pub_key,
                                  SecKeyRef* out_priv_key) {
   OSStatus err;
   SecKeychainRef keychain;
   err = SecKeychainCopyDefault(&keychain);
-  if (err)
+  if (err) {
+    base::LogCSSMError("SecKeychainCopyDefault", err);
     return err;
+  }
   scoped_cftyperef<SecKeychainRef> scoped_keychain(keychain);
-  return SecKeyCreatePair(
-      keychain,
-      CSSM_ALGID_RSA,
-      size_in_bits,
-      0LL,
-      // public key usage and attributes:
-      CSSM_KEYUSE_ENCRYPT | CSSM_KEYUSE_VERIFY | CSSM_KEYUSE_WRAP,
-      CSSM_KEYATTR_EXTRACTABLE | CSSM_KEYATTR_PERMANENT,
-      // private key usage and attributes:
-      CSSM_KEYUSE_DECRYPT | CSSM_KEYUSE_SIGN | CSSM_KEYUSE_UNWRAP,
-      CSSM_KEYATTR_EXTRACTABLE | CSSM_KEYATTR_PERMANENT |
-          CSSM_KEYATTR_SENSITIVE,
-      NULL,
-      out_pub_key, out_priv_key);
+  {
+    AutoLock locked(base::GetMacSecurityServicesLock());
+    err = SecKeyCreatePair(
+        keychain,
+        CSSM_ALGID_RSA,
+        size_in_bits,
+        0LL,
+        // public key usage and attributes:
+        CSSM_KEYUSE_ENCRYPT | CSSM_KEYUSE_VERIFY | CSSM_KEYUSE_WRAP,
+        CSSM_KEYATTR_EXTRACTABLE | CSSM_KEYATTR_PERMANENT,
+        // private key usage and attributes:
+        CSSM_KEYUSE_DECRYPT | CSSM_KEYUSE_SIGN | CSSM_KEYUSE_UNWRAP,
+        CSSM_KEYATTR_EXTRACTABLE | CSSM_KEYATTR_PERMANENT |
+            CSSM_KEYATTR_SENSITIVE,
+        initial_access,
+        out_pub_key, out_priv_key);
+  }
+  if (err)
+    base::LogCSSMError("SecKeyCreatePair", err);
+  return err;
 }
 
 static OSStatus CreateSignatureContext(SecKeyRef key,
@@ -216,28 +261,46 @@ static OSStatus CreateSignatureContext(SecKeyRef key,
                                        CSSM_CC_HANDLE* out_cc_handle) {
   OSStatus err;
   const CSSM_ACCESS_CREDENTIALS* credentials = NULL;
-  err = SecKeyGetCredentials(key,
-                             CSSM_ACL_AUTHORIZATION_SIGN,
-                             kSecCredentialTypeDefault,
-                             &credentials);
-  if (err)
-      return err;
+  {
+    AutoLock locked(base::GetMacSecurityServicesLock());
+    err = SecKeyGetCredentials(key,
+                               CSSM_ACL_AUTHORIZATION_SIGN,
+                               kSecCredentialTypeDefault,
+                               &credentials);
+  }
+  if (err) {
+    base::LogCSSMError("SecKeyGetCredentials", err);
+    return err;
+  }
 
   CSSM_CSP_HANDLE csp_handle = 0;
-  err = SecKeyGetCSPHandle(key, &csp_handle);
-  if (err)
+  {
+    AutoLock locked(base::GetMacSecurityServicesLock());
+    err = SecKeyGetCSPHandle(key, &csp_handle);
+  }
+  if (err) {
+    base::LogCSSMError("SecKeyGetCSPHandle", err);
     return err;
+  }
 
   const CSSM_KEY* cssm_key = NULL;
-  err = SecKeyGetCSSMKey(key, &cssm_key);
-  if (err)
+  {
+    AutoLock locked(base::GetMacSecurityServicesLock());
+    err = SecKeyGetCSSMKey(key, &cssm_key);
+  }
+  if (err) {
+    base::LogCSSMError("SecKeyGetCSSMKey", err);
     return err;
+  }
 
-  return CSSM_CSP_CreateSignatureContext(csp_handle,
-                                         algorithm,
-                                         credentials,
-                                         cssm_key,
-                                         out_cc_handle);
+  err = CSSM_CSP_CreateSignatureContext(csp_handle,
+                                        algorithm,
+                                        credentials,
+                                        cssm_key,
+                                        out_cc_handle);
+  if (err)
+    base::LogCSSMError("CSSM_CSP_CreateSignatureContext", err);
+  return err;
 }
 
 static OSStatus SignData(CSSM_DATA data,
@@ -247,9 +310,13 @@ static OSStatus SignData(CSSM_DATA data,
   OSStatus err = CreateSignatureContext(private_key,
                                         CSSM_ALGID_MD5WithRSA,
                                         &cc_handle);
-  if (err)
+  if (err) {
+    base::LogCSSMError("CreateSignatureContext", err);
     return err;
+  }
   err = CSSM_SignData(cc_handle, &data, 1, CSSM_ALGID_NONE, signature);
+  if (err)
+    base::LogCSSMError("CSSM_SignData", err);
   CSSM_DeleteContext(cc_handle);
   return err;
 }

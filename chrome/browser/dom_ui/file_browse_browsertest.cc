@@ -2,10 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/file_path.h"
-#include "base/file_util.h"
 #include "base/task.h"
-#include "base/values.h"
 #include "base/path_service.h"
 #include "chrome/browser/dom_ui/dom_ui.h"
 #include "chrome/browser/tab_contents/navigation_controller.h"
@@ -16,8 +13,11 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
+#include "net/test/test_server.h"
 
 namespace {
+
+typedef DOMElementProxy::By By;
 
 class FileBrowseBrowserTest : public InProcessBrowserTest {
  public:
@@ -30,6 +30,8 @@ class FileBrowseUiObserver : public NotificationObserver {
  public:
   FileBrowseUiObserver() : file_browse_tab_(NULL), is_waiting_(false) {
     registrar_.Add(this, NotificationType::LOAD_STOP,
+                   NotificationService::AllSources());
+    registrar_.Add(this, NotificationType::TAB_CONTENTS_DESTROYED,
                    NotificationService::AllSources());
   }
 
@@ -44,8 +46,6 @@ class FileBrowseUiObserver : public NotificationObserver {
   // not get related notification because test body runs in a task already.
   // Uses a periodical check of the dialog window to implement the wait.
   void WaitForFileBrowseClose() {
-    CheckFileBrowseClosed();
-
     if (file_browse_tab_ != NULL) {
       is_waiting_ = true;
       ui_test_utils::RunMessageLoop();
@@ -72,6 +72,16 @@ class FileBrowseUiObserver : public NotificationObserver {
           }
         }
       }
+    } else if (type == NotificationType::TAB_CONTENTS_DESTROYED) {
+      TabContents* tab_contents = Source<TabContents>(source).ptr();
+      if (file_browse_tab_ == tab_contents) {
+        file_browse_tab_ = NULL;
+
+        if (is_waiting_) {
+          is_waiting_ = false;
+          MessageLoopForUI::current()->Quit();
+        }
+      }
     }
   }
 
@@ -85,37 +95,6 @@ class FileBrowseUiObserver : public NotificationObserver {
   }
 
  private:
-  class CheckFileBrowseClosedTask : public Task {
-   public:
-    explicit CheckFileBrowseClosedTask(FileBrowseUiObserver* owner)
-        : owner_(owner) {
-    }
-
-    virtual void Run() {
-      owner_->CheckFileBrowseClosed();
-    }
-
-   private:
-    FileBrowseUiObserver* owner_;
-  };
-
-  void CheckFileBrowseClosed() {
-    HtmlDialogView* dialog_view =
-        static_cast<HtmlDialogView*>(file_browse_tab_->delegate());
-
-    if (dialog_view->native_view()) {
-      MessageLoopForUI::current()->PostDelayedTask(
-          FROM_HERE, new CheckFileBrowseClosedTask(this), 100);
-    } else {
-      file_browse_tab_ = NULL;
-
-      if (is_waiting_) {
-        is_waiting_ = false;
-        MessageLoopForUI::current()->Quit();
-      }
-    }
-  }
-
   NotificationRegistrar registrar_;
   TabContents* file_browse_tab_;
   bool is_waiting_;
@@ -124,13 +103,13 @@ class FileBrowseUiObserver : public NotificationObserver {
 };
 
 IN_PROC_BROWSER_TEST_F(FileBrowseBrowserTest, InputFileTriggerFileBrowse) {
-  HTTPTestServer* server = StartHTTPServer();
+  ASSERT_TRUE(test_server()->Start());
   ui_test_utils::NavigateToURL(browser(),
-                               server->TestServerPage("files/input_file.html"));
+                               test_server()->GetURL("files/input_file.html"));
 
   DOMElementProxyRef doc = ui_test_utils::GetActiveDOMDocument(browser());
 
-  DOMElementProxyRef input_file = doc->FindBySelectors(".single");
+  DOMElementProxyRef input_file = doc->FindElement(By::Selectors(".single"));
   ASSERT_TRUE(input_file);
 
   // Creates FileBrowseUiObserver before we click.

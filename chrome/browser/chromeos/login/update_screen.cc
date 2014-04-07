@@ -4,68 +4,99 @@
 
 #include "chrome/browser/chromeos/login/update_screen.h"
 
+#include "base/logging.h"
+#include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/login/screen_observer.h"
 #include "chrome/browser/chromeos/login/update_view.h"
+#include "chrome/browser/chromeos/login/wizard_controller.h"
 
 namespace {
 
-// Update window should appear for at least kMinimalUpdateTime seconds.
-const int kMinimalUpdateTime = 3;
+// Progress bar stages. Each represents progress bar value
+// at the beginning of each stage.
+// TODO(nkostylev): Base stage progress values on approximate time.
+// TODO(nkostylev): Animate progress during each state.
+const int kBeforeUpdateCheckProgress = 7;
+const int kBeforeDownloadProgress = 14;
+const int kBeforeVerifyingProgress = 74;
+const int kBeforeFinalizingProgress = 81;
+const int kProgressComplete = 100;
 
-// Progress bar increment step.
-const int kUpdateCheckProgressIncrement = 20;
-const int kUpdateCompleteProgressIncrement = 75;
+// Defines what part of update progress does download part takes.
+const int kDownloadProgressIncrement = 60;
+
+// Considering 10px shadow from each side.
+const int kUpdateScreenWidth = 580;
+const int kUpdateScreenHeight = 305;
 
 }  // anonymous namespace
 
 namespace chromeos {
 
 UpdateScreen::UpdateScreen(WizardScreenDelegate* delegate)
-    : DefaultViewScreen<chromeos::UpdateView>(delegate),
-      update_result_(UPGRADE_STARTED),
-      update_error_(GOOGLE_UPDATE_NO_ERROR) {
+    : DefaultViewScreen<chromeos::UpdateView>(delegate,
+                                              kUpdateScreenWidth,
+                                              kUpdateScreenHeight),
+      checking_for_update_(true),
+      maximal_curtain_time_(0),
+      reboot_check_delay_(0) {
 }
 
 UpdateScreen::~UpdateScreen() {
   // Remove pointer to this object from view.
   if (view())
     view()->set_controller(NULL);
-  // Google Updater is holding a pointer to us until it reports status,
-  // so we need to remove it in case we were still listening.
-  if (google_updater_.get())
-    google_updater_->set_status_listener(NULL);
+  CrosLibrary::Get()->GetUpdateLibrary()->RemoveObserver(this);
 }
 
-void UpdateScreen::OnReportResults(GoogleUpdateUpgradeResult result,
-                                 GoogleUpdateErrorCode error_code,
-                                 const std::wstring& version) {
-  // Drop the last reference to the object so that it gets cleaned up here.
-  google_updater_ = NULL;
-  // Depending on the result decide what to do next.
-  update_result_ = result;
-  update_error_ = error_code;
-  switch (update_result_) {
-    case UPGRADE_IS_AVAILABLE:
-      // Advance view progress bar.
-      view()->AddProgress(kUpdateCheckProgressIncrement);
-      // Create new Google Updater instance and install the update.
-      google_updater_ = CreateGoogleUpdate();
-      google_updater_->set_status_listener(this);
-      google_updater_->CheckForUpdate(true, NULL);
+void UpdateScreen::UpdateStatusChanged(UpdateLibrary* library) {
+  UpdateStatusOperation status = library->status().status;
+  if (checking_for_update_ && status > UPDATE_STATUS_CHECKING_FOR_UPDATE) {
+    checking_for_update_ = false;
+  }
+
+  switch (status) {
+    case UPDATE_STATUS_CHECKING_FOR_UPDATE:
+      // Do nothing in these cases, we don't want to notify the user of the
+      // check unless there is an update.
       break;
-    case UPGRADE_SUCCESSFUL:
-      view()->AddProgress(kUpdateCompleteProgressIncrement);
-      // Fall through.
-    case UPGRADE_ALREADY_UP_TO_DATE:
-      view()->AddProgress(kUpdateCheckProgressIncrement);
-      // Fall through.
-    case UPGRADE_ERROR:
-      if (MinimalUpdateTimeElapsed()) {
-        ExitUpdate();
+    case UPDATE_STATUS_UPDATE_AVAILABLE:
+      view()->SetProgress(kBeforeDownloadProgress);
+      LOG(INFO) << "Update available: " << library->status().new_version;
+      break;
+    case UPDATE_STATUS_DOWNLOADING:
+      {
+        view()->ShowCurtain(false);
+        int download_progress = static_cast<int>(
+            library->status().download_progress * kDownloadProgressIncrement);
+        view()->SetProgress(kBeforeDownloadProgress + download_progress);
       }
+      break;
+    case UPDATE_STATUS_VERIFYING:
+      view()->SetProgress(kBeforeVerifyingProgress);
+      break;
+    case UPDATE_STATUS_FINALIZING:
+      view()->SetProgress(kBeforeFinalizingProgress);
+      break;
+    case UPDATE_STATUS_UPDATED_NEED_REBOOT:
+      // Make sure that first OOBE stage won't be shown after reboot.
+      WizardController::MarkOobeCompleted();
+      view()->SetProgress(kProgressComplete);
+      view()->ShowCurtain(false);
+      CrosLibrary::Get()->GetUpdateLibrary()->RebootAfterUpdate();
+      LOG(INFO) << "Reboot API was called. Waiting for reboot.";
+      reboot_timer_.Start(base::TimeDelta::FromSeconds(reboot_check_delay_),
+                          this,
+                          &UpdateScreen::OnWaitForRebootTimeElapsed);
+      break;
+    case UPDATE_STATUS_IDLE:
+    case UPDATE_STATUS_ERROR:
+    case UPDATE_STATUS_REPORTING_ERROR_EVENT:
+      ExitUpdate(false);
       break;
     default:
       NOTREACHED();
+      break;
   }
 }
 
@@ -74,67 +105,88 @@ void UpdateScreen::StartUpdate() {
   view()->Reset();
   view()->set_controller(this);
 
-  // Start the minimal update time timer.
-  DCHECK(!minimal_update_time_timer_.IsRunning());
-  minimal_update_time_timer_.Start(
-      base::TimeDelta::FromSeconds(kMinimalUpdateTime),
-      this,
-      &UpdateScreen::OnMinimalUpdateTimeElapsed);
+  // Start the maximal curtain time timer.
+  if (maximal_curtain_time_ > 0) {
+    maximal_curtain_time_timer_.Start(
+        base::TimeDelta::FromSeconds(maximal_curtain_time_),
+        this,
+        &UpdateScreen::OnMaximalCurtainTimeElapsed);
+  } else {
+    view()->ShowCurtain(false);
+  }
 
-  // Create Google Updater object and check if there is an update available.
-  google_updater_ = CreateGoogleUpdate();
-  google_updater_->set_status_listener(this);
-  google_updater_->CheckForUpdate(false, NULL);
-}
+  view()->SetProgress(kBeforeUpdateCheckProgress);
 
-void UpdateScreen::CancelUpdate() {
-#if !defined(OFFICIAL_BUILD)
-  update_result_ = UPGRADE_ALREADY_UP_TO_DATE;
-  update_error_ = GOOGLE_UPDATE_NO_ERROR;
-  minimal_update_time_timer_.Stop();
-  ExitUpdate();
-#endif
-}
-
-void UpdateScreen::ExitUpdate() {
-  ScreenObserver* observer = delegate()->GetObserver(this);
-  if (observer) {
-    switch (update_result_) {
-      case UPGRADE_ALREADY_UP_TO_DATE:
-        observer->OnExit(ScreenObserver::UPDATE_NOUPDATE);
-        break;
-      case UPGRADE_SUCCESSFUL:
-        observer->OnExit(ScreenObserver::UPDATE_INSTALLED);
-        break;
-      case UPGRADE_ERROR:
-        if (update_error_ == GOOGLE_UPDATE_ERROR_UPDATING) {
-          observer->OnExit(ScreenObserver::UPDATE_NETWORK_ERROR);
-        } else {
-          // TODO(denisromanov): figure out better what to do if
-          // some other error has occurred.
-          observer->OnExit(ScreenObserver::UPDATE_OTHER_ERROR);
-        }
-        break;
-      default:
-        NOTREACHED();
+  if (!CrosLibrary::Get()->EnsureLoaded()) {
+    LOG(ERROR) << "Error loading CrosLibrary";
+  } else {
+    CrosLibrary::Get()->GetUpdateLibrary()->AddObserver(this);
+    LOG(INFO) << "Checking for update";
+    if (!CrosLibrary::Get()->GetUpdateLibrary()->CheckForUpdate()) {
+      ExitUpdate(true);
     }
   }
 }
 
-bool UpdateScreen::MinimalUpdateTimeElapsed() {
-  return !minimal_update_time_timer_.IsRunning();
+void UpdateScreen::CancelUpdate() {
+  // Screen has longer lifetime than it's view.
+  // View is deleted after wizard proceeds to the next screen.
+  if (view())
+    ExitUpdate(true);
 }
 
-GoogleUpdate* UpdateScreen::CreateGoogleUpdate() {
-  return new GoogleUpdate();
-}
+void UpdateScreen::ExitUpdate(bool forced) {
+  maximal_curtain_time_timer_.Stop();
+  ScreenObserver* observer = delegate()->GetObserver(this);
 
-void UpdateScreen::OnMinimalUpdateTimeElapsed() {
-  if (update_result_ == UPGRADE_SUCCESSFUL ||
-      update_result_ == UPGRADE_ALREADY_UP_TO_DATE ||
-      update_result_ == UPGRADE_ERROR) {
-    ExitUpdate();
+  if (!CrosLibrary::Get()->EnsureLoaded()) {
+    observer->OnExit(ScreenObserver::UPDATE_ERROR_CHECKING_FOR_UPDATE);
+    return;
   }
+
+  if (forced) {
+    observer->OnExit(ScreenObserver::UPDATE_NOUPDATE);
+    return;
+  }
+
+  UpdateLibrary* update_library = CrosLibrary::Get()->GetUpdateLibrary();
+  update_library->RemoveObserver(this);
+  switch (update_library->status().status) {
+    case UPDATE_STATUS_IDLE:
+      observer->OnExit(ScreenObserver::UPDATE_NOUPDATE);
+      break;
+    case UPDATE_STATUS_ERROR:
+    case UPDATE_STATUS_REPORTING_ERROR_EVENT:
+      observer->OnExit(checking_for_update_ ?
+          ScreenObserver::UPDATE_ERROR_CHECKING_FOR_UPDATE :
+          ScreenObserver::UPDATE_ERROR_UPDATING);
+      break;
+    default:
+      NOTREACHED();
+  }
+}
+
+void UpdateScreen::OnMaximalCurtainTimeElapsed() {
+  view()->ShowCurtain(false);
+}
+
+void UpdateScreen::OnWaitForRebootTimeElapsed() {
+  LOG(ERROR) << "Unable to reboot - asking user for a manual reboot.";
+  view()->ShowManualRebootInfo();
+}
+
+void UpdateScreen::SetMaximalCurtainTime(int seconds) {
+  if (seconds <= 0)
+    maximal_curtain_time_timer_.Stop();
+  DCHECK(!maximal_curtain_time_timer_.IsRunning());
+  maximal_curtain_time_ = seconds;
+}
+
+void UpdateScreen::SetRebootCheckDelay(int seconds) {
+  if (seconds <= 0)
+    reboot_timer_.Stop();
+  DCHECK(!reboot_timer_.IsRunning());
+  reboot_check_delay_ = seconds;
 }
 
 }  // namespace chromeos

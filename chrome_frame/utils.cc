@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 #include <mshtml.h>
 #include <shlobj.h>
 #include <wininet.h>
+
+#include <atlsecurity.h>
 
 #include "base/file_util.h"
 #include "base/file_version_info.h"
@@ -16,19 +18,25 @@
 #include "base/scoped_bstr_win.h"
 #include "base/scoped_comptr_win.h"
 #include "base/scoped_variant_win.h"
+#include "base/string_number_conversions.h"
+#include "base/string_tokenizer.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/thread_local.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/installer/util/chrome_frame_distribution.h"
 #include "chrome_frame/extra_system_apis.h"
 #include "chrome_frame/html_utils.h"
+#include "chrome_frame/policy_settings.h"
 #include "chrome_frame/simple_resource_loader.h"
 #include "chrome_frame/utils.h"
 #include "googleurl/src/gurl.h"
 #include "googleurl/src/url_canon.h"
 
 #include "grit/chromium_strings.h"
+#include "net/base/escape.h"
 #include "net/http/http_util.h"
 
 // Note that these values are all lower case and are compared to
@@ -39,14 +47,19 @@ const wchar_t kContentAttribName[] = L"content";
 const wchar_t kXUACompatValue[] = L"x-ua-compatible";
 const wchar_t kBodyTag[] = L"body";
 const wchar_t kChromeContentPrefix[] = L"chrome=";
+const char kGCFProtocol[] = "gcf";
 const wchar_t kChromeProtocolPrefix[] = L"gcf:";
 const wchar_t kChromeMimeType[] = L"application/chromepage";
 const wchar_t kPatchProtocols[] = L"PatchProtocols";
+const wchar_t kChromeFrameConfigKey[] = L"Software\\Google\\ChromeFrame";
+const wchar_t kRenderInGCFUrlList[] = L"RenderInGcfUrls";
+const wchar_t kRenderInHostUrlList[] = L"RenderInHostUrls";
+const wchar_t kEnableGCFRendererByDefault[] = L"IsDefaultRenderer";
+const wchar_t kIexploreProfileName[] = L"iexplore";
+const wchar_t kRundllProfileName[] = L"rundll32";
 
-static const wchar_t kChromeFrameConfigKey[] =
-    L"Software\\Google\\ChromeFrame";
-static const wchar_t kChromeFrameOptinUrlsKey[] = L"OptinUrls";
-static const wchar_t kEnableGCFProtocol[] = L"EnableGCFProtocol";
+static const wchar_t kAllowUnsafeURLs[] = L"AllowUnsafeURLs";
+static const wchar_t kEnableBuggyBhoIntercept[] = L"EnableBuggyBhoIntercept";
 
 static const wchar_t kChromeFrameNPAPIKey[] =
     L"Software\\MozillaPlugins\\@google.com/ChromeFrame,version=1.0";
@@ -56,11 +69,15 @@ static const wchar_t kChromeFramePersistNPAPIReg[] = L"PersistNPAPIReg";
 const wchar_t kChromeFrameOmahaSuffix[] = L"-cf";
 const wchar_t kDevChannelName[] = L"-dev";
 
-const wchar_t kChromeAttachExternalTabPrefix[] = L"attach_external_tab";
+const char kAttachExternalTabPrefix[] = "attach_external_tab";
 
 // Indicates that we are running in a test environment, where execptions, etc
 // are handled by the chrome test crash server.
 const wchar_t kChromeFrameHeadlessMode[] = L"ChromeFrameHeadlessMode";
+
+// Indicates that we are running in an environment that expects chrome renderer
+// accessibility to be enabled for use in automation tests.
+const wchar_t kChromeFrameAccessibleMode[] = L"ChromeFrameAccessibleMode";
 
 // Indicates that we are running in an environment that wishes to avoid
 // DLL pinning, such as the perf tests.
@@ -308,10 +325,10 @@ void DisplayVersionMismatchWarning(HWND parent,
   }
   std::wstring title = SimpleResourceLoader::Get(IDS_VERSIONMISMATCH_HEADER);
   std::wstring message;
-  SStringPrintf(&message,
-                SimpleResourceLoader::Get(IDS_VERSIONMISMATCH).c_str(),
-                wide_server_version.c_str(),
-                version_string.c_str());
+  base::SStringPrintf(&message,
+                      SimpleResourceLoader::Get(IDS_VERSIONMISMATCH).c_str(),
+                      wide_server_version.c_str(),
+                      version_string.c_str());
 
   ::MessageBox(parent, message.c_str(), title.c_str(), MB_OK);
 }
@@ -342,6 +359,13 @@ AddRefModule::~AddRefModule() {
   _pAtlModule->Unlock();
 }
 
+bool IsChrome(RendererType renderer_type) {
+  DCHECK_GE(renderer_type, RENDERER_TYPE_UNDETERMINED);
+  DCHECK_LE(renderer_type, RENDERER_TYPE_OTHER);
+  return renderer_type >= RENDERER_TYPE_CHROME_MIN &&
+    renderer_type <= RENDERER_TYPE_CHROME_MAX;
+}
+
 namespace {
 const char kIEImageName[] = "iexplore.exe";
 const char kFirefoxImageName[] = "firefox.exe";
@@ -355,7 +379,7 @@ std::wstring GetHostProcessName(bool include_extension) {
   if (!include_extension) {
     exe = exe.RemoveExtension();
   }
-  return exe.ToWStringHack();
+  return exe.value();
 }
 
 BrowserType GetBrowserType() {
@@ -404,8 +428,11 @@ IEVersion GetIEVersion() {
           case 7:
             ie_version = IE_7;
             break;
+          case 8:
+            ie_version = IE_8;
+            break;
           default:
-            ie_version = HIWORD(high) >= 8 ? IE_8 : IE_UNSUPPORTED;
+            ie_version = HIWORD(high) >= 9 ? IE_9 : IE_UNSUPPORTED;
             break;
         }
       } else {
@@ -531,6 +558,12 @@ bool GetModuleVersion(HMODULE module, uint32* high, uint32* low) {
   }
 
   return ok;
+}
+
+HMODULE GetModuleFromAddress(void* address) {
+  MEMORY_BASIC_INFORMATION info = {0};
+  ::VirtualQuery(address, &info, sizeof(info));
+  return reinterpret_cast<HMODULE>(info.AllocationBase);
 }
 
 namespace {
@@ -668,20 +701,75 @@ bool DeleteConfigValue(const wchar_t* value_name) {
   return false;
 }
 
-bool IsOptInUrl(const wchar_t* url) {
-  RegKey config_key;
-  if (!config_key.Open(HKEY_CURRENT_USER, kChromeFrameConfigKey, KEY_READ))
-    return false;
+bool IsGcfDefaultRenderer() {
+  DWORD is_default = 0;  // NOLINT
 
-  RegistryValueIterator optin_urls_list(config_key.Handle(),
-                                        kChromeFrameOptinUrlsKey);
-  while (optin_urls_list.Valid()) {
-    if (MatchPatternWide(url, optin_urls_list.Name()))
-      return true;
-    ++optin_urls_list;
+  // First check policy settings
+  Singleton<PolicySettings> policy;
+  PolicySettings::RendererForUrl renderer = policy->default_renderer();
+  if (renderer != PolicySettings::RENDERER_NOT_SPECIFIED) {
+    is_default = (renderer == PolicySettings::RENDER_IN_CHROME_FRAME);
+  } else {
+    // TODO(tommi): Implement caching for this config value as it gets
+    // checked frequently.
+    RegKey config_key;
+    if (config_key.Open(HKEY_CURRENT_USER, kChromeFrameConfigKey, KEY_READ)) {
+      config_key.ReadValueDW(kEnableGCFRendererByDefault, &is_default);
+    }
   }
 
-  return false;
+  return is_default != 0;
+}
+
+RendererType RendererTypeForUrl(const std::wstring& url) {
+  // First check if the default renderer settings are specified by policy.
+  // If so, then that overrides the user settings.
+  Singleton<PolicySettings> policy;
+  PolicySettings::RendererForUrl renderer = policy->GetRendererForUrl(
+      url.c_str());
+  if (renderer != PolicySettings::RENDERER_NOT_SPECIFIED) {
+    // We may know at this point that policy says do NOT render in Chrome Frame.
+    // To maintain consistency, we return RENDERER_TYPE_UNDETERMINED so that
+    // content sniffing, etc. still take place.
+    // TODO(tommi): Clarify the intent here.
+    return (renderer == PolicySettings::RENDER_IN_CHROME_FRAME) ?
+        RENDERER_TYPE_CHROME_OPT_IN_URL : RENDERER_TYPE_UNDETERMINED;
+  }
+
+  RegKey config_key;
+  if (!config_key.Open(HKEY_CURRENT_USER, kChromeFrameConfigKey, KEY_READ))
+    return RENDERER_TYPE_UNDETERMINED;
+
+  RendererType renderer_type = RENDERER_TYPE_UNDETERMINED;
+
+  const wchar_t* url_list_name = NULL;
+  int render_in_cf_by_default = FALSE;
+  config_key.ReadValueDW(kEnableGCFRendererByDefault,
+                         reinterpret_cast<DWORD*>(&render_in_cf_by_default));
+  if (render_in_cf_by_default) {
+    url_list_name = kRenderInHostUrlList;
+    renderer_type = RENDERER_TYPE_CHROME_DEFAULT_RENDERER;
+  } else {
+    url_list_name = kRenderInGCFUrlList;
+  }
+
+  bool match_found = false;
+  RegistryValueIterator url_list(config_key.Handle(), url_list_name);
+  while (!match_found && url_list.Valid()) {
+    if (MatchPattern(url, url_list.Name())) {
+      match_found = true;
+    } else {
+      ++url_list;
+    }
+  }
+
+  if (match_found) {
+    renderer_type = render_in_cf_by_default ?
+      RENDERER_TYPE_UNDETERMINED :
+      RENDERER_TYPE_CHROME_OPT_IN_URL;
+  }
+
+  return renderer_type;
 }
 
 HRESULT NavigateBrowserToMoniker(IUnknown* browser, IMoniker* moniker,
@@ -695,7 +783,8 @@ HRESULT NavigateBrowserToMoniker(IUnknown* browser, IMoniker* moniker,
   HRESULT hr = DoQueryService(SID_SWebBrowserApp, browser,
                               web_browser2.Receive());
   DCHECK(web_browser2);
-  DLOG_IF(WARNING, FAILED(hr)) << StringPrintf(L"SWebBrowserApp 0x%08X", hr);
+  DLOG_IF(WARNING, FAILED(hr)) << base::StringPrintf(L"SWebBrowserApp 0x%08X",
+                                                     hr);
   if (FAILED(hr))
     return hr;
 
@@ -748,7 +837,7 @@ HRESULT NavigateBrowserToMoniker(IUnknown* browser, IMoniker* moniker,
                                                headers_var.AsInput(), bind_ctx,
                                                const_cast<wchar_t*>(fragment));
       DLOG_IF(WARNING, FAILED(hr))
-          << StringPrintf(L"NavigateWithBindCtx2 0x%08X", hr);
+          << base::StringPrintf(L"NavigateWithBindCtx2 0x%08X", hr);
     }
   } else {
     // IE6
@@ -778,13 +867,13 @@ HRESULT NavigateBrowserToMoniker(IUnknown* browser, IMoniker* moniker,
                                                bind_ctx,
                                                const_cast<wchar_t*>(fragment));
         DLOG_IF(WARNING, FAILED(hr))
-            << StringPrintf(L"NavigateWithBindCtx 0x%08X", hr);
+            << base::StringPrintf(L"NavigateWithBindCtx 0x%08X", hr);
       } else {
         NOTREACHED();
       }
       ::CoTaskMemFree(url);
     } else {
-      DLOG(ERROR) << StringPrintf("GetDisplayName: 0x%08X", hr);
+      DLOG(ERROR) << base::StringPrintf("GetDisplayName: 0x%08X", hr);
     }
   }
 
@@ -806,21 +895,19 @@ bool CheckForCFNavigation(IBrowserService* browser, bool clear_flag) {
   return ret;
 }
 
-bool IsValidUrlScheme(const std::wstring& url, bool is_privileged) {
-  if (url.empty())
+bool IsValidUrlScheme(const GURL& url, bool is_privileged) {
+  if (url.is_empty())
     return false;
 
-  GURL crack_url(url);
-
-  if (crack_url.SchemeIs(chrome::kHttpScheme) ||
-      crack_url.SchemeIs(chrome::kHttpsScheme) ||
-      crack_url.SchemeIs(chrome::kAboutScheme))
+  if (url.SchemeIs(chrome::kHttpScheme) ||
+      url.SchemeIs(chrome::kHttpsScheme) ||
+      url.SchemeIs(chrome::kAboutScheme))
     return true;
 
   // Additional checking for view-source. Allow only http and https
   // URLs in view source.
-  if (crack_url.SchemeIs(chrome::kViewSourceScheme)) {
-    GURL sub_url(crack_url.path());
+  if (url.SchemeIs(chrome::kViewSourceScheme)) {
+    GURL sub_url(url.path());
     if (sub_url.SchemeIs(chrome::kHttpScheme) ||
         sub_url.SchemeIs(chrome::kHttpsScheme))
       return true;
@@ -829,11 +916,8 @@ bool IsValidUrlScheme(const std::wstring& url, bool is_privileged) {
   }
 
   if (is_privileged &&
-      (crack_url.SchemeIs(chrome::kDataScheme) ||
-       crack_url.SchemeIs(chrome::kExtensionScheme)))
-    return true;
-
-  if (StartsWith(url, kChromeAttachExternalTabPrefix, false))
+      (url.SchemeIs(chrome::kDataScheme) ||
+       url.SchemeIs(chrome::kExtensionScheme)))
     return true;
 
   return false;
@@ -899,8 +983,15 @@ bool IsHeadlessMode() {
   return headless;
 }
 
+bool IsAccessibleMode() {
+  bool accessible = GetConfigBool(false, kChromeFrameAccessibleMode);
+  return accessible;
+}
+
 bool IsUnpinnedMode() {
-  bool unpinned = GetConfigBool(false, kChromeFrameUnpinnedMode);
+  // We only check this value once and then cache it since changing the registry
+  // once we've pinned the DLL won't have any effect.
+  static bool unpinned = GetConfigBool(false, kChromeFrameUnpinnedMode);
   return unpinned;
 }
 
@@ -1047,7 +1138,7 @@ int GetHttpResponseStatusFromBinding(IBinding* binding) {
     DWORD reserved = 0;
     if (SUCCEEDED(info->QueryInfo(HTTP_QUERY_STATUS_CODE, status, &buf_size,
                                   &flags, &reserved))) {
-      http_status = StringToInt(status);
+      base::StringToInt(status, &http_status);
     } else {
       NOTREACHED() << "Failed to get HTTP status";
     }
@@ -1058,16 +1149,379 @@ int GetHttpResponseStatusFromBinding(IBinding* binding) {
   return http_status;
 }
 
+CLIPFORMAT GetTextHtmlClipboardFormat() {
+  static const CLIPFORMAT text_html = RegisterClipboardFormat(CFSTR_MIME_HTML);
+  return text_html;
+}
+
+bool IsTextHtmlMimeType(const wchar_t* mime_type) {
+  return IsTextHtmlClipFormat(RegisterClipboardFormatW(mime_type));
+}
+
+bool IsTextHtmlClipFormat(CLIPFORMAT cf) {
+  return cf == GetTextHtmlClipboardFormat();
+}
+
 ProtocolPatchMethod GetPatchMethod() {
   ProtocolPatchMethod patch_method =
       static_cast<ProtocolPatchMethod>(
-          GetConfigInt(PATCH_METHOD_MONIKER, kPatchProtocols));
+          GetConfigInt(PATCH_METHOD_INET_PROTOCOL, kPatchProtocols));
   return patch_method;
 }
 
-bool MonikerPatchEnabled() {
+bool IsIBrowserServicePatchEnabled() {
   ProtocolPatchMethod patch_method = GetPatchMethod();
-  LOG_IF(ERROR, patch_method != PATCH_METHOD_MONIKER)
-      << "Not running test. Moniker patch not enabled.";
-  return patch_method == PATCH_METHOD_MONIKER;
+  return patch_method == PATCH_METHOD_IBROWSER;
 }
+
+bool IsSystemProcess() {
+  bool is_system = false;
+  CAccessToken process_token;
+  if (process_token.GetProcessToken(TOKEN_QUERY, GetCurrentProcess())) {
+    CSid logon_sid;
+    if (process_token.GetUser(&logon_sid)) {
+      is_system = logon_sid == Sids::System();
+    }
+  }
+  return is_system;
+}
+
+
+std::string BindStatus2Str(ULONG bind_status) {
+  std::string s;
+  static const char* const bindstatus_txt[] = {
+    "BINDSTATUS_FINDINGRESOURCE",
+    "BINDSTATUS_CONNECTING",
+    "BINDSTATUS_REDIRECTING",
+    "BINDSTATUS_BEGINDOWNLOADDATA",
+    "BINDSTATUS_DOWNLOADINGDATA",
+    "BINDSTATUS_ENDDOWNLOADDATA",
+    "BINDSTATUS_BEGINDOWNLOADCOMPONENTS",
+    "BINDSTATUS_INSTALLINGCOMPONENTS",
+    "BINDSTATUS_ENDDOWNLOADCOMPONENTS",
+    "BINDSTATUS_USINGCACHEDCOPY",
+    "BINDSTATUS_SENDINGREQUEST",
+    "BINDSTATUS_CLASSIDAVAILABLE",
+    "BINDSTATUS_MIMETYPEAVAILABLE",
+    "BINDSTATUS_CACHEFILENAMEAVAILABLE",
+    "BINDSTATUS_BEGINSYNCOPERATION",
+    "BINDSTATUS_ENDSYNCOPERATION",
+    "BINDSTATUS_BEGINUPLOADDATA",
+    "BINDSTATUS_UPLOADINGDATA",
+    "BINDSTATUS_ENDUPLOADINGDATA",
+    "BINDSTATUS_PROTOCOLCLASSID",
+    "BINDSTATUS_ENCODING",
+    "BINDSTATUS_VERFIEDMIMETYPEAVAILABLE",
+    "BINDSTATUS_CLASSINSTALLLOCATION",
+    "BINDSTATUS_DECODING",
+    "BINDSTATUS_LOADINGMIMEHANDLER",
+    "BINDSTATUS_CONTENTDISPOSITIONATTACH",
+    "BINDSTATUS_FILTERREPORTMIMETYPE",
+    "BINDSTATUS_CLSIDCANINSTANTIATE",
+    "BINDSTATUS_IUNKNOWNAVAILABLE",
+    "BINDSTATUS_DIRECTBIND",
+    "BINDSTATUS_RAWMIMETYPE",
+    "BINDSTATUS_PROXYDETECTING",
+    "BINDSTATUS_ACCEPTRANGES",
+    "BINDSTATUS_COOKIE_SENT",
+    "BINDSTATUS_COMPACT_POLICY_RECEIVED",
+    "BINDSTATUS_COOKIE_SUPPRESSED",
+    "BINDSTATUS_COOKIE_STATE_UNKNOWN",
+    "BINDSTATUS_COOKIE_STATE_ACCEPT",
+    "BINDSTATUS_COOKIE_STATE_REJECT",
+    "BINDSTATUS_COOKIE_STATE_PROMPT",
+    "BINDSTATUS_COOKIE_STATE_LEASH",
+    "BINDSTATUS_COOKIE_STATE_DOWNGRADE",
+    "BINDSTATUS_POLICY_HREF",
+    "BINDSTATUS_P3P_HEADER",
+    "BINDSTATUS_SESSION_COOKIE_RECEIVED",
+    "BINDSTATUS_PERSISTENT_COOKIE_RECEIVED",
+    "BINDSTATUS_SESSION_COOKIES_ALLOWED",
+    "BINDSTATUS_CACHECONTROL",
+    "BINDSTATUS_CONTENTDISPOSITIONFILENAME",
+    "BINDSTATUS_MIMETEXTPLAINMISMATCH",
+    "BINDSTATUS_PUBLISHERAVAILABLE",
+    "BINDSTATUS_DISPLAYNAMEAVAILABLE",
+    "BINDSTATUS_SSLUX_NAVBLOCKED",
+    "BINDSTATUS_SERVER_MIMETYPEAVAILABLE",
+    "BINDSTATUS_SNIFFED_CLASSIDAVAILABLE",
+    "BINDSTATUS_64BIT_PROGRESS"
+  };
+  if (bind_status >= 1 && bind_status <= BINDSTATUS_64BIT_PROGRESS)
+    s = bindstatus_txt[bind_status - 1];
+  else
+    s = base::StringPrintf("UnDoc[%#x]", bind_status);
+  return s;
+}
+
+std::string PiFlags2Str(DWORD flags) {
+#define ADD_PI_FLAG(x)  \
+  if (flags & x) { \
+    s.append(#x ## " "); \
+    flags &= ~x; \
+  }
+
+  std::string s = " flags ";
+  ADD_PI_FLAG(PI_PARSE_URL);
+  ADD_PI_FLAG(PI_FILTER_MODE);
+  ADD_PI_FLAG(PI_FORCE_ASYNC);
+  ADD_PI_FLAG(PI_USE_WORKERTHREAD);
+  ADD_PI_FLAG(PI_MIMEVERIFICATION);
+  ADD_PI_FLAG(PI_CLSIDLOOKUP);
+  ADD_PI_FLAG(PI_DATAPROGRESS);
+  ADD_PI_FLAG(PI_SYNCHRONOUS);
+  ADD_PI_FLAG(PI_APARTMENTTHREADED);
+  ADD_PI_FLAG(PI_CLASSINSTALL);
+  ADD_PI_FLAG(PI_PASSONBINDCTX);
+  ADD_PI_FLAG(PI_NOMIMEHANDLER);
+  ADD_PI_FLAG(PI_LOADAPPDIRECT);
+  ADD_PI_FLAG(PD_FORCE_SWITCH);
+  ADD_PI_FLAG(PI_PREFERDEFAULTHANDLER);
+
+  if (flags)
+    s += base::StringPrintf("+UnDoc[%#x]", flags);
+  return s;
+#undef ADD_PI_FLAG
+}
+
+std::string Bscf2Str(DWORD flags) {
+#define ADD_BSCF_FLAG(x)  \
+  if (flags & x) {\
+    s.append(#x ## " "); \
+    flags &= ~x; \
+  }
+
+  std::string s = " flags ";
+  ADD_BSCF_FLAG(BSCF_FIRSTDATANOTIFICATION)
+  ADD_BSCF_FLAG(BSCF_INTERMEDIATEDATANOTIFICATION)
+  ADD_BSCF_FLAG(BSCF_LASTDATANOTIFICATION)
+  ADD_BSCF_FLAG(BSCF_DATAFULLYAVAILABLE)
+  ADD_BSCF_FLAG(BSCF_AVAILABLEDATASIZEUNKNOWN)
+  ADD_BSCF_FLAG(BSCF_SKIPDRAINDATAFORFILEURLS)
+  ADD_BSCF_FLAG(BSCF_64BITLENGTHDOWNLOAD)
+
+  if (flags)
+    s += base::StringPrintf("+UnDoc[%#x]", flags);
+  return s;
+#undef ADD_BSCF_FLAG
+}
+
+// Reads data from a stream into a string.
+HRESULT ReadStream(IStream* stream, size_t size, std::string* data) {
+  DCHECK(stream);
+  DCHECK(data);
+
+  DWORD read = 0;
+  HRESULT hr = stream->Read(WriteInto(data, size + 1), size, &read);
+  DCHECK(hr == S_OK || hr == S_FALSE || hr == E_PENDING);
+  if (read) {
+    data->erase(read);
+    DCHECK_EQ(read, data->length());
+  } else {
+    data->clear();
+    // Return S_FALSE if the underlying stream returned S_OK and zero bytes.
+    if (hr == S_OK)
+      hr = S_FALSE;
+  }
+
+  return hr;
+}
+
+ChromeFrameUrl::ChromeFrameUrl() {
+  Reset();
+}
+
+bool ChromeFrameUrl::Parse(const std::wstring& url) {
+  Reset();
+  parsed_url_ = GURL(url);
+
+  if (parsed_url_.is_empty())
+    return false;
+
+  is_chrome_protocol_ = parsed_url_.SchemeIs(kGCFProtocol);
+  if (is_chrome_protocol_) {
+    parsed_url_ = GURL(url.c_str() + lstrlen(kChromeProtocolPrefix));
+    return true;
+  }
+
+  return ParseAttachExternalTabUrl();
+}
+
+bool ChromeFrameUrl::ParseAttachExternalTabUrl() {
+  std::string query = parsed_url_.query();
+  if (!StartsWithASCII(query, kAttachExternalTabPrefix, false)) {
+    return parsed_url_.is_valid();
+  }
+
+  attach_to_external_tab_ = true;
+  StringTokenizer tokenizer(query, "&");
+  // Skip over kChromeAttachExternalTabPrefix
+  tokenizer.GetNext();
+  // Read the following items in order.
+  // 1. cookie
+  // 2. disposition
+  // 3. dimension.x
+  // 4. dimension.y
+  // 5. dimension.width
+  // 6. dimension.height.
+  if (tokenizer.GetNext()) {
+    char* end_ptr = 0;
+    cookie_ = _strtoui64(tokenizer.token().c_str(), &end_ptr, 10);
+  } else {
+    return false;
+  }
+
+  if (tokenizer.GetNext()) {
+    disposition_ = atoi(tokenizer.token().c_str());
+  } else {
+    return false;
+  }
+
+  if (tokenizer.GetNext()) {
+    dimensions_.set_x(atoi(tokenizer.token().c_str()));
+  } else {
+    return false;
+  }
+
+  if (tokenizer.GetNext()) {
+    dimensions_.set_y(atoi(tokenizer.token().c_str()));
+  } else {
+    return false;
+  }
+
+  if (tokenizer.GetNext()) {
+    dimensions_.set_width(atoi(tokenizer.token().c_str()));
+  } else {
+    return false;
+  }
+
+  if (tokenizer.GetNext()) {
+    dimensions_.set_height(atoi(tokenizer.token().c_str()));
+  } else {
+    return false;
+  }
+
+  if (tokenizer.GetNext()) {
+    profile_name_ = tokenizer.token();
+    // Escape out special characters like %20, etc.
+    profile_name_ = UnescapeURLComponent(profile_name_,
+        UnescapeRule::SPACES | UnescapeRule::URL_SPECIAL_CHARS);
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+void ChromeFrameUrl::Reset() {
+  attach_to_external_tab_ = false;
+  is_chrome_protocol_ = false;
+  cookie_ = 0;
+  dimensions_.SetRect(0, 0, 0, 0);
+  disposition_ = 0;
+  profile_name_.clear();
+}
+
+bool CanNavigate(const GURL& url, IInternetSecurityManager* security_manager,
+                 bool is_privileged) {
+  if (!url.is_valid()) {
+    DLOG(ERROR) << "Invalid URL passed to InitiateNavigation: " << url;
+    return false;
+  }
+
+  // No sanity checks if unsafe URLs are allowed
+  if (GetConfigBool(false, kAllowUnsafeURLs))
+    return true;
+
+  if (!IsValidUrlScheme(url, is_privileged)) {
+    DLOG(WARNING) << __FUNCTION__ << " Disallowing navigation to url: " << url;
+    return false;
+  }
+
+  // Allow only about:blank or about:version
+  if (url.SchemeIs(chrome::kAboutScheme)) {
+    if (!LowerCaseEqualsASCII(url.spec(), chrome::kAboutBlankURL) &&
+        !LowerCaseEqualsASCII(url.spec(), chrome::kAboutVersionURL)) {
+      DLOG(WARNING) << __FUNCTION__
+                    << " Disallowing navigation to about url: " << url;
+      return false;
+    }
+  }
+
+  // Prevent navigations to URLs in untrusted zone, even in Firefox.
+  if (security_manager) {
+    DWORD zone = URLZONE_INVALID;
+    std::wstring unicode_url = UTF8ToWide(url.spec());
+    security_manager->MapUrlToZone(unicode_url.c_str(), &zone, 0);
+    if (zone == URLZONE_UNTRUSTED) {
+      DLOG(WARNING) << __FUNCTION__
+                    << " Disallowing navigation to restricted url: " << url;
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void PinModule() {
+  static bool s_pinned = false;
+  if (!s_pinned && !IsUnpinnedMode()) {
+    FilePath module_path;
+    if (PathService::Get(base::FILE_MODULE, &module_path)) {
+      HMODULE unused;
+      if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_PIN,
+                             module_path.value().c_str(), &unused)) {
+        NOTREACHED() << "Failed to pin module " << module_path.value().c_str()
+                     << " , last error: " << GetLastError();
+      } else {
+        s_pinned = true;
+      }
+    } else {
+      NOTREACHED() << "Could not get module path.";
+    }
+  }
+}
+
+void WaitWithMessageLoop(HANDLE* handles, int count, DWORD timeout) {
+  base::Time now = base::Time::Now();
+  base::Time wait_until = now + base::TimeDelta::FromMilliseconds(timeout);
+
+  while (wait_until >= now) {
+    base::TimeDelta wait_time = wait_until - now;
+    DWORD wait = MsgWaitForMultipleObjects(
+        count, handles, FALSE, static_cast<DWORD>(wait_time.InMilliseconds()),
+        QS_ALLINPUT);
+    switch (wait) {
+      case WAIT_OBJECT_0:
+      case WAIT_TIMEOUT:
+       return;
+
+      case WAIT_OBJECT_0 + 1: {
+        MSG msg = {0};
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+          TranslateMessage(&msg);
+          DispatchMessage(&msg);
+        }
+        break;
+      }
+
+      default: {
+        NOTREACHED() << "Unexpected return from MsgWaitForMultipleObjects :"
+                     << wait;
+        return;
+      }
+    }
+    now = base::Time::Now();
+  }
+}
+
+void EnumerateKeyValues(HKEY parent_key, const wchar_t* sub_key_name,
+                        std::vector<std::wstring>* values) {
+  DCHECK(values);
+  RegistryValueIterator url_list(parent_key, sub_key_name);
+  while (url_list.Valid()) {
+    values->push_back(url_list.Value());
+    ++url_list;
+  }
+}
+

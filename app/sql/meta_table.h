@@ -4,6 +4,7 @@
 
 #ifndef APP_SQL_META_TABLE_H_
 #define APP_SQL_META_TABLE_H_
+#pragma once
 
 #include <string>
 
@@ -26,6 +27,9 @@ class MetaTable {
   // new tables, it will initialize the version number to |version| and the
   // compatible version number to |compatible_version|.
   bool Init(Connection* db, int version, int compatible_version);
+
+  // Resets this MetaTable object, making another call to Init() possible.
+  void Reset();
 
   // The version number of the database. This should be the version number of
   // the creator of the file. The version number will be 0 if there is no

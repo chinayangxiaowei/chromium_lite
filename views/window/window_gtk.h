@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VIEWS_WINDOW_WINDOW_GTK_H_
 #define VIEWS_WINDOW_WINDOW_GTK_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "views/widget/widget_gtk.h"
@@ -32,6 +33,7 @@ class WindowGtk : public WidgetGtk, public Window {
   virtual void Show();
   virtual void HideWindow();
   virtual void Activate();
+  virtual void Deactivate();
   virtual void Close();
   virtual void Maximize();
   virtual void Minimize();
@@ -68,6 +70,7 @@ class WindowGtk : public WidgetGtk, public Window {
   virtual gboolean OnWindowStateEvent(GtkWidget* widget,
                                       GdkEventWindowState* event);
   virtual gboolean OnLeaveNotify(GtkWidget* widget, GdkEventCrossing* event);
+  virtual void SetInitialFocus();
 
  protected:
   // For  the constructor.
@@ -77,7 +80,7 @@ class WindowGtk : public WidgetGtk, public Window {
   explicit WindowGtk(WindowDelegate* window_delegate);
 
   // Initializes the window to the passed in bounds.
-  void Init(GtkWindow* parent, const gfx::Rect& bounds);
+  virtual void Init(GtkWindow* parent, const gfx::Rect& bounds);
 
   virtual void OnDestroy(GtkWidget* widget);
 

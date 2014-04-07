@@ -4,10 +4,9 @@
 
 #ifndef GFX_BLIT_H_
 #define GFX_BLIT_H_
+#pragma once
 
 #include "gfx/native_widget_types.h"
-#include "gfx/point.h"
-#include "gfx/rect.h"
 
 namespace skia {
 class PlatformCanvas;
@@ -41,6 +40,13 @@ void BlitCanvasToCanvas(skia::PlatformCanvas *dst_canvas,
                         const Rect& dst_rect,
                         skia::PlatformCanvas *src_canvas,
                         const Point& src_origin);
+
+// Scrolls the given subset of the given canvas by the given amount.
+// The canvas should not have a clip or a transform applied, since platforms
+// may implement those operations differently.
+void ScrollCanvas(skia::PlatformCanvas* canvas,
+                  const Rect& clip,
+                  const Point& amount);
 
 }  // namespace gfx
 

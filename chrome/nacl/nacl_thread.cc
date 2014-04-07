@@ -4,6 +4,7 @@
 
 #include "chrome/nacl/nacl_thread.h"
 
+#include "base/scoped_ptr.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/nacl_messages.h"
 
@@ -16,9 +17,13 @@ typedef HANDLE NaClHandle;
 typedef int NaClHandle;
 #endif  // NaClHandle
 
-int SelMain(const int desc, const NaClHandle handle);
+// This is currently necessary because we have a conflict between
+// NaCl's "struct NaClThread" and Chromium's "class NaClThread".
+extern "C" int NaClMainForChromium(int handle_count, const NaClHandle* handles,
+                                   int debug);
 
-NaClThread::NaClThread() {
+NaClThread::NaClThread(bool debug) {
+  debug_enabled_ = debug ? 1 : 0;
 }
 
 NaClThread::~NaClThread() {
@@ -34,7 +39,11 @@ void NaClThread::OnControlMessageReceived(const IPC::Message& msg) {
   IPC_END_MESSAGE_MAP()
 }
 
-void NaClThread::OnStartSelLdr(int channel_descriptor,
-                               nacl::FileDescriptor handle) {
-  SelMain(channel_descriptor, nacl::ToNativeHandle(handle));
+void NaClThread::OnStartSelLdr(std::vector<nacl::FileDescriptor> handles) {
+  scoped_array<NaClHandle> array(new NaClHandle[handles.size()]);
+  for (size_t i = 0; i < handles.size(); i++) {
+    array[i] = nacl::ToNativeHandle(handles[i]);
+  }
+  NaClMainForChromium(static_cast<int>(handles.size()), array.get(),
+                      debug_enabled_);
 }

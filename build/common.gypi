@@ -13,6 +13,13 @@
     # whether warnings are treated as errors.
     'chromium_code%': 0,
 
+    'internal_pdf%': 0,
+
+    # This allows to use libcros from the current system, ie. /usr/lib/
+    # The cros_api will be pulled in as a static library, and all headers
+    # from the system include dirs.
+    'system_libcros%': '0',
+
     # Variables expected to be overriden on the GYP command line (-D) or by
     # ~/.gyp/include.gypi.
 
@@ -48,27 +55,63 @@
             'host_arch%': 'ia32',
           }],
         ],
+
+        # Whether we're building a ChromeOS build.  We set the initial
+        # value at this level of nesting so it's available for the
+        # toolkit_views test below.
+        'chromeos%': '0',
+
+        # Disable touch support by default.
+        'touchui%': 0,
+
+        # To do a shared build on linux we need to be able to choose between
+        # type static_library and shared_library. We default to doing a static
+        # build but you can override this with "gyp -Dlibrary=shared_library"
+        # or you can add the following line (without the #) to
+        # ~/.gyp/include.gypi {'variables': {'library': 'shared_library'}}
+        # to compile as shared by default
+        'library%': 'static_library',
       },
+
+      # We set those at this level of nesting so the values are available for
+      # other conditionals below.
+      'conditions': [
+        # Set default value of toolkit_views on for Windows, Chrome OS
+        # and the touch UI.
+        ['OS=="win" or chromeos==1 or touchui==1', {
+          'toolkit_views%': 1,
+        }, {
+          'toolkit_views%': 0,
+        }],
+
+        # A flag to enable or disable our compile-time dependency
+        # on gnome-keyring. If that dependency is disabled, no gnome-keyring
+        # support will be available. This option is useful
+        # for Linux distributions.
+        ['chromeos==1', {
+          'use_gnome_keyring%': 0,
+        }, {
+          'use_gnome_keyring%': 1,
+        }],
+
+        # Set to 1 compile with -fPIC cflag on linux. This is a must for shared
+        # libraries on linux x86-64 and arm.
+        ['host_arch=="ia32"', {
+          'linux_fpic%': 0,
+        }, {
+          'linux_fpic%': 1,
+        }],
+      ],
+
       'host_arch%': '<(host_arch)',
 
       # Default architecture we're building for is the architecture we're
       # building on.
       'target_arch%': '<(host_arch)',
 
-      # We do want to build Chromium with Breakpad support in certain
-      # situations. I.e. for Chrome bot.
-      'linux_chromium_breakpad%': 0,
-      # And if we want to dump symbols.
-      'linux_chromium_dump_symbols%': 0,
-      # Also see linux_strip_binary below.
-
-      # By default, Linux does not use views. To turn on views in Linux,
-      # set the variable GYP_DEFINES to "toolkit_views=1", or modify
-      # ~/.gyp/include.gypi .
-      'toolkit_views%': 0,
-
-      # Defaults to a desktop build, overridden via command line/env.
-      'chromeos%': 0,
+      # Copy conditionally-set variables out one scope.
+      'chromeos%': '<(chromeos)',
+      'touchui%': '<(touchui)',
 
       # This variable tells WebCore.gyp and JavaScriptCore.gyp whether they are
       # are built under a chromium full build (1) or a webkit.org chromium
@@ -78,10 +121,6 @@
       # Set to 1 to enable fast builds. It disables debug info for fastest
       # compilation.
       'fastbuild%': 0,
-
-      # Set to 1 compile with -fPIC cflag on linux. This is a must for shared
-      # libraries on linux x86-64 and arm.
-      'linux_fpic%': 0,
 
       # Python version.
       'python_ver%': '2.5',
@@ -94,6 +133,21 @@
 
       # The system root for cross-compiles. Default: none.
       'sysroot%': '',
+
+      # On Linux, we build with sse2 for Chromium builds.
+      'disable_sse2%': 0,
+
+      # Remoting compilation is enabled by default. Set to 0 to disable.
+      'remoting%': 1,
+
+      'library%': '<(library)',
+
+      # Variable 'component' is for cases where we would like to build some
+      # components as dynamic shared libraries but still need variable
+      # 'library' for static libraries.
+      # By default, component is set to whatever library is set to and
+      # it can be overriden by the GYP command line or by ~/.gyp/include.gypi.
+      'component%': '<(library)',
     },
 
     # Define branding and buildtype on the basis of their settings within the
@@ -103,14 +157,20 @@
     'target_arch%': '<(target_arch)',
     'host_arch%': '<(host_arch)',
     'toolkit_views%': '<(toolkit_views)',
+    'use_gnome_keyring%': '<(use_gnome_keyring)',
+    'linux_fpic%': '<(linux_fpic)',
     'chromeos%': '<(chromeos)',
+    'touchui%': '<(touchui)',
     'inside_chromium_build%': '<(inside_chromium_build)',
     'fastbuild%': '<(fastbuild)',
-    'linux_fpic%': '<(linux_fpic)',
     'python_ver%': '<(python_ver)',
     'armv7%': '<(armv7)',
     'arm_neon%': '<(arm_neon)',
     'sysroot%': '<(sysroot)',
+    'disable_sse2%': '<(disable_sse2)',
+    'remoting%': '<(remoting)',
+    'library%': '<(library)',
+    'component%': '<(component)',
 
     # The release channel that this build targets. This is used to restrict
     # channel-specific build options, like which installer packages to create.
@@ -160,18 +220,14 @@
     #  'win_use_allocator_shim': 0,
     #  'win_release_RuntimeLibrary': 2
     # to ~/.gyp/include.gypi, gclient runhooks --force, and do a release build.
-    'win_use_allocator_shim%': 1, # 0 = shim allocator via libcmt; 1 = msvcrt
-
-    # To do a shared build on linux we need to be able to choose between type
-    # static_library and shared_library. We default to doing a static build
-    # but you can override this with "gyp -Dlibrary=shared_library" or you
-    # can add the following line (without the #) to ~/.gyp/include.gypi
-    # {'variables': {'library': 'shared_library'}}
-    # to compile as shared by default
-    'library%': 'static_library',
+    'win_use_allocator_shim%': 1, # 1 = shim allocator via libcmt; 0 = msvcrt
 
     # Whether usage of OpenMAX is enabled.
     'enable_openmax%': 0,
+
+    # Whether proprietary audio/video codecs are assumed to be included with
+    # this build (only meaningful if branding!=Chrome).
+    'proprietary_codecs%': 0,
 
     # TODO(bradnelson): eliminate this when possible.
     # To allow local gyp files to prevent release.vsprops from being included.
@@ -199,18 +255,40 @@
     # Set this to true to enable SELinux support.
     'selinux%': 0,
 
-    # Strip the binary after dumping symbols.
+    # Set this to true when building with Clang.
+    # See http://code.google.com/p/chromium/wiki/Clang for details.
+    # TODO: eventually clang should behave identically to gcc, and this
+    # won't be necessary.
+    'clang%': 0,
+
+    # Override whether we should use Breakpad on Linux. I.e. for Chrome bot.
+    'linux_breakpad%': 0,
+    # And if we want to dump symbols for Breakpad-enabled builds.
+    'linux_dump_symbols%': 0,
+    # And if we want to strip the binary after dumping symbols.
     'linux_strip_binary%': 0,
+    # Strip the test binaries needed for Linux reliability tests.
+    'linux_strip_reliability_tests%': 0,
 
     # Enable TCMalloc.
-    'linux_use_tcmalloc%': 0,
+    'linux_use_tcmalloc%': 1,
+
+    # Disable TCMalloc's debugallocation.
+    'linux_use_debugallocation%': 0,
 
     # Disable TCMalloc's heapchecker.
     'linux_use_heapchecker%': 0,
 
+    # Disable shadow stack keeping used by heapcheck to unwind the stacks
+    # better.
+    'linux_keep_shadow_stacks%': 0,
+
     # Set to 1 to turn on seccomp sandbox by default.
     # (Note: this is ignored for official builds.)
     'linux_use_seccomp_sandbox%': 0,
+
+    # Set to 1 to link against libgnome-keyring instead of using dlopen().
+    'linux_link_gnome_keyring%': 0,
 
     # Set to select the Title Case versions of strings in GRD files.
     'use_titlecase_in_grd_files%': 0,
@@ -226,6 +304,19 @@
     # arm_neon==0).
     'arm_fpu%': 'vfpv3',
 
+    # Enable new NPDevice API.
+    'enable_new_npdevice_api%': 0,
+
+    # Enable EGLImage support in OpenMAX
+    'enable_eglimage%': 0,
+
+    # Enable a variable used elsewhere throughout the GYP files to determine
+    # whether to compile in the sources for the GPU plugin / process.
+    'enable_gpu%': 1,
+
+    # Use OpenSSL instead of NSS. Currently in development.
+    'use_openssl%': 0,
+
     'conditions': [
       ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
         # This will set gcc_version to XY if you are running gcc X.Y.*.
@@ -234,23 +325,15 @@
         # Figure out the python architecture to decide if we build pyauto.
         'python_arch%': '<!(<(DEPTH)/build/linux/python_arch.sh <(sysroot)/usr/lib/libpython<(python_ver).so.1.0)',
         'conditions': [
-          ['branding=="Chrome" or linux_chromium_breakpad==1', {
+          ['branding=="Chrome"', {
             'linux_breakpad%': 1,
-          }, {
-            'linux_breakpad%': 0,
           }],
           # All Chrome builds have breakpad symbols, but only process the
           # symbols from official builds.
-          # TODO(mmoss) dump_syms segfaults on x64. Enable once dump_syms and
-          # crash server handle 64-bit symbols.
-          ['linux_chromium_dump_symbols==1 or '
-           '(branding=="Chrome" and buildtype=="Official" and '
-           'target_arch=="ia32")', {
+          ['(branding=="Chrome" and buildtype=="Official")', {
             'linux_dump_symbols%': 1,
-          }, {
-            'linux_dump_symbols%': 0,
           }],
-          ['toolkit_views==0 and chromeos==0', {
+          ['toolkit_views==0', {
             # GTK wants Title Case strings
             'use_titlecase_in_grd_files%': 1,
           }],
@@ -288,6 +371,9 @@
       # It is on by default on VS 2008 and off on VS 2005.
       ['OS=="win"', {
         'conditions': [
+          ['component=="shared_library"', {
+            'win_use_allocator_shim%': 0,
+          }],
           ['MSVS_VERSION=="2005"', {
             'msvs_multi_core_compile%': 0,
           },{
@@ -306,22 +392,13 @@
           'NACL_WIN64',
         ],
       }],
-      # Compute based on OS and target architecture whether the GPU
-      # plugin / process is supported.
-      [ 'OS=="win" or (OS=="linux" and target_arch!="arm") or OS=="mac"', {
-        # Enable a variable used elsewhere throughout the GYP files to determine
-        # whether to compile in the sources for the GPU plugin / process.
-        'enable_gpu%': 1,
-      }, {  # GPU plugin not supported
-        'enable_gpu%': 0,
-      }],
     ],
 
     # NOTE: When these end up in the Mac bundle, we need to replace '-' for '_'
     # so Cocoa is happy (http://crbug.com/20441).
     'locales': [
       'am', 'ar', 'bg', 'bn', 'ca', 'cs', 'da', 'de', 'el', 'en-GB',
-      'en-US', 'es-419', 'es', 'et', 'fi', 'fil', 'fr', 'gu', 'he',
+      'en-US', 'es-419', 'es', 'et', 'fa', 'fi', 'fil', 'fr', 'gu', 'he',
       'hi', 'hr', 'hu', 'id', 'it', 'ja', 'kn', 'ko', 'lt', 'lv',
       'ml', 'mr', 'nb', 'nl', 'pl', 'pt-BR', 'pt-PT', 'ro', 'ru',
       'sk', 'sl', 'sr', 'sv', 'sw', 'ta', 'te', 'th', 'tr', 'uk',
@@ -347,13 +424,27 @@
       # See http://msdn.microsoft.com/en-us/library/aa652360(VS.71).aspx
       'win_release_Optimization%': '2', # 2 = /Os
       'win_debug_Optimization%': '0',   # 0 = /Od
-      # See http://msdn.microsoft.com/en-us/library/aa652367(VS.71).aspx
-      'win_release_RuntimeLibrary%': '0', # 0 = /MT (nondebug static)
-      'win_debug_RuntimeLibrary%': '1',   # 1 = /MTd (debug static)
+      # See http://msdn.microsoft.com/en-us/library/8wtf2dfz(VS.71).aspx
+      'win_debug_RuntimeChecks%': '3',    # 3 = all checks enabled, 0 = off
+      # See http://msdn.microsoft.com/en-us/library/47238hez(VS.71).aspx
+      'win_debug_InlineFunctionExpansion%': '',    # empty = default, 0 = off,
+      'win_release_InlineFunctionExpansion%': '2', # 1 = only __inline, 2 = max
 
       'release_extra_cflags%': '',
       'debug_extra_cflags%': '',
       'release_valgrind_build%': 0,
+
+      'conditions': [
+        ['OS=="win" and component=="shared_library"', {
+          # See http://msdn.microsoft.com/en-us/library/aa652367.aspx
+          'win_release_RuntimeLibrary%': '2', # 2 = /MT (nondebug DLL)
+          'win_debug_RuntimeLibrary%': '3',   # 3 = /MTd (debug DLL)
+        }, {
+          # See http://msdn.microsoft.com/en-us/library/aa652367.aspx
+          'win_release_RuntimeLibrary%': '0', # 0 = /MT (nondebug static)
+          'win_debug_RuntimeLibrary%': '1',   # 1 = /MTd (debug static)
+        }],
+      ],
     },
     'conditions': [
       ['branding=="Chrome"', {
@@ -361,15 +452,24 @@
       }, {  # else: branding!="Chrome"
         'defines': ['CHROMIUM_BUILD'],
       }],
-      ['toolkit_views==1 or chromeos==1', {
+      ['toolkit_views==1', {
         'defines': ['TOOLKIT_VIEWS=1'],
       }],
       ['chromeos==1', {
         'defines': ['OS_CHROMEOS=1'],
       }],
+      ['touchui==1', {
+        'defines': ['TOUCH_UI=1'],
+      }],
+      ['remoting==1', {
+        'defines': ['ENABLE_REMOTING=1'],
+      }],
+      ['proprietary_codecs==1', {
+        'defines': ['USE_PROPRIETARY_CODECS'],
+      }],
       ['fastbuild!=0', {
         'conditions': [
-          # Finally, for Windows, we simply turn on profiling.
+          # For Windows, we don't genererate debug information.
           ['OS=="win"', {
             'msvs_settings': {
               'VCLinkerTool': {
@@ -379,7 +479,11 @@
                 'DebugInformationFormat': '0',
               }
             }
-         }],  # OS==win
+          }, { # else: OS != "win", generate less debug information.
+            'variables': {
+              'debug_extra_cflags': '-g1',
+            },
+          }],
         ],  # conditions for fastbuild.
       }],  # fastbuild!=0
       ['selinux==1', {
@@ -395,6 +499,16 @@
       ['enable_gpu==1', {
         'defines': [
           'ENABLE_GPU=1',
+        ],
+      }],
+      ['use_openssl==1', {
+        'defines': [
+          'USE_OPENSSL=1',
+        ],
+      }],
+      ['enable_eglimage==1', {
+        'defines': [
+          'ENABLE_EGLIMAGE=1',
         ],
       }],
       ['coverage!=0', {
@@ -436,6 +550,16 @@
          }],  # OS==win
         ],  # conditions for coverage
       }],  # coverage!=0
+      ['OS=="win"', {
+        'defines': [
+          '__STD_C',
+          '_CRT_SECURE_NO_DEPRECATE',
+          '_SCL_SECURE_NO_DEPRECATE',
+        ],
+        'include_dirs': [
+          '<(DEPTH)/third_party/wtl/include',
+        ],
+      }],  # OS==win
     ],  # conditions for 'target_defaults'
     'target_conditions': [
       ['chromium_code==0', {
@@ -465,7 +589,7 @@
           [ 'OS=="mac"', {
             'xcode_settings': {
               'GCC_TREAT_WARNINGS_AS_ERRORS': 'NO',
-              'WARNING_CFLAGS!': ['-Wall'],
+              'WARNING_CFLAGS!': ['-Wall', '-Wextra'],
             },
           }],
         ],
@@ -488,7 +612,7 @@
           }],
           ['OS!="linux" and OS!="freebsd" and OS!="openbsd"', {
             'sources/': [
-              ['exclude', '_(chromeos|gtk|x|x11)(_unittest)?\\.cc$'],
+              ['exclude', '_(chromeos|gtk|x|x11|xdg)(_unittest)?\\.cc$'],
               ['exclude', '/gtk/'],
               ['exclude', '/(gtk|x11)_[^/]*\\.cc$'],
             ],
@@ -502,16 +626,17 @@
           # We use "POSIX" to refer to all non-Windows operating systems.
           ['OS=="win"', {
             'sources/': [ ['exclude', '_posix\\.cc$'] ],
-          }],
-          # Though Skia is conceptually shared by Linux and Windows,
-          # the only _skia files in our tree are Linux-specific.
-          ['OS!="linux" and OS!="freebsd" and OS!="openbsd"', {
-            'sources/': [ ['exclude', '_skia\\.cc$'] ],
+            # turn on warnings for signed/unsigned mismatch on chromium code.
+            'msvs_settings': {
+              'VCCLCompilerTool': {
+                'AdditionalOptions': ['/we4389'],
+              },
+            },
           }],
           ['chromeos!=1', {
             'sources/': [ ['exclude', '_chromeos\\.cc$'] ]
           }],
-          ['OS!="win" and (toolkit_views==0 and chromeos==0)', {
+          ['toolkit_views==0', {
             'sources/': [ ['exclude', '_views\\.cc$'] ]
           }],
         ],
@@ -570,6 +695,7 @@
       },
       'Debug_Base': {
         'abstract': 1,
+        'defines': ['DYNAMIC_ANNOTATIONS_ENABLED=1'],
         'xcode_settings': {
           'COPY_PHASE_STRIP': 'NO',
           'GCC_OPTIMIZATION_LEVEL': '<(mac_debug_optimization)',
@@ -579,8 +705,20 @@
           'VCCLCompilerTool': {
             'Optimization': '<(win_debug_Optimization)',
             'PreprocessorDefinitions': ['_DEBUG'],
-            'BasicRuntimeChecks': '3',
+            'BasicRuntimeChecks': '<(win_debug_RuntimeChecks)',
             'RuntimeLibrary': '<(win_debug_RuntimeLibrary)',
+            'conditions': [
+              # According to MSVS, InlineFunctionExpansion=0 means
+              # "default inlining", not "/Ob0".
+              # Thus, we have to handle InlineFunctionExpansion==0 separately.
+              ['win_debug_InlineFunctionExpansion==0', {
+                'AdditionalOptions': ['/Ob0'],
+              }],
+              ['win_debug_InlineFunctionExpansion!=""', {
+                'InlineFunctionExpansion':
+                  '<(win_debug_InlineFunctionExpansion)',
+              }],
+            ],
           },
           'VCLinkerTool': {
             'LinkIncremental': '<(msvs_debug_link_incremental)',
@@ -611,6 +749,18 @@
           'VCCLCompilerTool': {
             'Optimization': '<(win_release_Optimization)',
             'RuntimeLibrary': '<(win_release_RuntimeLibrary)',
+            'conditions': [
+              # According to MSVS, InlineFunctionExpansion=0 means
+              # "default inlining", not "/Ob0".
+              # Thus, we have to handle InlineFunctionExpansion==0 separately.
+              ['win_release_InlineFunctionExpansion==0', {
+                'AdditionalOptions': ['/Ob0'],
+              }],
+              ['win_release_InlineFunctionExpansion!=""', {
+                'InlineFunctionExpansion':
+                  '<(win_release_InlineFunctionExpansion)',
+              }],
+            ],
           },
           'VCLinkerTool': {
             'LinkIncremental': '1',
@@ -618,17 +768,12 @@
         },
         'conditions': [
           ['release_valgrind_build==0', {
-            'defines': ['NVALGRIND'],
+            'defines': ['NVALGRIND', 'DYNAMIC_ANNOTATIONS_ENABLED=0'],
+          }, {
+            'defines': ['DYNAMIC_ANNOTATIONS_ENABLED=1'],
           }],
           ['win_use_allocator_shim==0', {
             'defines': ['NO_TCMALLOC'],
-          }],
-          ['win_release_RuntimeLibrary==2', {
-            # Visual C++ 2008 barfs when building anything with /MD (msvcrt):
-            #  VC\include\typeinfo(139) : warning C4275: non dll-interface
-            #  class 'stdext::exception' used as base for dll-interface
-            #  class 'std::bad_cast'
-            'msvs_disabled_warnings': [4275],
           }],
           ['OS=="linux"', {
             'cflags': [
@@ -721,6 +866,7 @@
           # Don't export any symbols (for example, to plugins we dlopen()).
           # Note: this is *required* to make some plugins work.
           '-fvisibility=hidden',
+          '-pipe',
         ],
         'cflags_cc': [
           '-fno-rtti',
@@ -810,16 +956,18 @@
             'cflags': [
               '-O>(debug_optimize)',
               '-g',
-              # One can use '-gstabs' to enable building the debugging
-              # information in STABS format for breakpad's dumpsyms.
-            ],
-            'ldflags': [
-              '-rdynamic',  # Allows backtrace to resolve symbols.
             ],
           },
           'Release_Base': {
             'variables': {
               'release_optimize%': '2',
+              # Binaries become big and gold is unable to perform GC
+              # and remove unused sections for some of test targets
+              # on 32 bit platform.
+              # (This is currently observed only in chromeos valgrind bots)
+              # The following flag is to disable --gc-sections linker
+              # option for these bots.
+              'no_gc_sections%': 0,
             },
             'cflags': [
               '-O>(release_optimize)',
@@ -832,8 +980,18 @@
               '-ffunction-sections',
             ],
             'ldflags': [
-              '-Wl,--gc-sections',
+              # Specifically tell the linker to perform optimizations.
+              # See http://lwn.net/Articles/192624/ .
+              '-Wl,-O1',
+              '-Wl,--as-needed',
             ],
+            'conditions' : [
+              ['no_gc_sections==0', {
+                'ldflags': [
+                  '-Wl,--gc-sections',
+                ],
+              }],
+            ]
           },
         },
         'variants': {
@@ -882,11 +1040,30 @@
             # compiler optimized the code, since the value is always kept
             # in its specified precision.
             'conditions': [
-              ['branding=="Chromium"', {
+              ['branding=="Chromium" and disable_sse2==0', {
                 'cflags': [
                   '-march=pentium4',
                   '-msse2',
                   '-mfpmath=sse',
+                ],
+              }],
+              # ChromeOS targets Pinetrail, which is sse3, but most of the
+              # benefit comes from sse2 so this setting allows ChromeOS
+              # to build on other CPUs.  In the future -march=atom would help
+              # but requires a newer compiler.
+              ['chromeos==1 and disable_sse2==0', {
+                'cflags': [
+                  '-msse2',
+                ],
+              }],
+              # Install packages have started cropping up with
+              # different headers between the 32-bit and 64-bit
+              # versions, so we have to shadow those differences off
+              # and make sure a 32-bit-on-64-bit build picks up the
+              # right files.
+              ['host_arch!="ia32"', {
+                'include_dirs+': [
+                  '/usr/include32',
                 ],
               }],
             ],
@@ -955,13 +1132,34 @@
                 ],
               }]]
           }],
+          ['clang==1', {
+            'cflags': [
+              # Don't warn about unused variables, due to a common pattern:
+              #   scoped_deleter unused_variable(&thing_to_delete);
+              '-Wno-unused-variable',
+              # Clang spots more unused functions.
+              '-Wno-unused-function',
+              # gtest confuses clang.
+              '-Wno-bool-conversions',
+              # Don't die on dtoa code that uses a char as an array index.
+              '-Wno-char-subscripts',
+              # Survive EXPECT_EQ(unnamed_enum, unsigned int) -- see
+              # http://code.google.com/p/googletest/source/detail?r=446 .
+              # TODO(thakis): Use -isystem instead (http://crbug.com/58751 ).
+              '-Wno-unnamed-type-template-args',
+            ],
+            'cflags!': [
+              # Clang doesn't seem to know know this flag.
+              '-mfpmath=sse',
+            ],
+          }],
           ['no_strict_aliasing==1', {
             'cflags': [
               '-fno-strict-aliasing',
             ],
           }],
           ['linux_breakpad==1', {
-            'cflags': [ '-gstabs' ],
+            'cflags': [ '-g' ],
             'defines': ['USE_LINUX_BREAKPAD'],
           }],
           ['linux_use_seccomp_sandbox==1 and buildtype!="Official"', {
@@ -987,6 +1185,10 @@
           ['linux_use_heapchecker==0', {
             'defines': ['NO_HEAPCHECKER'],
           }],
+          ['linux_keep_shadow_stacks==1', {
+            'defines': ['KEEP_SHADOW_STACKS'],
+            'cflags': ['-finstrument-functions'],
+          }],
         ],
       },
     }],
@@ -1006,9 +1208,10 @@
     ['OS=="mac"', {
       'target_defaults': {
         'variables': {
-          # This should be 'mac_real_dsym%', but there seems to be a bug
-          # with % in variables that are intended to be set to different
-          # values in different targets, like this one.
+          # These should be 'mac_real_dsym%' and 'mac_strip%', but there
+          # seems to be a bug with % in variables that are intended to be
+          # set to different values in different targets, like these two.
+          'mac_strip': 1,      # Strip debugging symbols from the target.
           'mac_real_dsym': 0,  # Fake .dSYMs are fine in most cases.
         },
         'mac_bundle': 0,
@@ -1033,11 +1236,31 @@
           'MACOSX_DEPLOYMENT_TARGET': '<(mac_deployment_target)',
           'PREBINDING': 'NO',                       # No -Wl,-prebind
           'USE_HEADERMAP': 'NO',
-          'WARNING_CFLAGS': ['-Wall', '-Wendif-labels'],
+          'WARNING_CFLAGS': [
+            '-Wall',
+            '-Wendif-labels',
+            '-Wextra',
+            # Don't warn about unused function parameters.
+            '-Wno-unused-parameter',
+            # Don't warn about the "struct foo f = {0};" initialization
+            # pattern.
+            '-Wno-missing-field-initializers',
+          ],
           'conditions': [
             ['chromium_mac_pch', {'GCC_PRECOMPILE_PREFIX_HEADER': 'YES'},
                                  {'GCC_PRECOMPILE_PREFIX_HEADER': 'NO'}
             ],
+            ['clang==1', {
+              'WARNING_CFLAGS': [
+                # Don't die on dtoa code that uses a char as an array index.
+                # This is required solely for base/third_party/dmg_fp/dtoa.cc.
+                '-Wno-char-subscripts',
+                # Survive EXPECT_EQ(unnamed_enum, unsigned int) -- see
+                # http://code.google.com/p/googletest/source/detail?r=446 .
+                # TODO(thakis): Use -isystem instead (http://crbug.com/58751 ).
+                '-Wno-unnamed-type-template-args',
+              ],
+            }],
           ],
         },
         'target_conditions': [
@@ -1047,7 +1270,8 @@
           ['_mac_bundle', {
             'xcode_settings': {'OTHER_LDFLAGS': ['-Wl,-ObjC']},
           }],
-          ['_type=="executable" or _type=="shared_library"', {
+          ['(_type=="executable" or _type=="shared_library" or \
+             _type=="loadable_module") and mac_strip!=0', {
             'target_conditions': [
               ['mac_real_dsym == 1', {
                 # To get a real .dSYM bundle produced by dsymutil, set the
@@ -1061,14 +1285,14 @@
                       'DEPLOYMENT_POSTPROCESSING': 'YES',
                       'STRIP_INSTALLED_PRODUCT': 'YES',
                       'target_conditions': [
-                        ['_type=="shared_library"', {
+                        ['_type=="shared_library" or _type=="loadable_module"', {
                           # The Xcode default is to strip debugging symbols
                           # only (-S).  Local symbols should be stripped as
                           # well, which will be handled by -x.  Xcode will
                           # continue to insert -S when stripping even when
                           # additional flags are added with STRIPFLAGS.
                           'STRIPFLAGS': '-x',
-                        }],  # _type=="shared_library"
+                        }],  # _type=="shared_library" or _type=="loadable_module"'
                       ],  # target_conditions
                     },  # xcode_settings
                   },  # configuration "Release"
@@ -1091,7 +1315,8 @@
                 ],  # postbuilds
               }],  # mac_real_dsym
             ],  # target_conditions
-          }],  # _type=="executable" or _type=="shared_library"
+          }],  # (_type=="executable" or _type=="shared_library" or
+               #  _type=="loadable_module") and mac_strip!=0
         ],  # target_conditions
       },  # target_defaults
     }],  # OS=="mac"
@@ -1102,24 +1327,31 @@
           'WINVER=0x0600',
           'WIN32',
           '_WINDOWS',
-          '_HAS_EXCEPTIONS=0',
           'NOMINMAX',
           '_CRT_RAND_S',
           'CERT_CHAIN_PARA_HAS_EXTRA_FIELDS',
           'WIN32_LEAN_AND_MEAN',
           '_SECURE_ATL',
+          '_ATL_NO_OPENGL',
           '_HAS_TR1=0',
+        ],
+        'conditions': [
+          ['component=="static_library"', {
+            'defines': [
+              '_HAS_EXCEPTIONS=0',
+            ],
+          }],
         ],
         'msvs_system_include_dirs': [
           '<(DEPTH)/third_party/platformsdk_win7/files/Include',
+          '<(DEPTH)/third_party/directxsdk/files/Include',
           '$(VSInstallDir)/VC/atlmfc/include',
         ],
         'msvs_cygwin_dirs': ['<(DEPTH)/third_party/cygwin'],
-        'msvs_disabled_warnings': [4396, 4503, 4819],
+        'msvs_disabled_warnings': [4351, 4396, 4503, 4819],
         'msvs_settings': {
           'VCCLCompilerTool': {
             'MinimalRebuild': 'false',
-            'ExceptionHandling': '0',
             'BufferSecurityCheck': 'true',
             'EnableFunctionLevelLinking': 'true',
             'RuntimeTypeInfo': 'false',
@@ -1130,12 +1362,19 @@
               [ 'msvs_multi_core_compile', {
                 'AdditionalOptions': ['/MP'],
               }],
+              ['component=="shared_library"', {
+                'ExceptionHandling': '1',  # /EHsc
+              }, {
+                'ExceptionHandling': '0',
+              }],
             ],
           },
           'VCLibrarianTool': {
             'AdditionalOptions': ['/ignore:4221'],
-            'AdditionalLibraryDirectories':
-              ['<(DEPTH)/third_party/platformsdk_win7/files/Lib'],
+            'AdditionalLibraryDirectories': [
+              '<(DEPTH)/third_party/platformsdk_win7/files/Lib',
+              '<(DEPTH)/third_party/directxsdk/files/Lib/x86',
+            ],
           },
           'VCLinkerTool': {
             'AdditionalDependencies': [
@@ -1147,8 +1386,10 @@
               'psapi.lib',
               'dbghelp.lib',
             ],
-            'AdditionalLibraryDirectories':
-              ['<(DEPTH)/third_party/platformsdk_win7/files/Lib'],
+            'AdditionalLibraryDirectories': [
+              '<(DEPTH)/third_party/platformsdk_win7/files/Lib',
+              '<(DEPTH)/third_party/directxsdk/files/Lib/x86',
+            ],
             'GenerateDebugInformation': 'true',
             'MapFileName': '$(OutDir)\\$(TargetName).map',
             'ImportLibrary': '$(OutDir)\\lib\\$(TargetName).lib',
@@ -1172,7 +1413,10 @@
           },
           'VCResourceCompilerTool': {
             'Culture' : '1033',
-            'AdditionalIncludeDirectories': ['<(DEPTH)'],
+            'AdditionalIncludeDirectories': [
+              '<(DEPTH)',
+              '<(SHARED_INTERMEDIATE_DIR)',
+            ],
           },
         },
       },
@@ -1223,6 +1467,13 @@
             },
           },
         },
+      },
+    }],
+    ['enable_new_npdevice_api==1', {
+      'target_defaults': {
+        'defines': [
+          'ENABLE_NEW_NPDEVICE_API',
+        ],
       },
     }],
   ],

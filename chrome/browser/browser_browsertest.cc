@@ -5,24 +5,28 @@
 #include <string>
 
 #include "app/l10n_util.h"
-#include "base/i18n/rtl.h"
+#include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/sys_info.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/app_modal_dialog.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_init.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_window.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/js_modal_dialog.h"
+#include "chrome/browser/native_app_modal_dialog.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tabs/pinned_tab_codec.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tabs/pinned_tab_codec.h"
+#include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/url_constants.h"
@@ -32,6 +36,11 @@
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "net/base/mock_host_resolver.h"
+#include "net/test/test_server.h"
+
+#if defined(OS_WIN)
+#include "base/i18n/rtl.h"
+#endif
 
 namespace {
 
@@ -45,6 +54,8 @@ const std::wstring OPEN_NEW_BEFOREUNLOAD_PAGE =
 
 const FilePath::CharType* kTitle1File = FILE_PATH_LITERAL("title1.html");
 const FilePath::CharType* kTitle2File = FILE_PATH_LITERAL("title2.html");
+
+const FilePath::CharType kDocRoot[] = FILE_PATH_LITERAL("chrome/test/data");
 
 // Given a page title, returns the expected window caption string.
 std::wstring WindowCaptionFromPageTitle(std::wstring page_title) {
@@ -87,52 +98,42 @@ class MockTabStripModelObserver : public TabStripModelObserver {
   DISALLOW_COPY_AND_ASSIGN(MockTabStripModelObserver);
 };
 
+// Used by CloseWithAppMenuOpen. Invokes CloseWindow on the supplied browser.
+class CloseWindowTask : public Task {
+ public:
+  explicit CloseWindowTask(Browser* browser) : browser_(browser) {}
+
+  virtual void Run() {
+    browser_->CloseWindow();
+  }
+
+ private:
+  Browser* browser_;
+
+  DISALLOW_COPY_AND_ASSIGN(CloseWindowTask);
+};
+
+// Used by CloseWithAppMenuOpen. Posts a CloseWindowTask and shows the app menu.
+class RunCloseWithAppMenuTask : public Task {
+ public:
+  explicit RunCloseWithAppMenuTask(Browser* browser) : browser_(browser) {}
+
+  virtual void Run() {
+    // ShowAppMenu is modal under views. Schedule a task that closes the window.
+    MessageLoop::current()->PostTask(FROM_HERE, new CloseWindowTask(browser_));
+    browser_->ShowAppMenu();
+  }
+
+ private:
+  Browser* browser_;
+
+  DISALLOW_COPY_AND_ASSIGN(RunCloseWithAppMenuTask);
+};
+
 }  // namespace
 
 class BrowserTest : public ExtensionBrowserTest {
- public:
-  // Used by phantom tab tests. Creates two tabs, pins the first and makes it
-  // a phantom tab (by closing it).
-  void PhantomTabTest() {
-    HTTPTestServer* server = StartHTTPServer();
-    ASSERT_TRUE(server);
-    host_resolver()->AddRule("www.example.com", "127.0.0.1");
-    GURL url(server->TestServerPage("empty.html"));
-    TabStripModel* model = browser()->tabstrip_model();
-
-    ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("app/")));
-
-    Extension* app_extension = GetExtension();
-
-    ui_test_utils::NavigateToURL(browser(), url);
-
-    TabContents* app_contents = new TabContents(browser()->profile(), NULL,
-                                                MSG_ROUTING_NONE, NULL);
-    app_contents->SetAppExtension(app_extension);
-
-    model->AddTabContents(app_contents, 0, false, 0, false);
-    model->SetTabPinned(0, true);
-    ui_test_utils::NavigateToURL(browser(), url);
-
-    // Close the first, which should make it a phantom.
-    model->CloseTabContentsAt(0);
-
-    // There should still be two tabs.
-    ASSERT_EQ(2, browser()->tab_count());
-    // The first tab should be a phantom.
-    EXPECT_TRUE(model->IsPhantomTab(0));
-    // And the tab contents of the first tab should have changed.
-    EXPECT_TRUE(model->GetTabContentsAt(0) != app_contents);
-  }
-
  protected:
-  virtual void SetUpCommandLine(CommandLine* command_line) {
-    ExtensionBrowserTest::SetUpCommandLine(command_line);
-
-    // Needed for phantom tab tests.
-    command_line->AppendSwitch(switches::kEnableExtensionApps);
-  }
-
   // In RTL locales wrap the page title with RTL embedding characters so that it
   // matches the value returned by GetWindowTitle().
   std::wstring LocaleWindowCaptionFromPageTitle(
@@ -152,7 +153,7 @@ class BrowserTest : public ExtensionBrowserTest {
 #endif
   }
 
-  // Returns the app extension installed by PhantomTabTest.
+  // Returns the app extension aptly named "App Test".
   Extension* GetExtension() {
     const ExtensionList* extensions =
         browser()->profile()->GetExtensionsService()->extensions();
@@ -203,8 +204,10 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_JavascriptAlertActivatesTab) {
   GURL url(ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
                                      FilePath(kTitle1File)));
   ui_test_utils::NavigateToURL(browser(), url);
-  browser()->AddTabWithURL(url, GURL(), PageTransition::TYPED,
-                           true, 0, false, NULL);
+  Browser::AddTabWithURLParams params(url, PageTransition::TYPED);
+  params.index = 0;
+  browser()->AddTabWithURL(&params);
+  EXPECT_EQ(browser(), params.target);
   EXPECT_EQ(2, browser()->tab_count());
   EXPECT_EQ(0, browser()->selected_index());
   TabContents* second_tab = browser()->GetTabContentsAt(1);
@@ -221,14 +224,18 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_JavascriptAlertActivatesTab) {
 // exact number of processes depends on the amount of memory. Previously we
 // had a hard limit of 31 processes and this test is mainly directed at
 // verifying that we don't crash when we pass this limit.
+// Warning: this test can take >30 seconds when running on a slow (low
+// memory?) Mac builder.
 IN_PROC_BROWSER_TEST_F(BrowserTest, ThirtyFourTabs) {
   GURL url(ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
                                      FilePath(kTitle2File)));
 
   // There is one initial tab.
   for (int ix = 0; ix != 33; ++ix) {
-    browser()->AddTabWithURL(url, GURL(), PageTransition::TYPED,
-                             true, 0, false, NULL);
+    Browser::AddTabWithURLParams params(url, PageTransition::TYPED);
+    params.index = 0;
+    browser()->AddTabWithURL(&params);
+    EXPECT_EQ(browser(), params.target);
   }
   EXPECT_EQ(34, browser()->tab_count());
 
@@ -249,7 +256,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, ReloadThenCancelBeforeUnload) {
 
   // Navigate to another page, but click cancel in the dialog.  Make sure that
   // the throbber stops spinning.
-  browser()->Reload();
+  browser()->Reload(CURRENT_TAB);
   AppModalDialog* alert = ui_test_utils::WaitForAppModalDialog();
   alert->CloseModalDialog();
   EXPECT_FALSE(browser()->GetSelectedTabContents()->is_loading());
@@ -259,18 +266,17 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, ReloadThenCancelBeforeUnload) {
       ExecuteJavascriptInWebFrame(L"", L"onbeforeunload=null;");
 }
 
-// Crashy on mac.  http://crbug.com/40150
+// Crashy on mac.  http://crbug.com/38522
 #if defined(OS_MACOSX)
 #define MAYBE_SingleBeforeUnloadAfterWindowClose \
         DISABLED_SingleBeforeUnloadAfterWindowClose
 #else
 #define MAYBE_SingleBeforeUnloadAfterWindowClose \
-        FLAKY_SingleBeforeUnloadAfterWindowClose
+        SingleBeforeUnloadAfterWindowClose
 #endif
 
 // Test for crbug.com/11647.  A page closed with window.close() should not have
 // two beforeunload dialogs shown.
-// Flaky: see http://crbug.com/27039
 IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_SingleBeforeUnloadAfterWindowClose) {
   browser()->GetSelectedTabContents()->render_view_host()->
       ExecuteJavascriptInWebFrame(L"", OPEN_NEW_BEFOREUNLOAD_PAGE);
@@ -281,12 +287,12 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_SingleBeforeUnloadAfterWindowClose) {
   browser()->GetTabContentsAt(0)->render_view_host()->
       ExecuteJavascriptInWebFrame(L"", L"w.close(); alert('bar');");
   AppModalDialog* alert = ui_test_utils::WaitForAppModalDialog();
-  alert->AcceptWindow();
+  alert->native_dialog()->AcceptAppModalDialog();
 
   alert = ui_test_utils::WaitForAppModalDialog();
   EXPECT_FALSE(static_cast<JavaScriptAppModalDialog*>(alert)->
                    is_before_unload_dialog());
-  alert->AcceptWindow();
+  alert->native_dialog()->AcceptAppModalDialog();
 }
 
 // Test that get_process_idle_time() returns reasonable values when compared
@@ -310,42 +316,51 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, RenderIdleTime) {
 // TODO(pinkerton): Disable app-mode in the model until we implement it
 // on the Mac. http://crbug.com/13148
 #if !defined(OS_MACOSX)
-IN_PROC_BROWSER_TEST_F(BrowserTest, CommandCreateAppShortcut) {
-  static const wchar_t kDocRoot[] = L"chrome/test/data";
-  static const FilePath::CharType* kEmptyFile = FILE_PATH_LITERAL("empty.html");
-
+IN_PROC_BROWSER_TEST_F(BrowserTest, CommandCreateAppShortcutFile) {
   CommandUpdater* command_updater = browser()->command_updater();
 
-  // Urls that are okay to have shortcuts.
+  static const FilePath::CharType* kEmptyFile = FILE_PATH_LITERAL("empty.html");
   GURL file_url(ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
                                           FilePath(kEmptyFile)));
   ASSERT_TRUE(file_url.SchemeIs(chrome::kFileScheme));
   ui_test_utils::NavigateToURL(browser(), file_url);
   EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_CREATE_SHORTCUTS));
+}
 
-  scoped_refptr<FTPTestServer> ftp_server(
-        FTPTestServer::CreateServer(kDocRoot));
-  ASSERT_TRUE(NULL != ftp_server.get());
-  GURL ftp_url(ftp_server->TestServerPage(""));
-  ASSERT_TRUE(ftp_url.SchemeIs(chrome::kFtpScheme));
-  ui_test_utils::NavigateToURL(browser(), ftp_url);
-  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_CREATE_SHORTCUTS));
+IN_PROC_BROWSER_TEST_F(BrowserTest, CommandCreateAppShortcutHttp) {
+  CommandUpdater* command_updater = browser()->command_updater();
 
-  scoped_refptr<HTTPTestServer> http_server(
-        HTTPTestServer::CreateServer(kDocRoot, NULL));
-  ASSERT_TRUE(NULL != http_server.get());
-  GURL http_url(http_server->TestServerPage(""));
+  ASSERT_TRUE(test_server()->Start());
+  GURL http_url(test_server()->GetURL(""));
   ASSERT_TRUE(http_url.SchemeIs(chrome::kHttpScheme));
   ui_test_utils::NavigateToURL(browser(), http_url);
   EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_CREATE_SHORTCUTS));
+}
 
-  scoped_refptr<HTTPSTestServer> https_server(
-        HTTPSTestServer::CreateGoodServer(kDocRoot));
-  ASSERT_TRUE(NULL != https_server.get());
-  GURL https_url(https_server->TestServerPage("/"));
+IN_PROC_BROWSER_TEST_F(BrowserTest, CommandCreateAppShortcutHttps) {
+  CommandUpdater* command_updater = browser()->command_updater();
+
+  net::TestServer test_server(net::TestServer::TYPE_HTTPS, FilePath(kDocRoot));
+  ASSERT_TRUE(test_server.Start());
+  GURL https_url(test_server.GetURL("/"));
   ASSERT_TRUE(https_url.SchemeIs(chrome::kHttpsScheme));
   ui_test_utils::NavigateToURL(browser(), https_url);
   EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_CREATE_SHORTCUTS));
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserTest, CommandCreateAppShortcutFtp) {
+  CommandUpdater* command_updater = browser()->command_updater();
+
+  net::TestServer test_server(net::TestServer::TYPE_FTP, FilePath(kDocRoot));
+  ASSERT_TRUE(test_server.Start());
+  GURL ftp_url(test_server.GetURL(""));
+  ASSERT_TRUE(ftp_url.SchemeIs(chrome::kFtpScheme));
+  ui_test_utils::NavigateToURL(browser(), ftp_url);
+  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_CREATE_SHORTCUTS));
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserTest, CommandCreateAppShortcutInvalid) {
+  CommandUpdater* command_updater = browser()->command_updater();
 
   // Urls that should not have shortcuts.
   GURL new_tab_url(chrome::kChromeUINewTabURL);
@@ -369,12 +384,9 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, CommandCreateAppShortcut) {
 // Test RenderView correctly send back favicon url for web page that redirects
 // to an anchor in javascript body.onload handler.
 IN_PROC_BROWSER_TEST_F(BrowserTest, FaviconOfOnloadRedirectToAnchorPage) {
-  static const wchar_t kDocRoot[] = L"chrome/test/data";
-  scoped_refptr<HTTPTestServer> server(
-        HTTPTestServer::CreateServer(kDocRoot, NULL));
-  ASSERT_TRUE(NULL != server.get());
-  GURL url(server->TestServerPage("files/onload_redirect_to_anchor.html"));
-  GURL expected_favicon_url(server->TestServerPage("files/test.png"));
+  ASSERT_TRUE(test_server()->Start());
+  GURL url(test_server()->GetURL("files/onload_redirect_to_anchor.html"));
+  GURL expected_favicon_url(test_server()->GetURL("files/test.png"));
 
   ui_test_utils::NavigateToURL(browser(), url);
 
@@ -383,49 +395,44 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, FaviconOfOnloadRedirectToAnchorPage) {
   EXPECT_EQ(expected_favicon_url.spec(), entry->favicon().url().spec());
 }
 
-// TODO(sky): get these to run on a Mac.
-#if !defined(OS_MACOSX)
-IN_PROC_BROWSER_TEST_F(BrowserTest, PhantomTab) {
-  PhantomTabTest();
-}
+// Test that an icon can be changed from JS.
+IN_PROC_BROWSER_TEST_F(BrowserTest, FaviconChange) {
+  static const FilePath::CharType* kFile =
+      FILE_PATH_LITERAL("onload_change_favicon.html");
+  GURL file_url(ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
+                                          FilePath(kFile)));
+  ASSERT_TRUE(file_url.SchemeIs(chrome::kFileScheme));
+  ui_test_utils::NavigateToURL(browser(), file_url);
 
-IN_PROC_BROWSER_TEST_F(BrowserTest, RevivePhantomTab) {
-  PhantomTabTest();
-
-  if (HasFatalFailure())
-    return;
-
-  TabStripModel* model = browser()->tabstrip_model();
-
-  // Revive the phantom tab by selecting it.
-  browser()->SelectTabContentsAt(0, true);
-
-  // There should still be two tabs.
-  ASSERT_EQ(2, browser()->tab_count());
-  // The first tab should no longer be a phantom.
-  EXPECT_FALSE(model->IsPhantomTab(0));
+  NavigationEntry* entry = browser()->GetSelectedTabContents()->
+      controller().GetActiveEntry();
+  static const FilePath::CharType* kIcon =
+      FILE_PATH_LITERAL("test1.png");
+  GURL expected_favicon_url(
+      ui_test_utils::GetTestUrl(FilePath(FilePath::kCurrentDirectory),
+                                         FilePath(kIcon)));
+  EXPECT_EQ(expected_favicon_url.spec(), entry->favicon().url().spec());
 }
 
 // Makes sure TabClosing is sent when uninstalling an extension that is an app
 // tab.
 IN_PROC_BROWSER_TEST_F(BrowserTest, TabClosingWhenRemovingExtension) {
-  HTTPTestServer* server = StartHTTPServer();
-  ASSERT_TRUE(server);
+  ASSERT_TRUE(test_server()->Start());
   host_resolver()->AddRule("www.example.com", "127.0.0.1");
-  GURL url(server->TestServerPage("empty.html"));
+  GURL url(test_server()->GetURL("empty.html"));
   TabStripModel* model = browser()->tabstrip_model();
 
   ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("app/")));
 
-  Extension* app_extension = GetExtension();
+  Extension* extension_app = GetExtension();
 
   ui_test_utils::NavigateToURL(browser(), url);
 
   TabContents* app_contents = new TabContents(browser()->profile(), NULL,
-                                              MSG_ROUTING_NONE, NULL);
-  app_contents->SetAppExtension(app_extension);
+                                              MSG_ROUTING_NONE, NULL, NULL);
+  app_contents->SetExtensionApp(extension_app);
 
-  model->AddTabContents(app_contents, 0, false, 0, false);
+  model->AddTabContents(app_contents, 0, 0, TabStripModel::ADD_NONE);
   model->SetTabPinned(0, true);
   ui_test_utils::NavigateToURL(browser(), url);
 
@@ -443,39 +450,43 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, TabClosingWhenRemovingExtension) {
   ASSERT_EQ(1, browser()->tab_count());
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserTest, AppTabRemovedWhenExtensionUninstalled) {
-  PhantomTabTest();
-
-  Extension* extension = GetExtension();
-  UninstallExtension(extension->id());
-
-  // The uninstall should have removed the tab.
-  ASSERT_EQ(1, browser()->tab_count());
-}
-#endif  // !defined(OS_MACOSX)
-
+#if defined(OS_WIN)
+// http://crbug.com/46198. On XP/Vista, the failure rate is 5 ~ 6%.
+#define MAYBE_PageLanguageDetection FLAKY_PageLanguageDetection
+#else
+#define MAYBE_PageLanguageDetection PageLanguageDetection
+#endif
 // Tests that the CLD (Compact Language Detection) works properly.
-IN_PROC_BROWSER_TEST_F(BrowserTest, PageLanguageDetection) {
-  static const wchar_t kDocRoot[] = L"chrome/test/data";
-  scoped_refptr<HTTPTestServer> server(
-        HTTPTestServer::CreateServer(kDocRoot, NULL));
-  ASSERT_TRUE(NULL != server.get());
+IN_PROC_BROWSER_TEST_F(BrowserTest, MAYBE_PageLanguageDetection) {
+  ASSERT_TRUE(test_server()->Start());
 
   TabContents* current_tab = browser()->GetSelectedTabContents();
 
   // Navigate to a page in English.
+  ui_test_utils::WindowedNotificationObserverWithDetails<TabContents,
+                                                         std::string>
+      en_language_detected_signal(NotificationType::TAB_LANGUAGE_DETERMINED,
+                                  current_tab);
   ui_test_utils::NavigateToURL(
-      browser(), GURL(server->TestServerPage("files/english_page.html")));
+      browser(), GURL(test_server()->GetURL("files/english_page.html")));
   EXPECT_TRUE(current_tab->language_state().original_language().empty());
-  std::string lang = ui_test_utils::WaitForLanguageDetection(current_tab);
+  en_language_detected_signal.Wait();
+  std::string lang;
+  EXPECT_TRUE(en_language_detected_signal.GetDetailsFor(current_tab, &lang));
   EXPECT_EQ("en", lang);
   EXPECT_EQ("en", current_tab->language_state().original_language());
 
   // Now navigate to a page in French.
+  ui_test_utils::WindowedNotificationObserverWithDetails<TabContents,
+                                                         std::string>
+      fr_language_detected_signal(NotificationType::TAB_LANGUAGE_DETERMINED,
+                                  current_tab);
   ui_test_utils::NavigateToURL(
-      browser(), GURL(server->TestServerPage("files/french_page.html")));
+      browser(), GURL(test_server()->GetURL("files/french_page.html")));
   EXPECT_TRUE(current_tab->language_state().original_language().empty());
-  lang = ui_test_utils::WaitForLanguageDetection(current_tab);
+  fr_language_detected_signal.Wait();
+  lang.clear();
+  EXPECT_TRUE(fr_language_detected_signal.GetDetailsFor(current_tab, &lang));
   EXPECT_EQ("fr", lang);
   EXPECT_EQ("fr", current_tab->language_state().original_language());
 }
@@ -489,20 +500,19 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, PageLanguageDetection) {
 #endif
 // Makes sure pinned tabs are restored correctly on start.
 IN_PROC_BROWSER_TEST_F(BrowserTest, RestorePinnedTabs) {
-  HTTPTestServer* server = StartHTTPServer();
-  ASSERT_TRUE(server);
+  ASSERT_TRUE(test_server()->Start());
 
   // Add an pinned app tab.
   host_resolver()->AddRule("www.example.com", "127.0.0.1");
-  GURL url(server->TestServerPage("empty.html"));
+  GURL url(test_server()->GetURL("empty.html"));
   TabStripModel* model = browser()->tabstrip_model();
   ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("app/")));
-  Extension* app_extension = GetExtension();
+  Extension* extension_app = GetExtension();
   ui_test_utils::NavigateToURL(browser(), url);
   TabContents* app_contents = new TabContents(browser()->profile(), NULL,
-                                              MSG_ROUTING_NONE, NULL);
-  app_contents->SetAppExtension(app_extension);
-  model->AddTabContents(app_contents, 0, false, 0, false);
+                                              MSG_ROUTING_NONE, NULL, NULL);
+  app_contents->SetExtensionApp(extension_app);
+  model->AddTabContents(app_contents, 0, 0, TabStripModel::ADD_NONE);
   model->SetTabPinned(0, true);
   ui_test_utils::NavigateToURL(browser(), url);
 
@@ -519,7 +529,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, RestorePinnedTabs) {
 
   // Simulate launching again.
   CommandLine dummy(CommandLine::ARGUMENTS_ONLY);
-  BrowserInit::LaunchWithProfile launch(std::wstring(), dummy);
+  BrowserInit::LaunchWithProfile launch(FilePath(), dummy);
   launch.profile_ = browser()->profile();
   launch.ProcessStartupURLs(std::vector<GURL>());
 
@@ -547,7 +557,103 @@ IN_PROC_BROWSER_TEST_F(BrowserTest, RestorePinnedTabs) {
   EXPECT_TRUE(new_model->IsTabPinned(0));
   EXPECT_TRUE(new_model->IsTabPinned(1));
 
-  EXPECT_TRUE(new_model->GetTabContentsAt(0)->app_extension() ==
-              app_extension);
+  EXPECT_TRUE(new_model->GetTabContentsAt(0)->extension_app() ==
+              extension_app);
 }
 #endif  // !defined(OS_CHROMEOS)
+
+// This test verifies we don't crash when closing the last window and the app
+// menu is showing.
+IN_PROC_BROWSER_TEST_F(BrowserTest, CloseWithAppMenuOpen) {
+  if (browser_defaults::kBrowserAliveWithNoWindows)
+    return;
+
+  // We need a message loop running for menus on windows.
+  MessageLoop::current()->PostTask(FROM_HERE,
+                                   new RunCloseWithAppMenuTask(browser()));
+}
+
+// TODO(ben): this test was never enabled. It has bit-rotted since being added.
+// It originally lived in browser_unittest.cc, but has been moved here to make
+// room for real browser unit tests.
+#if 0
+class BrowserTest2 : public InProcessBrowserTest {
+ public:
+  BrowserTest2() {
+    host_resolver_proc_ = new net::RuleBasedHostResolverProc(NULL);
+    // Avoid making external DNS lookups. In this test we don't need this
+    // to succeed.
+    host_resolver_proc_->AddSimulatedFailure("*.google.com");
+    scoped_host_resolver_proc_.Init(host_resolver_proc_.get());
+  }
+
+ private:
+  scoped_refptr<net::RuleBasedHostResolverProc> host_resolver_proc_;
+  net::ScopedDefaultHostResolverProc scoped_host_resolver_proc_;
+};
+
+IN_PROC_BROWSER_TEST_F(BrowserTest2, NoTabsInPopups) {
+  Browser::RegisterAppPrefs(L"Test");
+
+  // We start with a normal browser with one tab.
+  EXPECT_EQ(1, browser()->tab_count());
+
+  // Open a popup browser with a single blank foreground tab.
+  Browser* popup_browser = browser()->CreateForType(Browser::TYPE_POPUP,
+                                                    browser()->profile());
+  popup_browser->AddBlankTab(true);
+  EXPECT_EQ(1, popup_browser->tab_count());
+
+  // Now try opening another tab in the popup browser.
+  AddTabWithURLParams params1(url, PageTransition::TYPED);
+  popup_browser->AddTabWithURL(&params1);
+  EXPECT_EQ(popup_browser, params1.target);
+
+  // The popup should still only have one tab.
+  EXPECT_EQ(1, popup_browser->tab_count());
+
+  // The normal browser should now have two.
+  EXPECT_EQ(2, browser()->tab_count());
+
+  // Open an app frame browser with a single blank foreground tab.
+  Browser* app_browser =
+      browser()->CreateForApp(L"Test", browser()->profile(), false);
+  app_browser->AddBlankTab(true);
+  EXPECT_EQ(1, app_browser->tab_count());
+
+  // Now try opening another tab in the app browser.
+  AddTabWithURLParams params2(GURL(chrome::kAboutBlankURL),
+                              PageTransition::TYPED);
+  app_browser->AddTabWithURL(&params2);
+  EXPECT_EQ(app_browser, params2.target);
+
+  // The popup should still only have one tab.
+  EXPECT_EQ(1, app_browser->tab_count());
+
+  // The normal browser should now have three.
+  EXPECT_EQ(3, browser()->tab_count());
+
+  // Open an app frame popup browser with a single blank foreground tab.
+  Browser* app_popup_browser =
+      browser()->CreateForApp(L"Test", browser()->profile(), false);
+  app_popup_browser->AddBlankTab(true);
+  EXPECT_EQ(1, app_popup_browser->tab_count());
+
+  // Now try opening another tab in the app popup browser.
+  AddTabWithURLParams params3(GURL(chrome::kAboutBlankURL),
+                              PageTransition::TYPED);
+  app_popup_browser->AddTabWithURL(&params3);
+  EXPECT_EQ(app_popup_browser, params3.target);
+
+  // The popup should still only have one tab.
+  EXPECT_EQ(1, app_popup_browser->tab_count());
+
+  // The normal browser should now have four.
+  EXPECT_EQ(4, browser()->tab_count());
+
+  // Close the additional browsers.
+  popup_browser->CloseAllTabs();
+  app_browser->CloseAllTabs();
+  app_popup_browser->CloseAllTabs();
+}
+#endif

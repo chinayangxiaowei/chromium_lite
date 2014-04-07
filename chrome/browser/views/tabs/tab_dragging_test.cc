@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,21 +19,35 @@
 #include "views/event.h"
 
 #if defined(OS_CHROMEOS)
-// Disabled, see http://crbug.com/40043.
+// This test doesn't make sense on chromeos as chromeos doesn't allow dragging
+// tabs out.
 #define MAYBE_Tab2OutOfTabStrip DISABLED_Tab2OutOfTabStrip
-#define MAYBE_Tab1Tab3Escape DISABLED_Tab1Tab3Escape
-
 #else
 #define MAYBE_Tab2OutOfTabStrip Tab2OutOfTabStrip
-
-// Flaky, see http://crbug.com/21092.
-#define MAYBE_Tab1Tab3Escape FLAKY_Tab1Tab3Escape
-
 #endif
 
+#if defined(OS_LINUX)
+// Disabled on Toolkit views bot. See http://crbug.com/42614
+#define MAYBE_Tab1Tab3Escape DISABLED_Tab1Tab3Escape
+#elif defined(OS_WIN)
+// Fails on Windows. See http://crbug.com/57687
+#define MAYBE_Tab1Tab3Escape FLAKY_Tab1Tab3Escape
+#else
+#define MAYBE_Tab1Tab3Escape Tab1Tab3Escape
+#endif
+
+// These tests fail on Linux because we haven't implemented all of tab dragging
+// (it's not needed on chromeos). See http://crbug.com/10941
+#if defined(OS_LINUX)
+#define MAYBE_Tab1Tab2 DISABLED_Tab1Tab2
+#define MAYBE_Tab1Tab3 DISABLED_Tab1Tab3
+#else
+#define MAYBE_Tab1Tab2 Tab1Tab2
+#define MAYBE_Tab1Tab3 Tab1Tab3
+#endif
 
 class TabDraggingTest : public UITest {
-protected:
+ protected:
   TabDraggingTest() {
     show_window_ = true;
   }
@@ -41,8 +55,7 @@ protected:
 
 // Automated UI test to open three tabs in a new window, and drag Tab_1 into
 // the position of Tab_2.
-// Disabled as per http://crbug.com/10941
-TEST_F(TabDraggingTest, DISABLED_Tab1Tab2) {
+TEST_F(TabDraggingTest, MAYBE_Tab1Tab2) {
   scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(browser.get());
   scoped_refptr<WindowProxy> window(browser->GetWindow());
@@ -72,8 +85,7 @@ TEST_F(TabDraggingTest, DISABLED_Tab1Tab2) {
   ASSERT_TRUE(tab3.get());
 
   // Make sure 3 tabs are open.
-  ASSERT_TRUE(browser->WaitForTabCountToBecome(initial_tab_count + 2,
-                                               10000));
+  ASSERT_TRUE(browser->WaitForTabCountToBecome(initial_tab_count + 2));
 
   // Get bounds for the tabs.
   gfx::Rect bounds1;
@@ -141,8 +153,7 @@ TEST_F(TabDraggingTest, DISABLED_Tab1Tab2) {
 }
 
 // Drag Tab_1 into the position of Tab_3.
-// Disabled as per http://crbug.com/10941
-TEST_F(TabDraggingTest, DISABLED_Tab1Tab3) {
+TEST_F(TabDraggingTest, MAYBE_Tab1Tab3) {
   scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(browser.get());
   scoped_refptr<WindowProxy> window(browser->GetWindow());
@@ -172,8 +183,7 @@ TEST_F(TabDraggingTest, DISABLED_Tab1Tab3) {
   ASSERT_TRUE(tab3.get());
 
   // Make sure 3 tabs are open.
-  ASSERT_TRUE(browser->WaitForTabCountToBecome(initial_tab_count + 2,
-                                               10000));
+  ASSERT_TRUE(browser->WaitForTabCountToBecome(initial_tab_count + 2));
 
   // Get bounds for the tabs.
   gfx::Rect bounds1;
@@ -268,7 +278,7 @@ TEST_F(TabDraggingTest, MAYBE_Tab1Tab3Escape) {
   ASSERT_TRUE(tab1->GetCurrentURL(&tab1_url));
 
   // Add Tab_2.
-  GURL tab2_url("about:");
+  GURL tab2_url("about:blank");
   ASSERT_TRUE(browser->AppendTab(tab2_url));
   scoped_refptr<TabProxy> tab2(browser->GetTab(1));
   ASSERT_TRUE(tab2.get());
@@ -280,8 +290,7 @@ TEST_F(TabDraggingTest, MAYBE_Tab1Tab3Escape) {
   ASSERT_TRUE(tab3.get());
 
   // Make sure 3 tabs are open.
-  ASSERT_TRUE(browser->WaitForTabCountToBecome(initial_tab_count + 2,
-                                               10000));
+  ASSERT_TRUE(browser->WaitForTabCountToBecome(initial_tab_count + 2));
 
   // Get bounds for the tabs.
   gfx::Rect bounds1;
@@ -391,8 +400,7 @@ TEST_F(TabDraggingTest, MAYBE_Tab2OutOfTabStrip) {
   ASSERT_TRUE(tab3.get());
 
   // Make sure 3 tabs are opened.
-  ASSERT_TRUE(browser->WaitForTabCountToBecome(initial_tab_count + 2,
-                                               10000));
+  ASSERT_TRUE(browser->WaitForTabCountToBecome(initial_tab_count + 2));
 
   // Make sure all the tab URL specs are different.
   ASSERT_TRUE(tab1_url != tab2_url);

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,12 +33,9 @@ void AdjustVolume(Format* buf_out,
   }
 }
 
-// Channel order for AAC
-// From http://www.hydrogenaudio.org/forums/lofiversion/index.php/t40046.html
-
-static const int kChannel_C = 0;
-static const int kChannel_L = 1;
-static const int kChannel_R = 2;
+static const int kChannel_L = 0;
+static const int kChannel_R = 1;
+static const int kChannel_C = 2;
 
 template<class Fixed, int min_value, int max_value>
 static int AddChannel(int val,
@@ -62,9 +59,9 @@ static int AddChannel(int val,
 
 template<class Format, class Fixed, int min_value, int max_value, int bias>
 static void FoldChannels(Format* buf_out,
-                  int sample_count,
-                  const float volume,
-                  int channels) {
+                         int sample_count,
+                         const float volume,
+                         int channels) {
   Format* buf_in = buf_out;
   const int center_volume = static_cast<int>(volume * 0.707f * 65536);
   const int fixed_volume = static_cast<int>(volume * 65536);
@@ -103,7 +100,7 @@ bool AdjustVolume(void* buf,
     memset(buf, 0, buflen);
     return true;
   }
-  if (channels > 0 && channels <= 6 && bytes_per_sample > 0) {
+  if (channels > 0 && channels <= 8 && bytes_per_sample > 0) {
     int sample_count = buflen / bytes_per_sample;
     const int fixed_volume = static_cast<int>(volume * 65536);
     if (bytes_per_sample == 1) {
@@ -133,7 +130,7 @@ bool FoldChannels(void* buf,
                   float volume) {
   DCHECK(buf);
   DCHECK(volume >= 0.0f && volume <= 1.0f);
-  if (channels >= 5 && channels <= 6 && bytes_per_sample > 0) {
+  if (channels > 2 && channels <= 8 && bytes_per_sample > 0) {
     int sample_count = buflen / (channels * bytes_per_sample);
     if (bytes_per_sample == 1) {
       FoldChannels<uint8, int32, -128, 127, 128>(

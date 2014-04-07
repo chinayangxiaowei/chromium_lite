@@ -6,6 +6,7 @@
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_BALLOON_COLLECTION_H_
 #define CHROME_BROWSER_NOTIFICATIONS_BALLOON_COLLECTION_H_
+#pragma once
 
 #include <deque>
 
@@ -43,6 +44,9 @@ class BalloonCollection {
   // Removes a balloon from the collection if present.  Returns
   // true if anything was removed.
   virtual bool Remove(const Notification& notification) = 0;
+
+  // Removes all balloons.
+  virtual void RemoveAll() = 0;
 
   // Is there room to add another notification?
   virtual bool HasSpace() const = 0;

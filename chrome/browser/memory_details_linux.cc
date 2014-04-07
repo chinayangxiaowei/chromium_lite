@@ -8,13 +8,13 @@
 #include <fcntl.h>
 #include <dirent.h>
 
-#include "app/l10n_util.h"
 #include "base/eintr_wrapper.h"
 #include "base/file_version_info.h"
 #include "base/string_util.h"
 #include "base/process_util.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/browser_child_process_host.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/child_process_host.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/zygote_host_linux.h"
 #include "chrome/common/chrome_constants.h"
@@ -25,6 +25,7 @@
 enum BrowserType {
   CHROME = 0,
   FIREFOX,
+  ICEWEASEL,
   OPERA,
   KONQUEROR,
   EPIPHANY,
@@ -37,6 +38,7 @@ enum BrowserType {
 static const char kBrowserPrettyNames[][10] = {
   "Chrome",
   "Firefox",
+  "Iceweasel",
   "Opera",
   "Konqueror",
   "Epiphany",
@@ -52,6 +54,7 @@ static const struct {
   { "firefox-3.5", FIREFOX },
   { "firefox-3.0", FIREFOX },
   { "firefox-bin", FIREFOX },
+  { "iceweasel", ICEWEASEL },
   { "opera", OPERA },
   { "konqueror", KONQUEROR },
   { "epiphany-browse", EPIPHANY },
@@ -103,7 +106,8 @@ static bool GetProcesses(std::vector<Process>* processes) {
       continue;
 
     const ssize_t len = HANDLE_EINTR(read(fd, buf, sizeof(buf) - 1));
-    HANDLE_EINTR(close(fd));
+    if (HANDLE_EINTR(close(fd)) < 0)
+      PLOG(ERROR) << "close";
     if (len < 1)
       continue;
     buf[len] = 0;
@@ -196,7 +200,7 @@ static void GetAllChildren(const std::vector<Process>& processes,
 
 void MemoryDetails::CollectProcessData(
     std::vector<ProcessMemoryInformation> child_info) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   std::vector<Process> processes;
   GetProcesses(&processes);
@@ -262,7 +266,7 @@ void MemoryDetails::CollectProcessData(
   }
 
   // Finally return to the browser thread.
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &MemoryDetails::CollectChildInfoOnUIThread));
 }

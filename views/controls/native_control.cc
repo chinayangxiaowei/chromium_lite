@@ -10,8 +10,9 @@
 #include <atlframe.h>
 #include <atlmisc.h>
 
+#include "app/keyboard_code_conversion_win.h"
+#include "app/keyboard_codes.h"
 #include "app/l10n_util_win.h"
-#include "base/keyboard_codes.h"
 #include "base/logging.h"
 #include "base/win_util.h"
 #include "gfx/native_theme_win.h"
@@ -201,7 +202,7 @@ void NativeControl::ValidateNativeControl() {
 
 void NativeControl::ViewHierarchyChanged(bool is_add, View *parent,
                                          View *child) {
-  if (is_add && child == this && GetWidget()) {
+  if (is_add && parent != this && !container_ && GetWidget()) {
     ValidateNativeControl();
     Layout();
   }
@@ -270,6 +271,7 @@ void NativeControl::Focus() {
   if (container_) {
     DCHECK(container_->GetControl());
     ::SetFocus(container_->GetControl());
+    NotifyAccessibilityEvent(AccessibilityTypes::EVENT_FOCUS, false);
   }
 }
 
@@ -330,7 +332,7 @@ DWORD NativeControl::GetAdditionalExStyle() const {
   // extended window style for a right-to-left layout so the subclass creates
   // a mirrored HWND for the underlying control.
   DWORD ex_style = 0;
-  if (UILayoutIsRightToLeft())
+  if (base::i18n::IsRTL())
     ex_style |= l10n_util::GetExtendedStyles();
 
   return ex_style;
@@ -341,7 +343,7 @@ DWORD NativeControl::GetAdditionalRTLStyle() const {
   // extended window style for a right-to-left layout so the subclass creates
   // a mirrored HWND for the underlying control.
   DWORD ex_style = 0;
-  if (UILayoutIsRightToLeft())
+  if (base::i18n::IsRTL())
     ex_style |= l10n_util::GetExtendedTooltipStyles();
 
   return ex_style;
@@ -358,7 +360,7 @@ LRESULT CALLBACK NativeControl::NativeControlWndProc(HWND window, UINT message,
   DCHECK(native_control);
 
   if (message == WM_KEYDOWN &&
-      native_control->OnKeyDown(win_util::WinToKeyboardCode(w_param))) {
+      native_control->OnKeyDown(app::KeyboardCodeForWindowsKeyCode(w_param))) {
     return 0;
   } else if (message == WM_SETFOCUS) {
     // Let the focus manager know that the focus changed.

@@ -51,14 +51,6 @@ IPC_BEGIN_MESSAGES(PluginProcess)
                        bool /* on or off */)
 #endif
 
-#if defined(OS_MACOSX)
-  // Notifies a plugin process that keyboard focus has changed.  If another
-  // plugin instance has received focus, the instance IDs is passed as a
-  // parameter; if focus has been taken away from a plugin, 0 is passed.
-  IPC_MESSAGE_CONTROL1(PluginProcessMsg_PluginFocusNotify,
-                       uint32 /* instance ID */)
-#endif
-
 IPC_END_MESSAGES(PluginProcess)
 
 
@@ -159,11 +151,6 @@ IPC_BEGIN_MESSAGES(PluginProcessHost)
                        uint32 /* window ID */,
                        gfx::Rect /* window rect */)
 
-  // Notifies the browser that a plugin instance has received keyboard focus.
-  IPC_MESSAGE_CONTROL2(PluginProcessHostMsg_PluginReceivedFocus,
-                       uint32 /* process ID */,
-                       uint32 /* instance ID */)
-
   // Notifies the browser that a plugin instance has requested a cursor
   // visibility change.
   IPC_MESSAGE_CONTROL1(PluginProcessHostMsg_PluginSetCursorVisibility,
@@ -226,12 +213,16 @@ IPC_BEGIN_MESSAGES(Plugin)
   IPC_SYNC_MESSAGE_ROUTED1_0(PluginMsg_UpdateGeometrySync,
                              PluginMsg_UpdateGeometry_Param)
 
-  IPC_SYNC_MESSAGE_ROUTED0_0(PluginMsg_SetFocus)
+  IPC_SYNC_MESSAGE_ROUTED1_0(PluginMsg_SetFocus,
+                             bool /* focused */)
 
   IPC_SYNC_MESSAGE_ROUTED1_2(PluginMsg_HandleInputEvent,
                              IPC::WebInputEventPointer /* event */,
                              bool /* handled */,
                              WebCursor /* cursor type*/)
+
+  IPC_MESSAGE_ROUTED1(PluginMsg_SetContentAreaFocus,
+                      bool /* has_focus */)
 
 #if defined(OS_MACOSX)
   IPC_MESSAGE_ROUTED1(PluginMsg_SetWindowFocus,
@@ -247,6 +238,9 @@ IPC_BEGIN_MESSAGES(Plugin)
   IPC_MESSAGE_ROUTED2(PluginMsg_WindowFrameChanged,
                       gfx::Rect /* window_frame */,
                       gfx::Rect /* view_frame */)
+
+  IPC_MESSAGE_ROUTED1(PluginMsg_ImeCompositionConfirmed,
+                      string16 /* text */)
 #endif
 
   IPC_SYNC_MESSAGE_ROUTED2_0(PluginMsg_WillSendRequest,
@@ -411,6 +405,9 @@ IPC_BEGIN_MESSAGES(PluginHost)
   IPC_MESSAGE_ROUTED1(PluginHostMsg_UpdateGeometry_ACK,
                       int /* ack_key */)
 
+  IPC_MESSAGE_ROUTED1(PluginHostMsg_SetImeEnabled,
+                      bool /* enabled */)
+
   // This message, used in Mac OS X 10.5 and earlier, is sent from the plug-in
   // process to the renderer process to indicate that the plug-in allocated a
   // new TransportDIB that holds the GPU's rendered image.  This information is
@@ -424,8 +421,10 @@ IPC_BEGIN_MESSAGES(PluginHost)
   // Synthesize a fake window handle for the plug-in to identify the instance
   // to the browser, allowing mapping to a surface for hardware accelleration
   // of plug-in content. The browser generates the handle which is then set on
-  // the plug-in.
-  IPC_MESSAGE_ROUTED0(PluginHostMsg_BindFakePluginWindowHandle)
+  // the plug-in. |opaque| indicates whether the content should be treated as
+  // opaque.
+  IPC_MESSAGE_ROUTED1(PluginHostMsg_BindFakePluginWindowHandle,
+                      bool /* opaque */)
 
   // This message, used only on 10.6 and later, is sent from the plug-in process
   // to the renderer process to indicate that the plugin allocated a new

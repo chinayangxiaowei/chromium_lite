@@ -32,6 +32,8 @@
 #include <list>
 
 #include "base/basictypes.h"
+#include "base/file_path.h"
+#include "base/scoped_temp_dir.h"
 #if defined(OS_MACOSX)
 #include "base/lazy_instance.h"
 #endif
@@ -50,16 +52,22 @@ typedef std::list<gfx::NativeWindow> WindowList;
 
 struct WebPreferences;
 class AccessibilityController;
-class FilePath;
 class GURL;
 class TestNavigationEntry;
 class TestNavigationController;
+class TestNotificationPresenter;
 class TestShellDevToolsAgent;
 class TestShellDevToolsClient;
 class TestWebViewDelegate;
 
 namespace base {
 class StringPiece;
+}
+
+namespace WebKit {
+class WebDeviceOrientationClientMock;
+class WebSpeechInputControllerMock;
+class WebSpeechInputListener;
 }
 
 class TestShell : public base::SupportsWeakPtr<TestShell>  {
@@ -74,7 +82,7 @@ public:
       bool dump_pixels;
 
       // Filename we dump pixels to (when pixel testing is enabled).
-      std::wstring pixel_file_name;
+      FilePath pixel_file_name;
       // The md5 hash of the bitmap dump (when pixel testing is enabled).
       std::string pixel_hash;
       // URL of the test.
@@ -91,10 +99,12 @@ public:
     static void CleanupLogging();
 
     // Initialization and clean up of a static member variable.
-    static void InitializeTestShell(bool layout_test_mode);
+    static void InitializeTestShell(bool layout_test_mode,
+                                    bool allow_external_pages);
     static void ShutdownTestShell();
 
     static bool layout_test_mode() { return layout_test_mode_; }
+    static bool allow_external_pages() { return allow_external_pages_; }
 
     // Called from the destructor to let each platform do any necessary
     // cleanup.
@@ -159,6 +169,9 @@ public:
     EventSendingController* event_sending_controller() {
       return event_sending_controller_.get();
     }
+    TestNotificationPresenter* notification_presenter() {
+      return notification_presenter_.get();
+    }
 
     // Resets the LayoutTestController and EventSendingController.  Should be
     // called before loading a page, since some end-editing event notifications
@@ -181,6 +194,10 @@ public:
       return layout_test_mode_ && (test_is_preparing_ || test_is_pending_) &&
              layout_test_controller_->ShouldDumpResourceLoadCallbacks();
     }
+    bool ShouldDumpResourceResponseMIMETypes() {
+      return layout_test_mode_ && (test_is_preparing_ || test_is_pending_) &&
+             layout_test_controller_->ShouldDumpResourceResponseMIMETypes();
+    }
     bool ShouldDumpTitleChanges() {
       return layout_test_mode_ &&
              layout_test_controller_->ShouldDumpTitleChanges();
@@ -196,7 +213,7 @@ public:
     void Reload();
     bool Navigate(const TestNavigationEntry& entry, bool reload);
 
-    bool PromptForSaveFile(const wchar_t* prompt_title, std::wstring* result);
+    bool PromptForSaveFile(const wchar_t* prompt_title, FilePath* result);
     std::wstring GetDocumentText();
     void DumpDocumentText();
     void DumpRenderTree();
@@ -256,12 +273,15 @@ public:
     // Writes the image captured from the given web frame to the given file.
     // The returned string is the ASCII-ized MD5 sum of the image.
     static std::string DumpImage(skia::PlatformCanvas* canvas,
-                                 const std::wstring& file_name,
+                                 const FilePath& path,
                                  const std::string& pixel_hash);
 
     static void ResetWebPreferences();
 
     static void SetAllowScriptsToCloseWindows();
+
+    static void SetAccelerated2dCanvasEnabled(bool enabled);
+    static void SetAcceleratedCompositingEnabled(bool enabled);
 
     WebPreferences* GetWebPreferences() { return web_prefs_; }
 
@@ -303,6 +323,10 @@ public:
       test_params_ = test_params;
     }
 
+    const FilePath& file_system_root() const {
+      return file_system_root_.path();
+    }
+
 #if defined(OS_MACOSX)
     // handle cleaning up a shell given the associated window
     static void DestroyAssociatedShell(gfx::NativeWindow handle);
@@ -318,10 +342,15 @@ public:
       return dev_tools_agent_.get();
     }
 
+    WebKit::WebDeviceOrientationClientMock* device_orientation_client_mock();
+
+    WebKit::WebSpeechInputControllerMock* CreateSpeechInputControllerMock(
+        WebKit::WebSpeechInputListener* listener);
+    WebKit::WebSpeechInputControllerMock* speech_input_controller_mock();
+
 protected:
     void CreateDevToolsClient(TestShellDevToolsAgent* agent);
     bool Initialize(const GURL& starting_url);
-    void InitializeDevToolsAgent(WebKit::WebView* webView);
     bool IsSVGTestURL(const GURL& url);
     void SizeToSVG();
     void SizeToDefault();
@@ -373,11 +402,13 @@ private:
     // True if developer extras should be enabled.
     static bool developer_extras_enabled_;
 
-    // Whether DevTools should be open before loading the page.
-    static bool inspector_test_mode_;
-
     // True when the app is being run using the --layout-tests switch.
     static bool layout_test_mode_;
+
+    // True when we wish to allow test shell to load external pages like
+    // www.google.com even when in --layout-test mode (used for QA to
+    // produce images of the rendered page)
+    static bool allow_external_pages_;
 
     // Default timeout in ms for file page loads when in layout test mode.
     static int file_test_timeout_ms_;
@@ -388,6 +419,7 @@ private:
     scoped_ptr<PlainTextController> plain_text_controller_;
     scoped_ptr<TextInputController> text_input_controller_;
     scoped_ptr<TestNavigationController> navigation_controller_;
+    scoped_ptr<TestNotificationPresenter> notification_presenter_;
 
     scoped_ptr<TestWebViewDelegate> delegate_;
     scoped_ptr<TestWebViewDelegate> popup_delegate_;
@@ -395,6 +427,13 @@ private:
     base::WeakPtr<TestShell> devtools_shell_;
     scoped_ptr<TestShellDevToolsAgent> dev_tools_agent_;
     scoped_ptr<TestShellDevToolsClient> dev_tools_client_;
+    scoped_ptr<WebKit::WebDeviceOrientationClientMock>
+        device_orientation_client_mock_;
+    scoped_ptr<WebKit::WebSpeechInputControllerMock>
+        speech_input_controller_mock_;
+
+    // A temporary directory for FileSystem API.
+    ScopedTempDir file_system_root_;
 
     const TestParams* test_params_;
 
@@ -403,6 +442,12 @@ private:
 
     // True while a test is running
     static bool test_is_pending_;
+
+    // True if we're testing the accelerated canvas 2d path.
+    static bool accelerated_2d_canvas_enabled_;
+
+    // True if we're testing the accelerated compositing.
+    static bool accelerated_compositing_enabled_;
 
     // True if driven from a nested message loop.
     bool is_modal_;
@@ -427,4 +472,3 @@ private:
 };
 
 #endif  // WEBKIT_TOOLS_TEST_SHELL_TEST_SHELL_H_
-

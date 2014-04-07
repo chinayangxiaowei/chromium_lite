@@ -90,8 +90,10 @@ struct MockCFDelegate : public ChromeFrameDelegateImpl {
 class MockAutomationProxy : public ChromeFrameAutomationProxy {
  public:
   MOCK_METHOD1(Send, bool(IPC::Message*));
-  MOCK_METHOD3(SendAsAsync, void(IPC::SyncMessage* msg, void* callback,
-                                 void* key));
+  MOCK_METHOD3(SendAsAsync,
+               void(IPC::SyncMessage* msg,
+                    SyncMessageReplyDispatcher::SyncMessageCallContext* context,
+                    void* key));
   MOCK_METHOD1(CancelAsync, void(void* key));
   MOCK_METHOD1(CreateTabProxy, scoped_refptr<TabProxy>(int handle));
   MOCK_METHOD1(ReleaseTabProxy, void(AutomationHandle handle));
@@ -103,12 +105,12 @@ class MockAutomationProxy : public ChromeFrameAutomationProxy {
 };
 
 struct MockAutomationMessageSender : public AutomationMessageSender {
-  MOCK_METHOD1(Send, bool(IPC::Message*));
+  virtual bool Send(IPC::Message* msg) {
+    return proxy_->Send(msg);
+  }
 
   void ForwardTo(StrictMock<MockAutomationProxy> *p) {
     proxy_ = p;
-    ON_CALL(*this, Send(testing::_))
-        .WillByDefault(testing::Invoke(proxy_, &MockAutomationProxy::Send));
   }
 
   StrictMock<MockAutomationProxy>* proxy_;

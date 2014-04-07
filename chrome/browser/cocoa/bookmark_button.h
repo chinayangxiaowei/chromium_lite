@@ -3,11 +3,13 @@
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
+#include <vector>
 #import "chrome/browser/cocoa/draggable_button.h"
 #include "webkit/glue/window_open_disposition.h"
 
 @class BookmarkBarFolderController;
 @class BookmarkButton;
+struct BookmarkDragData;
 class BookmarkModel;
 class BookmarkNode;
 @class BrowserWindowController;
@@ -37,6 +39,13 @@ class ThemeProvider;
 
 // Returns the top-level window for this button.
 - (NSWindow*)browserWindow;
+
+// Returns YES if the bookmark button can be dragged to the trash, NO otherwise.
+- (BOOL)canDragBookmarkButtonToTrash:(BookmarkButton*)button;
+
+// This is called after the user has dropped the bookmark button on the trash.
+// The delegate can use this event to delete the bookmark.
+- (void)didDragBookmarkToTrash:(BookmarkButton*)button;
 
 @end
 
@@ -70,7 +79,7 @@ class ThemeProvider;
 // mode on the NTP.
 - (BOOL)dragShouldLockBarVisibility;
 
-// Perform the actual DnD of a bookmark button.
+// Perform the actual DnD of a bookmark or bookmark button.
 
 // |point| is in the base coordinate system of the destination window;
 // |it comes from an id<NSDraggingInfo>. |copy| is YES if a copy is to be
@@ -80,6 +89,15 @@ class ThemeProvider;
 - (BOOL)dragButton:(BookmarkButton*)sourceButton
                 to:(NSPoint)point
               copy:(BOOL)copy;
+
+// Determine if the pasteboard from |info| has dragging data containing
+// bookmark(s) and perform the drag and return YES, otherwise return NO.
+- (BOOL)dragBookmarkData:(id<NSDraggingInfo>)info;
+
+// Determine if the drag pasteboard has any drag data of type
+// kBookmarkDictionaryListPboardType and, if so, return those elements
+// otherwise return an empty vector.
+- (std::vector<const BookmarkNode*>)retrieveBookmarkDragDataNodes;
 
 // Return YES if we should show the drop indicator, else NO.  In some
 // cases (e.g. hover open) we don't want to show the drop indicator.
@@ -94,8 +112,7 @@ class ThemeProvider;
 // |it comes from an id<NSDraggingInfo>.
 // TODO(viettrungluu,jrg): instead of this, make buttons move around.
 // http://crbug.com/35968
-- (CGFloat)indicatorPosForDragOfButton:(BookmarkButton*)sourceButton
-                               toPoint:(NSPoint)point;
+- (CGFloat)indicatorPosForDragToPoint:(NSPoint)point;
 
 // Return the theme provider associated with this browser window.
 - (ThemeProvider*)themeProvider;
@@ -133,6 +150,15 @@ class ThemeProvider;
 - (void)addButtonForNode:(const BookmarkNode*)node
                  atIndex:(NSInteger)buttonIndex;
 
+// Given a list or |urls| and |titles|, create new bookmark nodes and add
+// them to the bookmark model such that they will be 1) added to the folder
+// represented by the button at |point| if it is a folder, or 2) inserted
+// into the parent of the non-folder bookmark at |point| in front of that
+// button. Returns YES if at least one bookmark was added.
+// TODO(mrossetti): Change function to use a pair-like structure for
+// URLs and titles. http://crbug.com/44411
+- (BOOL)addURLs:(NSArray*)urls withTitles:(NSArray*)titles at:(NSPoint)point;
+
 // Move a button from one place in the menu to another. This is safe
 // to call when a folder menu window is open as that window will be updated.
 - (void)moveButtonFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
@@ -161,6 +187,10 @@ class ThemeProvider;
   // different window), so there is no way to retrieve the same BWC object after
   // a drag.
   BrowserWindowController* visibilityDelegate_;  // weak
+
+  NSPoint dragMouseOffset_;
+  NSPoint dragEndScreenLocation_;
+  BOOL dragPending_;
 }
 
 @property(assign, nonatomic) NSObject<BookmarkButtonDelegate>* delegate;
@@ -179,6 +209,17 @@ class ThemeProvider;
 // http://crbug.com/35967
 - (BOOL)isEmpty;
 
+// Turn on or off pulsing of a bookmark button.
+// Triggered by the bookmark bubble.
+- (void)setIsContinuousPulsing:(BOOL)flag;
+
+// Return continuous pulse state.
+- (BOOL)isContinuousPulsing;
+
+// Return the location in screen coordinates where the remove animation should
+// be displayed.
+- (NSPoint)screenLocationForRemoveAnimation;
+
 @end  // @interface BookmarkButton
 
 
@@ -186,3 +227,17 @@ class ThemeProvider;
 - (void)beginDrag:(NSEvent*)event;
 @end
 
+namespace bookmark_button {
+
+// Notifications for pulsing of bookmarks.
+extern NSString* const kPulseBookmarkButtonNotification;
+
+// Key for userInfo dict of a kPulseBookmarkButtonNotification.
+// Value is a [NSValue valueWithPointer:]; pointer is a (const BookmarkNode*).
+extern NSString* const kBookmarkKey;
+
+// Key for userInfo dict of a kPulseBookmarkButtonNotification.
+// Value is a [NSNumber numberWithBool:] to turn pulsing on or off.
+extern NSString* const kBookmarkPulseFlagKey;
+
+};

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include "app/os_exchange_data.h"
 #include "app/os_exchange_data_provider_win.h"
 #include "base/base_drag_source.h"
-#include "base/logging.h"
-#include "gfx/canvas_paint.h"
+#include "gfx/canvas_skia.h"
 
 namespace views {
 
@@ -24,12 +23,12 @@ void RootView::OnPaint(HWND hwnd) {
     RECT win_version = original_dirty_region.ToRECT();
     InvalidateRect(hwnd, &win_version, FALSE);
   }
-  gfx::CanvasPaint canvas(hwnd);
-  if (!canvas.isEmpty()) {
-    const PAINTSTRUCT& ps = canvas.paintStruct();
-    SchedulePaint(gfx::Rect(ps.rcPaint), false);
+  scoped_ptr<gfx::CanvasPaint> canvas(
+      gfx::CanvasPaint::CreateCanvasPaint(hwnd));
+  if (!canvas->IsValid()) {
+    SchedulePaint(canvas->GetInvalidRect(), false);
     if (NeedsPainting(false))
-      ProcessPaint(&canvas);
+      ProcessPaint(canvas->AsCanvas());
   }
 }
 

@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_HTTP_HTTP_TRANSACTION_UNITTEST_H_
 #define NET_HTTP_HTTP_TRANSACTION_UNITTEST_H_
+#pragma once
 
 #include "net/http/http_transaction.h"
 
@@ -13,10 +14,12 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/message_loop.h"
+#include "base/string16.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "net/base/io_buffer.h"
-#include "net/base/net_errors.h"
 #include "net/base/load_flags.h"
+#include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/http/http_cache.h"
@@ -35,9 +38,9 @@ enum {
   TEST_MODE_SYNC_CACHE_START = 1 << 2,
   TEST_MODE_SYNC_CACHE_READ  = 1 << 3,
   TEST_MODE_SYNC_CACHE_WRITE  = 1 << 4,
-  TEST_MODE_SYNC_ALL = TEST_MODE_SYNC_NET_START | TEST_MODE_SYNC_NET_READ |
-                       TEST_MODE_SYNC_CACHE_START | TEST_MODE_SYNC_CACHE_READ |
-                       TEST_MODE_SYNC_CACHE_WRITE
+  TEST_MODE_SYNC_ALL = (TEST_MODE_SYNC_NET_START | TEST_MODE_SYNC_NET_READ |
+                        TEST_MODE_SYNC_CACHE_START | TEST_MODE_SYNC_CACHE_READ |
+                        TEST_MODE_SYNC_CACHE_WRITE)
 };
 
 typedef void (*MockTransactionHandler)(const net::HttpRequestInfo* request,
@@ -97,7 +100,7 @@ class MockHttpRequest : public net::HttpRequestInfo {
   explicit MockHttpRequest(const MockTransaction& t) {
     url = GURL(t.url);
     method = t.method;
-    extra_headers = t.request_headers;
+    extra_headers.AddHeadersFromString(t.request_headers);
     load_flags = t.load_flags;
   }
 };
@@ -224,8 +227,8 @@ class MockNetworkTransaction : public net::HttpTransaction {
     if (t->handler)
       (t->handler)(request, &resp_status, &resp_headers, &resp_data);
 
-    std::string header_data =
-        StringPrintf("%s\n%s\n", resp_status.c_str(), resp_headers.c_str());
+    std::string header_data = base::StringPrintf(
+        "%s\n%s\n", resp_status.c_str(), resp_headers.c_str());
     std::replace(header_data.begin(), header_data.end(), '\n', '\0');
 
     response_.request_time = base::Time::Now();
@@ -259,8 +262,8 @@ class MockNetworkTransaction : public net::HttpTransaction {
     return net::ERR_FAILED;
   }
 
-  virtual int RestartWithAuth(const std::wstring& username,
-                              const std::wstring& password,
+  virtual int RestartWithAuth(const string16& username,
+                              const string16& password,
                               net::CompletionCallback* callback) {
     return net::ERR_FAILED;
   }
@@ -291,7 +294,8 @@ class MockNetworkTransaction : public net::HttpTransaction {
   }
 
   virtual net::LoadState GetLoadState() const {
-    NOTREACHED() << "define some mock state transitions";
+    if (data_cursor_)
+      return net::LOAD_STATE_READING_RESPONSE;
     return net::LOAD_STATE_IDLE;
   }
 

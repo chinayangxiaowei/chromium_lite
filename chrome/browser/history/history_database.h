@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_HISTORY_HISTORY_DATABASE_H_
 #define CHROME_BROWSER_HISTORY_HISTORY_DATABASE_H_
+#pragma once
 
 #include "app/sql/connection.h"
 #include "app/sql/init_status.h"
@@ -122,6 +123,9 @@ class HistoryDatabase : public DownloadDatabase,
     return needs_version_17_migration_;
   }
 
+  // Update the database version after the TopSites migration.
+  void MigrationToTopSitesDone();
+
   // Visit table functions ----------------------------------------------------
 
   // Update the segment id of a visit. Return true on success.
@@ -136,9 +140,6 @@ class HistoryDatabase : public DownloadDatabase,
   // early expiration (AUTO_SUBFRAMES).
   virtual base::Time GetEarlyExpirationThreshold();
   virtual void UpdateEarlyExpirationThreshold(base::Time threshold);
-
-  // Drops the starred table and star_id from urls.
-  bool MigrateFromVersion15ToVersion16();
 
  private:
   // Implemented for URLDatabase.
@@ -168,7 +169,7 @@ class HistoryDatabase : public DownloadDatabase,
 
   base::Time cached_early_expiration_threshold_;
 
-  // See the getter above.
+  // See the getters above.
   bool needs_version_17_migration_;
 
   DISALLOW_COPY_AND_ASSIGN(HistoryDatabase);

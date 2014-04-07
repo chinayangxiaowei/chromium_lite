@@ -5,19 +5,41 @@
 #include "webkit/appcache/appcache_host.h"
 
 #include "base/logging.h"
+#include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "webkit/appcache/appcache.h"
+#include "webkit/appcache/appcache_backend_impl.h"
 #include "webkit/appcache/appcache_request_handler.h"
 
 namespace appcache {
 
+namespace {
+
+void FillCacheInfo(
+    const AppCache* cache, Status status, AppCacheInfo* info) {
+  DCHECK(cache);
+  info->cache_id = cache->cache_id();
+  info->status = status;
+  info->is_complete = cache->is_complete();
+  if (info->is_complete) {
+    info->manifest_url = cache->owning_group()->manifest_url();
+    info->last_update_time = cache->update_time();
+    info->creation_time = cache->owning_group()->creation_time();
+    info->size = cache->cache_size();
+  }
+}
+
+}  // Anonymous namespace
+
 AppCacheHost::AppCacheHost(int host_id, AppCacheFrontend* frontend,
                            AppCacheService* service)
-    : host_id_(host_id), pending_main_resource_cache_id_(kNoCacheId),
+    : host_id_(host_id), parent_host_id_(kNoHostId), parent_process_id_(0),
+      pending_main_resource_cache_id_(kNoCacheId),
       pending_selected_cache_id_(kNoCacheId),
       frontend_(frontend), service_(service),
       pending_get_status_callback_(NULL), pending_start_update_callback_(NULL),
       pending_swap_cache_callback_(NULL), pending_callback_param_(NULL),
-      main_resource_blocked_(false) {
+      main_resource_blocked_(false), associated_cache_info_pending_(false) {
 }
 
 AppCacheHost::~AppCacheHost() {
@@ -45,7 +67,8 @@ void AppCacheHost::SelectCache(const GURL& document_url,
          !pending_get_status_callback_);
 
   if (main_resource_blocked_)
-    frontend_->OnContentBlocked(host_id_);
+    frontend_->OnContentBlocked(host_id_,
+                                blocked_manifest_url_);
 
   // First we handle an unusual case of SelectCache being called a second
   // time. Generally this shouldn't happen, but with bad content I think
@@ -90,6 +113,31 @@ void AppCacheHost::SelectCache(const GURL& document_url,
 
   // TODO(michaeln): If there was a manifest URL, the user agent may report
   // to the user that it was ignored, to aid in application development.
+  FinishCacheSelection(NULL, NULL);
+}
+
+void AppCacheHost::SelectCacheForWorker(int parent_process_id,
+                                        int parent_host_id) {
+  DCHECK(!pending_start_update_callback_ &&
+         !pending_swap_cache_callback_ &&
+         !pending_get_status_callback_ &&
+         !is_selection_pending());
+
+  parent_process_id_ = parent_process_id;
+  parent_host_id_ = parent_host_id;
+  FinishCacheSelection(NULL, NULL);
+}
+
+void AppCacheHost::SelectCacheForSharedWorker(int64 appcache_id) {
+  DCHECK(!pending_start_update_callback_ &&
+         !pending_swap_cache_callback_ &&
+         !pending_get_status_callback_ &&
+         !is_selection_pending());
+
+  if (appcache_id != kNoCacheId) {
+    LoadSelectedCache(appcache_id);
+    return;
+  }
   FinishCacheSelection(NULL, NULL);
 }
 
@@ -197,17 +245,49 @@ void AppCacheHost::DoPendingSwapCache() {
   pending_callback_param_ = NULL;
 }
 
+AppCacheHost* AppCacheHost::GetParentAppCacheHost() const {
+  DCHECK(is_for_dedicated_worker());
+  AppCacheBackendImpl* backend = service_->GetBackend(parent_process_id_);
+  return backend ? backend->GetHost(parent_host_id_) : NULL;
+}
+
 AppCacheRequestHandler* AppCacheHost::CreateRequestHandler(
                                           URLRequest* request,
-                                          bool is_main_request) {
-  if (is_main_request)
-    return new AppCacheRequestHandler(this, true);
+                                          ResourceType::Type resource_type) {
+  if (is_for_dedicated_worker()) {
+    AppCacheHost* parent_host = GetParentAppCacheHost();
+    if (parent_host)
+      return parent_host->CreateRequestHandler(request, resource_type);
+    return NULL;
+  }
+
+  if (AppCacheRequestHandler::IsMainResourceType(resource_type))
+    return new AppCacheRequestHandler(this, resource_type);
 
   if ((associated_cache() && associated_cache()->is_complete()) ||
       is_selection_pending()) {
-    return new AppCacheRequestHandler(this, false);
+    return new AppCacheRequestHandler(this, resource_type);
   }
   return NULL;
+}
+
+void AppCacheHost::GetResourceList(
+    std::vector<AppCacheResourceInfo>* resource_infos) {
+  if (associated_cache_.get() && associated_cache_->is_complete()) {
+    for (AppCache::EntryMap::const_iterator it =
+         associated_cache_->entries().begin();
+         it != associated_cache_->entries().end(); ++it) {
+      AppCacheResourceInfo info;
+      info.url = it->first;
+      info.is_master = it->second.IsMaster();
+      info.is_manifest = it->second.IsManifest();
+      info.is_fallback = it->second.IsFallback();
+      info.is_foreign = it->second.IsForeign();
+      info.is_explicit = it->second.IsExplicit();
+      info.size = it->second.response_size();
+      resource_infos->push_back(info);
+    }
+  }
 }
 
 Status AppCacheHost::GetStatus() {
@@ -273,8 +353,14 @@ void AppCacheHost::FinishCacheSelection(
     // context being navigated.
     DCHECK(cache->owning_group());
     DCHECK(new_master_entry_url_.is_empty());
-    AssociateCache(cache);
     AppCacheGroup* owing_group = cache->owning_group();
+    const char* kFormatString =
+        "Document was loaded from Application Cache with manifest %s";
+    frontend_->OnLogMessage(
+        host_id_, LOG_INFO,
+        base::StringPrintf(
+            kFormatString, owing_group->manifest_url().spec().c_str()));
+    AssociateCache(cache);
     if (!owing_group->is_obsolete() && !owing_group->is_being_deleted()) {
       owing_group->StartUpdateWithHost(this);
       ObserveGroupBeingUpdated(owing_group);
@@ -287,6 +373,13 @@ void AppCacheHost::FinishCacheSelection(
     // resource from which document was loaded as the new master resourse.
     DCHECK(!group->is_obsolete());
     DCHECK(new_master_entry_url_.is_valid());
+    const char* kFormatString = group->HasCache() ?
+        "Adding master entry to Application Cache with manifest %s" :
+        "Creating Application Cache with manifest %s";
+    frontend_->OnLogMessage(
+        host_id_, LOG_INFO,
+        base::StringPrintf(kFormatString,
+                           group->manifest_url().spec().c_str()));
     AssociateCache(NULL);  // The UpdateJob may produce one for us later.
     group->StartUpdateWithNewMasterEntry(this, new_master_entry_url_);
     ObserveGroupBeingUpdated(group);
@@ -323,10 +416,18 @@ void AppCacheHost::OnUpdateComplete(AppCacheGroup* group) {
 
   group_being_updated_ = NULL;
   newest_cache_of_group_being_updated_ = NULL;
+
+  if (associated_cache_info_pending_ && associated_cache_.get() &&
+      associated_cache_->is_complete()) {
+    AppCacheInfo info;
+    FillCacheInfo(associated_cache_.get(), GetStatus(), &info);
+    associated_cache_info_pending_ = false;
+    frontend_->OnCacheSelected(host_id_, info);
+  }
 }
 
 void AppCacheHost::OnContentBlocked(AppCacheGroup* group) {
-  frontend_->OnContentBlocked(host_id_);
+  frontend_->OnContentBlocked(host_id_, group->manifest_url());
 }
 
 void AppCacheHost::SetSwappableCache(AppCacheGroup* group) {
@@ -351,8 +452,9 @@ void AppCacheHost::LoadMainResourceCache(int64 cache_id) {
   service_->storage()->LoadCache(cache_id, this);
 }
 
-void AppCacheHost::NotifyMainResourceBlocked() {
+void AppCacheHost::NotifyMainResourceBlocked(const GURL& manifest_url) {
   main_resource_blocked_ = true;
+  blocked_manifest_url_ = manifest_url;
 }
 
 void AppCacheHost::AssociateCache(AppCache* cache) {
@@ -362,13 +464,13 @@ void AppCacheHost::AssociateCache(AppCache* cache) {
 
   associated_cache_ = cache;
   SetSwappableCache(cache ? cache->owning_group() : NULL);
-
+  associated_cache_info_pending_ = cache && !cache->is_complete();
+  AppCacheInfo info;
   if (cache) {
     cache->AssociateHost(this);
-    frontend_->OnCacheSelected(host_id_, cache->cache_id(), GetStatus());
-  } else {
-    frontend_->OnCacheSelected(host_id_, kNoCacheId, UNCACHED);
+    FillCacheInfo(cache, GetStatus(), &info);
   }
+  frontend_->OnCacheSelected(host_id_, info);
 }
 
 }  // namespace appcache

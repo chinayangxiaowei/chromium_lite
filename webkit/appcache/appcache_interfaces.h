@@ -9,8 +9,9 @@
 #include <vector>
 #include "base/basictypes.h"
 #include "base/file_path.h"
+#include "base/time.h"
+#include "googleurl/src/gurl.h"
 
-class GURL;
 class URLRequest;
 
 namespace appcache {
@@ -44,21 +45,65 @@ enum EventID {
   OBSOLETE_EVENT
 };
 
-// Interface used by backend to talk to frontend.
+enum LogLevel {
+  LOG_TIP,
+  LOG_INFO,
+  LOG_WARNING,
+  LOG_ERROR,
+};
+
+struct AppCacheInfo {
+  AppCacheInfo();
+  ~AppCacheInfo();
+
+  GURL manifest_url;
+  base::Time creation_time;
+  base::Time last_update_time;
+  base::Time last_access_time;
+  int64 cache_id;
+  Status status;
+  int64 size;
+  bool is_complete;
+};
+
+typedef std::vector<AppCacheInfo> AppCacheInfoVector;
+
+// Type to hold information about a single appcache resource.
+struct AppCacheResourceInfo {
+  AppCacheResourceInfo();
+  ~AppCacheResourceInfo();
+
+  GURL url;
+  int64 size;
+  bool is_master;
+  bool is_manifest;
+  bool is_fallback;
+  bool is_foreign;
+  bool is_explicit;
+};
+
+// Interface used by backend (browser-process) to talk to frontend (renderer).
 class AppCacheFrontend {
  public:
-  virtual void OnCacheSelected(int host_id, int64 cache_id ,
-                               Status status) = 0;
+  virtual void OnCacheSelected(
+      int host_id, const appcache::AppCacheInfo& info) = 0;
   virtual void OnStatusChanged(const std::vector<int>& host_ids,
                                Status status) = 0;
   virtual void OnEventRaised(const std::vector<int>& host_ids,
                              EventID event_id) = 0;
-  virtual void OnContentBlocked(int host_id) = 0;
-
+  virtual void OnProgressEventRaised(const std::vector<int>& host_ids,
+                                     const GURL& url,
+                                     int num_total, int num_complete) = 0;
+  virtual void OnErrorEventRaised(const std::vector<int>& host_ids,
+                                  const std::string& message) = 0;
+  virtual void OnContentBlocked(int host_id,
+                                const GURL& manifest_url) = 0;
+  virtual void OnLogMessage(int host_id, LogLevel log_level,
+                            const std::string& message) = 0;
   virtual ~AppCacheFrontend() {}
 };
 
-// Interface used by frontend to talk to backend.
+// Interface used by frontend (renderer) to talk to backend (browser-process).
 class AppCacheBackend {
  public:
   virtual void RegisterHost(int host_id) = 0;
@@ -67,11 +112,20 @@ class AppCacheBackend {
                            const GURL& document_url,
                            const int64 cache_document_was_loaded_from,
                            const GURL& manifest_url) = 0;
+  virtual void SelectCacheForWorker(
+                           int host_id,
+                           int parent_process_id,
+                           int parent_host_id) = 0;
+  virtual void SelectCacheForSharedWorker(
+                           int host_id,
+                           int64 appcache_id) = 0;
   virtual void MarkAsForeignEntry(int host_id, const GURL& document_url,
                                   int64 cache_document_was_loaded_from) = 0;
   virtual Status GetStatus(int host_id) = 0;
   virtual bool StartUpdate(int host_id) = 0;
   virtual bool SwapCache(int host_id) = 0;
+  virtual void GetResourceList(
+      int host_id, std::vector<AppCacheResourceInfo>* resource_infos) = 0;
 
   virtual ~AppCacheBackend() {}
 };

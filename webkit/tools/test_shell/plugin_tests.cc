@@ -54,6 +54,9 @@ class PluginTest : public TestShellTest {
   }
 
   void CopyTestPlugin() {
+    // On Linux, we need to delete before copying because if the plugin is a
+    // hard link, the copy will fail.
+    DeleteTestPlugin();
     ASSERT_TRUE(file_util::CopyDirectory(plugin_src_, plugin_file_path_, true));
   }
 
@@ -64,11 +67,6 @@ class PluginTest : public TestShellTest {
   virtual void SetUp() {
     CopyTestPlugin();
     TestShellTest::SetUp();
-  }
-
-  virtual void TearDown() {
-    DeleteTestPlugin();
-    TestShellTest::TearDown();
   }
 
   FilePath plugin_src_;
@@ -124,36 +122,6 @@ TEST_F(PluginTest, Refresh) {
   text = test_shell_->webView()->mainFrame()->contentAsText(10000).utf8();
   ASSERT_EQ(text, "DONE");
 }
-
-#if defined(OS_WIN)
-// TODO(port): Reenable on mac and linux once they have working default plugins.
-TEST_F(PluginTest, DefaultPluginLoadTest) {
-  std::string html = "\
-      <div id='result'>Test running....</div>\
-      <script>\
-      function onSuccess() {\
-        var result = document.getElementById('result');\
-        result.innerHTML = 'DONE';\
-      }\
-      </script>\
-      <DIV ID=PluginDiv>\
-      <object classid=\"clsid:9E8BC6CE-AF35-400c-ABF6-A3F746A1871D\">\
-      <embed type=\"application/chromium-test-default-plugin\"\
-        mode=\"np_embed\"\
-      ></embed>\
-      </object>\
-      </DIV>\
-      ";
-
-  test_shell_->webView()->mainFrame()->loadHTMLString(
-      html, GURL("about:blank"));
-  test_shell_->WaitTestFinished();
-
-  std::string text =
-      test_shell_->webView()->mainFrame()->contentAsText(10000).utf8();
-  ASSERT_EQ(true, StartsWithASCII(text, "DONE", true));
-}
-#endif
 
 // Tests that if a frame is deleted as a result of calling NPP_HandleEvent, we
 // don't crash.

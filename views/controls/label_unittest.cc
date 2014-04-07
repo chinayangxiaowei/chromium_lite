@@ -31,11 +31,11 @@ TEST(LabelTest, FontPropertyCourier) {
 TEST(LabelTest, FontPropertyArial) {
   Label label;
   std::wstring font_name(L"arial");
-  gfx::Font font = gfx::Font::CreateFont(font_name, 30);
+  gfx::Font font(font_name, 30);
   label.SetFont(font);
   gfx::Font font_used = label.font();
-  EXPECT_EQ(font_name, font_used.FontName());
-  EXPECT_EQ(30, font_used.FontSize());
+  EXPECT_EQ(font_name, font_used.GetFontName());
+  EXPECT_EQ(30, font_used.GetFontSize());
 }
 
 TEST(LabelTest, TextProperty) {
@@ -159,17 +159,13 @@ TEST(LabelTest, Accessibility) {
   std::wstring test_text(L"My special text.");
   label.SetText(test_text);
 
-  AccessibilityTypes::Role role;
-  EXPECT_TRUE(label.GetAccessibleRole(&role));
-  EXPECT_EQ(AccessibilityTypes::ROLE_STATICTEXT, role);
+  EXPECT_EQ(AccessibilityTypes::ROLE_STATICTEXT, label.GetAccessibleRole());
 
   std::wstring name;
   EXPECT_TRUE(label.GetAccessibleName(&name));
   EXPECT_EQ(test_text, name);
 
-  AccessibilityTypes::State state;
-  EXPECT_TRUE(label.GetAccessibleState(&state));
-  EXPECT_TRUE(AccessibilityTypes::STATE_READONLY & state);
+  EXPECT_TRUE(AccessibilityTypes::STATE_READONLY & label.GetAccessibleState());
 }
 
 TEST(LabelTest, SingleLineSizing) {
@@ -287,7 +283,7 @@ TEST(LabelTest, DrawSingleLineString) {
 
   // Turn off mirroring so that we don't need to figure out if
   // align right really means align left.
-  label.EnableUIMirroringForRTLLanguages(false);
+  label.set_rtl_alignment_mode(Label::AUTO_DETECT_ALIGNMENT);
 
   std::wstring test_text(L"Here's a string with no returns.");
   label.SetText(test_text);
@@ -405,7 +401,7 @@ TEST(LabelTest, DrawMultiLineString) {
 
   // Turn off mirroring so that we don't need to figure out if
   // align right really means align left.
-  label.EnableUIMirroringForRTLLanguages(false);
+  label.set_rtl_alignment_mode(Label::AUTO_DETECT_ALIGNMENT);
 
   std::wstring test_text(L"Another string\nwith returns\n\n!");
   label.SetText(test_text);
@@ -550,8 +546,7 @@ TEST(LabelTest, DrawSingleLineStringInRTL) {
   Label label;
   label.SetFocusable(false);
 
-  label.EnableUIMirroringForRTLLanguages(true);
-  std::string locale = l10n_util::GetApplicationLocale(std::wstring());
+  std::string locale = l10n_util::GetApplicationLocale("");
   base::i18n::SetICUDefaultLocale("he");
 
   std::wstring test_text(L"Here's a string with no returns.");
@@ -673,8 +668,7 @@ TEST(LabelTest, DrawMultiLineStringInRTL) {
   label.SetFocusable(false);
 
   // Test for RTL.
-  label.EnableUIMirroringForRTLLanguages(true);
-  std::string locale = l10n_util::GetApplicationLocale(std::wstring());
+  std::string locale = l10n_util::GetApplicationLocale("");
   base::i18n::SetICUDefaultLocale("he");
 
   std::wstring test_text(L"Another string\nwith returns\n\n!");

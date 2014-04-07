@@ -1,35 +1,10 @@
-// Copyright 2010, Google Inc.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//    * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//    * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//    * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "chrome_frame/npapi_url_request.h"
 
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
 #include "chrome_frame/np_browser_functions.h"
 #include "chrome_frame/np_utils.h"
 #include "net/base/net_errors.h"
@@ -53,6 +28,14 @@ class NPAPIUrlRequest : public PluginUrlRequest {
   // this will be called on the plugin UI thread only.
   virtual unsigned long API_CALL AddRef();
   virtual unsigned long API_CALL Release();
+
+  const URLRequestStatus& status() const {
+    return status_;
+  }
+
+  NPP instance() const {
+    return instance_;
+  }
 
  private:
   unsigned long ref_count_;
@@ -89,8 +72,30 @@ bool NPAPIUrlRequest::Start() {
     // it using XHR
     result = npapi::GetURLNotify(instance_, url().c_str(), NULL, this);
   } else if (LowerCaseEqualsASCII(method(), "post")) {
+    uint32 data_len = static_cast<uint32>(post_data_len());
+
+    std::string buffer;
+    if (extra_headers().length() > 0) {
+      buffer += extra_headers();
+      TrimWhitespace(buffer, TRIM_ALL, &buffer);
+
+      // Firefox looks specifically for "Content-length: \d+\r\n\r\n"
+      // to detect if extra headers are added to the message buffer.
+      buffer += "\r\nContent-length: ";
+      buffer += base::IntToString(data_len);
+      buffer += "\r\n\r\n";
+    }
+
+    std::string data;
+    data.resize(data_len);
+    uint32 bytes_read;
+    upload_data_->Read(&data[0], data_len,
+                       reinterpret_cast<ULONG*>(&bytes_read));
+    DCHECK_EQ(data_len, bytes_read);
+    buffer += data;
+
     result = npapi::PostURLNotify(instance_, url().c_str(), NULL,
-        extra_headers().length(), extra_headers().c_str(), false, this);
+        buffer.length(), buffer.c_str(), false, this);
   } else {
     NOTREACHED() << "PluginUrlRequest only supports 'GET'/'POST'";
   }
@@ -116,6 +121,8 @@ bool NPAPIUrlRequest::Start() {
 void NPAPIUrlRequest::Stop() {
   DLOG(INFO) << "Finished request: Url - " << url() << " result: "
       << static_cast<int>(status_.status());
+
+  status_.set_status(URLRequestStatus::CANCELED);
   if (stream_) {
     npapi::DestroyStream(instance_, stream_, NPRES_USER_BREAK);
     stream_ = NULL;
@@ -140,21 +147,28 @@ NPError NPAPIUrlRequest::OnStreamCreated(const char* mime_type,
 }
 
 NPError NPAPIUrlRequest::OnStreamDestroyed(NPReason reason) {
-  URLRequestStatus::Status status = URLRequestStatus::FAILED;
-  switch (reason) {
-    case NPRES_DONE:
-      status_.set_status(URLRequestStatus::SUCCESS);
-      status_.set_os_error(0);
-      break;
-    case NPRES_USER_BREAK:
-      status_.set_status(URLRequestStatus::CANCELED);
-      status_.set_os_error(net::ERR_ABORTED);
-      break;
-    case NPRES_NETWORK_ERR:
-    default:
-      status_.set_status(URLRequestStatus::FAILED);
-      status_.set_os_error(net::ERR_CONNECTION_CLOSED);
-      break;
+  // If the request has been aborted, then ignore the |reason| argument.
+  // Normally the execution flow is such than NPRES_USER_BREAK will be passed
+  // when the stream is aborted, but sometimes NPRES_NETWORK_ERROR is passed
+  // instead.  To prevent Chrome from receiving a notification of a failed
+  // network connection, when Chrome actually canceled the request, we ignore
+  // the status here.
+  if (URLRequestStatus::CANCELED != status_.status()) {
+    switch (reason) {
+      case NPRES_DONE:
+        status_.set_status(URLRequestStatus::SUCCESS);
+        status_.set_os_error(0);
+        break;
+      case NPRES_USER_BREAK:
+        status_.set_status(URLRequestStatus::CANCELED);
+        status_.set_os_error(net::ERR_ABORTED);
+        break;
+      case NPRES_NETWORK_ERR:
+      default:
+        status_.set_status(URLRequestStatus::FAILED);
+        status_.set_os_error(net::ERR_CONNECTION_CLOSED);
+        break;
+    }
   }
 
   delegate_->OnResponseEnd(id(), status_);
@@ -208,11 +222,11 @@ void NPAPIUrlRequestManager::StartRequest(int request_id,
         request_info.method, request_info.referrer,
         request_info.extra_request_headers,
         request_info.upload_data,
+        static_cast<ResourceType::Type>(request_info.resource_type),
         enable_frame_busting_)) {
-    // Add to map.
     DCHECK(request_map_.find(request_id) == request_map_.end());
-    request_map_[request_id] = new_request;
     if (new_request->Start()) {
+      request_map_[request_id] = new_request;
       // Keep additional reference on request for NPSTREAM
       // This will be released in NPP_UrlNotify
       new_request->AddRef();
@@ -345,6 +359,13 @@ NPError NPAPIUrlRequestManager::NewStream(NPMIMEType type,
   if (!request)
     return NPERR_NO_ERROR;
 
+  // This stream is being constructed for a request that has already been
+  // canceled.  Signal its immediate termination.
+  if (URLRequestStatus::CANCELED == request->status().status()) {
+    return npapi::DestroyStream(request->instance(),
+                                stream, NPRES_USER_BREAK);
+  }
+
   DCHECK(request_map_.find(request->id()) != request_map_.end());
   // We need to return the requested stream mode if we are returning a success
   // code. If we don't do this it causes Opera to blow up.
@@ -374,8 +395,15 @@ NPError NPAPIUrlRequestManager::DestroyStream(NPStream* stream,
   NPAPIUrlRequest* request = RequestFromNotifyData(stream->notifyData);
   if (!request)
     return NPERR_NO_ERROR;
-  DCHECK(request_map_.find(request->id()) != request_map_.end());
-  return request->OnStreamDestroyed(reason);
+
+  // It is possible to receive notification of a destroyed stream for a
+  // unregistered request:  EndRequest will unregister a request in response
+  // to an AutomationMsg_RequestEnd message.  EndRequest will also invoke
+  // npapi::DestroyStream, which will call back to this function.
+  if (request_map_.find(request->id()) != request_map_.end())
+    return request->OnStreamDestroyed(reason);
+
+  return NPERR_NO_ERROR;
 }
 
 void NPAPIUrlRequestManager::UrlNotify(const char* url, NPReason reason,

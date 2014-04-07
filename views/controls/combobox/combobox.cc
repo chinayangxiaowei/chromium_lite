@@ -5,8 +5,9 @@
 #include "views/controls/combobox/combobox.h"
 
 #include "app/combobox_model.h"
-#include "base/keyboard_codes.h"
+#include "app/keyboard_codes.h"
 #include "base/logging.h"
+#include "base/utf_string_conversions.h"
 #include "views/controls/combobox/native_combobox_wrapper.h"
 #include "views/controls/native/native_view_host.h"
 
@@ -33,6 +34,7 @@ void Combobox::ModelChanged() {
   selected_item_ = std::min(0, model_->GetItemCount());
   if (native_wrapper_)
     native_wrapper_->UpdateFromModel();
+  PreferredSizeChanged();
 }
 
 void Combobox::SetSelectedItem(int index) {
@@ -73,7 +75,7 @@ void Combobox::SetEnabled(bool flag) {
 // VKEY_ESCAPE should be handled by this view when the drop down list is active.
 // In other words, the list should be closed instead of the dialog.
 bool Combobox::SkipDefaultKeyEventProcessing(const KeyEvent& e) {
-  if (e.GetKeyCode() != base::VKEY_ESCAPE ||
+  if (e.GetKeyCode() != app::VKEY_ESCAPE ||
       e.IsShiftDown() || e.IsControlDown() || e.IsAltDown()) {
     return false;
   }
@@ -85,18 +87,12 @@ void Combobox::PaintFocusBorder(gfx::Canvas* canvas) {
     View::PaintFocusBorder(canvas);
 }
 
-bool Combobox::GetAccessibleRole(AccessibilityTypes::Role* role) {
-  DCHECK(role);
-
-  *role = AccessibilityTypes::ROLE_COMBOBOX;
-  return true;
+AccessibilityTypes::Role Combobox::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_COMBOBOX;
 }
 
-bool Combobox::GetAccessibleValue(std::wstring* value) {
-  DCHECK(value);
-
-  *value = model_->GetItemAt(selected_item_);
-  return true;
+std::wstring Combobox::GetAccessibleValue() {
+  return UTF16ToWideHack(model_->GetItemAt(selected_item_));
 }
 
 void Combobox::Focus() {

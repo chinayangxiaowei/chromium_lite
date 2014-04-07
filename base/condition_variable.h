@@ -64,6 +64,7 @@
 
 #ifndef BASE_CONDITION_VARIABLE_H_
 #define BASE_CONDITION_VARIABLE_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -174,6 +175,9 @@ class ConditionVariable {
 
   pthread_cond_t condition_;
   pthread_mutex_t* user_mutex_;
+#if !defined(NDEBUG)
+  Lock* user_lock_;     // Needed to adjust shadow lock state on wait.
+#endif
 
 #endif
 

@@ -25,11 +25,12 @@ WifiDataProviderCommon::WifiDataProviderCommon()
 WifiDataProviderCommon::~WifiDataProviderCommon() {
   // Thread must be stopped before entering destructor chain to avoid race
   // conditions; see comment in DeviceDataProvider::Unregister.
-  DCHECK(!IsRunning()) << "Must call StopDataProvider before destroying me";
+  DCHECK(!IsRunning());  // Must call StopDataProvider before destroying me.
 }
 
 bool WifiDataProviderCommon::StartDataProvider() {
   DCHECK(CalledOnClientThread());
+  DCHECK(!IsRunning());  // StartDataProvider must only be called once.
   return Start();
 }
 
@@ -76,19 +77,21 @@ void WifiDataProviderCommon::CleanUp() {
 void WifiDataProviderCommon::DoWifiScanTask() {
   bool update_available = false;
   WifiData new_data;
-  if (wlan_api_->GetAccessPointData(&new_data.access_point_data)) {
+  if (!wlan_api_->GetAccessPointData(&new_data.access_point_data)) {
+    ScheduleNextScan(polling_policy_->NoWifiInterval());
+  } else {
     {
       AutoLock lock(data_mutex_);
       update_available = wifi_data_.DiffersSignificantly(new_data);
       wifi_data_ = new_data;
     }
-    if (update_available || !is_first_scan_complete_) {
-      is_first_scan_complete_ = true;
-      NotifyListeners();
-    }
+    polling_policy_->UpdatePollingInterval(update_available);
+    ScheduleNextScan(polling_policy_->PollingInterval());
   }
-  polling_policy_->UpdatePollingInterval(update_available);
-  ScheduleNextScan(polling_policy_->PollingInterval());
+  if (update_available || !is_first_scan_complete_) {
+    is_first_scan_complete_ = true;
+    NotifyListeners();
+  }
 }
 
 void WifiDataProviderCommon::ScheduleNextScan(int interval) {

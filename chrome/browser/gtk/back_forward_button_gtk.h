@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_GTK_BACK_FORWARD_BUTTON_GTK_H_
 #define CHROME_BROWSER_GTK_BACK_FORWARD_BUTTON_GTK_H_
+#pragma once
 
 #include "app/gtk_signal.h"
 #include "base/scoped_ptr.h"
@@ -25,7 +26,7 @@ class BackForwardButtonGtk : MenuGtk::Delegate {
 
   // MenuGtk::Delegate implementation.
   virtual void StoppedShowing();
-  bool AlwaysShowImages() const;
+  virtual bool AlwaysShowIconForCmd(int command_id) const;
 
   GtkWidget* widget() { return button_->widget(); }
 

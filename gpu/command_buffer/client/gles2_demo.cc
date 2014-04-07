@@ -12,7 +12,9 @@
 #include <shellapi.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "app/gfx/gl/gl_context.h"
 #include "base/at_exit.h"
+#include "base/command_line.h"
 #include "base/callback.h"
 #include "base/message_loop.h"
 #include "base/ref_counted.h"
@@ -57,6 +59,7 @@ bool GLES2Demo::Setup(void* hwnd, int32 size) {
   GPUProcessor* gpu_processor = new GPUProcessor(command_buffer.get());
   if (!gpu_processor->Initialize(reinterpret_cast<HWND>(hwnd),
                                  gfx::Size(),
+                                 std::vector<int32>(),
                                  NULL,
                                  0)) {
     return NULL;
@@ -66,7 +69,7 @@ bool GLES2Demo::Setup(void* hwnd, int32 size) {
       NewCallback(gpu_processor, &GPUProcessor::ProcessCommands));
 
   GLES2CmdHelper* helper = new GLES2CmdHelper(command_buffer.get());
-  if (!helper->Initialize()) {
+  if (!helper->Initialize(size)) {
     // TODO(gman): cleanup.
     return false;
   }
@@ -84,7 +87,8 @@ bool GLES2Demo::Setup(void* hwnd, int32 size) {
   gles2::SetGLContext(new GLES2Implementation(helper,
                                               transfer_buffer.size,
                                               transfer_buffer.ptr,
-                                              transfer_buffer_id));
+                                              transfer_buffer_id,
+                                              false));
 
   GLFromCPPInit();
 
@@ -191,14 +195,22 @@ int WINAPI WinMain(HINSTANCE instance,
                    LPSTR command_line,
                    int command_show) {
   g_instance = instance;
+  int argc = 1;
+  const char* const argv[] = {
+    "gles2_demo.exe"
+  };
+
 #else
 int main(int argc, char** argv) {
 #endif
+  CommandLine::Init(argc, argv);
 
   const int32 kCommandBufferSize = 1024 * 1024;
 
   base::AtExitManager at_exit_manager;
   MessageLoopForUI message_loop;
+
+  gfx::GLContext::InitializeOneOff();
 
   GLES2Demo* demo = new GLES2Demo();
 
@@ -214,5 +226,3 @@ int main(int argc, char** argv) {
 
   return EXIT_SUCCESS;
 }
-
-

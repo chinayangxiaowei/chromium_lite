@@ -4,12 +4,17 @@
 
 #include "chrome/gpu/gpu_thread.h"
 
-#include "build/build_config.h"
+#include <string>
+#include <vector>
 
+#include "app/gfx/gl/gl_context.h"
 #include "base/command_line.h"
+#include "build/build_config.h"
 #include "chrome/common/child_process.h"
+#include "chrome/common/gpu_info.h"
 #include "chrome/common/gpu_messages.h"
-#include "chrome/gpu/gpu_config.h"
+#include "chrome/gpu/gpu_info_collector.h"
+#include "ipc/ipc_channel_handle.h"
 
 #if defined(OS_WIN)
 #include "chrome/gpu/gpu_view_win.h"
@@ -21,6 +26,7 @@
 #endif
 
 #if defined(OS_LINUX)
+#include "app/x11_util.h"
 #include <gtk/gtk.h>
 #endif
 
@@ -52,6 +58,7 @@ GpuThread::GpuThread() {
     for (size_t i = 0; i < args.size(); ++i) {
       free(argv[i]);
     }
+    x11_util::SetDefaultX11ErrorHandlers();
   }
 #endif
 }
@@ -67,6 +74,10 @@ GpuBackingStoreGLXContext* GpuThread::GetGLXContext() {
 }
 #endif
 
+void GpuThread::RemoveChannel(int renderer_id) {
+  gpu_channels_.erase(renderer_id);
+}
+
 void GpuThread::OnControlMessageReceived(const IPC::Message& msg) {
   bool msg_is_ok = true;
   IPC_BEGIN_MESSAGE_MAP_EX(GpuThread, msg, msg_is_ok)
@@ -76,41 +87,53 @@ void GpuThread::OnControlMessageReceived(const IPC::Message& msg) {
                         OnSynchronize)
     IPC_MESSAGE_HANDLER(GpuMsg_NewRenderWidgetHostView,
                         OnNewRenderWidgetHostView)
+    IPC_MESSAGE_HANDLER(GpuMsg_CollectGraphicsInfo,
+                        OnCollectGraphicsInfo)
+    IPC_MESSAGE_HANDLER(GpuMsg_Crash,
+                        OnCrash)
+    IPC_MESSAGE_HANDLER(GpuMsg_Hang,
+                        OnHang)
   IPC_END_MESSAGE_MAP_EX()
 }
 
 void GpuThread::OnEstablishChannel(int renderer_id) {
   scoped_refptr<GpuChannel> channel;
-
-  GpuChannelMap::const_iterator iter = gpu_channels_.find(renderer_id);
-  if (iter == gpu_channels_.end()) {
-    channel = new GpuChannel(renderer_id);
-  } else {
-    channel = iter->second;
-  }
-
-  DCHECK(channel != NULL);
-
-  if (channel->Init()) {
-    // TODO(apatrick): figure out when to remove channels from the map. They
-    // will never be destroyed otherwise.
-    gpu_channels_[renderer_id] = channel;
-  } else {
-    channel = NULL;
-  }
-
   IPC::ChannelHandle channel_handle;
-  if (channel.get()) {
-    channel_handle.name = channel->GetChannelName();
+  GPUInfo gpu_info;
+
+  // Fail to establish a channel if some implementation of GL cannot be
+  // initialized.
+  if (gfx::GLContext::InitializeOneOff()) {
+    // Fail to establish channel if GPU stats cannot be retreived.
+    if (gpu_info_collector::CollectGraphicsInfo(&gpu_info)) {
+      GpuChannelMap::const_iterator iter = gpu_channels_.find(renderer_id);
+      if (iter == gpu_channels_.end()) {
+        channel = new GpuChannel(renderer_id);
+      } else {
+        channel = iter->second;
+      }
+
+      DCHECK(channel != NULL);
+
+      if (channel->Init()) {
+        gpu_channels_[renderer_id] = channel;
+      } else {
+        channel = NULL;
+      }
+
+      if (channel.get()) {
+        channel_handle.name = channel->GetChannelName();
 #if defined(OS_POSIX)
-    // On POSIX, pass the renderer-side FD. Also mark it as auto-close so that
-    // it gets closed after it has been sent.
-    int renderer_fd = channel->DisownRendererFd();
-    channel_handle.socket = base::FileDescriptor(renderer_fd, true);
+        // On POSIX, pass the renderer-side FD. Also mark it as auto-close so
+        // that it gets closed after it has been sent.
+        int renderer_fd = channel->DisownRendererFd();
+        channel_handle.socket = base::FileDescriptor(renderer_fd, true);
 #endif
+      }
+    }
   }
 
-  Send(new GpuHostMsg_ChannelEstablished(channel_handle));
+  Send(new GpuHostMsg_ChannelEstablished(channel_handle, gpu_info));
 }
 
 void GpuThread::OnSynchronize() {
@@ -129,4 +152,26 @@ void GpuThread::OnNewRenderWidgetHostView(GpuNativeWindowHandle parent_window,
 #else
   NOTIMPLEMENTED();
 #endif
+}
+
+void GpuThread::OnCollectGraphicsInfo() {
+  // Fail to establish a channel if some implementation of GL cannot be
+  // initialized.
+  GPUInfo gpu_info;
+  if (gfx::GLContext::InitializeOneOff()) {
+    gpu_info_collector::CollectGraphicsInfo(&gpu_info);
+  }
+
+  Send(new GpuHostMsg_GraphicsInfoCollected(gpu_info));
+}
+
+void GpuThread::OnCrash() {
+  // Good bye, cruel world.
+  volatile int* it_s_the_end_of_the_world_as_we_know_it = NULL;
+  *it_s_the_end_of_the_world_as_we_know_it = 0xdead;
+}
+
+void GpuThread::OnHang() {
+  for (;;)
+    PlatformThread::Sleep(1000);
 }

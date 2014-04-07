@@ -4,23 +4,25 @@
 // Tests exercising the Chrome Plugin API.
 
 #include "base/file_util.h"
+#include "base/message_loop_proxy.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chrome_plugin_host.h"
-#include "chrome/browser/chrome_thread.h"
-#include "chrome/browser/net/url_request_context_getter.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/chrome_plugin_lib.h"
+#include "chrome/common/net/url_request_context_getter.h"
 #include "chrome/test/chrome_plugin/test_chrome_plugin.h"
 #include "net/base/io_buffer.h"
 #include "net/http/http_response_headers.h"
 #include "net/url_request/url_request_test_job.h"
 #include "net/url_request/url_request_unittest.h"
+#include "net/test/test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
 
-const wchar_t kDocRoot[] = L"chrome/test/data";
+const FilePath::CharType kDocRoot[] = FILE_PATH_LITERAL("chrome/test/data");
 const char kPluginFilename[] = "test_chrome_plugin.dll";
 const int kResponseBufferSize = 4096;
 
@@ -31,6 +33,10 @@ class TestURLRequestContextGetter : public URLRequestContextGetter {
       context_ = new TestURLRequestContext();
     return context_;
   }
+  virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy() {
+    return BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO);
+  }
+
  private:
   ~TestURLRequestContextGetter() {}
   scoped_refptr<URLRequestContext> context_;
@@ -39,7 +45,7 @@ class TestURLRequestContextGetter : public URLRequestContextGetter {
 class ChromePluginTest : public testing::Test, public URLRequest::Delegate {
  public:
   ChromePluginTest()
-      : io_thread_(ChromeThread::IO, &message_loop_),
+      : io_thread_(BrowserThread::IO, &message_loop_),
         request_(NULL),
         response_buffer_(new net::IOBuffer(kResponseBufferSize)),
         plugin_(NULL),
@@ -88,7 +94,7 @@ class ChromePluginTest : public testing::Test, public URLRequest::Delegate {
   }
  protected:
   MessageLoopForIO message_loop_;
-  ChromeThread io_thread_;
+  BrowserThread io_thread_;
 
   // Note: we use URLRequest (instead of URLFetcher) because this allows the
   // request to be intercepted.
@@ -273,11 +279,10 @@ TEST_F(ChromePluginTest, CanMakeGETRequestAsync) {
 
 // Tests that the plugin can issue a POST request.
 TEST_F(ChromePluginTest, CanMakePOSTRequest) {
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(kDocRoot, NULL);
-  ASSERT_TRUE(NULL != server.get());
+  net::TestServer test_server(net::TestServer::TYPE_HTTP, FilePath(kDocRoot));
+  ASSERT_TRUE(test_server.Start());
 
-  GURL url = server->TestServerPage("echo");
+  GURL url = test_server.GetURL("echo");
 
   EXPECT_EQ(CPERR_SUCCESS, test_funcs_.test_make_request("POST", url));
 
@@ -299,4 +304,3 @@ TEST_F(ChromePluginTest, DoesNotInterceptOwnRequest) {
 }
 
 }  // namespace
-

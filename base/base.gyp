@@ -1,4 +1,4 @@
-# Copyright (c) 2009 The Chromium Authors. All rights reserved.
+# Copyright (c) 2010 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -31,8 +31,12 @@
         'base',
       ],
       'sources': [
+        'i18n/char_iterator.cc',
+        'i18n/char_iterator.h',
         'i18n/file_util_icu.cc',
         'i18n/file_util_icu.h',
+        'i18n/icu_encoding_detection.cc',
+        'i18n/icu_encoding_detection.h',
         'i18n/icu_string_conversions.cc',
         'i18n/icu_string_conversions.h',
         'i18n/icu_util.cc',
@@ -53,9 +57,7 @@
       'msvs_guid': '27A30967-4BBA-48D1-8522-CDE95F7B1CEC',
       'sources': [
         # Infrastructure files.
-        'multiprocess_test.h',
         'test/run_all_unittests.cc',
-        'test/test_suite.h',
 
         # Tests.
         'at_exit_unittest.cc',
@@ -68,12 +70,14 @@
         'condition_variable_unittest.cc',
         'crypto/encryptor_unittest.cc',
         'crypto/rsa_private_key_unittest.cc',
+        'crypto/rsa_private_key_nss_unittest.cc',
         'crypto/signature_creator_unittest.cc',
         'crypto/signature_verifier_unittest.cc',
         'crypto/symmetric_key_unittest.cc',
         'data_pack_unittest.cc',
         'debug_util_unittest.cc',
         'dir_reader_posix_unittest.cc',
+        'environment_unittest.cc',
         'event_trace_consumer_win_unittest.cc',
         'event_trace_controller_win_unittest.cc',
         'event_trace_provider_win_unittest.cc',
@@ -86,6 +90,7 @@
         'histogram_unittest.cc',
         'hmac_unittest.cc',
         'id_map_unittest.cc',
+        'i18n/char_iterator_unittest.cc',
         'i18n/file_util_icu_unittest.cc',
         'i18n/icu_string_conversions_unittest.cc',
         'i18n/rtl_unittest.cc',
@@ -97,20 +102,27 @@
         'leak_tracker_unittest.cc',
         'linked_list_unittest.cc',
         'linked_ptr_unittest.cc',
+        'lock_unittest.cc',
+        'logging_unittest.cc',
         'mac_util_unittest.mm',
+        'message_loop_proxy_impl_unittest.cc',
         'message_loop_unittest.cc',
         'message_pump_glib_unittest.cc',
+        'non_thread_safe_unittest.cc',
         'object_watcher_unittest.cc',
         'observer_list_unittest.cc',
         'path_service_unittest.cc',
         'pe_image_unittest.cc',
         'pickle_unittest.cc',
+        'platform_file_unittest.cc',
+        'platform_thread_unittest.cc',
         'pr_time_unittest.cc',
         'process_util_unittest.cc',
         'process_util_unittest_mac.h',
         'process_util_unittest_mac.mm',
         'rand_util_unittest.cc',
         'ref_counted_unittest.cc',
+        'registry_unittest.cc',
         'scoped_bstr_win_unittest.cc',
         'scoped_comptr_win_unittest.cc',
         'scoped_native_library_unittest.cc',
@@ -124,13 +136,17 @@
         'singleton_unittest.cc',
         'stack_container_unittest.cc',
         'stats_table_unittest.cc',
+        'string_number_conversions_unittest.cc',
         'string_piece_unittest.cc',
         'string_split_unittest.cc',
         'string_tokenizer_unittest.cc',
         'string_util_unittest.cc',
+        'stringprintf_unittest.cc',
         'sys_info_unittest.cc',
         'sys_string_conversions_mac_unittest.mm',
         'sys_string_conversions_unittest.cc',
+        'task_queue_unittest.cc',
+        'thread_checker_unittest.cc',
         'thread_collision_warner_unittest.cc',
         'thread_local_storage_unittest.cc',
         'thread_local_unittest.cc',
@@ -139,18 +155,19 @@
         'time_win_unittest.cc',
         'timer_unittest.cc',
         'tools_sanity_unittest.cc',
+        'trace_event_win_unittest.cc',
         'tracked_objects_unittest.cc',
         'tuple_unittest.cc',
         'utf_offset_string_conversions_unittest.cc',
         'utf_string_conversions_unittest.cc',
         'values_unittest.cc',
         'version_unittest.cc',
+        'vlog_unittest.cc',
         'waitable_event_unittest.cc',
         'waitable_event_watcher_unittest.cc',
         'watchdog_unittest.cc',
         'weak_ptr_unittest.cc',
         'win_util_unittest.cc',
-        'wmi_util_unittest.cc',
         'worker_pool_unittest.cc',
       ],
       'include_dirs': [
@@ -161,6 +178,7 @@
       'dependencies': [
         'base',
         'base_i18n',
+        'test_support_base',
         '../testing/gmock.gyp:gmock',
         '../testing/gtest.gyp:gtest',
       ],
@@ -170,6 +188,9 @@
             'file_version_info_unittest.cc',
             'worker_pool_linux_unittest.cc',
           ],
+          'sources': [
+            'xdg_util_unittest.cc',
+          ],
           'dependencies': [
             '../build/linux/system.gyp:gtk',
             '../build/linux/system.gyp:nss',
@@ -178,6 +199,7 @@
         }, {  # OS != "linux" and OS != "freebsd" and OS != "openbsd" and OS != "solaris"
           'sources!': [
             'message_pump_glib_unittest.cc',
+            'crypto/rsa_private_key_nss_unittest.cc',
           ]
         }],
         # This is needed to trigger the dll copy step on windows.
@@ -197,13 +219,14 @@
             'event_trace_provider_win_unittest.cc',
             'object_watcher_unittest.cc',
             'pe_image_unittest.cc',
+            'registry_unittest.cc',
             'scoped_bstr_win_unittest.cc',
             'scoped_comptr_win_unittest.cc',
             'scoped_variant_win_unittest.cc',
             'system_monitor_unittest.cc',
             'time_win_unittest.cc',
+            'trace_event_win_unittest.cc',
             'win_util_unittest.cc',
-            'wmi_util_unittest.cc',
           ],
         }],
       ],
@@ -213,13 +236,35 @@
       'type': '<(library)',
       'dependencies': [
         'base',
+        'base_i18n',
+        '../testing/gmock.gyp:gmock',
+        '../testing/gtest.gyp:gtest',
+      ],
+      'conditions': [
+        ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
+          'dependencies': [
+            # test_suite initializes GTK.
+            '../build/linux/system.gyp:gtk',
+          ],
+        }],
       ],
       'sources': [
+        'perftimer.cc',
+        'test/multiprocess_test.cc',
+        'test/multiprocess_test.h',
+        'test/perf_test_suite.cc',
+        'test/perf_test_suite.h',
         'test/test_file_util.h',
         'test/test_file_util_linux.cc',
         'test/test_file_util_mac.cc',
         'test/test_file_util_posix.cc',
         'test/test_file_util_win.cc',
+        'test/test_suite.cc',
+        'test/test_suite.h',
+        'test/test_switches.cc',
+        'test/test_switches.h',
+        'test/test_timeouts.cc',
+        'test/test_timeouts.h',
       ],
     },
     {
@@ -265,65 +310,6 @@
               'SubSystem': '2',         # Set /SUBSYSTEM:WINDOWS
             },
           },
-        },
-      ],
-    }],
-    [ 'OS == "linux" or OS == "freebsd" or OS == "openbsd" or OS == "solaris"', {
-      'targets': [
-        {
-          'target_name': 'linux_versioninfo',
-          'type': '<(library)',
-          'sources': [
-            'file_version_info_linux.cc',
-          ],
-          'include_dirs': [
-            '..',
-            '<(SHARED_INTERMEDIATE_DIR)',
-          ],
-          'actions': [
-            {
-              'action_name': 'linux_version',
-              'variables': {
-                'lastchange_path':
-                  '<(SHARED_INTERMEDIATE_DIR)/build/LASTCHANGE',
-                'version_py_path': '../chrome/tools/build/version.py',
-                'version_path': '../chrome/VERSION',
-                'template_input_path': 'file_version_info_linux.h.version',
-              },
-              'conditions': [
-                [ 'branding == "Chrome"', {
-                  'variables': {
-                     'branding_path':
-                       '../chrome/app/theme/google_chrome/BRANDING',
-                  },
-                }, { # else branding!="Chrome"
-                  'variables': {
-                     'branding_path':
-                       '../chrome/app/theme/chromium/BRANDING',
-                  },
-                }],
-              ],
-              'inputs': [
-                '<(template_input_path)',
-                '<(version_path)',
-                '<(branding_path)',
-                '<(lastchange_path)',
-              ],
-              'outputs': [
-                '<(SHARED_INTERMEDIATE_DIR)/base/file_version_info_linux.h',
-              ],
-              'action': [
-                'python',
-                '<(version_py_path)',
-                '-f', '<(version_path)',
-                '-f', '<(branding_path)',
-                '-f', '<(lastchange_path)',
-                '<(template_input_path)',
-                '<@(_outputs)',
-              ],
-              'message': 'Generating version information',
-            },
-          ],
         },
       ],
     }],

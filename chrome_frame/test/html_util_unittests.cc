@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,14 +16,15 @@
 #include "base/ref_counted.h"
 #include "base/scoped_handle.h"
 #include "base/task.h"
-#include "base/win_util.h"
+#include "base/utf_string_conversions.h"
 #include "net/base/net_util.h"
 
+#include "chrome/browser/automation/url_request_automation_job.h"
 #include "chrome_frame/chrome_frame_automation.h"
 #include "chrome_frame/chrome_frame_delegate.h"
 #include "chrome_frame/html_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "chrome/browser/automation/url_request_automation_job.h"
+#include "webkit/glue/user_agent.h"
 
 const char kChromeFrameUserAgent[] = "chromeframe";
 
@@ -33,34 +34,34 @@ class HtmlUtilUnittest : public testing::Test {
   HtmlUtilUnittest() {}
 
   // Returns the test path given a test case.
-  virtual bool GetTestPath(const std::wstring& test_case, std::wstring* path) {
+  virtual bool GetTestPath(const std::string& test_case, FilePath* path) {
     if (!path) {
       NOTREACHED();
       return false;
     }
 
-    std::wstring test_path;
+    FilePath test_path;
     if (!PathService::Get(base::DIR_SOURCE_ROOT, &test_path)) {
       NOTREACHED();
       return false;
     }
 
-    file_util::AppendToPath(&test_path, L"chrome_frame");
-    file_util::AppendToPath(&test_path, L"test");
-    file_util::AppendToPath(&test_path, L"html_util_test_data");
-    file_util::AppendToPath(&test_path, test_case);
+    test_path = test_path.AppendASCII("chrome_frame");
+    test_path = test_path.AppendASCII("test");
+    test_path = test_path.AppendASCII("html_util_test_data");
+    test_path = test_path.AppendASCII(test_case);
 
     *path = test_path;
     return true;
   }
 
-  virtual bool GetTestData(const std::wstring& test_case, std::wstring* data) {
+  virtual bool GetTestData(const std::string& test_case, std::wstring* data) {
     if (!data) {
       NOTREACHED();
       return false;
     }
 
-    std::wstring path;
+    FilePath path;
     if (!GetTestPath(test_case, &path)) {
       NOTREACHED();
       return false;
@@ -78,7 +79,7 @@ class HtmlUtilUnittest : public testing::Test {
 
 TEST_F(HtmlUtilUnittest, BasicTest) {
   std::wstring test_data;
-  GetTestData(L"basic_test.html", &test_data);
+  GetTestData("basic_test.html", &test_data);
 
   HTMLScanner scanner(test_data.c_str());
 
@@ -99,7 +100,7 @@ TEST_F(HtmlUtilUnittest, BasicTest) {
 
 TEST_F(HtmlUtilUnittest, QuotesTest) {
   std::wstring test_data;
-  GetTestData(L"quotes_test.html", &test_data);
+  GetTestData("quotes_test.html", &test_data);
 
   HTMLScanner scanner(test_data.c_str());
 
@@ -120,7 +121,7 @@ TEST_F(HtmlUtilUnittest, QuotesTest) {
 
 TEST_F(HtmlUtilUnittest, DegenerateCasesTest) {
   std::wstring test_data;
-  GetTestData(L"degenerate_cases_test.html", &test_data);
+  GetTestData("degenerate_cases_test.html", &test_data);
 
   HTMLScanner scanner(test_data.c_str());
 
@@ -133,7 +134,7 @@ TEST_F(HtmlUtilUnittest, DegenerateCasesTest) {
 
 TEST_F(HtmlUtilUnittest, MultipleTagsTest) {
   std::wstring test_data;
-  GetTestData(L"multiple_tags.html", &test_data);
+  GetTestData("multiple_tags.html", &test_data);
 
   HTMLScanner scanner(test_data.c_str());
 
@@ -292,14 +293,22 @@ TEST_F(HtmlUtilUnittest, AddChromeFrameToUserAgentValue) {
 
 TEST_F(HtmlUtilUnittest, GetDefaultUserAgentHeaderWithCFTag) {
   std::string ua(http_utils::GetDefaultUserAgentHeaderWithCFTag());
-  EXPECT_NE(0, ua.length());
+  EXPECT_NE(0u, ua.length());
   EXPECT_NE(std::string::npos, ua.find("Mozilla"));
   EXPECT_NE(std::string::npos, ua.find(kChromeFrameUserAgent));
 }
 
+TEST_F(HtmlUtilUnittest, GetChromeUserAgent) {
+  std::string chrome_ua;
+  webkit_glue::BuildUserAgent(false, &chrome_ua);
+  EXPECT_FALSE(chrome_ua.empty());
+  const char* ua = http_utils::GetChromeUserAgent();
+  EXPECT_EQ(0, chrome_ua.compare(ua));
+}
+
 TEST_F(HtmlUtilUnittest, GetDefaultUserAgent) {
   std::string ua(http_utils::GetDefaultUserAgent());
-  EXPECT_NE(0, ua.length());
+  EXPECT_NE(0u, ua.length());
   EXPECT_NE(std::string::npos, ua.find("Mozilla"));
 }
 
@@ -368,4 +377,3 @@ TEST(HttpUtils, HasFrameBustingHeader) {
     "X-Frame-Options: SAMEORIGIN\r\n"
     "X-Frame-Options: ALLOWall\r\n"));
 }
-

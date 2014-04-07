@@ -1,6 +1,6 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.  Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 // This file defines FileStream, a basic interface for reading and writing files
 // synchronously or asynchronously with support for seeking to an offset.
@@ -9,6 +9,7 @@
 
 #ifndef NET_BASE_FILE_STREAM_H_
 #define NET_BASE_FILE_STREAM_H_
+#pragma once
 
 #include "base/platform_file.h"
 #include "base/scoped_ptr.h"
@@ -34,6 +35,8 @@ class FileStream {
   // |file| is valid file handle.
   // |flags| is a bitfield of base::PlatformFileFlags when the file handle was
   // opened.
+  // The already opened file will not be automatically closed when FileStream
+  // is destructed.
   FileStream(base::PlatformFile file, int flags);
 
   ~FileStream();
@@ -118,6 +121,15 @@ class FileStream {
   //   platform with this call.
   int64 Truncate(int64 bytes);
 
+  // Forces out a filesystem sync on this file to make sure that the file was
+  // written out to disk and is not currently sitting in the buffer. This does
+  // not have to be called, it just forces one to happen at the time of
+  // calling.
+  //
+  /// Returns an error code if the operation could not be performed.
+  //
+  // This method should not be called if the stream was opened READ_ONLY.
+  int Flush();
  private:
   class AsyncContext;
   friend class AsyncContext;
@@ -128,6 +140,7 @@ class FileStream {
 
   base::PlatformFile file_;
   int open_flags_;
+  bool auto_closed_;
 
   DISALLOW_COPY_AND_ASSIGN(FileStream);
 };

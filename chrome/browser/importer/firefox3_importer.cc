@@ -6,16 +6,18 @@
 
 #include <set>
 
-#include "app/l10n_util.h"
 #include "base/file_util.h"
 #include "base/message_loop.h"
 #include "base/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
+#include "base/values.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/importer/firefox2_importer.h"
 #include "chrome/browser/importer/firefox_importer_utils.h"
 #include "chrome/browser/importer/importer_bridge.h"
+#include "chrome/browser/importer/importer_data_types.h"
 #include "chrome/browser/importer/nss_decryptor.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/common/time_format.h"
@@ -33,42 +35,54 @@ using importer::ProfileInfo;
 using importer::SEARCH_ENGINES;
 using webkit_glue::PasswordForm;
 
-void Firefox3Importer::StartImport(ProfileInfo profile_info,
+Firefox3Importer::Firefox3Importer() {
+#if defined(OS_LINUX)
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  locale_ = g_browser_process->GetApplicationLocale();
+#endif
+}
+
+Firefox3Importer::~Firefox3Importer() {
+}
+
+void Firefox3Importer::StartImport(importer::ProfileInfo profile_info,
                                    uint16 items,
                                    ImporterBridge* bridge) {
+#if defined(OS_LINUX)
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+#endif
   bridge_ = bridge;
-  source_path_ = FilePath::FromWStringHack(profile_info.source_path);
-  app_path_ = FilePath::FromWStringHack(profile_info.app_path);
-
+  source_path_ = profile_info.source_path;
+  app_path_ = profile_info.app_path;
 
   // The order here is important!
   bridge_->NotifyStarted();
-  if ((items & HOME_PAGE) && !cancelled())
+  if ((items & importer::HOME_PAGE) && !cancelled())
     ImportHomepage();  // Doesn't have a UI item.
 
   // Note history should be imported before bookmarks because bookmark import
   // will also import favicons and we store favicon for a URL only if the URL
   // exist in history or bookmarks.
-  if ((items & HISTORY) && !cancelled()) {
-    bridge_->NotifyItemStarted(HISTORY);
+  if ((items & importer::HISTORY) && !cancelled()) {
+    bridge_->NotifyItemStarted(importer::HISTORY);
     ImportHistory();
-    bridge_->NotifyItemEnded(HISTORY);
+    bridge_->NotifyItemEnded(importer::HISTORY);
   }
 
-  if ((items & FAVORITES) && !cancelled()) {
-    bridge_->NotifyItemStarted(FAVORITES);
+  if ((items & importer::FAVORITES) && !cancelled()) {
+    bridge_->NotifyItemStarted(importer::FAVORITES);
     ImportBookmarks();
-    bridge_->NotifyItemEnded(FAVORITES);
+    bridge_->NotifyItemEnded(importer::FAVORITES);
   }
-  if ((items & SEARCH_ENGINES) && !cancelled()) {
-    bridge_->NotifyItemStarted(SEARCH_ENGINES);
+  if ((items & importer::SEARCH_ENGINES) && !cancelled()) {
+    bridge_->NotifyItemStarted(importer::SEARCH_ENGINES);
     ImportSearchEngines();
-    bridge_->NotifyItemEnded(SEARCH_ENGINES);
+    bridge_->NotifyItemEnded(importer::SEARCH_ENGINES);
   }
-  if ((items & PASSWORDS) && !cancelled()) {
-    bridge_->NotifyItemStarted(PASSWORDS);
+  if ((items & importer::PASSWORDS) && !cancelled()) {
+    bridge_->NotifyItemStarted(importer::PASSWORDS);
     ImportPasswords();
-    bridge_->NotifyItemEnded(PASSWORDS);
+    bridge_->NotifyItemEnded(importer::PASSWORDS);
   }
   bridge_->NotifyEnded();
 }
@@ -109,7 +123,7 @@ void Firefox3Importer::ImportHistory() {
       continue;
 
     history::URLRow row(url);
-    row.set_title(s.column_wstring(1));
+    row.set_title(UTF8ToUTF16(s.column_string(1)));
     row.set_visit_count(s.column_int(2));
     row.set_hidden(s.column_int(3) == 1);
     row.set_typed_count(s.column_int(4));
@@ -118,7 +132,7 @@ void Firefox3Importer::ImportHistory() {
     rows.push_back(row);
   }
   if (!rows.empty() && !cancelled()) {
-    bridge_->SetHistoryItems(rows);
+    bridge_->SetHistoryItems(rows, history::SOURCE_FIREFOX_IMPORTED);
   }
 }
 
@@ -174,10 +188,11 @@ void Firefox3Importer::ImportBookmarks() {
       post_keyword_ids.insert(s.column_int(0));
   } else {
     NOTREACHED();
+    return;
   }
 
   std::wstring firefox_folder =
-      l10n_util::GetString(IDS_BOOKMARK_GROUP_FROM_FIREFOX);
+      bridge_->GetLocalizedString(IDS_BOOKMARK_GROUP_FROM_FIREFOX);
   for (size_t i = 0; i < list.size(); ++i) {
     BookmarkItem* item = list[i];
 
@@ -253,7 +268,7 @@ void Firefox3Importer::ImportBookmarks() {
   // Write into profile.
   if (!bookmarks.empty() && !cancelled()) {
     const std::wstring& first_folder_name =
-        l10n_util::GetString(IDS_BOOKMARK_GROUP_FROM_FIREFOX);
+        bridge_->GetLocalizedString(IDS_BOOKMARK_GROUP_FROM_FIREFOX);
     int options = 0;
     if (import_to_bookmark_bar())
       options = ProfileWriter::IMPORT_TO_BOOKMARK_BAR;
@@ -349,9 +364,9 @@ void Firefox3Importer::GetSearchEnginesXMLFiles(
   FilePath app_path = app_path_.AppendASCII("searchplugins");
   FilePath profile_path = source_path_.AppendASCII("searchplugins");
 
-  // Firefox doesn't store a search engine in its sqlite database unless
-  // the user has changed the default definition of engine. So we get search
-  // engines from sqlite db as well as from file system.
+  // Firefox doesn't store a search engine in its sqlite database unless the
+  // user has added a engine. So we get search engines from sqlite db as well
+  // as from the file system.
   if (s.step() == SQLITE_ROW) {
     const std::wstring kAppPrefix = L"[app]/";
     const std::wstring kProfilePrefix = L"[profile]/";
@@ -379,6 +394,20 @@ void Firefox3Importer::GetSearchEnginesXMLFiles(
       files->push_back(file);
     } while (s.step() == SQLITE_ROW && !cancelled());
   }
+
+#if defined(OS_LINUX)
+  // Ubuntu-flavored Firefox3 supports locale-specific search engines via
+  // locale-named subdirectories. They fall back to en-US.
+  // See http://crbug.com/53899
+  // TODO(jshin): we need to make sure our locale code matches that of
+  // Firefox.
+  FilePath locale_app_path = app_path.AppendASCII(locale_);
+  FilePath default_locale_app_path = app_path.AppendASCII("en-US");
+  if (file_util::DirectoryExists(locale_app_path))
+    app_path = locale_app_path;
+  else if (file_util::DirectoryExists(default_locale_app_path))
+    app_path = default_locale_app_path;
+#endif
 
   // Get search engine definition from file system.
   file_util::FileEnumerator engines(app_path, false,

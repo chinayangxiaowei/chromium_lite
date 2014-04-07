@@ -1,51 +1,27 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.  Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "net/ftp/ftp_directory_listing_buffer.h"
 
+#include "base/i18n/icu_encoding_detection.h"
 #include "base/i18n/icu_string_conversions.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "net/base/net_errors.h"
+#include "net/ftp/ftp_directory_listing_parser_hprc.h"
 #include "net/ftp/ftp_directory_listing_parser_ls.h"
 #include "net/ftp/ftp_directory_listing_parser_mlsd.h"
 #include "net/ftp/ftp_directory_listing_parser_netware.h"
 #include "net/ftp/ftp_directory_listing_parser_vms.h"
 #include "net/ftp/ftp_directory_listing_parser_windows.h"
-#include "unicode/ucsdet.h"
-
-namespace {
-
-// A very simple-minded character encoding detection.
-// TODO(jungshik): We can apply more heuristics here (e.g. using various hints
-// like TLD, the UI language/default encoding of a client, etc). In that case,
-// this should be pulled out of here and moved somewhere in base because there
-// can be other use cases.
-std::string DetectEncoding(const std::string& text) {
-  if (IsStringASCII(text))
-    return std::string();
-  UErrorCode status = U_ZERO_ERROR;
-  UCharsetDetector* detector = ucsdet_open(&status);
-  ucsdet_setText(detector, text.data(), static_cast<int32_t>(text.length()),
-                 &status);
-  const UCharsetMatch* match = ucsdet_detect(detector, &status);
-  const char* encoding = ucsdet_getName(match, &status);
-  ucsdet_close(detector);
-  // Should we check the quality of the match? A rather arbitrary number is
-  // assigned by ICU and it's hard to come up with a lower limit.
-  if (U_FAILURE(status))
-    return std::string();
-  return encoding;
-}
-
-}  // namespace
 
 namespace net {
 
 FtpDirectoryListingBuffer::FtpDirectoryListingBuffer(
     const base::Time& current_time)
     : current_parser_(NULL) {
+  parsers_.insert(new FtpDirectoryListingParserHprc(current_time));
   parsers_.insert(new FtpDirectoryListingParserLs(current_time));
   parsers_.insert(new FtpDirectoryListingParserMlsd());
   parsers_.insert(new FtpDirectoryListingParserNetware(current_time));
@@ -109,8 +85,10 @@ bool FtpDirectoryListingBuffer::ConvertToDetectedEncoding(
 }
 
 int FtpDirectoryListingBuffer::ExtractFullLinesFromBuffer() {
-  if (encoding_.empty())
-    encoding_ = DetectEncoding(buffer_);
+  if (encoding_.empty()) {
+    if (!base::DetectEncoding(buffer_, &encoding_))
+      return ERR_ENCODING_DETECTION_FAILED;
+  }
 
   int cut_pos = 0;
   // TODO(phajdan.jr): This code accepts all endlines matching \r*\n. Should it

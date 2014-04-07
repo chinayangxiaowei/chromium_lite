@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,94 +6,161 @@
 
 #include "base/message_loop.h"
 #include "base/string_util.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
-
-// Allows InvokeLater without adding refcounting. This class is a Singleton and
-// won't be deleted until it's last InvokeLater is run.
-template <>
-struct RunnableMethodTraits<chromeos::PowerLibraryImpl> {
-  void RetainCallee(chromeos::PowerLibraryImpl* obj) {}
-  void ReleaseCallee(chromeos::PowerLibraryImpl* obj) {}
-};
 
 namespace chromeos {
 
-PowerLibraryImpl::PowerLibraryImpl()
-    : power_status_connection_(NULL),
-      status_(chromeos::PowerStatus()) {
-  if (CrosLibrary::Get()->EnsureLoaded()) {
-    Init();
+class PowerLibraryImpl : public PowerLibrary {
+ public:
+  PowerLibraryImpl()
+      : power_status_connection_(NULL),
+        status_(chromeos::PowerStatus()) {
+    if (CrosLibrary::Get()->EnsureLoaded()) {
+      Init();
+    }
   }
-}
 
-PowerLibraryImpl::~PowerLibraryImpl() {
-  if (power_status_connection_) {
-    chromeos::DisconnectPowerStatus(power_status_connection_);
+  ~PowerLibraryImpl() {
+    if (power_status_connection_) {
+      chromeos::DisconnectPowerStatus(power_status_connection_);
+    }
   }
-}
 
-void PowerLibraryImpl::AddObserver(Observer* observer) {
-  observers_.AddObserver(observer);
-}
+  void AddObserver(Observer* observer) {
+    observers_.AddObserver(observer);
+  }
 
-void PowerLibraryImpl::RemoveObserver(Observer* observer) {
-  observers_.RemoveObserver(observer);
-}
+  void RemoveObserver(Observer* observer) {
+    observers_.RemoveObserver(observer);
+  }
 
-bool PowerLibraryImpl::line_power_on() const {
-  return status_.line_power_on;
-}
+  bool line_power_on() const {
+    return status_.line_power_on;
+  }
 
-bool PowerLibraryImpl::battery_is_present() const {
-  return status_.battery_is_present;
-}
+  bool battery_is_present() const {
+    return status_.battery_is_present;
+  }
 
-bool PowerLibraryImpl::battery_fully_charged() const {
-  return status_.battery_state == chromeos::BATTERY_STATE_FULLY_CHARGED;
-}
+  bool battery_fully_charged() const {
+    return status_.battery_state == chromeos::BATTERY_STATE_FULLY_CHARGED;
+  }
 
-double PowerLibraryImpl::battery_percentage() const {
-  return status_.battery_percentage;
-}
+  double battery_percentage() const {
+    return status_.battery_percentage;
+  }
 
-base::TimeDelta PowerLibraryImpl::battery_time_to_empty() const {
-  return base::TimeDelta::FromSeconds(status_.battery_time_to_empty);
-}
+  base::TimeDelta battery_time_to_empty() const {
+    return base::TimeDelta::FromSeconds(status_.battery_time_to_empty);
+  }
 
-base::TimeDelta PowerLibraryImpl::battery_time_to_full() const {
-  return base::TimeDelta::FromSeconds(status_.battery_time_to_full);
-}
+  base::TimeDelta battery_time_to_full() const {
+    return base::TimeDelta::FromSeconds(status_.battery_time_to_full);
+  }
+
+  virtual void EnableScreenLock(bool enable) {
+    if (!CrosLibrary::Get()->EnsureLoaded())
+      return;
+
+    // Make sure we run on FILE thread becuase chromeos::EnableScreenLock
+    // would write power manager config file to disk.
+    if (!BrowserThread::CurrentlyOn(BrowserThread::FILE)) {
+      BrowserThread::PostTask(
+          BrowserThread::FILE, FROM_HERE,
+          NewRunnableMethod(this, &PowerLibraryImpl::EnableScreenLock, enable));
+      return;
+    }
+
+    chromeos::EnableScreenLock(enable);
+  }
+
+  virtual void RequestRestart() {
+    if (!CrosLibrary::Get()->EnsureLoaded())
+      return;
+    chromeos::RequestRestart();
+  }
+
+  virtual void RequestShutdown() {
+    if (!CrosLibrary::Get()->EnsureLoaded())
+      return;
+    chromeos::RequestShutdown();
+  }
+
+ private:
+  static void PowerStatusChangedHandler(void* object,
+      const chromeos::PowerStatus& status) {
+    PowerLibraryImpl* power = static_cast<PowerLibraryImpl*>(object);
+    power->UpdatePowerStatus(status);
+  }
+
+  void Init() {
+    power_status_connection_ = chromeos::MonitorPowerStatus(
+        &PowerStatusChangedHandler, this);
+  }
+
+  void UpdatePowerStatus(const chromeos::PowerStatus& status) {
+    // Make sure we run on UI thread.
+    if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
+      BrowserThread::PostTask(
+          BrowserThread::UI, FROM_HERE,
+          NewRunnableMethod(
+              this, &PowerLibraryImpl::UpdatePowerStatus, status));
+      return;
+    }
+
+    DVLOG(1) << "Power lpo=" << status.line_power_on
+             << " sta=" << status.battery_state
+             << " per=" << status.battery_percentage
+             << " tte=" << status.battery_time_to_empty
+             << " ttf=" << status.battery_time_to_full;
+    status_ = status;
+    FOR_EACH_OBSERVER(Observer, observers_, PowerChanged(this));
+  }
+
+  ObserverList<Observer> observers_;
+
+  // A reference to the battery power api, to allow callbacks when the battery
+  // status changes.
+  chromeos::PowerStatusConnection power_status_connection_;
+
+  // The latest power status.
+  chromeos::PowerStatus status_;
+
+  DISALLOW_COPY_AND_ASSIGN(PowerLibraryImpl);
+};
+
+class PowerLibraryStubImpl : public PowerLibrary {
+ public:
+  PowerLibraryStubImpl() {}
+  ~PowerLibraryStubImpl() {}
+  void AddObserver(Observer* observer) {}
+  void RemoveObserver(Observer* observer) {}
+  bool line_power_on() const { return false; }
+  bool battery_is_present() const { return false; }
+  bool battery_fully_charged() const { return false; }
+  double battery_percentage() const { return false; }
+  base::TimeDelta battery_time_to_empty() const {
+    return base::TimeDelta::FromSeconds(0);
+  }
+  base::TimeDelta battery_time_to_full() const {
+    return base::TimeDelta::FromSeconds(0);
+  }
+  virtual void EnableScreenLock(bool enable) {}
+  virtual void RequestRestart() {}
+  virtual void RequestShutdown() {}
+};
 
 // static
-void PowerLibraryImpl::PowerStatusChangedHandler(void* object,
-    const chromeos::PowerStatus& status) {
-  PowerLibraryImpl* power = static_cast<PowerLibraryImpl*>(object);
-  power->UpdatePowerStatus(status);
-}
-
-void PowerLibraryImpl::Init() {
-  power_status_connection_ = chromeos::MonitorPowerStatus(
-      &PowerStatusChangedHandler, this);
-}
-
-void PowerLibraryImpl::UpdatePowerStatus(const chromeos::PowerStatus& status) {
-  // Make sure we run on UI thread.
-  if (!ChromeThread::CurrentlyOn(ChromeThread::UI)) {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
-        NewRunnableMethod(this, &PowerLibraryImpl::UpdatePowerStatus, status));
-    return;
-  }
-
-  DLOG(INFO) << "Power" <<
-                " lpo=" << status.line_power_on <<
-                " sta=" << status.battery_state <<
-                " per=" << status.battery_percentage <<
-                " tte=" << status.battery_time_to_empty <<
-                " ttf=" << status.battery_time_to_full;
-  status_ = status;
-  FOR_EACH_OBSERVER(Observer, observers_, PowerChanged(this));
+PowerLibrary* PowerLibrary::GetImpl(bool stub) {
+  if (stub)
+    return new PowerLibraryStubImpl();
+  else
+    return new PowerLibraryImpl();
 }
 
 }  // namespace chromeos
+
+// Allows InvokeLater without adding refcounting. This class is a Singleton and
+// won't be deleted until it's last InvokeLater is run.
+DISABLE_RUNNABLE_METHOD_REFCOUNT(chromeos::PowerLibraryImpl);

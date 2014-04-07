@@ -16,8 +16,10 @@
 
 #include "app/clipboard/clipboard.h"
 #include "base/file_path.h"
+#include "base/platform_file.h"
 #include "base/string16.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCanvas.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebFileError.h"
 
 class GURL;
 class SkBitmap;
@@ -42,7 +44,7 @@ namespace webkit_glue {
 
 //---- BEGIN FUNCTIONS IMPLEMENTED BY WEBKIT/GLUE -----------------------------
 
-void SetJavaScriptFlags(const std::wstring& flags);
+void SetJavaScriptFlags(const std::string& flags);
 
 // Turn on the logging for notImplemented() calls from WebCore.
 void EnableWebCoreNotImplementedLogging();
@@ -76,7 +78,8 @@ int NumberOfPages(WebKit::WebFrame* web_frame,
                   float page_height_in_pixels);
 
 // Returns a dump of the scroll position of the webframe.
-std::wstring DumpFrameScrollPosition(WebKit::WebFrame* web_frame, bool recursive);
+std::wstring DumpFrameScrollPosition(WebKit::WebFrame* web_frame,
+                                     bool recursive);
 
 // Returns a dump of the given history state suitable for implementing the
 // dumpBackForwardList command of the layoutTestController.
@@ -130,6 +133,10 @@ FilePath::StringType WebStringToFilePathString(const WebKit::WebString& str);
 WebKit::WebString FilePathStringToWebString(const FilePath::StringType& str);
 FilePath WebStringToFilePath(const WebKit::WebString& str);
 WebKit::WebString FilePathToWebString(const FilePath& file_path);
+
+// File error conversion
+WebKit::WebFileError PlatformFileErrorToWebFileError(
+    base::PlatformFileError error_code);
 
 // Returns a WebCanvas pointer associated with the given Skia canvas.
 WebKit::WebCanvas* ToWebCanvas(skia::PlatformCanvas*);
@@ -194,6 +201,19 @@ void ClipboardReadAsciiText(Clipboard::Buffer buffer, std::string* result);
 // Reads HTML from the clipboard, if available.
 void ClipboardReadHTML(Clipboard::Buffer buffer, string16* markup, GURL* url);
 
+// Reads the available types from the clipboard, if available.
+bool ClipboardReadAvailableTypes(Clipboard::Buffer buffer,
+                                 std::vector<string16>* types,
+                                 bool* contains_filenames);
+
+// Reads one type of data from the clipboard, if available.
+bool ClipboardReadData(Clipboard::Buffer buffer, const string16& type,
+                       string16* data, string16* metadata);
+
+// Reads filenames from the clipboard, if available.
+bool ClipboardReadFilenames(Clipboard::Buffer buffer,
+                            std::vector<string16>* filenames);
+
 // Gets the directory where the application data and libraries exist.  This
 // may be a versioned subdirectory, or it may be the same directory as the
 // GetExeDirectory(), depending on the embedder's implementation.
@@ -234,13 +254,48 @@ bool FindProxyForUrl(const GURL& url, std::string* proxy_list);
 
 // Returns the locale that this instance of webkit is running as.  This is of
 // the form language-country (e.g., en-US or pt-BR).
-std::wstring GetWebKitLocale();
+std::string GetWebKitLocale();
 
 // Close current connections.  Used for debugging.
 void CloseCurrentConnections();
 
 // Enable or disable the disk cache.  Used for debugging.
 void SetCacheMode(bool enabled);
+
+// Clear the disk cache.  Used for debugging.
+void ClearCache();
+
+// Returns the product version.  E.g., Chrome/4.1.333.0
+std::string GetProductVersion();
+
+// Returns true if the embedder is running in single process mode.
+bool IsSingleProcess();
+
+// Enables/Disables Spdy for requests afterwards. Used for benchmarking.
+void EnableSpdy(bool enable);
+
+// Notifies the browser that the given action has been performed.
+void UserMetricsRecordAction(const std::string& action);
+
+#if defined(OS_LINUX)
+// Return a read-only file descriptor to the font which best matches the given
+// properties or -1 on failure.
+//   charset: specifies the language(s) that the font must cover. See
+// render_sandbox_host_linux.cc for more information.
+int MatchFontWithFallback(const std::string& face, bool bold,
+                          bool italic, int charset);
+
+// GetFontTable loads a specified font table from an open SFNT file.
+//   fd: a file descriptor to the SFNT file. The position doesn't matter.
+//   table: the table in *big-endian* format, or 0 for the whole font file.
+//   output: a buffer of size output_length that gets the data.  can be 0, in
+//     which case output_length will be set to the required size in bytes.
+//   output_length: size of output, if it's not 0.
+//
+//   returns: true on success.
+bool GetFontTable(int fd, uint32_t table, uint8_t* output,
+                  size_t* output_length);
+#endif
 
 // ---- END FUNCTIONS IMPLEMENTED BY EMBEDDER ---------------------------------
 

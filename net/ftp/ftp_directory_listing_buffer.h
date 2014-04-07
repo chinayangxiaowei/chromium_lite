@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.  Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #ifndef NET_FTP_FTP_DIRECTORY_LISTING_BUFFER_H_
 #define NET_FTP_FTP_DIRECTORY_LISTING_BUFFER_H_
+#pragma once
 
 #include <deque>
 #include <set>
@@ -44,6 +45,8 @@ class FtpDirectoryListingBuffer {
   // Returns recognized server type. It is valid to call this function at any
   // time, although it will return SERVER_UNKNOWN if it doesn't know the answer.
   FtpServerType GetServerType() const;
+
+  const std::string& encoding() const { return encoding_; }
 
  private:
   typedef std::set<FtpDirectoryListingParser*> ParserSet;

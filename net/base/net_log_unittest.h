@@ -1,13 +1,14 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_BASE_NET_LOG_UNITTEST_H_
 #define NET_BASE_NET_LOG_UNITTEST_H_
+#pragma once
 
 #include <cstddef>
-#include <vector>
-#include "net/base/net_log.h"
+
+#include "net/base/capturing_net_log.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
@@ -27,7 +28,9 @@ inline ::testing::AssertionResult LogContainsEventHelper(
     NetLog::EventType expected_event,
     NetLog::EventPhase expected_phase) {
   // Negative indices are reverse indices.
-  size_t j = (i < 0) ? entries.size() + i : i;
+  size_t j = (i < 0) ?
+      static_cast<size_t>(static_cast<int>(entries.size()) + i) :
+      static_cast<size_t>(i);
   if (j >= entries.size())
     return ::testing::AssertionFailure() << j << " is out of bounds.";
   const CapturingNetLog::Entry& entry = entries[j];
@@ -94,7 +97,9 @@ inline ::testing::AssertionResult LogContainsEntryWithType(
     int i, // Negative indices are reverse indices.
     NetLog::EventType type) {
   // Negative indices are reverse indices.
-  size_t j = (i < 0) ? entries.size() + i : i;
+  size_t j = (i < 0) ?
+      static_cast<size_t>(static_cast<int>(entries.size()) + i) :
+      static_cast<size_t>(i);
   if (j >= entries.size())
     return ::testing::AssertionFailure() << j << " is out of bounds.";
   const CapturingNetLog::Entry& entry = entries[j];
@@ -105,7 +110,7 @@ inline ::testing::AssertionResult LogContainsEntryWithType(
 
 
 // Expect that the log contains an event, but don't care about where
-// as long as the index where it is found is greater than min_index.
+// as long as the first index where it is found is at least |min_index|.
 // Returns the position where the event was found.
 inline size_t ExpectLogContainsSomewhere(
     const CapturingNetLog::EntryList& entries,
@@ -121,6 +126,25 @@ inline size_t ExpectLogContainsSomewhere(
   }
   EXPECT_LT(i, entries.size());
   EXPECT_GE(i, min_index);
+  return i;
+}
+
+// Expect that the log contains an event, but don't care about where
+// as long as one index where it is found is at least |min_index|.
+// Returns the first such position where the event was found.
+inline size_t ExpectLogContainsSomewhereAfter(
+    const CapturingNetLog::EntryList& entries,
+    size_t min_index,
+    NetLog::EventType expected_event,
+    NetLog::EventPhase expected_phase) {
+  size_t i = min_index;
+  for (; i < entries.size(); ++i) {
+    const CapturingNetLog::Entry& entry = entries[i];
+    if (entry.type == expected_event &&
+        entry.phase == expected_phase)
+      break;
+  }
+  EXPECT_LT(i, entries.size());
   return i;
 }
 

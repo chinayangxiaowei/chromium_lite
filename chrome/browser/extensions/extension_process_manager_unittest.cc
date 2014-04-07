@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_process_manager.h"
+#include "chrome/browser/extensions/extension_error_reporter.h"
 #include "chrome/browser/renderer_host/site_instance.h"
-#include "chrome/common/extensions/extension_error_reporter.h"
 #include "chrome/test/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -31,13 +31,13 @@ TEST_F(ExtensionProcessManagerTest, ProcessGrouping) {
   // Extensions in different profiles should always be different SiteInstances.
   // Note: we don't initialize these, since we're not testing that
   // functionality.  This means we can get away with a NULL UserScriptMaster.
-  TestingProfile profile1(1);
+  TestingProfile profile1;
   scoped_ptr<ExtensionProcessManager> manager1(
-      new ExtensionProcessManager(&profile1));
+      ExtensionProcessManager::Create(&profile1));
 
-  TestingProfile profile2(2);
+  TestingProfile profile2;
   scoped_ptr<ExtensionProcessManager> manager2(
-      new ExtensionProcessManager(&profile2));
+      ExtensionProcessManager::Create(&profile2));
 
   // Extensions with common origins ("scheme://id/") should be grouped in the
   // same SiteInstance.

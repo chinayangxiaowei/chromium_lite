@@ -4,6 +4,8 @@
 
 #include "chrome/browser/extensions/extension_test_api.h"
 
+#include <string>
+
 #include "chrome/browser/browser.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/extensions/extensions_service.h"
@@ -20,7 +22,7 @@ bool ExtensionTestPassFunction::RunImpl() {
 
 bool ExtensionTestFailFunction::RunImpl() {
   std::string message;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetAsString(&message));
+  EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &message));
   NotificationService::current()->Notify(
       NotificationType::EXTENSION_TEST_FAILED,
       Source<Profile>(dispatcher()->profile()),
@@ -30,9 +32,7 @@ bool ExtensionTestFailFunction::RunImpl() {
 
 bool ExtensionTestLogFunction::RunImpl() {
   std::string message;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetAsString(&message));
-  printf("%s\n", message.c_str());
-  LOG(INFO) << message;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &message));
   return true;
 }
 
@@ -46,7 +46,24 @@ bool ExtensionTestQuotaResetFunction::RunImpl() {
 
 bool ExtensionTestCreateIncognitoTabFunction::RunImpl() {
   std::string url;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetAsString(&url));
+  EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &url));
   Browser::OpenURLOffTheRecord(profile(), GURL(url));
   return true;
+}
+
+bool ExtensionTestSendMessageFunction::RunImpl() {
+  std::string message;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &message));
+  AddRef();  // balanced in Reply
+  NotificationService::current()->Notify(
+      NotificationType::EXTENSION_TEST_MESSAGE,
+      Source<ExtensionTestSendMessageFunction>(this),
+      Details<std::string>(&message));
+  return true;
+}
+
+void ExtensionTestSendMessageFunction::Reply(const std::string& message) {
+  result_.reset(Value::CreateStringValue(message));
+  SendResponse(true);
+  Release();  // balanced in RunImpl
 }

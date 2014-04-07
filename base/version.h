@@ -4,12 +4,13 @@
 
 #ifndef BASE_VERSION_H_
 #define BASE_VERSION_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
 #include "base/basictypes.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
+#include "base/gtest_prod_util.h"
 
 class Version {
  public:
@@ -24,7 +25,7 @@ class Version {
   // will DCHECK.
   Version();
 
-  ~Version() {}
+  ~Version();
 
   bool Equals(const Version& other) const;
 
@@ -42,9 +43,9 @@ class Version {
   bool is_valid_;
   std::vector<uint16> components_;
 
-  FRIEND_TEST(VersionTest, DefaultConstructor);
-  FRIEND_TEST(VersionTest, GetVersionFromString);
-  FRIEND_TEST(VersionTest, Compare);
+  FRIEND_TEST_ALL_PREFIXES(VersionTest, DefaultConstructor);
+  FRIEND_TEST_ALL_PREFIXES(VersionTest, GetVersionFromString);
+  FRIEND_TEST_ALL_PREFIXES(VersionTest, Compare);
 };
 
 #endif  // BASE_VERSION_H_

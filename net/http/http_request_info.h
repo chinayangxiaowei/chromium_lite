@@ -4,19 +4,27 @@
 
 #ifndef NET_HTTP_HTTP_REQUEST_INFO_H__
 #define NET_HTTP_HTTP_REQUEST_INFO_H__
+#pragma once
 
 #include <string>
 #include "base/ref_counted.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/request_priority.h"
 #include "net/base/upload_data.h"
+#include "net/http/http_request_headers.h"
 
 namespace net {
 
-class HttpRequestInfo {
- public:
-  HttpRequestInfo() : load_flags(0), priority(LOWEST) {
-  }
+struct HttpRequestInfo {
+  enum RequestMotivation{
+    // TODO(mbelshe): move these into Client Socket.
+    PRECONNECT_MOTIVATED,  // This request was motivated by a prefetch.
+    OMNIBOX_MOTIVATED,   // This request was motivated by the omnibox.
+    NORMAL_MOTIVATION    // No special motivation associated with the request.
+  };
+
+  HttpRequestInfo();
+  ~HttpRequestInfo();
 
   // The requested URL.
   GURL url;
@@ -27,12 +35,8 @@ class HttpRequestInfo {
   // The method to use (GET, POST, etc.).
   std::string method;
 
-  // The user agent string to use.  TODO(darin): we should just add this to
-  // extra_headers
-  std::string user_agent;
-
-  // Any extra request headers (\r\n-delimited).
-  std::string extra_headers;
+  // Any extra request headers (including User-Agent).
+  HttpRequestHeaders extra_headers;
 
   // Any upload data.
   scoped_refptr<UploadData> upload_data;
@@ -42,6 +46,9 @@ class HttpRequestInfo {
 
   // The priority level for this request.
   RequestPriority priority;
+
+  // The motivation behind this request.
+  RequestMotivation motivation;
 };
 
 }  // namespace net

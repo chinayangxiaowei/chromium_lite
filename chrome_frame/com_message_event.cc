@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "base/logging.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
 
 ComMessageEvent::ComMessageEvent() {
@@ -18,7 +19,7 @@ bool ComMessageEvent::Initialize(IOleContainer* container,
                                  const std::string& message,
                                  const std::string& origin,
                                  const std::string& event_type) {
-  DCHECK(container);
+  DLOG_IF(WARNING, !container) << __FUNCTION__ << " no container";
   message_ = message;
   origin_ = origin;
   type_ = event_type;
@@ -27,8 +28,10 @@ bool ComMessageEvent::Initialize(IOleContainer* container,
   ScopedComPtr<IHTMLEventObj> basic_event;
   ScopedComPtr<IHTMLDocument2> doc;
 
-  // Fetching doc may fail in non-IE containers.
-  container->QueryInterface(doc.Receive());
+  // Fetching doc may fail in non-IE containers
+  // and container might be NULL in some applications.
+  if (container)
+    container->QueryInterface(doc.Receive());
   if (doc) {
     ScopedComPtr<IHTMLDocument4> doc4;
     doc4.QueryFrom(doc);
@@ -91,7 +94,7 @@ STDMETHODIMP ComMessageEvent::GetIDsOfNames(REFIID iid, LPOLESTR* names,
 
       if (FAILED(hr)) {
         DLOG(WARNING) << "member not found: " << names[i]
-                      << StringPrintf(L"0x%08X", hr);
+                      << base::StringPrintf(L"0x%08X", hr);
       }
     }
   }

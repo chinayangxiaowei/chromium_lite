@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_EXTENSIONS_EXTENSION_POPUP_CONTROLLER_H_
 #define CHROME_BROWSER_COCOA_EXTENSIONS_EXTENSION_POPUP_CONTROLLER_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -50,7 +51,7 @@ class NotificationRegistrar;
   scoped_ptr<DevtoolsNotificationBridge> notificationBridge_;
 
   // Whether the popup has a devtools window attached to it.
-  bool beingInspected_;
+  BOOL beingInspected_;
 }
 
 // Returns the ExtensionHost object associated with this popup.
@@ -70,7 +71,8 @@ class NotificationRegistrar;
 + (ExtensionPopupController*)showURL:(GURL)url
                            inBrowser:(Browser*)browser
                           anchoredAt:(NSPoint)anchoredAt
-                       arrowLocation:(BubbleArrowLocation)arrowLocation
+                       arrowLocation:(info_bubble::BubbleArrowLocation)
+                                         arrowLocation
                              devMode:(BOOL)devMode;
 
 // Returns the controller used to display the popup being shown. If no popup is

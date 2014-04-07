@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_WEBMESSAGEPORTCHANNEL_IMPL_H_
 #define CHROME_COMMON_WEBMESSAGEPORTCHANNEL_IMPL_H_
+#pragma once
 
 #include <queue>
 #include <vector>
@@ -31,7 +32,7 @@ class WebMessagePortChannelImpl
 
  private:
   friend class base::RefCountedThreadSafe<WebMessagePortChannelImpl>;
-  ~WebMessagePortChannelImpl();
+  virtual ~WebMessagePortChannelImpl();
 
   // WebMessagePortChannel implementation.
   virtual void setClient(WebKit::WebMessagePortChannelClient* client);

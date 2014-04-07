@@ -10,7 +10,7 @@
 
 namespace gpu {
 
-#ifndef COMPILER_MSVC
+#ifndef _MSC_VER
 const FencedAllocator::Offset FencedAllocator::kInvalidOffset;
 #endif
 
@@ -21,8 +21,9 @@ FencedAllocator::~FencedAllocator() {
       i = WaitForTokenAndFreeBlock(i);
     }
   }
-  DCHECK_EQ(blocks_.size(), 1u);
-  DCHECK_EQ(blocks_[0].state, FREE);
+  // These checks are not valid if the service has crashed or lost the context.
+  // GPU_DCHECK_EQ(blocks_.size(), 1u);
+  // GPU_DCHECK_EQ(blocks_[0].state, FREE);
 }
 
 // Looks for a non-allocated block that is big enough. Search in the FREE
@@ -59,14 +60,14 @@ FencedAllocator::Offset FencedAllocator::Alloc(unsigned int size) {
 // necessary.
 void FencedAllocator::Free(FencedAllocator::Offset offset) {
   BlockIndex index = GetBlockByOffset(offset);
-  DCHECK_NE(blocks_[index].state, FREE);
+  GPU_DCHECK_NE(blocks_[index].state, FREE);
   blocks_[index].state = FREE;
   CollapseFreeBlock(index);
 }
 
 // Looks for the corresponding block, mark it FREE_PENDING_TOKEN.
-void FencedAllocator::FreePendingToken(FencedAllocator::Offset offset,
-                                       unsigned int token) {
+void FencedAllocator::FreePendingToken(
+    FencedAllocator::Offset offset, int32 token) {
   BlockIndex index = GetBlockByOffset(offset);
   Block &block = blocks_[index];
   block.state = FREE_PENDING_TOKEN;
@@ -95,7 +96,7 @@ unsigned int FencedAllocator::GetLargestFreeOrPendingSize() {
       max_size = std::max(max_size, current_size);
       current_size = 0;
     } else {
-      DCHECK(block.state == FREE || block.state == FREE_PENDING_TOKEN);
+      GPU_DCHECK(block.state == FREE || block.state == FREE_PENDING_TOKEN);
       current_size += block.size;
     }
   }
@@ -148,10 +149,24 @@ FencedAllocator::BlockIndex FencedAllocator::CollapseFreeBlock(
 FencedAllocator::BlockIndex FencedAllocator::WaitForTokenAndFreeBlock(
     BlockIndex index) {
   Block &block = blocks_[index];
-  DCHECK_EQ(block.state, FREE_PENDING_TOKEN);
+  GPU_DCHECK_EQ(block.state, FREE_PENDING_TOKEN);
   helper_->WaitForToken(block.token);
   block.state = FREE;
   return CollapseFreeBlock(index);
+}
+
+// Frees any blocks pending a token for which the token has been read.
+void FencedAllocator::FreeUnused() {
+  int32 last_token_read = helper_->last_token_read();
+  for (unsigned int i = 0; i < blocks_.size();) {
+    Block& block = blocks_[i];
+    if (block.state == FREE_PENDING_TOKEN && block.token <= last_token_read) {
+      block.state = FREE;
+      i = CollapseFreeBlock(i);
+    } else {
+      ++i;
+    }
+  }
 }
 
 // If the block is exactly the requested size, simply mark it IN_USE, otherwise
@@ -159,8 +174,8 @@ FencedAllocator::BlockIndex FencedAllocator::WaitForTokenAndFreeBlock(
 FencedAllocator::Offset FencedAllocator::AllocInBlock(BlockIndex index,
                                                       unsigned int size) {
   Block &block = blocks_[index];
-  DCHECK_GE(block.size, size);
-  DCHECK_EQ(block.state, FREE);
+  GPU_DCHECK_GE(block.size, size);
+  GPU_DCHECK_EQ(block.state, FREE);
   Offset offset = block.offset;
   if (block.size == size) {
     block.state = IN_USE;
@@ -179,7 +194,7 @@ FencedAllocator::BlockIndex FencedAllocator::GetBlockByOffset(Offset offset) {
   Block templ = { IN_USE, offset, 0, kUnusedToken };
   Container::iterator it = std::lower_bound(blocks_.begin(), blocks_.end(),
                                             templ, OffsetCmp());
-  DCHECK(it != blocks_.end() && it->offset == offset);
+  GPU_DCHECK(it != blocks_.end() && it->offset == offset);
   return it-blocks_.begin();
 }
 

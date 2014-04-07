@@ -4,6 +4,7 @@
 
 #ifndef CHROME_TEST_SYNC_TEST_HTTP_BRIDGE_FACTORY_H_
 #define CHROME_TEST_SYNC_TEST_HTTP_BRIDGE_FACTORY_H_
+#pragma once
 
 #include "chrome/browser/sync/engine/syncapi.h"
 
@@ -61,7 +62,9 @@ class TestHttpBridgeFactory : public sync_api::HttpPostProviderFactory {
   virtual sync_api::HttpPostProviderInterface* Create() {
     return new TestHttpBridge();
   }
-  virtual void Destroy(sync_api::HttpPostProviderInterface* http) {}
+  virtual void Destroy(sync_api::HttpPostProviderInterface* http) {
+    delete http;
+  }
 };
 
 }  // namespace browser_sync

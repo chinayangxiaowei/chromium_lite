@@ -38,6 +38,7 @@
 
 o3djs.provide('o3djs.serialization');
 
+o3djs.require('o3djs.math');
 o3djs.require('o3djs.error');
 o3djs.require('o3djs.texture');
 
@@ -198,7 +199,29 @@ o3djs.serialization.Deserializer = function(pack, json) {
     },
 
     'o3d.TextureCUBE': function(deserializer, json) {
-      if ('o3d.uri' in json.params) {
+      if ('o3d.negx_uri' in json.params) {
+        // Cube map comprised of six separate textures.
+        var param_names = [
+            'o3d.posx_uri',
+            'o3d.negx_uri',
+            'o3d.posy_uri',
+            'o3d.negy_uri',
+            'o3d.posz_uri',
+            'o3d.negz_uri'
+        ];
+        var rawDataArray = [];
+        for (var i = 0; i < param_names.length; i++) {
+          var uri = json.params[param_names[i]].value;
+          var rawData = deserializer.archiveInfo.getFileByURI(uri);
+          if (!rawData) {
+            throw 'Could not find texture ' + uri + ' in the archive';
+          }
+          rawDataArray.push(rawData);
+        }
+        // Cube map faces should not be flipped.
+        return o3djs.texture.createTextureFromRawDataArray(
+            pack, rawDataArray, true, false);
+      } else if ('o3d.uri' in json.params) {
         var uri = json.params['o3d.uri'].value;
         var rawData = deserializer.archiveInfo.getFileByURI(uri);
         if (!rawData) {
@@ -267,10 +290,12 @@ o3djs.serialization.Deserializer = function(pack, json) {
 
     'o3d.Skin': function(deserializer, object, json) {
       if ('custom' in json) {
-        var rawData = deserializer.archiveInfo.getFileByURI('skins.bin');
-        object.set(rawData,
-                   json.custom.binaryRange[0],
-                   json.custom.binaryRange[1] - json.custom.binaryRange[0]);
+        if ('binaryRange' in json.custom) {
+          var rawData = deserializer.archiveInfo.getFileByURI('skins.bin');
+          object.set(rawData,
+                     json.custom.binaryRange[0],
+                     json.custom.binaryRange[1] - json.custom.binaryRange[0]);
+        }
       }
     },
 
@@ -423,7 +448,10 @@ o3djs.serialization.Deserializer.prototype.deserializeValue = function(
       for (var i = 0; i != valueAsObject.length; ++i) {
         valueAsObject[i] = this.deserializeValue(valueAsObject[i]);
       }
-      return valueAsObject;
+      if (o3djs.math.usePluginMath_) {
+        return valueAsObject;
+      }
+      return o3djs.serialization.fixMatrices(valueAsObject);
     }
 
     var refId = valueAsObject['ref'];
@@ -719,6 +747,50 @@ o3djs.serialization.createDeserializer = function(pack, json) {
 o3djs.serialization.deserialize = function(pack, json) {
   var deserializer = o3djs.serialization.createDeserializer(pack, json);
   deserializer.run();
+};
+
+/**
+ * This function looks at a given data type, determines if it is an old style
+ * matrix that is a 2d doubly nested array.  If so, it flattens the matrix in
+ * place so that it may be handled by the code.
+ * @param {Object} parsed a potential array that will be repaired
+ */
+o3djs.serialization.fixMatrices = function(parsed) {
+  function isMatrix(m) {
+    var len = m && m.length;
+    if (len && len <= 4) {
+      for (var i = 0; i < len; ++i) {
+        var mi = m[i];
+        var mlen = mi.length;
+        if (mlen != len) {
+          return false;
+        }
+        for(var j = 0; j < len; ++j) {
+          if (Number(mi[j]) == NaN){
+            return false;
+          }
+        }
+      }
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  function flatten(m) {
+    var len = m.length;
+    var retval = new o3djs.math.makeMatrix4(len * len);
+    for (var i = 0; i < len; ++i) {
+      for (var j = 0; j < len; ++j) {
+        retval[i * len + j] = m[i][j];
+      }
+    }
+    return retval;
+  }
+  if (isMatrix(parsed)) {
+    return flatten(parsed);
+  }
+  return parsed;
 };
 
 /**

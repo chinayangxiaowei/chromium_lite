@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_PROXY_PROXY_INFO_H_
 #define NET_PROXY_PROXY_INFO_H_
+#pragma once
 
 #include <string>
 
@@ -12,32 +13,31 @@
 #include "net/proxy/proxy_retry_info.h"
 #include "net/proxy/proxy_server.h"
 
-class GURL;
-
 namespace net {
 
 // This object holds proxy information returned by ResolveProxy.
 class ProxyInfo {
  public:
   ProxyInfo();
+  ~ProxyInfo();
   // Default copy-constructor and assignment operator are OK!
 
-  // Use the same proxy server as the given |proxy_info|.
+  // Uses the same proxy server as the given |proxy_info|.
   void Use(const ProxyInfo& proxy_info);
 
-  // Use a direct connection.
+  // Uses a direct connection.
   void UseDirect();
 
-  // Use a specific proxy server, of the form:
+  // Uses a specific proxy server, of the form:
   //   proxy-uri = [<scheme> "://"] <hostname> [":" <port>]
   // This may optionally be a semi-colon delimited list of <proxy-uri>.
   // It is OK to have LWS between entries.
   void UseNamedProxy(const std::string& proxy_uri_list);
 
-  // Set the proxy list to a single entry, |proxy_server|.
+  // Sets the proxy list to a single entry, |proxy_server|.
   void UseProxyServer(const ProxyServer& proxy_server);
 
-  // Parse from the given PAC result.
+  // Parses from the given PAC result.
   void UsePacString(const std::string& pac_string) {
     proxy_list_.SetFromPacString(pac_string);
   }
@@ -50,6 +50,27 @@ class ProxyInfo {
     return proxy_list_.Get().is_direct();
   }
 
+  // Returns true if the first valid proxy server is an https proxy.
+  bool is_https() const {
+    if (is_empty())
+      return false;
+    return proxy_server().is_https();
+  }
+
+  // Returns true if the first valid proxy server is an http proxy.
+  bool is_http() const {
+    if (is_empty())
+      return false;
+    return proxy_server().is_http();
+  }
+
+  // Returns true if the first valid proxy server is a socks server.
+  bool is_socks() const {
+    if (is_empty())
+      return false;
+    return proxy_server().is_socks();
+  }
+
   // Returns true if this proxy info has no proxies left to try.
   bool is_empty() const {
     return proxy_list_.IsEmpty();
@@ -57,27 +78,21 @@ class ProxyInfo {
 
   // Returns the first valid proxy server. is_empty() must be false to be able
   // to call this function.
-  ProxyServer proxy_server() const { return proxy_list_.Get(); }
+  const ProxyServer& proxy_server() const { return proxy_list_.Get(); }
 
   // See description in ProxyList::ToPacString().
   std::string ToPacString() const;
 
   // Marks the current proxy as bad. Returns true if there is another proxy
   // available to try in proxy list_.
-  bool Fallback(ProxyRetryInfoMap* proxy_retry_info) {
-    return proxy_list_.Fallback(proxy_retry_info);
-  }
+  bool Fallback(ProxyRetryInfoMap* proxy_retry_info);
 
   // De-prioritizes the proxies that we have cached as not working, by moving
   // them to the end of the proxy list.
-  void DeprioritizeBadProxies(const ProxyRetryInfoMap& proxy_retry_info) {
-    proxy_list_.DeprioritizeBadProxies(proxy_retry_info);
-  }
+  void DeprioritizeBadProxies(const ProxyRetryInfoMap& proxy_retry_info);
 
-  // Delete any entry which doesn't have one of the specified proxy schemes.
-  void RemoveProxiesWithoutScheme(int scheme_bit_field) {
-    proxy_list_.RemoveProxiesWithoutScheme(scheme_bit_field);
-  }
+  // Deletes any entry which doesn't have one of the specified proxy schemes.
+  void RemoveProxiesWithoutScheme(int scheme_bit_field);
 
  private:
   friend class ProxyService;

@@ -1,4 +1,4 @@
-// Copyright (c) 2008-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,9 @@
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
 #include "net/base/ssl_cert_request_info.h"
+#include "net/base/ssl_connection_status_flags.h"
 #include "net/base/ssl_info.h"
+#include "net/socket/client_socket_handle.h"
 
 // Welcome to Mac SSL. We've been waiting for you.
 //
@@ -37,7 +39,7 @@
 // it. Therefore, there are different sets of states in our respective state
 // machines, fewer on the Mac because Secure Transport keeps a lot of its own
 // state. The discussion about what each of the states means lives in comments
-// in the DoLoop() function.
+// in the DoHandshakeLoop() function.
 //
 // Secure Transport is designed for use by either blocking or non-blocking
 // network I/O. If, for example, you called SSLRead() to fetch data, Secure
@@ -106,18 +108,6 @@ const unsigned int kWriteSizeResumeLimit = 1 * 1024 * 1024;
 #define SSL_LOG LOG(INFO) << "SSL: "
 
 #if MAC_OS_X_VERSION_MAX_ALLOWED <= MAC_OS_X_VERSION_10_5
-// Declarations needed to call the 10.5.7 and later SSLSetSessionOption()
-// function when building with the 10.5.0 SDK.
-typedef enum {
-  kSSLSessionOptionBreakOnServerAuth,
-  kSSLSessionOptionBreakOnCertRequested,
-} SSLSessionOption;
-
-enum {
-  errSSLServerAuthCompleted = -9841,
-  errSSLClientCertRequested = -9842,
-};
-
 // When compiled against the Mac OS X 10.5 SDK, define symbolic constants for
 // cipher suites added in Mac OS X 10.6.
 enum {
@@ -150,9 +140,6 @@ enum {
 };
 #endif
 
-typedef OSStatus (*SSLSetSessionOptionFuncPtr)(SSLContextRef,
-                                               SSLSessionOption,
-                                               Boolean);
 // For an explanation of the Mac OS X error codes, please refer to:
 // http://developer.apple.com/mac/library/documentation/Security/Reference/secureTransportRef/Reference/reference.html
 int NetErrorFromOSStatus(OSStatus status) {
@@ -168,13 +155,21 @@ int NetErrorFromOSStatus(OSStatus status) {
       return ERR_CONNECTION_ABORTED;
     case errSSLInternal:
       return ERR_UNEXPECTED;
+    case errSSLBadRecordMac:
     case errSSLCrypto:
+    case errSSLConnectionRefused:
+    case errSSLDecryptionFail:
     case errSSLFatalAlert:
     case errSSLIllegalParam:  // Received an illegal_parameter alert.
-    case errSSLPeerUnexpectedMsg:  // Received an unexpected_message alert.
-    case errSSLProtocol:
+    case errSSLPeerDecodeError:  // Received a decode_error alert.
+    case errSSLPeerDecryptError:  // Received a decrypt_error alert.
+    case errSSLPeerExportRestriction:  // Received an export_restriction alert.
     case errSSLPeerHandshakeFail:  // Received a handshake_failure alert.
-    case errSSLConnectionRefused:
+    case errSSLPeerNoRenegotiation:  // Received a no_renegotiation alert
+    case errSSLPeerUnexpectedMsg:  // Received an unexpected_message alert.
+    case errSSLPeerUserCancelled:  // Received a user_cancelled alert.
+    case errSSLProtocol:
+    case errSSLRecordOverflow:
       return ERR_SSL_PROTOCOL_ERROR;
     case errSSLHostNameMismatch:
       return ERR_CERT_COMMON_NAME_INVALID;
@@ -192,19 +187,25 @@ int NetErrorFromOSStatus(OSStatus status) {
     case noErr:
       return OK;
 
+    // (Note that all errSSLPeer* codes indicate errors reported by the peer,
+    // so the cert-related ones refer to my _client_ cert.)
     case errSSLPeerCertUnknown...errSSLPeerBadCert:
-    case errSSLPeerInsufficientSecurity...errSSLPeerUnknownCA:
-      // (Note that all errSSLPeer* codes indicate errors reported by the
-      // peer, so the cert-related ones refer to my _client_ cert.)
+    case errSSLPeerUnknownCA:
+    // TODO(rsleevi): Add a new error code for access_denied - the peer has
+    // accepted the certificate as valid, but denied access to the requested
+    // resource. Returning ERR_BAD_SSL_CLIENT_AUTH simply gives the user a
+    // chance to select a new certificate, if they have one, and try again.
+    case errSSLPeerAccessDenied:
       LOG(WARNING) << "Server rejected client cert (OSStatus=" << status << ")";
       return ERR_BAD_SSL_CLIENT_AUTH_CERT;
 
-    case errSSLBadRecordMac:
+    case errSSLPeerInsufficientSecurity:
+    case errSSLPeerProtocolVersion:
+      return ERR_SSL_VERSION_OR_CIPHER_MISMATCH;
+
     case errSSLBufferOverflow:
-    case errSSLDecryptionFail:
     case errSSLModuleAttach:
     case errSSLNegotiation:
-    case errSSLRecordOverflow:
     case errSSLSessionNotFound:
     default:
       LOG(WARNING) << "Unknown error " << status <<
@@ -432,7 +433,6 @@ X509Certificate* GetServerCert(SSLContextRef ssl_context) {
 
   SecCertificateRef server_cert = static_cast<SecCertificateRef>(
       const_cast<void*>(CFArrayGetValueAtIndex(certs, 0)));
-  CFRetain(server_cert);
   return X509Certificate::CreateFromHandle(
       server_cert, X509Certificate::SOURCE_FROM_NETWORK, intermediate_ca_certs);
 }
@@ -497,7 +497,7 @@ EnabledCipherSuites::EnabledCipherSuites() {
 
 //-----------------------------------------------------------------------------
 
-SSLClientSocketMac::SSLClientSocketMac(ClientSocket* transport_socket,
+SSLClientSocketMac::SSLClientSocketMac(ClientSocketHandle* transport_socket,
                                        const std::string& hostname,
                                        const SSLConfig& ssl_config)
     : handshake_io_callback_(this, &SSLClientSocketMac::OnHandshakeIOComplete),
@@ -514,44 +514,42 @@ SSLClientSocketMac::SSLClientSocketMac(ClientSocket* transport_socket,
       user_read_buf_len_(0),
       user_write_buf_len_(0),
       next_handshake_state_(STATE_NONE),
-      completed_handshake_(false),
-      handshake_interrupted_(false),
+      renegotiating_(false),
       client_cert_requested_(false),
       ssl_context_(NULL),
-      pending_send_error_(OK) {
+      pending_send_error_(OK),
+      net_log_(transport_socket->socket()->NetLog()) {
 }
 
 SSLClientSocketMac::~SSLClientSocketMac() {
   Disconnect();
 }
 
-int SSLClientSocketMac::Connect(CompletionCallback* callback,
-                                const BoundNetLog& net_log) {
+int SSLClientSocketMac::Connect(CompletionCallback* callback) {
   DCHECK(transport_.get());
   DCHECK(next_handshake_state_ == STATE_NONE);
   DCHECK(!user_connect_callback_);
 
-  net_log.BeginEvent(NetLog::TYPE_SSL_CONNECT);
+  net_log_.BeginEvent(NetLog::TYPE_SSL_CONNECT, NULL);
 
   int rv = InitializeSSLContext();
   if (rv != OK) {
-    net_log.EndEvent(NetLog::TYPE_SSL_CONNECT);
+    net_log_.EndEvent(NetLog::TYPE_SSL_CONNECT, NULL);
     return rv;
   }
 
-  next_handshake_state_ = STATE_HANDSHAKE_START;
+  next_handshake_state_ = STATE_HANDSHAKE;
   rv = DoHandshakeLoop(OK);
   if (rv == ERR_IO_PENDING) {
-    net_log_ = net_log;
     user_connect_callback_ = callback;
   } else {
-    net_log.EndEvent(NetLog::TYPE_SSL_CONNECT);
+    net_log_.EndEvent(NetLog::TYPE_SSL_CONNECT, NULL);
   }
   return rv;
 }
 
 void SSLClientSocketMac::Disconnect() {
-  completed_handshake_ = false;
+  next_handshake_state_ = STATE_NONE;
 
   if (ssl_context_) {
     SSLClose(ssl_context_);
@@ -562,7 +560,7 @@ void SSLClientSocketMac::Disconnect() {
 
   // Shut down anything that may call us back.
   verifier_.reset();
-  transport_->Disconnect();
+  transport_->socket()->Disconnect();
 }
 
 bool SSLClientSocketMac::IsConnected() const {
@@ -572,7 +570,7 @@ bool SSLClientSocketMac::IsConnected() const {
   // layer (HttpNetworkTransaction) needs to handle a persistent connection
   // closed by the server when we send a request anyway, a false positive in
   // exchange for simpler code is a good trade-off.
-  return completed_handshake_ && transport_->IsConnected();
+  return completed_handshake() && transport_->socket()->IsConnected();
 }
 
 bool SSLClientSocketMac::IsConnectedAndIdle() const {
@@ -581,18 +579,43 @@ bool SSLClientSocketMac::IsConnectedAndIdle() const {
   // Strictly speaking, we should check if we have received the close_notify
   // alert message from the server, and return false in that case.  Although
   // the close_notify alert message means EOF in the SSL layer, it is just
-  // bytes to the transport layer below, so transport_->IsConnectedAndIdle()
-  // returns the desired false when we receive close_notify.
-  return completed_handshake_ && transport_->IsConnectedAndIdle();
+  // bytes to the transport layer below, so
+  // transport_->socket()->IsConnectedAndIdle() returns the desired false
+  // when we receive close_notify.
+  return completed_handshake() && transport_->socket()->IsConnectedAndIdle();
 }
 
 int SSLClientSocketMac::GetPeerAddress(AddressList* address) const {
-  return transport_->GetPeerAddress(address);
+  return transport_->socket()->GetPeerAddress(address);
+}
+
+void SSLClientSocketMac::SetSubresourceSpeculation() {
+  if (transport_.get() && transport_->socket()) {
+    transport_->socket()->SetSubresourceSpeculation();
+  } else {
+    NOTREACHED();
+  }
+}
+
+void SSLClientSocketMac::SetOmniboxSpeculation() {
+  if (transport_.get() && transport_->socket()) {
+    transport_->socket()->SetOmniboxSpeculation();
+  } else {
+    NOTREACHED();
+  }
+}
+
+bool SSLClientSocketMac::WasEverUsed() const {
+  if (transport_.get() && transport_->socket()) {
+    return transport_->socket()->WasEverUsed();
+  }
+  NOTREACHED();
+  return false;
 }
 
 int SSLClientSocketMac::Read(IOBuffer* buf, int buf_len,
                              CompletionCallback* callback) {
-  DCHECK(completed_handshake_);
+  DCHECK(completed_handshake());
   DCHECK(!user_read_callback_);
   DCHECK(!user_read_buf_);
 
@@ -611,7 +634,7 @@ int SSLClientSocketMac::Read(IOBuffer* buf, int buf_len,
 
 int SSLClientSocketMac::Write(IOBuffer* buf, int buf_len,
                               CompletionCallback* callback) {
-  DCHECK(completed_handshake_);
+  DCHECK(completed_handshake());
   DCHECK(!user_write_callback_);
   DCHECK(!user_write_buf_);
 
@@ -629,11 +652,11 @@ int SSLClientSocketMac::Write(IOBuffer* buf, int buf_len,
 }
 
 bool SSLClientSocketMac::SetReceiveBufferSize(int32 size) {
-  return transport_->SetReceiveBufferSize(size);
+  return transport_->socket()->SetReceiveBufferSize(size);
 }
 
 bool SSLClientSocketMac::SetSendBufferSize(int32 size) {
-  return transport_->SetSendBufferSize(size);
+  return transport_->socket()->SetSendBufferSize(size);
 }
 
 void SSLClientSocketMac::GetSSLInfo(SSLInfo* ssl_info) {
@@ -652,8 +675,15 @@ void SSLClientSocketMac::GetSSLInfo(SSLInfo* ssl_info) {
   // security info
   SSLCipherSuite suite;
   OSStatus status = SSLGetNegotiatedCipher(ssl_context_, &suite);
-  if (!status)
+  if (!status) {
     ssl_info->security_bits = KeySizeOfCipherSuite(suite);
+    ssl_info->connection_status |=
+        (suite & SSL_CONNECTION_CIPHERSUITE_MASK) <<
+        SSL_CONNECTION_CIPHERSUITE_SHIFT;
+  }
+
+  if (ssl_config_.ssl3_fallback)
+    ssl_info->connection_status |= SSL_CONNECTION_SSL3_FALLBACK;
 }
 
 void SSLClientSocketMac::GetSSLCertRequestInfo(
@@ -694,34 +724,6 @@ SSLClientSocket::NextProtoStatus
 SSLClientSocketMac::GetNextProto(std::string* proto) {
   proto->clear();
   return kNextProtoUnsupported;
-}
-
-OSStatus SSLClientSocketMac::EnableBreakOnAuth(bool enabled) {
-  // SSLSetSessionOption() was introduced in Mac OS X 10.5.7. It allows us
-  // to perform certificate validation during the handshake, which is
-  // required in order to properly enable session resumption.
-  //
-  // With the kSSLSessionOptionBreakOnServerAuth option set, SSLHandshake()
-  // will return errSSLServerAuthCompleted after receiving the server's
-  // Certificate during the handshake. That gives us an opportunity to verify
-  // the server certificate and then re-enter that handshake (assuming the
-  // certificate successfully validated).
-  // If the server also requests a client cert, SSLHandshake() will return
-  // errSSLClientCertRequested in addition to (or in some cases *instead of*)
-  // errSSLServerAuthCompleted.
-  static SSLSetSessionOptionFuncPtr ssl_set_session_options =
-      LookupFunction<SSLSetSessionOptionFuncPtr>(CFSTR("com.apple.security"),
-                                                 CFSTR("SSLSetSessionOption"));
-  if (!ssl_set_session_options)
-    return unimpErr;  // Return this if the API isn't available
-  OSStatus err = ssl_set_session_options(ssl_context_,
-                                         kSSLSessionOptionBreakOnServerAuth,
-                                         enabled);
-  if (err)
-    return err;
-  return ssl_set_session_options(ssl_context_,
-                                 kSSLSessionOptionBreakOnCertRequested,
-                                 enabled);
 }
 
 int SSLClientSocketMac::InitializeSSLContext() {
@@ -779,50 +781,31 @@ int SSLClientSocketMac::InitializeSSLContext() {
     return NetErrorFromOSStatus(status);
 
   if (ssl_config_.send_client_cert) {
-    // Provide the client cert up-front if we have one, even though we'll get
-    // notified later when the server requests it, and set it again; this is
-    // seemingly redundant but works around a problem with SecureTransport
-    // and provides correct behavior on both 10.5 and 10.6:
-    // http://lists.apple.com/archives/apple-cdsa/2010/Feb/msg00058.html
-    // http://code.google.com/p/chromium/issues/detail?id=38905
-    SSL_LOG << "Setting client cert in advance because send_client_cert is set";
     status = SetClientCert();
     if (status)
       return NetErrorFromOSStatus(status);
+    return OK;
   }
 
-  status = EnableBreakOnAuth(true);
-  if (status == noErr) {
-    // Only enable session resumption if break-on-auth is available,
-    // because without break-on-auth we are verifying the server's certificate
-    // after the handshake completes (but before any application data is
-    // exchanged). If we were to enable session resumption in this situation,
-    // the session would be cached before we verified the certificate, leaving
-    // the potential for a session in which the certificate failed to validate
-    // to still be able to be resumed.
+  // Concatenate the hostname and peer address to use as the peer ID. To
+  // resume a session, we must connect to the same server on the same port
+  // using the same hostname (i.e., localhost and 127.0.0.1 are considered
+  // different peers, which puts us through certificate validation again
+  // and catches hostname/certificate name mismatches.
+  AddressList address;
+  int rv = transport_->socket()->GetPeerAddress(&address);
+  if (rv != OK)
+    return rv;
+  const struct addrinfo* ai = address.head();
+  std::string peer_id(hostname_);
+  peer_id += std::string(reinterpret_cast<char*>(ai->ai_addr),
+                         ai->ai_addrlen);
 
-    // Concatenate the hostname and peer address to use as the peer ID. To
-    // resume a session, we must connect to the same server on the same port
-    // using the same hostname (i.e., localhost and 127.0.0.1 are considered
-    // different peers, which puts us through certificate validation again
-    // and catches hostname/certificate name mismatches.
-    AddressList address;
-    int rv = transport_->GetPeerAddress(&address);
-    if (rv != OK)
-      return rv;
-    const struct addrinfo* ai = address.head();
-    std::string peer_id(hostname_);
-    peer_id += std::string(reinterpret_cast<char*>(ai->ai_addr),
-                           ai->ai_addrlen);
-
-    // SSLSetPeerID() treats peer_id as a binary blob, and makes its
-    // own copy.
-    status = SSLSetPeerID(ssl_context_, peer_id.data(), peer_id.length());
-    if (status)
-      return NetErrorFromOSStatus(status);
-  } else if (status != unimpErr) {  // it's OK if the API isn't available
+  // SSLSetPeerID() treats peer_id as a binary blob, and makes its
+  // own copy.
+  status = SSLSetPeerID(ssl_context_, peer_id.data(), peer_id.length());
+  if (status)
     return NetErrorFromOSStatus(status);
-  }
 
   return OK;
 }
@@ -830,7 +813,6 @@ int SSLClientSocketMac::InitializeSSLContext() {
 void SSLClientSocketMac::DoConnectCallback(int rv) {
   DCHECK(rv != ERR_IO_PENDING);
   DCHECK(user_connect_callback_);
-  DCHECK(next_handshake_state_ == STATE_NONE);
 
   CompletionCallback* c = user_connect_callback_;
   user_connect_callback_ = NULL;
@@ -864,11 +846,17 @@ void SSLClientSocketMac::DoWriteCallback(int rv) {
 }
 
 void SSLClientSocketMac::OnHandshakeIOComplete(int result) {
-  DCHECK(next_handshake_state_ != STATE_NONE);
   int rv = DoHandshakeLoop(result);
   if (rv != ERR_IO_PENDING) {
-    net_log_.EndEvent(NetLog::TYPE_SSL_CONNECT);
-    net_log_ = BoundNetLog();
+    // If there is no connect callback available to call, we are
+    // renegotiating (which occurs because we are in the middle of a Read
+    // when the renegotiation process starts).  So we complete the Read
+    // here.
+    if (!user_connect_callback_) {
+      DoReadCallback(rv);
+      return;
+    }
+    net_log_.EndEvent(NetLog::TYPE_SSL_CONNECT, NULL);
     DoConnectCallback(rv);
   }
 }
@@ -881,15 +869,11 @@ void SSLClientSocketMac::OnTransportReadComplete(int result) {
   }
   read_io_buf_ = NULL;
 
-  if (next_handshake_state_ != STATE_NONE) {
-    int rv = DoHandshakeLoop(result);
-    if (rv != ERR_IO_PENDING) {
-      net_log_.EndEvent(NetLog::TYPE_SSL_CONNECT);
-      net_log_ = BoundNetLog();
-      DoConnectCallback(rv);
-    }
+  if (!completed_handshake()) {
+    OnHandshakeIOComplete(result);
     return;
   }
+
   if (user_read_buf_) {
     if (result < 0) {
       DoReadCallback(result);
@@ -914,6 +898,11 @@ void SSLClientSocketMac::OnTransportWriteComplete(int result) {
   if (!send_buffer_.empty())
     SSLWriteCallback(this, NULL, NULL);
 
+  if (!completed_handshake()) {
+    OnHandshakeIOComplete(result);
+    return;
+  }
+
   // If paused because too much data is in flight, try writing again and make
   // the promised callback.
   if (user_write_buf_ && send_buffer_.size() < kWriteSizeResumeLimit) {
@@ -923,8 +912,6 @@ void SSLClientSocketMac::OnTransportWriteComplete(int result) {
   }
 }
 
-// This is the main loop driving the state machine. Most calls coming from the
-// outside just set up a few variables and jump into here.
 int SSLClientSocketMac::DoHandshakeLoop(int last_io_result) {
   DCHECK(next_handshake_state_ != STATE_NONE);
   int rv = last_io_result;
@@ -932,22 +919,28 @@ int SSLClientSocketMac::DoHandshakeLoop(int last_io_result) {
     State state = next_handshake_state_;
     next_handshake_state_ = STATE_NONE;
     switch (state) {
-      case STATE_HANDSHAKE_START:
-        // Do the SSL/TLS handshake, up to the server certificate message.
-        rv = DoHandshakeStart();
+      case STATE_HANDSHAKE:
+        // Do the SSL/TLS handshake.
+        rv = DoHandshake();
         break;
       case STATE_VERIFY_CERT:
         // Kick off server certificate validation.
         rv = DoVerifyCert();
         break;
       case STATE_VERIFY_CERT_COMPLETE:
-        // Check the results of the  server certificate validation.
+        // Check the results of the server certificate validation.
         rv = DoVerifyCertComplete(rv);
         break;
-      case STATE_HANDSHAKE_FINISH:
-        // Do the SSL/TLS handshake, after the server certificate message.
-        rv = DoHandshakeFinish();
+      case STATE_COMPLETED_RENEGOTIATION:
+        // The renegotiation handshake has completed, and the Read() call
+        // that was interrupted by the renegotiation needs to be resumed in
+        // order to to satisfy the original caller's request.
+        rv = DoCompletedRenegotiation(rv);
         break;
+      case STATE_COMPLETED_HANDSHAKE:
+        next_handshake_state_ = STATE_COMPLETED_HANDSHAKE;
+        // This is the end of our state machine, so return.
+        return rv;
       default:
         rv = ERR_UNEXPECTED;
         NOTREACHED() << "unexpected state";
@@ -957,57 +950,49 @@ int SSLClientSocketMac::DoHandshakeLoop(int last_io_result) {
   return rv;
 }
 
-int SSLClientSocketMac::DoHandshakeStart() {
+int SSLClientSocketMac::DoHandshake() {
+  client_cert_requested_ = false;
+
   OSStatus status = SSLHandshake(ssl_context_);
 
+  SSLClientCertificateState client_cert_state;
+  if (SSLGetClientCertificateState(ssl_context_, &client_cert_state) != noErr)
+    client_cert_state = kSSLClientCertNone;
+  if (client_cert_state > kSSLClientCertNone)
+    client_cert_requested_ = true;
+
   switch (status) {
-    case errSSLWouldBlock:
-      next_handshake_state_ = STATE_HANDSHAKE_START;
-      break;
-
     case noErr:
-      // TODO(hawk): we verify the certificate chain even on resumed sessions
-      // so that we have the certificate status (valid, expired but overridden
-      // by the user, EV, etc.) available. Eliminate this step once we have
-      // a certificate validation result cache. (Also applies to the
-      // errSSLServerAuthCompleted case below.)
-      SSL_LOG << "Handshake completed (DoHandshakeStart), next verify cert";
-      next_handshake_state_ = STATE_VERIFY_CERT;
-      HandshakeFinished();
+      return DidCompleteHandshake();
+    case errSSLWouldBlock:
+      next_handshake_state_ = STATE_HANDSHAKE;
       break;
-
-    case errSSLServerAuthCompleted:
-      // Override errSSLServerAuthCompleted as it's not actually an error,
-      // but rather an indication that we're only half way through the
-      // handshake.
-      SSL_LOG << "Server auth completed (DoHandshakeStart)";
-      next_handshake_state_ = STATE_VERIFY_CERT;
-      handshake_interrupted_ = true;
-      status = noErr;
-      break;
-
-    case errSSLClientCertRequested:
-      SSL_LOG << "Received client cert request in DoHandshakeStart";
-      // If we get this instead of errSSLServerAuthCompleted, the latter is
-      // implicit, and we should begin verification as well.
-      next_handshake_state_ = STATE_VERIFY_CERT;
-      handshake_interrupted_ = true;
-      status = noErr;
-      // We don't want to send a client cert now, because we haven't
-      // verified the server's cert yet. Remember it for later.
-      client_cert_requested_ = true;
-      break;
-
     case errSSLClosedGraceful:
       // The server unexpectedly closed on us.
       return ERR_SSL_PROTOCOL_ERROR;
+    case errSSLClosedAbort:
+    case errSSLPeerHandshakeFail:
+      if (client_cert_requested_) {
+        // See if the server aborted due to client cert checking.
+        if (!ssl_config_.send_client_cert) {
+          SSL_LOG << "Server requested SSL cert during handshake";
+          return ERR_SSL_CLIENT_AUTH_CERT_NEEDED;
+        }
+        LOG(WARNING) << "Server aborted SSL handshake";
+        return ERR_BAD_SSL_CLIENT_AUTH_CERT;
+      }
+      break;
   }
 
   int net_error = NetErrorFromOSStatus(status);
-  if (status == noErr || IsCertificateError(net_error)) {
-    server_cert_ = GetServerCert(ssl_context_);
-    if (!server_cert_)
-      return ERR_UNEXPECTED;
+  DCHECK(!IsCertificateError(net_error));
+
+  if (!ssl_config_.send_client_cert &&
+     (client_cert_state == kSSLClientCertRejected ||
+      net_error == ERR_BAD_SSL_CLIENT_AUTH_CERT)) {
+    // The server unexpectedly sent a peer certificate error alert when no
+    // certificate had been sent.
+    net_error = ERR_SSL_PROTOCOL_ERROR;
   }
   return net_error;
 }
@@ -1015,8 +1000,7 @@ int SSLClientSocketMac::DoHandshakeStart() {
 int SSLClientSocketMac::DoVerifyCert() {
   next_handshake_state_ = STATE_VERIFY_CERT_COMPLETE;
 
-  if (!server_cert_)
-    return ERR_UNEXPECTED;
+  DCHECK(server_cert_);
 
   SSL_LOG << "DoVerifyCert...";
   int flags = 0;
@@ -1038,29 +1022,21 @@ int SSLClientSocketMac::DoVerifyCertComplete(int result) {
   if (IsCertificateError(result) && ssl_config_.IsAllowedBadCert(server_cert_))
     result = OK;
 
-  if (result == OK && client_cert_requested_) {
-    if (!ssl_config_.send_client_cert) {
-      // Caller hasn't specified a client cert, so let it know the server's
-      // asking for one, and abort the connection.
-      return ERR_SSL_CLIENT_AUTH_CERT_NEEDED;
-    }
-    // (We already called SetClientCert during InitializeSSLContext;
-    // no need to do so again.)
+  if (result == OK && client_cert_requested_ &&
+      !ssl_config_.send_client_cert) {
+    // Caller hasn't specified a client cert, so let it know the server is
+    // asking for one, and abort the connection.
+    return ERR_SSL_CLIENT_AUTH_CERT_NEEDED;
+  }
+  SSL_LOG << "Handshake finished! (DoVerifyCertComplete)";
+
+  if (renegotiating_) {
+    DidCompleteRenegotiation();
+    return result;
   }
 
-  if (handshake_interrupted_) {
-    // With session resumption enabled the full handshake (i.e., the handshake
-    // in a non-resumed session) occurs in two steps. Continue on to the second
-    // step if the certificate is OK.
-    if (result == OK)
-      next_handshake_state_ = STATE_HANDSHAKE_FINISH;
-  } else {
-    // If the session was resumed or session resumption was disabled, we're
-    // done with the handshake.
-    SSL_LOG << "Handshake finished! (DoVerifyCertComplete)";
-    completed_handshake_ = true;
-    DCHECK(next_handshake_state_ == STATE_NONE);
-  }
+  // The initial handshake has completed.
+  next_handshake_state_ = STATE_COMPLETED_HANDSHAKE;
 
   return result;
 }
@@ -1078,79 +1054,24 @@ int SSLClientSocketMac::SetClientCert() {
   return result;
 }
 
-int SSLClientSocketMac::DoHandshakeFinish() {
-  OSStatus status = SSLHandshake(ssl_context_);
-
-  switch (status) {
-    case errSSLWouldBlock:
-      next_handshake_state_ = STATE_HANDSHAKE_FINISH;
-      break;
-    case errSSLClientCertRequested:
-      SSL_LOG << "Server requested client cert (DoHandshakeFinish)";
-      if (!ssl_config_.send_client_cert)
-        return ERR_SSL_CLIENT_AUTH_CERT_NEEDED;
-      // (We already called SetClientCert during InitializeSSLContext.)
-      status = noErr;
-      next_handshake_state_ = STATE_HANDSHAKE_FINISH;
-      break;
-    case errSSLClosedGraceful:
-      return ERR_SSL_PROTOCOL_ERROR;
-    case errSSLClosedAbort:
-    case errSSLPeerHandshakeFail: {
-      // See if the server aborted due to client cert checking.
-      SSLClientCertificateState client_state;
-      if (SSLGetClientCertificateState(ssl_context_, &client_state) == noErr &&
-          client_state > kSSLClientCertNone) {
-        if (client_state == kSSLClientCertRequested &&
-            !ssl_config_.send_client_cert) {
-          SSL_LOG << "Server requested SSL cert during handshake";
-          return ERR_SSL_CLIENT_AUTH_CERT_NEEDED;
-        }
-        LOG(WARNING) << "Server aborted SSL handshake; client_state="
-                     << client_state;
-        return ERR_BAD_SSL_CLIENT_AUTH_CERT;
-      }
-      break;
-    }
-    case noErr:
-      SSL_LOG << "Handshake finished! (DoHandshakeFinish)";
-      HandshakeFinished();
-      completed_handshake_ = true;
-      DCHECK(next_handshake_state_ == STATE_NONE);
-      break;
-    default:
-      break;
-  }
-
-  return NetErrorFromOSStatus(status);
-}
-
-void SSLClientSocketMac::HandshakeFinished() {
-  // After the handshake's finished, disable breaking on server or client
-  // auth. Otherwise it might be triggered during a subsequent renegotiation,
-  // and SecureTransport doesn't handle that very well (there's usually no way
-  // to proceed without aborting the connection, at least not on 10.5.)
-  SSL_LOG << "HandshakeFinished()";
-  OSStatus status = EnableBreakOnAuth(false);
-  if (status != noErr)
-    SSL_LOG << "EnableBreakOnAuth failed: " << status;
-  // Note- this will actually always return an error, up through OS 10.6.3,
-  // because the option can't be changed after the context opens.
-}
-
 int SSLClientSocketMac::DoPayloadRead() {
   size_t processed = 0;
-  OSStatus status = SSLRead(ssl_context_,
-                            user_read_buf_->data(),
-                            user_read_buf_len_,
-                            &processed);
-
+  OSStatus status = SSLRead(ssl_context_, user_read_buf_->data(),
+                            user_read_buf_len_, &processed);
+  if (status == errSSLWouldBlock && renegotiating_) {
+    CHECK_EQ(static_cast<size_t>(0), processed);
+    next_handshake_state_ = STATE_HANDSHAKE;
+    return DoHandshakeLoop(OK);
+  }
   // There's a subtle difference here in semantics of the "would block" errors.
   // In our code, ERR_IO_PENDING means the whole operation is async, while
   // errSSLWouldBlock means that the stream isn't ending (and is often returned
   // along with partial data). So even though "would block" is returned, if we
-  // have data, let's just return it.
-
+  // have data, let's just return it. This is further complicated by the fact
+  // that errSSLWouldBlock is also used to short-circuit SSLRead()'s
+  // transparent renegotiation, so that we can update our state machine above,
+  // which otherwise would get out of sync with the SSLContextRef's internal
+  // state machine.
   if (processed > 0)
     return processed;
 
@@ -1160,22 +1081,6 @@ int SSLClientSocketMac::DoPayloadRead() {
       // return an error code indicating that the SSL connection ended
       // uncleanly, a potential truncation attack.  See http://crbug.com/18586.
       return OK;
-
-    case errSSLServerAuthCompleted:
-    case errSSLClientCertRequested:
-      // Server wants to renegotiate, probably to ask for a client cert,
-      // but SecureTransport doesn't support renegotiation so we have to close.
-      if (ssl_config_.send_client_cert) {
-        // We already gave SecureTransport a client cert. At this point there's
-        // nothing we can do; the renegotiation will fail regardless, due to
-        // bugs in Apple's SecureTransport library.
-        SSL_LOG << "Server renegotiating (status=" << status
-                << "), but I've already set a client cert. Fatal error.";
-        return ERR_SSL_PROTOCOL_ERROR;
-      }
-      // Tell my caller the server wants a client cert so it can reconnect.
-      SSL_LOG << "Server renegotiating; assuming it wants a client cert...";
-      return ERR_SSL_CLIENT_AUTH_CERT_NEEDED;
 
     default:
       return NetErrorFromOSStatus(status);
@@ -1199,6 +1104,43 @@ int SSLClientSocketMac::DoPayloadWrite() {
   return NetErrorFromOSStatus(status);
 }
 
+int SSLClientSocketMac::DoCompletedRenegotiation(int result) {
+  // The user had a read in progress, which was usurped by the renegotiation.
+  // Restart the read sequence.
+  next_handshake_state_ = STATE_COMPLETED_HANDSHAKE;
+  if (result != OK)
+    return result;
+  return DoPayloadRead();
+}
+
+void SSLClientSocketMac::DidCompleteRenegotiation() {
+  DCHECK(!user_connect_callback_);
+  renegotiating_ = false;
+  next_handshake_state_ = STATE_COMPLETED_RENEGOTIATION;
+}
+
+int SSLClientSocketMac::DidCompleteHandshake() {
+  DCHECK(!server_cert_ || renegotiating_);
+  SSL_LOG << "Handshake completed, next verify cert";
+
+  scoped_refptr<X509Certificate> new_server_cert =
+      GetServerCert(ssl_context_);
+  if (!new_server_cert)
+    return ERR_UNEXPECTED;
+
+  if (renegotiating_ &&
+      X509Certificate::IsSameOSCert(server_cert_->os_cert_handle(),
+                                    new_server_cert->os_cert_handle())) {
+    // We already verified the server certificate.  Either it is good or the
+    // user has accepted the certificate error.
+    DidCompleteRenegotiation();
+  } else {
+    server_cert_ = new_server_cert;
+    next_handshake_state_ = STATE_VERIFY_CERT;
+  }
+  return OK;
+}
+
 // static
 OSStatus SSLClientSocketMac::SSLReadCallback(SSLConnectionRef connection,
                                              void* data,
@@ -1215,15 +1157,41 @@ OSStatus SSLClientSocketMac::SSLReadCallback(SSLConnectionRef connection,
     *data_length = 0;
     return errSSLWouldBlock;
   }
+  if (us->completed_handshake()) {
+    // The state machine for SSLRead, located in libsecurity_ssl's
+    // sslTransport.c, will attempt to fully complete the renegotiation
+    // transparently in SSLRead once it reads the server's HelloRequest
+    // message. In order to make sure that the server certificate is
+    // (re-)verified and that any other parameters are logged (eg:
+    // certificate request state), we try to detect that the
+    // SSLClientSocketMac's state machine is out of sync with the
+    // SSLContext's. When that happens, we break out by faking
+    // errSSLWouldBlock, and set a flag so that DoPayloadRead() knows that
+    // it's not actually blocked. DoPayloadRead() will then restart the
+    // handshake state machine, and finally resume the original Read()
+    // once it successfully completes, similar to the behaviour of
+    // SSLClientSocketWin's DoDecryptPayload() and DoLoop() behave.
+    SSLSessionState state;
+    OSStatus status = SSLGetSessionState(us->ssl_context_, &state);
+    if (status) {
+      *data_length = 0;
+      return status;
+    }
+    if (state == kSSLHandshake) {
+      *data_length = 0;
+      us->renegotiating_ = true;
+      return errSSLWouldBlock;
+    }
+  }
 
   size_t total_read = us->recv_buffer_.size();
 
   int rv = 1;  // any old value to spin the loop below
   while (rv > 0 && total_read < *data_length) {
     us->read_io_buf_ = new IOBuffer(*data_length - total_read);
-    rv = us->transport_->Read(us->read_io_buf_,
-                              *data_length - total_read,
-                              &us->transport_read_callback_);
+    rv = us->transport_->socket()->Read(us->read_io_buf_,
+                                        *data_length - total_read,
+                                        &us->transport_read_callback_);
 
     if (rv >= 0) {
       us->recv_buffer_.insert(us->recv_buffer_.end(),
@@ -1283,9 +1251,9 @@ OSStatus SSLClientSocketMac::SSLWriteCallback(SSLConnectionRef connection,
     us->write_io_buf_ = new IOBuffer(us->send_buffer_.size());
     memcpy(us->write_io_buf_->data(), &us->send_buffer_[0],
            us->send_buffer_.size());
-    rv = us->transport_->Write(us->write_io_buf_,
-                               us->send_buffer_.size(),
-                               &us->transport_write_callback_);
+    rv = us->transport_->socket()->Write(us->write_io_buf_,
+                                         us->send_buffer_.size(),
+                                         &us->transport_write_callback_);
     if (rv > 0) {
       us->send_buffer_.erase(us->send_buffer_.begin(),
                              us->send_buffer_.begin() + rv);

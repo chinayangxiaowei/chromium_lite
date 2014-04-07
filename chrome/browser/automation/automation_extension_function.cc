@@ -8,6 +8,7 @@
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/values.h"
 #include "chrome/browser/automation/extension_automation_constants.h"
 #include "chrome/browser/extensions/extension_function_dispatcher.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
@@ -19,7 +20,10 @@ TabContents* AutomationExtensionFunction::api_handler_tab_ = NULL;
 AutomationExtensionFunction::PendingFunctionsMap
     AutomationExtensionFunction::pending_functions_;
 
-void AutomationExtensionFunction::SetArgs(const Value* args) {
+AutomationExtensionFunction::AutomationExtensionFunction() {
+}
+
+void AutomationExtensionFunction::SetArgs(const ListValue* args) {
   // Need to JSON-encode for sending over the wire to the automation user.
   base::JSONWriter::Write(args, false, &args_);
 }
@@ -101,8 +105,8 @@ void AutomationExtensionFunction::Enable(
 }
 
 void AutomationExtensionFunction::Disable() {
-   api_handler_tab_ = NULL;
-   ExtensionFunctionDispatcher::ResetFunctions();
+  api_handler_tab_ = NULL;
+  ExtensionFunctionDispatcher::ResetFunctions();
 }
 
 bool AutomationExtensionFunction::InterceptMessageFromExternalHost(
@@ -162,4 +166,7 @@ bool AutomationExtensionFunction::InterceptMessageFromExternalHost(
   }
 
   return false;
+}
+
+AutomationExtensionFunction::~AutomationExtensionFunction() {
 }

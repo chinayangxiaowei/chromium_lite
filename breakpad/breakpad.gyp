@@ -47,8 +47,14 @@
         {
           'target_name': 'crash_inspector',
           'type': 'executable',
+          'variables': {
+            'mac_real_dsym': 1,
+          },
           'dependencies': [
             'breakpad_utilities',
+          ],
+          'include_dirs': [
+            'src/common/mac',
           ],
           'sources': [
             'src/client/mac/crash_generation/Inspector.mm',
@@ -64,6 +70,12 @@
           'target_name': 'crash_report_sender',
           'type': 'executable',
           'mac_bundle': 1,
+          'variables': {
+            'mac_real_dsym': 1,
+          },
+          'include_dirs': [
+            'src/common/mac',
+          ],
           'sources': [
             'src/common/mac/HTTPMultipartUpload.m',
             'src/client/mac/sender/crash_report_sender.m',
@@ -72,7 +84,7 @@
           'mac_bundle_resources': [
             'src/client/mac/sender/English.lproj/Localizable.strings',
             'src/client/mac/sender/crash_report_sender.icns',
-            'src/client/mac/sender/Breakpad.nib',
+            'src/client/mac/sender/Breakpad.xib',
             'src/client/mac/sender/crash_report_sender-Info.plist',
           ],
           'mac_bundle_resources!': [
@@ -95,15 +107,28 @@
           'include_dirs': [
             'src/common/mac',
           ],
-          'dependencies': [
-            'breakpad_utilities',
-          ],
           'sources': [
-            'src/common/dwarf/bytereader.cc',
+            'src/common/dwarf/dwarf2diehandler.cc',
             'src/common/dwarf/dwarf2reader.cc',
-            'src/common/dwarf/functioninfo.cc',
+            'src/common/dwarf/bytereader.cc',
+            'src/common/dwarf_cfi_to_module.cc',
+            'src/common/dwarf_cu_to_module.cc',
+            'src/common/dwarf_line_to_module.cc',
+            'src/common/language.cc',
+            'src/common/module.cc',
             'src/common/mac/dump_syms.mm',
+            'src/common/mac/file_id.cc',
+            'src/common/mac/macho_id.cc',
+            'src/common/mac/macho_reader.cc',
+            'src/common/mac/macho_utilities.cc',
+            'src/common/mac/macho_walker.cc',
+            'src/common/stabs_reader.cc',
+            'src/common/stabs_to_module.cc',
             'src/tools/mac/dump_syms/dump_syms_tool.mm',
+          ],
+          'defines': [
+            # For src/common/stabs_reader.h.
+            'HAVE_MACH_O_NLIST_H',
           ],
           'xcode_settings': {
             # The DWARF utilities require -funsigned-char.
@@ -114,6 +139,7 @@
           'link_settings': {
             'libraries': [
               '$(SDKROOT)/System/Library/Frameworks/Foundation.framework',
+              '$(SDKROOT)/usr/lib/libcrypto.dylib',
             ],
           },
           'configurations': {
@@ -153,6 +179,8 @@
             'crash_report_sender',
           ],
           'sources': [
+            'src/client/mac/crash_generation/crash_generation_client.cc',
+            'src/client/mac/crash_generation/crash_generation_client.h',
             'src/client/mac/handler/protected_memory_allocator.cc',
             'src/client/mac/handler/exception_handler.cc',
             'src/client/mac/Framework/Breakpad.mm',
@@ -164,7 +192,7 @@
     [ 'OS=="linux"', {
       'conditions': [
         # Tools needed for archiving build symbols.
-        ['branding=="Chrome" or linux_breakpad==1', {
+        ['linux_breakpad==1', {
           'targets': [
             {
               'target_name': 'symupload',
@@ -209,17 +237,13 @@
               'cflags_cc!': ['-fno-rtti'],
 
               'sources': [
-                'src/common/dump_stabs.cc',
-                'src/common/dump_stabs.h',
                 'src/common/dwarf/bytereader.cc',
-                'src/common/dwarf/cfi_assembler.cc',
                 'src/common/dwarf_cfi_to_module.cc',
                 'src/common/dwarf_cfi_to_module.h',
                 'src/common/dwarf_cu_to_module.cc',
                 'src/common/dwarf_cu_to_module.h',
                 'src/common/dwarf/dwarf2diehandler.cc',
                 'src/common/dwarf/dwarf2reader.cc',
-                'src/common/dwarf/functioninfo.cc',
                 'src/common/dwarf_line_to_module.cc',
                 'src/common/dwarf_line_to_module.h',
                 'src/common/language.cc',
@@ -233,7 +257,16 @@
                 'src/common/module.h',
                 'src/common/stabs_reader.cc',
                 'src/common/stabs_reader.h',
+                'src/common/stabs_to_module.cc',
+                'src/common/stabs_to_module.h',
                 'src/tools/linux/dump_syms/dump_syms.cc',
+              ],
+
+              # Breakpad rev 583 introduced this flag.
+              # Using this define, stabs_reader.h will include a.out.h to
+              # build on Linux.
+              'defines': [
+                'HAVE_A_OUT_H',
               ],
 
               'include_dirs': [
@@ -264,19 +297,55 @@
             'src/client/minidump_file_writer.h',
             'src/common/convert_UTF.c',
             'src/common/convert_UTF.h',
-            'src/common/linux/file_id.h',
             'src/common/linux/file_id.cc',
+            'src/common/linux/file_id.h',
+            'src/common/linux/google_crashdump_uploader.cc',
+            'src/common/linux/google_crashdump_uploader.h',
             'src/common/linux/guid_creator.cc',
             'src/common/linux/guid_creator.h',
+            'src/common/linux/libcurl_wrapper.cc',
+            'src/common/linux/libcurl_wrapper.h',
             'src/common/linux/linux_libc_support.h',
             'src/common/linux/linux_syscall_support.h',
-            'src/common/linux/memory.h',
+            'src/common/memory.h',
             'src/common/string_conversion.cc',
             'src/common/string_conversion.h',
           ],
 
+          'link_settings': {
+            'libraries': [
+              '-ldl',
+            ],
+          },
+
           'include_dirs': [
             'src',
+            'src/client',
+            'src/third_party/linux/include',
+            '..',
+            '.',
+          ],
+        },
+        {
+          # Breakpad r693 uses some files from src/processor in unit tests.
+          'target_name': 'breakpad_processor_support',
+          'type': '<(library)',
+
+          'sources': [
+            'src/processor/basic_code_modules.cc',
+            'src/processor/basic_code_modules.h',
+            'src/processor/logging.cc',
+            'src/processor/logging.h',
+            'src/processor/minidump.cc',
+            'src/processor/minidump.h',
+            'src/processor/pathname_stripper.cc',
+            'src/processor/pathname_stripper.h',
+          ],
+
+          'include_dirs': [
+            'src',
+            'src/client',
+            'src/third_party/linux/include',
             '..',
             '.',
           ],
@@ -289,6 +358,7 @@
             '../testing/gtest.gyp:gtestmain',
             '../testing/gmock.gyp:gmock',
             'breakpad_client',
+            'breakpad_processor_support',
           ],
 
           'sources': [
@@ -300,7 +370,7 @@
             'src/client/linux/minidump_writer/minidump_writer_unittest.cc',
             'src/common/linux/file_id_unittest.cc',
             'src/common/linux/linux_libc_support_unittest.cc',
-            'src/common/linux/memory_unittest.cc',
+            'src/common/memory_unittest.cc',
           ],
 
           'include_dirs': [
@@ -320,6 +390,19 @@
 
           'dependencies': [
             'breakpad_client',
+          ],
+
+          'include_dirs': [
+            '..',
+            'src',
+          ],
+        },
+        {
+          'target_name': 'minidump-2-core',
+          'type': 'executable',
+
+          'sources': [
+            'src/tools/linux/md2core/minidump-2-core.cc'
           ],
 
           'include_dirs': [

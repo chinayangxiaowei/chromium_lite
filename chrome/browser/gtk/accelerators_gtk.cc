@@ -123,6 +123,7 @@ const struct AcceleratorMapping {
   { GDK_r, IDC_RELOAD_IGNORING_CACHE,
     GdkModifierType(GDK_CONTROL_MASK|GDK_SHIFT_MASK) },
   { GDK_F5, IDC_RELOAD, GdkModifierType(0) },
+  { GDK_F5, IDC_RELOAD_IGNORING_CACHE, GDK_CONTROL_MASK },
   { GDK_F5, IDC_RELOAD_IGNORING_CACHE, GDK_SHIFT_MASK },
   { XF86XK_Reload, IDC_RELOAD, GdkModifierType(0) },
   { XF86XK_Refresh, IDC_RELOAD, GdkModifierType(0) },
@@ -132,6 +133,8 @@ const struct AcceleratorMapping {
   { GDK_i, IDC_DEV_TOOLS,
     GdkModifierType(GDK_CONTROL_MASK | GDK_SHIFT_MASK) },
   { GDK_j, IDC_DEV_TOOLS_CONSOLE,
+    GdkModifierType(GDK_CONTROL_MASK | GDK_SHIFT_MASK) },
+  { GDK_c, IDC_DEV_TOOLS_INSPECT,
     GdkModifierType(GDK_CONTROL_MASK | GDK_SHIFT_MASK) },
   { GDK_Escape, IDC_TASK_MANAGER, GDK_SHIFT_MASK },
 
@@ -151,8 +154,7 @@ const struct AcceleratorMapping {
   { GDK_o, IDC_OPEN_FILE, GDK_CONTROL_MASK },
   { GDK_f, IDC_FIND, GDK_CONTROL_MASK },
   { GDK_p, IDC_PRINT, GDK_CONTROL_MASK },
-  { GDK_b, IDC_SHOW_BOOKMARK_BAR, GDK_CONTROL_MASK },
-  { GDK_b, IDC_SHOW_BOOKMARK_MANAGER,
+  { GDK_b, IDC_SHOW_BOOKMARK_BAR,
     GdkModifierType(GDK_CONTROL_MASK | GDK_SHIFT_MASK) },
   { GDK_F11, IDC_FULLSCREEN, GdkModifierType(0) },
   { GDK_Delete, IDC_CLEAR_BROWSING_DATA,
@@ -165,7 +167,7 @@ const struct AcceleratorMapping {
   { XF86XK_History, IDC_SHOW_HISTORY, GdkModifierType(0) },
   { GDK_q, IDC_EXIT, GdkModifierType(GDK_CONTROL_MASK | GDK_SHIFT_MASK) },
   { GDK_s, IDC_SAVE_PAGE, GDK_CONTROL_MASK },
-  { GDK_e, IDC_SHOW_PAGE_MENU, GDK_MOD1_MASK },
+  { GDK_e, IDC_SHOW_APP_MENU, GDK_MOD1_MASK },
   { GDK_f, IDC_SHOW_APP_MENU, GDK_MOD1_MASK },
 };
 

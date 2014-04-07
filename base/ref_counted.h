@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_REF_COUNTED_H_
 #define BASE_REF_COUNTED_H_
+#pragma once
 
 #include "base/atomic_ref_count.h"
 #include "base/thread_collision_warner.h"
@@ -22,15 +23,15 @@ class RefCountedBase {
   RefCountedBase();
   ~RefCountedBase();
 
-  void AddRef();
+  void AddRef() const;
 
   // Returns true if the object should self-delete.
-  bool Release();
+  bool Release() const;
 
  private:
-  int ref_count_;
+  mutable int ref_count_;
 #ifndef NDEBUG
-  bool in_dtor_;
+  mutable bool in_dtor_;
 #endif
 
   DFAKE_MUTEX(add_release_);
@@ -48,15 +49,15 @@ class RefCountedThreadSafeBase {
   RefCountedThreadSafeBase();
   ~RefCountedThreadSafeBase();
 
-  void AddRef();
+  void AddRef() const;
 
   // Returns true if the object should self-delete.
-  bool Release();
+  bool Release() const;
 
  private:
-  AtomicRefCount ref_count_;
+  mutable AtomicRefCount ref_count_;
 #ifndef NDEBUG
-  bool in_dtor_;
+  mutable bool in_dtor_;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(RefCountedThreadSafeBase);
@@ -84,13 +85,13 @@ class RefCounted : public subtle::RefCountedBase {
   RefCounted() { }
   ~RefCounted() { }
 
-  void AddRef() {
+  void AddRef() const {
     subtle::RefCountedBase::AddRef();
   }
 
-  void Release() {
+  void Release() const {
     if (subtle::RefCountedBase::Release()) {
-      delete static_cast<T*>(this);
+      delete static_cast<const T*>(this);
     }
   }
 
@@ -109,7 +110,8 @@ struct DefaultRefCountedThreadSafeTraits {
     // Delete through RefCountedThreadSafe to make child classes only need to be
     // friend with RefCountedThreadSafe instead of this struct, which is an
     // implementation detail.
-    RefCountedThreadSafe<T, DefaultRefCountedThreadSafeTraits>::DeleteInternal(x);
+    RefCountedThreadSafe<T,
+                         DefaultRefCountedThreadSafeTraits>::DeleteInternal(x);
   }
 };
 

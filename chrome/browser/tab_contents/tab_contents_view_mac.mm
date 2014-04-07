@@ -9,25 +9,25 @@
 #include <string>
 
 #import "base/chrome_application_mac.h"
-#include "chrome/browser/browser.h" // TODO(beng): this dependency is awful.
 #import "chrome/browser/cocoa/focus_tracker.h"
-#import "chrome/browser/cocoa/chrome_browser_window.h"
 #import "chrome/browser/cocoa/browser_window_controller.h"
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
 #include "chrome/browser/cocoa/sad_tab_controller.h"
 #import "chrome/browser/cocoa/web_drag_source.h"
 #import "chrome/browser/cocoa/web_drop_target.h"
+#import "chrome/browser/cocoa/view_id_util.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_view_host_factory.h"
 #include "chrome/browser/renderer_host/render_widget_host.h"
 #include "chrome/browser/renderer_host/render_widget_host_view_mac.h"
 #include "chrome/browser/tab_contents/render_view_context_menu_mac.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tab_contents/tab_contents_delegate.h"
 #include "chrome/common/notification_type.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/render_messages.h"
 #include "skia/ext/skia_utils_mac.h"
-#import "third_party/mozilla/include/NSPasteboard+Utils.h"
+#import "third_party/mozilla/NSPasteboard+Utils.h"
 
 using WebKit::WebDragOperation;
 using WebKit::WebDragOperationsMask;
@@ -63,7 +63,8 @@ TabContentsView* TabContentsView::Create(TabContents* tab_contents) {
 }
 
 TabContentsViewMac::TabContentsViewMac(TabContents* tab_contents)
-    : TabContentsView(tab_contents) {
+    : TabContentsView(tab_contents),
+      preferred_width_(0) {
   registrar_.Add(this, NotificationType::TAB_CONTENTS_CONNECTED,
                  Source<TabContents>(tab_contents));
 }
@@ -79,6 +80,7 @@ TabContentsViewMac::~TabContentsViewMac() {
 void TabContentsViewMac::CreateView(const gfx::Size& initial_size) {
   TabContentsViewCocoa* view =
       [[TabContentsViewCocoa alloc] initWithTabContentsViewMac:this];
+  [view setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
   cocoa_view_.reset(view);
 }
 
@@ -126,7 +128,7 @@ gfx::NativeWindow TabContentsViewMac::GetTopLevelNativeWindow() const {
 }
 
 void TabContentsViewMac::GetContainerBounds(gfx::Rect* out) const {
-  *out = [cocoa_view_.get() NSRectToRect:[cocoa_view_.get() bounds]];
+  *out = [cocoa_view_.get() flipNSRectToRect:[cocoa_view_.get() bounds]];
 }
 
 void TabContentsViewMac::StartDragging(
@@ -153,10 +155,10 @@ void TabContentsViewMac::StartDragging(
 }
 
 void TabContentsViewMac::RenderViewCreated(RenderViewHost* host) {
-  // We want updates whenever the intrinsic width of the webpage
-  // changes. Put the RenderView into that mode.
-  int routing_id = host->routing_id();
-  host->Send(new ViewMsg_EnablePreferredSizeChangedMode(routing_id));
+  // We want updates whenever the intrinsic width of the webpage changes.
+  // Put the RenderView into that mode. The preferred width is used for example
+  // when the "zoom" button in the browser window is clicked.
+  host->EnablePreferredSizeChangedMode(kPreferredSizeWidth);
 }
 
 void TabContentsViewMac::SetPageTitle(const std::wstring& title) {
@@ -181,7 +183,7 @@ void TabContentsViewMac::SizeContents(const gfx::Size& size) {
   // See tab_contents_view.h.
   gfx::Rect rect(gfx::Point(), size);
   TabContentsViewCocoa* view = cocoa_view_.get();
-  [view setFrame:[view RectToNSRect:rect]];
+  [view setFrame:[view flipRectToNSRect:rect]];
 }
 
 void TabContentsViewMac::Focus() {
@@ -219,6 +221,11 @@ void TabContentsViewMac::RestoreFocus() {
   focus_tracker_.reset(nil);
 }
 
+void TabContentsViewMac::UpdatePreferredSize(const gfx::Size& pref_size) {
+  preferred_width_ = pref_size.width();
+  TabContentsView::UpdatePreferredSize(pref_size);
+}
+
 void TabContentsViewMac::UpdateDragCursor(WebDragOperation operation) {
   [cocoa_view_ setCurrentDragOperation: operation];
 }
@@ -228,7 +235,7 @@ void TabContentsViewMac::GotFocus() {
   // all subclasses. http://crbug.com/21875
 }
 
-// This is called when we the renderer asks us to take focus back (i.e., it has
+// This is called when the renderer asks us to take focus back (i.e., it has
 // iterated past the last focusable element on the page).
 void TabContentsViewMac::TakeFocus(bool reverse) {
   if (reverse) {
@@ -241,7 +248,7 @@ void TabContentsViewMac::TakeFocus(bool reverse) {
 void TabContentsViewMac::ShowContextMenu(const ContextMenuParams& params) {
   RenderViewContextMenuMac menu(tab_contents(),
                                 params,
-                                GetNativeView());
+                                GetContentNativeView());
   menu.Init();
 }
 
@@ -324,11 +331,17 @@ void TabContentsViewMac::Observe(NotificationType type,
     dropTarget_.reset(
         [[WebDropTarget alloc] initWithTabContents:[self tabContents]]);
     [self registerDragTypes];
+    // TabContentsViewCocoa's ViewID may be changed to VIEW_ID_DEV_TOOLS_DOCKED
+    // by TabContentsController, so we can't just override -viewID method to
+    // return it.
+    view_id_util::SetID(self, VIEW_ID_TAB_CONTAINER);
   }
   return self;
 }
 
 - (void)dealloc {
+  view_id_util::UnsetID(self);
+
   // Cancel any deferred tab closes, just in case.
   [self cancelDeferredClose];
 

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_WORKER_WEBWORKER_STUB_H_
 #define CHROME_WORKER_WEBWORKER_STUB_H_
+#pragma once
 
 #include "chrome/worker/webworker_stub_base.h"
 #include "chrome/worker/webworkerclient_proxy.h"
@@ -17,11 +18,14 @@ class WebWorker;
 // appropriate WebWorker APIs.
 class WebWorkerStub : public WebWorkerStubBase {
  public:
-  WebWorkerStub(const GURL& url, int route_id);
+  WebWorkerStub(const GURL& url, int route_id,
+                const WorkerAppCacheInitInfo& appcache_init_info);
 
   // IPC::Channel::Listener implementation.
   virtual void OnMessageReceived(const IPC::Message& message);
   virtual void OnChannelError();
+
+  virtual const GURL& url() const { return url_; }
 
  private:
   virtual ~WebWorkerStub();
@@ -32,6 +36,7 @@ class WebWorkerStub : public WebWorkerStubBase {
                      const std::vector<int>& new_routing_ids);
 
   WebKit::WebWorker* impl_;
+  GURL url_;
 
   DISALLOW_COPY_AND_ASSIGN(WebWorkerStub);
 };

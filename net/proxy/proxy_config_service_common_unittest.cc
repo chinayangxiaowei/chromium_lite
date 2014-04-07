@@ -49,6 +49,26 @@ std::string FlattenProxyBypass(const ProxyBypassRules& bypass_rules) {
 
 }  // namespace
 
+ProxyRulesExpectation::ProxyRulesExpectation(
+    ProxyConfig::ProxyRules::Type type,
+    const char* single_proxy,
+    const char* proxy_for_http,
+    const char* proxy_for_https,
+    const char* proxy_for_ftp,
+    const char* fallback_proxy,
+    const char* flattened_bypass_rules,
+    bool reverse_bypass)
+    : type(type),
+      single_proxy(single_proxy),
+      proxy_for_http(proxy_for_http),
+      proxy_for_https(proxy_for_https),
+      proxy_for_ftp(proxy_for_ftp),
+      fallback_proxy(fallback_proxy),
+      flattened_bypass_rules(flattened_bypass_rules),
+      reverse_bypass(reverse_bypass) {
+}
+
+
 ::testing::AssertionResult ProxyRulesExpectation::Matches(
     const ProxyConfig::ProxyRules& rules) const {
   ::testing::AssertionResult failure_details = ::testing::AssertionFailure();
@@ -66,8 +86,8 @@ std::string FlattenProxyBypass(const ProxyBypassRules& bypass_rules) {
                            rules.proxy_for_http, &failure_details, &failed);
   MatchesProxyServerHelper("Bad proxy_for_https", proxy_for_https,
                            rules.proxy_for_https, &failure_details, &failed);
-  MatchesProxyServerHelper("Bad proxy_for_socks", socks_proxy,
-                           rules.socks_proxy, &failure_details, &failed);
+  MatchesProxyServerHelper("Bad fallback_proxy", fallback_proxy,
+                           rules.fallback_proxy, &failure_details, &failed);
 
   std::string actual_flattened_bypass = FlattenProxyBypass(rules.bypass_rules);
   if (std::string(flattened_bypass_rules) != actual_flattened_bypass) {
@@ -77,20 +97,27 @@ std::string FlattenProxyBypass(const ProxyBypassRules& bypass_rules) {
     failed = true;
   }
 
+  if (rules.reverse_bypass != reverse_bypass) {
+    failure_details << "Bad reverse_bypass. Expected: " << reverse_bypass
+                    << " but got: " << rules.reverse_bypass;
+    failed = true;
+  }
+
   return failed ? failure_details : ::testing::AssertionSuccess();
 }
 
 // static
 ProxyRulesExpectation ProxyRulesExpectation::Empty() {
   return ProxyRulesExpectation(ProxyConfig::ProxyRules::TYPE_NO_RULES,
-                               "", "", "", "", "", "");
+                               "", "", "", "", "", "", false);
 }
 
 // static
 ProxyRulesExpectation ProxyRulesExpectation::EmptyWithBypass(
     const char* flattened_bypass_rules) {
   return ProxyRulesExpectation(ProxyConfig::ProxyRules::TYPE_NO_RULES,
-                               "", "", "", "", "", flattened_bypass_rules);
+                               "", "", "", "", "", flattened_bypass_rules,
+                               false);
 }
 
 // static
@@ -99,7 +126,7 @@ ProxyRulesExpectation ProxyRulesExpectation::Single(
     const char* flattened_bypass_rules) {
   return ProxyRulesExpectation(ProxyConfig::ProxyRules::TYPE_SINGLE_PROXY,
                                single_proxy, "", "", "", "",
-                               flattened_bypass_rules);
+                               flattened_bypass_rules, false);
 }
 
 // static
@@ -110,7 +137,7 @@ ProxyRulesExpectation ProxyRulesExpectation::PerScheme(
     const char* flattened_bypass_rules) {
   return ProxyRulesExpectation(ProxyConfig::ProxyRules::TYPE_PROXY_PER_SCHEME,
                                "", proxy_http, proxy_https, proxy_ftp, "",
-                               flattened_bypass_rules);
+                               flattened_bypass_rules, false);
 }
 
 // static
@@ -122,7 +149,18 @@ ProxyRulesExpectation ProxyRulesExpectation::PerSchemeWithSocks(
     const char* flattened_bypass_rules) {
   return ProxyRulesExpectation(ProxyConfig::ProxyRules::TYPE_PROXY_PER_SCHEME,
                                "", proxy_http, proxy_https, proxy_ftp,
-                               socks_proxy, flattened_bypass_rules);
+                               socks_proxy, flattened_bypass_rules, false);
+}
+
+// static
+ProxyRulesExpectation ProxyRulesExpectation::PerSchemeWithBypassReversed(
+    const char* proxy_http,
+    const char* proxy_https,
+    const char* proxy_ftp,
+    const char* flattened_bypass_rules) {
+  return ProxyRulesExpectation(ProxyConfig::ProxyRules::TYPE_PROXY_PER_SCHEME,
+                               "", proxy_http, proxy_https, proxy_ftp, "",
+                               flattened_bypass_rules, true);
 }
 
 }  // namespace net

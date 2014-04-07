@@ -7,14 +7,6 @@
     "128": "icon_128.png"
   },
   "default_locale": "en_US",
-  "toolstrips": [
-    {
-      "path": "toolstrip1.html",
-      "mole": "lorem_ipsum.html",
-      "mole_height": 200
-    },
-    "toolstrip2.html"
-  ],
   "background_page": "backgroundpage.html",
   "permissions": ["tabs", "http://*.google.com/*", "https://*.google.com/*"],
   "content_scripts": [
@@ -27,6 +19,5 @@
       "matches": ["http://*.news.com/*"],
       "js": ["js_files/script3.js"]
     }
-  ],
-  "privacy_blacklists": ["blacklist.pbl"]
+  ]
 }

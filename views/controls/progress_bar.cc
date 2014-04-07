@@ -6,11 +6,9 @@
 
 #include <string>
 
-#include "app/l10n_util.h"
-#include "app/resource_bundle.h"
 #include "base/logging.h"
 #include "base/string_util.h"
-#include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/color_utils.h"
 #include "gfx/font.h"
 #include "gfx/insets.h"
@@ -75,7 +73,7 @@ static void FillRoundRect(gfx::Canvas* canvas,
   } else {
     paint.setColor(gradient_start_color);
   }
-  canvas->drawPath(path, paint);
+  canvas->AsCanvasSkia()->drawPath(path, paint);
 }
 
 static void StrokeRoundRect(gfx::Canvas* canvas,
@@ -92,7 +90,7 @@ static void StrokeRoundRect(gfx::Canvas* canvas,
   paint.setStyle(SkPaint::kStroke_Style);
   paint.setFlags(SkPaint::kAntiAlias_Flag);
   paint.setStrokeWidth(SkIntToScalar(stroke_width));
-  canvas->drawPath(path, paint);
+  canvas->AsCanvasSkia()->drawPath(path, paint);
 }
 
 }  // anonymous namespace
@@ -185,16 +183,12 @@ void ProgressBar::SetEnabled(bool enabled) {
   // TODO(denisromanov): Need to switch progress bar color here?
 }
 
-bool ProgressBar::GetAccessibleRole(AccessibilityTypes::Role* role) {
-  DCHECK(role);
-  *role = AccessibilityTypes::ROLE_PROGRESSBAR;
-  return true;
+AccessibilityTypes::Role ProgressBar::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_PROGRESSBAR;
 }
 
-bool ProgressBar::GetAccessibleState(AccessibilityTypes::State* state) {
-  DCHECK(state);
-  *state = AccessibilityTypes::STATE_READONLY;
-  return true;
+AccessibilityTypes::State ProgressBar::GetAccessibleState() {
+  return AccessibilityTypes::STATE_READONLY;
 }
 
 }  // namespace views

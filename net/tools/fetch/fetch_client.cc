@@ -9,6 +9,7 @@
 #include "base/message_loop.h"
 #include "base/singleton.h"
 #include "base/stats_counters.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "net/base/completion_callback.h"
 #include "net/base/host_resolver.h"
@@ -63,7 +64,7 @@ class Client {
     request_info_.url = url_;
     request_info_.method = "GET";
     int state = transaction_->Start(
-        &request_info_, &connect_callback_, NULL);
+        &request_info_, &connect_callback_, net::BoundNetLog());
     DCHECK(state == net::ERR_IO_PENDING);
   };
 
@@ -125,31 +126,40 @@ int main(int argc, char**argv) {
   if (!url.length())
     usage(argv[0]);
   int client_limit = 1;
-  if (parsed_command_line.HasSwitch("n"))
-    StringToInt(parsed_command_line.GetSwitchValueASCII("n"), &client_limit);
+  if (parsed_command_line.HasSwitch("n")) {
+    base::StringToInt(parsed_command_line.GetSwitchValueASCII("n"),
+                      &client_limit);
+  }
   bool use_cache = parsed_command_line.HasSwitch("use-cache");
 
   // Do work here.
   MessageLoop loop(MessageLoop::TYPE_IO);
 
-  scoped_refptr<net::HostResolver> host_resolver(
-      net::CreateSystemHostResolver(NULL));
+  scoped_ptr<net::HostResolver> host_resolver(
+      net::CreateSystemHostResolver(net::HostResolver::kDefaultParallelism,
+                                    NULL));
 
   scoped_refptr<net::ProxyService> proxy_service(
-      net::ProxyService::CreateNull());
+      net::ProxyService::CreateDirect());
   scoped_refptr<net::SSLConfigService> ssl_config_service(
       net::SSLConfigService::CreateSystemSSLConfigService());
   net::HttpTransactionFactory* factory = NULL;
   scoped_ptr<net::HttpAuthHandlerFactory> http_auth_handler_factory(
-      net::HttpAuthHandlerFactory::CreateDefault());
+      net::HttpAuthHandlerFactory::CreateDefault(host_resolver.get()));
   if (use_cache) {
-    factory = new net::HttpCache(NULL, host_resolver, proxy_service,
-                                 ssl_config_service,
-                                 http_auth_handler_factory.get(), 0);
+    factory = new net::HttpCache(host_resolver.get(), NULL, proxy_service,
+        ssl_config_service, http_auth_handler_factory.get(), NULL, NULL,
+        net::HttpCache::DefaultBackend::InMemory(0));
   } else {
     factory = new net::HttpNetworkLayer(
-        net::ClientSocketFactory::GetDefaultFactory(), NULL, host_resolver,
-        proxy_service, ssl_config_service, http_auth_handler_factory.get());
+        net::ClientSocketFactory::GetDefaultFactory(),
+        host_resolver.get(),
+        NULL /* dnsrr_resolver */,
+        proxy_service,
+        ssl_config_service,
+        http_auth_handler_factory.get(),
+        NULL,
+        NULL);
   }
 
   {

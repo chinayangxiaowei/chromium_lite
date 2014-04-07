@@ -4,25 +4,34 @@
 
 #include "chrome/browser/views/autocomplete/autocomplete_popup_contents_view.h"
 
+#include "unicode/ubidi.h"
+
 #include "app/bidi_line_iterator.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "app/theme_provider.h"
+#include "app/text_elider.h"
 #include "base/compiler_specific.h"
 #include "base/i18n/rtl.h"
 #include "chrome/browser/autocomplete/autocomplete_edit_view.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
-#include "chrome/browser/bubble_positioner.h"
+#include "chrome/browser/instant/instant_opt_in.h"
 #include "chrome/browser/views/bubble_border.h"
-#include "gfx/canvas.h"
+#include "chrome/browser/views/location_bar/location_bar_view.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/color_utils.h"
 #include "gfx/insets.h"
 #include "gfx/path.h"
+#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "third_party/skia/include/core/SkShader.h"
-#include "third_party/icu/public/common/unicode/ubidi.h"
+#include "views/controls/button/text_button.h"
+#include "views/controls/label.h"
+#include "views/grid_layout.h"
+#include "views/standard_layout.h"
 #include "views/widget/widget.h"
+#include "views/window/window.h"
 
 #if defined(OS_WIN)
 #include <objidl.h>
@@ -30,6 +39,11 @@
 #include <dwmapi.h>
 
 #include "app/win_util.h"
+#endif
+
+#if defined(OS_LINUX)
+#include "chrome/browser/gtk/gtk_util.h"
+#include "gfx/skia_utils_gtk.h"
 #endif
 
 namespace {
@@ -58,6 +72,14 @@ SkColor GetColor(ResultViewState state, ColorKind kind) {
     colors[SELECTED][BACKGROUND] = color_utils::GetSysSkColor(COLOR_HIGHLIGHT);
     colors[NORMAL][TEXT] = color_utils::GetSysSkColor(COLOR_WINDOWTEXT);
     colors[SELECTED][TEXT] = color_utils::GetSysSkColor(COLOR_HIGHLIGHTTEXT);
+#elif defined(OS_LINUX)
+    GdkColor bg_color, selected_bg_color, text_color, selected_text_color;
+    gtk_util::GetTextColors(
+        &bg_color, &selected_bg_color, &text_color, &selected_text_color);
+    colors[NORMAL][BACKGROUND] = gfx::GdkColorToSkColor(bg_color);
+    colors[SELECTED][BACKGROUND] = gfx::GdkColorToSkColor(selected_bg_color);
+    colors[NORMAL][TEXT] = gfx::GdkColorToSkColor(text_color);
+    colors[SELECTED][TEXT] = gfx::GdkColorToSkColor(selected_text_color);
 #else
     // TODO(beng): source from theme provider.
     colors[NORMAL][BACKGROUND] = SK_ColorWHITE;
@@ -81,6 +103,8 @@ SkColor GetColor(ResultViewState state, ColorKind kind) {
   return colors[state][kind];
 }
 
+const wchar_t kEllipsis[] = L"\x2026";
+
 const SkAlpha kGlassPopupAlpha = 240;
 const SkAlpha kOpaquePopupAlpha = 255;
 // The minimum distance between the top and bottom of the icon and the top or
@@ -91,13 +115,6 @@ const int kIconVerticalPadding = 2;
 // bottom of the row. See comment about the use of "minimum" for
 // kIconVerticalPadding.
 const int kTextVerticalPadding = 3;
-// The padding at the left edge of the row, left of the icon.
-const int kRowLeftPadding = 6;
-// The padding on the right edge of the row, right of the text.
-const int kRowRightPadding = 3;
-// The horizontal distance between the right edge of the icon and the left edge
-// of the text.
-const int kIconTextSpacing = 9;
 // The size delta between the font used for the edit and the result rows. Passed
 // to gfx::Font::DeriveFont.
 #if !defined(OS_CHROMEOS)
@@ -107,13 +124,94 @@ const int kEditFontAdjust = -1;
 const int kEditFontAdjust = 0;
 #endif
 
-}
+// Horizontal padding between the buttons on the opt in promo.
+const int kOptInButtonPadding = 2;
+
+// Padding around the opt in view.
+const int kOptInLeftPadding = 12;
+const int kOptInRightPadding = 0;
+const int kOptInTopPadding = 6;
+const int kOptInBottomPadding = 3;
+
+// Padding between the top of the opt-in view and the separator.
+const int kOptInSeparatorSpacing = 2;
+
+}  // namespace
+
+class AutocompletePopupContentsView::InstantOptInView :
+    public views::View,
+    public views::ButtonListener {
+ public:
+  InstantOptInView(AutocompletePopupContentsView* contents_view,
+                   const gfx::Font& label_font,
+                   const gfx::Font& button_font)
+      : contents_view_(contents_view) {
+    views::Label* label =
+        new views::Label(l10n_util::GetString(IDS_INSTANT_OPT_IN_LABEL));
+    label->SetFont(label_font);
+
+    views::GridLayout* layout = new views::GridLayout(this);
+    layout->SetInsets(kOptInTopPadding, kOptInLeftPadding,
+                      kOptInBottomPadding, kOptInRightPadding);
+    SetLayoutManager(layout);
+
+    const int first_column_set = 1;
+    views::GridLayout::Alignment v_align = views::GridLayout::CENTER;
+    views::ColumnSet* column_set = layout->AddColumnSet(first_column_set);
+    column_set->AddColumn(views::GridLayout::LEADING, v_align, 1,
+                          views::GridLayout::USE_PREF, 0, 0);
+    column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
+    column_set->AddColumn(views::GridLayout::CENTER, v_align, 0,
+                          views::GridLayout::USE_PREF, 0, 0);
+    column_set->AddPaddingColumn(0, kOptInButtonPadding);
+    column_set->AddColumn(views::GridLayout::CENTER, v_align, 0,
+                          views::GridLayout::USE_PREF, 0, 0);
+    column_set->LinkColumnSizes(2, 4, -1);
+    layout->StartRow(0, first_column_set);
+    layout->AddView(label);
+    layout->AddView(CreateButton(IDS_INSTANT_OPT_IN_NO_THANKS, button_font));
+    layout->AddView(CreateButton(IDS_INSTANT_OPT_IN_ENABLE, button_font));
+  }
+
+  virtual void ButtonPressed(views::Button* sender, const views::Event& event) {
+    contents_view_->UserPressedOptIn(
+        sender->tag() == IDS_INSTANT_OPT_IN_ENABLE);
+    // WARNING: we've been deleted.
+  }
+
+  virtual void Paint(gfx::Canvas* canvas) {
+    canvas->DrawLineInt(
+        GetColor(NORMAL, DIMMED_TEXT), 0, kOptInSeparatorSpacing, width(),
+        kOptInSeparatorSpacing);
+  }
+
+ private:
+  // Creates and returns a button configured for the opt-in promo.
+  views::View* CreateButton(int id, const gfx::Font& font) {
+    // NOTE: we can't use NativeButton as the popup is a layered window and
+    // native buttons don't draw  in layered windows.
+    // TODO: these buttons look crap. Figure out the right border/background to
+    // use.
+    views::TextButton* button =
+        new views::TextButton(this, l10n_util::GetString(id));
+    button->SetNormalHasBorder(true);
+    button->set_tag(id);
+    button->SetFont(font);
+    button->set_animate_on_state_change(false);
+    return button;
+  }
+
+  AutocompletePopupContentsView* contents_view_;
+
+  DISALLOW_COPY_AND_ASSIGN(InstantOptInView);
+};
 
 class AutocompleteResultView : public views::View {
  public:
   AutocompleteResultView(AutocompleteResultViewModel* model,
                          int model_index,
-                         const gfx::Font& font);
+                         const gfx::Font& font,
+                         const gfx::Font& bold_font);
   virtual ~AutocompleteResultView();
 
   // Updates the match used to paint the contents of this result view. We copy
@@ -126,10 +224,42 @@ class AutocompleteResultView : public views::View {
   virtual void Layout();
   virtual gfx::Size GetPreferredSize();
 
+  // Returns the preferred height for a single row.
+  static int GetPreferredHeight(const gfx::Font& font,
+                                const gfx::Font& bold_font);
+
  private:
+  // Precalculated data used to draw the portion of a match classification that
+  // fits entirely within one run.
+  struct ClassificationData {
+    std::wstring text;
+    const gfx::Font* font;
+    SkColor color;
+    int pixel_width;
+  };
+  typedef std::vector<ClassificationData> Classifications;
+
+  // Precalculated data used to draw a complete visual run within the match.
+  // This will include all or part of at leasdt one, and possibly several,
+  // classifications.
+  struct RunData {
+    size_t run_start;  // Offset within the match text where this run begins.
+    int visual_order;  // Where this run occurs in visual order.  The earliest
+                       // run drawn is run 0.
+    bool is_rtl;
+    int pixel_width;
+    Classifications classifications;  // Classification pieces within this run,
+                                      // in logical order.
+  };
+  typedef std::vector<RunData> Runs;
+
+  // Predicate functions for use when sorting the runs.
+  static bool SortRunsLogically(const RunData& lhs, const RunData& rhs);
+  static bool SortRunsVisually(const RunData& lhs, const RunData& rhs);
+
   ResultViewState GetState() const;
 
-  SkBitmap* GetIcon() const;
+  const SkBitmap* GetIcon() const;
 
   // Draws the specified |text| into the canvas, using highlighting provided by
   // |classifications|. If |force_dim| is true, ACMatchClassification::DIM is
@@ -142,25 +272,31 @@ class AutocompleteResultView : public views::View {
                  int x,
                  int y);
 
-  // Draws an individual sub-fragment with the specified style. Returns the x
-  // position to the right of the fragment.
-  int DrawStringFragment(gfx::Canvas* canvas,
-                         const std::wstring& text,
-                         int style,
-                         int x,
-                         int y,
-                         bool force_rtl_directionality);
-
-  // Gets the font and text color for a fragment with the specified style.
-  gfx::Font GetFragmentFont(int style) const;
-  SkColor GetFragmentTextColor(int style) const;
+  // Elides |runs| to fit in |remaining_width|.  The runs in |runs| should be in
+  // logical order.
+  //
+  // When we need to elide a run, the ellipsis will be placed at the end of that
+  // run.  This means that if we elide a run whose visual direction is opposite
+  // that of the drawing context, the ellipsis will not be at the "end" of the
+  // drawn string.  For example, if in an LTR context we have the LTR run
+  // "LTR_STRING" and the RTL run "RTL_STRING", the unelided text would be drawn
+  // like:
+  //     LTR_STRING GNIRTS_LTR
+  // If we need to elide the RTL run, then it will be drawn like:
+  //     LTR_STRING ...RTS_LTR
+  // Instead of:
+  //     LTR_STRING RTS_LTR...
+  void Elide(Runs* runs, int remaining_width) const;
 
   // This row's model and model index.
   AutocompleteResultViewModel* model_;
   size_t model_index_;
 
-  // The font used to derive fonts for rendering the text in this row.
-  gfx::Font font_;
+  const gfx::Font normal_font_;
+  const gfx::Font bold_font_;
+
+  // Width of the ellipsis in the normal font.
+  int ellipsis_width_;
 
   // A context used for mirroring regions.
   class MirroringContext;
@@ -170,159 +306,70 @@ class AutocompleteResultView : public views::View {
   gfx::Rect icon_bounds_;
   gfx::Rect text_bounds_;
 
-  // Icons for rows.
-  static SkBitmap* icon_url_;
-  static SkBitmap* icon_url_selected_;
-  static SkBitmap* icon_history_;
-  static SkBitmap* icon_history_selected_;
-  static SkBitmap* icon_search_;
-  static SkBitmap* icon_search_selected_;
-  static SkBitmap* icon_more_;
-  static SkBitmap* icon_more_selected_;
-  static SkBitmap* icon_star_;
-  static SkBitmap* icon_star_selected_;
   static int icon_size_;
 
   AutocompleteMatch match_;
-
-  static bool initialized_;
-  static void InitClass();
 
   DISALLOW_COPY_AND_ASSIGN(AutocompleteResultView);
 };
 
 // static
-SkBitmap* AutocompleteResultView::icon_url_ = NULL;
-SkBitmap* AutocompleteResultView::icon_url_selected_ = NULL;
-SkBitmap* AutocompleteResultView::icon_history_ = NULL;
-SkBitmap* AutocompleteResultView::icon_history_selected_ = NULL;
-SkBitmap* AutocompleteResultView::icon_search_ = NULL;
-SkBitmap* AutocompleteResultView::icon_search_selected_ = NULL;
-SkBitmap* AutocompleteResultView::icon_star_ = NULL;
-SkBitmap* AutocompleteResultView::icon_star_selected_ = NULL;
-SkBitmap* AutocompleteResultView::icon_more_ = NULL;
-SkBitmap* AutocompleteResultView::icon_more_selected_ = NULL;
 int AutocompleteResultView::icon_size_ = 0;
-bool AutocompleteResultView::initialized_ = false;
 
-// This class is a utility class which mirrors an x position, calculates the
-// index of the i-th run of a text, and calculates the index of the i-th
-// fragment of a run.
-// To render a styled text, we split a text into fragments and draw each
-// fragment with the specified style. Unfortunately, it is not trivial to
-// implement the above steps in a mirrored window.
-// When we split a URL "www.google.com" into three fragments ('www.', 'google',
-// and '.com') and draw them in a mirrored window as shown in the following
-// steps, the output text becomes ".comgooglewww.".
-// 1. Draw 'www.'
-//      +-----------------+ +-----------------+
-//      |LTR window       | |       RTL window|
-//      +-----------------+ +-----------------+
-//      |www.             | |             www.|
-//      +-----------------+ +-----------------+
-// 2. Draw 'google'
-//      +-----------------+ +-----------------+
-//      |LTR window       | |       RTL window|
-//      +-----------------+ +-----------------+
-//      |www.google       | |       googlewww.|
-//      +-----------------+ +-----------------+
-// 3. Draw '.com'
-//      +-----------------+ +-----------------+
-//      |LTR window       | |       RTL window|
-//      +-----------------+ +-----------------+
-//      |www.google.com   | |   .comgooglewww.|
-//      +-----------------+ +-----------------+
-// To fix this fragment-ordering problem, we should swap the run indices and
-// fragment indices when rendering in a mirrred coordinate as listed below.
-// 1. Draw 'www.' for LTR (or ".com" for RTL)
-//      +-----------------+ +-----------------+
-//      |LTR window       | |       RTL window|
-//      +-----------------+ +-----------------+
-//      |www.             | |             .com|
-//      +-----------------+ +-----------------+
-// 2. Draw 'google'
-//      +-----------------+ +-----------------+
-//      |LTR window       | |       RTL window|
-//      +-----------------+ +-----------------+
-//      |www.google       | |       google.com|
-//      +-----------------+ +-----------------+
-// 3. Draw '.com' for LTR (or "www." for RTL)
-//      +-----------------+ +-----------------+
-//      |LTR window       | |       RTL window|
-//      +-----------------+ +-----------------+
-//      |www.google.com   | |   www.google.com|
-//      +-----------------+ +-----------------+
-// This class encapsulates the above steps for AutocompleteResultView.
+// This class is a utility class for calculations affected by whether the result
+// view is horizontally mirrored.  The drawing functions can be written as if
+// all drawing occurs left-to-right, and then use this class to get the actual
+// coordinates to begin drawing onscreen.
 class AutocompleteResultView::MirroringContext {
  public:
-  MirroringContext() : min_x_(0), center_x_(0), max_x_(0), mirrored_(false) { }
+  MirroringContext() : center_(0), right_(0) {}
 
-  // Initializes a mirroring context with the bounding region of a text.
-  // This class uses the center of this region as an axis for calculating
-  // mirrored coordinates.
-  int Initialize(int x1, int x2, bool enabled);
-
-  // Returns the "left" side of the specified region.
-  // When the application language is a right-to-left one, this function
-  // calculates the mirrored coordinates of the input region and returns the
-  // left side of the mirrored region.
-  // The input region must be in the bounding region specified in the
-  // Initialize() function.
-  int GetLeft(int x1, int x2) const;
-
-  // Returns the index of the i-th run of a text.
-  // When we split a text into runs, we need to write each run in the LTR
-  // (or RTL) order if UI language is LTR (or RTL), respectively.
-  int GetRun(int i, int size) const {
-    return mirrored_ ? (size - i - 1) : i;
+  // Tells the mirroring context to use the provided range as the physical
+  // bounds of the drawing region.  When coordinate mirroring is needed, the
+  // mirror point will be the center of this range.
+  void Initialize(int x, int width) {
+    center_ = x + width / 2;
+    right_ = x + width;
   }
 
-  // Returns the index of the i-th text fragment of a run.
-  // When we split a run into fragments, we need to write each fragment in the
-  // LTR (or RTL) order if UI language is LTR (or RTL), respectively.
-  size_t GetClassification(size_t i, size_t size, bool run_rtl) const {
-    return (mirrored_ != run_rtl) ? (size - i - 1) : i;
+  // Given a logical range within the drawing region, returns the coordinate of
+  // the possibly-mirrored "left" side.  (This functions exactly like
+  // View::MirroredLeftPointForRect().)
+  int mirrored_left_coord(int left, int right) const {
+    return base::i18n::IsRTL() ? (center_ + (center_ - right)) : left;
   }
 
-  // Returns whether or not the x coordinate is mirrored.
-  bool mirrored() const {
-    return mirrored_;
+  // Given a logical coordinate within the drawing region, returns the remaining
+  // width available.
+  int remaining_width(int x) const {
+    return right_ - x;
   }
 
  private:
-  int min_x_;
-  int center_x_;
-  int max_x_;
-  bool mirrored_;
+  int center_;
+  int right_;
 
   DISALLOW_COPY_AND_ASSIGN(MirroringContext);
 };
 
-int AutocompleteResultView::MirroringContext::Initialize(int x1, int x2,
-                                                         bool mirrored) {
-  min_x_ = std::min(x1, x2);
-  max_x_ = std::max(x1, x2);
-  center_x_ = min_x_ + (max_x_ - min_x_) / 2;
-  mirrored_ = mirrored;
-  return x1;
-}
-
-int AutocompleteResultView::MirroringContext::GetLeft(int x1, int x2) const {
-  return mirrored_ ?
-      (center_x_ + (center_x_ - std::max(x1, x2))) : std::min(x1, x2);
-}
-
 AutocompleteResultView::AutocompleteResultView(
     AutocompleteResultViewModel* model,
     int model_index,
-    const gfx::Font& font)
+    const gfx::Font& font,
+    const gfx::Font& bold_font)
     : model_(model),
       model_index_(model_index),
-      font_(font),
+      normal_font_(font),
+      bold_font_(bold_font),
+      ellipsis_width_(font.GetStringWidth(kEllipsis)),
       mirroring_context_(new MirroringContext()),
       match_(NULL, 0, false, AutocompleteMatch::URL_WHAT_YOU_TYPED) {
   CHECK(model_index >= 0);
-  InitClass();
+  if (icon_size_ == 0) {
+    icon_size_ = ResourceBundle::GetSharedInstance().GetBitmapNamed(
+        AutocompleteMatch::TypeToIcon(AutocompleteMatch::URL_WHAT_YOU_TYPED))->
+        width();
+  }
 }
 
 AutocompleteResultView::~AutocompleteResultView() {
@@ -331,25 +378,24 @@ AutocompleteResultView::~AutocompleteResultView() {
 void AutocompleteResultView::Paint(gfx::Canvas* canvas) {
   const ResultViewState state = GetState();
   if (state != NORMAL)
-    canvas->drawColor(GetColor(state, BACKGROUND));
-
-  int x = MirroredLeftPointForRect(icon_bounds_);
+    canvas->AsCanvasSkia()->drawColor(GetColor(state, BACKGROUND));
 
   // Paint the icon.
-  canvas->DrawBitmapInt(*GetIcon(), x, icon_bounds_.y());
+  canvas->DrawBitmapInt(*GetIcon(), MirroredLeftPointForRect(icon_bounds_),
+                        icon_bounds_.y());
 
   // Paint the text.
-  // Initialize the |mirroring_context_| with the left and right positions.
-  // The DrawString() function uses this |mirroring_context_| to calculate the
-  // position of an input text.
-  bool text_mirroring = View::UILayoutIsRightToLeft();
-  int text_left = MirroredLeftPointForRect(text_bounds_);
-  int text_right = text_mirroring ? x - kIconTextSpacing : text_bounds_.right();
-  x = mirroring_context_->Initialize(text_left, text_right, text_mirroring);
+  int x = MirroredLeftPointForRect(text_bounds_);
+  mirroring_context_->Initialize(x, text_bounds_.width());
   x = DrawString(canvas, match_.contents, match_.contents_class, false, x,
                  text_bounds_.y());
 
   // Paint the description.
+  // TODO(pkasting): Because we paint in multiple separate pieces, we can wind
+  // up with no space even for an ellipsis for one or both of these pieces.
+  // Instead, we should paint the entire match as a single long string.  This
+  // would also let us use a more properly-localizable string than we get with
+  // just the IDS_AUTOCOMPLETE_MATCH_DESCRIPTION_SEPARATOR.
   if (!match_.description.empty()) {
     std::wstring separator =
         l10n_util::GetString(IDS_AUTOCOMPLETE_MATCH_DESCRIPTION_SEPARATOR);
@@ -365,22 +411,40 @@ void AutocompleteResultView::Paint(gfx::Canvas* canvas) {
 }
 
 void AutocompleteResultView::Layout() {
-  icon_bounds_.SetRect(kRowLeftPadding, (height() - icon_size_) / 2,
-                       icon_size_, icon_size_);
-  int text_x = icon_bounds_.right() + kIconTextSpacing;
-  text_bounds_.SetRect(
-      text_x,
-      std::max(0, (height() - font_.height()) / 2),
-      std::max(0, bounds().right() - text_x - kRowRightPadding),
-      font_.height());
+  icon_bounds_.SetRect(LocationBarView::kEdgeItemPadding,
+                       (height() - icon_size_) / 2, icon_size_, icon_size_);
+  int text_x = icon_bounds_.right() + LocationBarView::kItemPadding;
+  int font_height = std::max(normal_font_.GetHeight(), bold_font_.GetHeight());
+  text_bounds_.SetRect(text_x, std::max(0, (height() - font_height) / 2),
+      std::max(bounds().width() - text_x - LocationBarView::kEdgeItemPadding,
+      0), font_height);
 }
 
 gfx::Size AutocompleteResultView::GetPreferredSize() {
-  int text_height = font_.height() + 2 * kTextVerticalPadding;
-  int icon_height = icon_size_ + 2 * kIconVerticalPadding;
-  return gfx::Size(0, std::max(icon_height, text_height));
+  return gfx::Size(0, GetPreferredHeight(normal_font_, bold_font_));
 }
 
+// static
+int AutocompleteResultView::GetPreferredHeight(
+    const gfx::Font& font,
+    const gfx::Font& bold_font) {
+  int text_height = std::max(font.GetHeight(), bold_font.GetHeight()) +
+      (kTextVerticalPadding * 2);
+  int icon_height = icon_size_ + (kIconVerticalPadding * 2);
+  return std::max(icon_height, text_height);
+}
+
+// static
+bool AutocompleteResultView::SortRunsLogically(const RunData& lhs,
+                                               const RunData& rhs) {
+  return lhs.run_start < rhs.run_start;
+}
+
+// static
+bool AutocompleteResultView::SortRunsVisually(const RunData& lhs,
+                                              const RunData& rhs) {
+  return lhs.visual_order < rhs.visual_order;
+}
 
 ResultViewState AutocompleteResultView::GetState() const {
   if (model_->IsSelectedIndex(model_index_))
@@ -388,30 +452,24 @@ ResultViewState AutocompleteResultView::GetState() const {
   return model_->IsHoveredIndex(model_index_) ? HOVERED : NORMAL;
 }
 
-SkBitmap* AutocompleteResultView::GetIcon() const {
-  bool selected = model_->IsSelectedIndex(model_index_);
-  if (match_.starred)
-    return selected ? icon_star_selected_ : icon_star_;
-  switch (match_.type) {
-    case AutocompleteMatch::URL_WHAT_YOU_TYPED:
-    case AutocompleteMatch::HISTORY_URL:
-    case AutocompleteMatch::NAVSUGGEST:
-      return selected ? icon_url_selected_ : icon_url_;
-    case AutocompleteMatch::HISTORY_TITLE:
-    case AutocompleteMatch::HISTORY_BODY:
-    case AutocompleteMatch::HISTORY_KEYWORD:
-      return selected ? icon_history_selected_ : icon_history_;
-    case AutocompleteMatch::SEARCH_WHAT_YOU_TYPED:
-    case AutocompleteMatch::SEARCH_HISTORY:
-    case AutocompleteMatch::SEARCH_SUGGEST:
-    case AutocompleteMatch::SEARCH_OTHER_ENGINE:
-      return selected ? icon_search_selected_ : icon_search_;
-    case AutocompleteMatch::OPEN_HISTORY_PAGE:
-      return selected ? icon_more_selected_ : icon_more_;
-    default:
-      NOTREACHED();
-      return NULL;
+const SkBitmap* AutocompleteResultView::GetIcon() const {
+  const SkBitmap* bitmap = model_->GetSpecialIcon(model_index_);
+  if (bitmap)
+    return bitmap;
+
+  int icon = match_.starred ?
+      IDR_OMNIBOX_STAR : AutocompleteMatch::TypeToIcon(match_.type);
+  if (model_->IsSelectedIndex(model_index_)) {
+    switch (icon) {
+      case IDR_OMNIBOX_HTTP:    icon = IDR_OMNIBOX_HTTP_SELECTED; break;
+      case IDR_OMNIBOX_HISTORY: icon = IDR_OMNIBOX_HISTORY_SELECTED; break;
+      case IDR_OMNIBOX_SEARCH:  icon = IDR_OMNIBOX_SEARCH_SELECTED; break;
+      case IDR_OMNIBOX_MORE:    icon = IDR_OMNIBOX_MORE_SELECTED; break;
+      case IDR_OMNIBOX_STAR:    icon = IDR_OMNIBOX_STAR_SELECTED; break;
+      default:             NOTREACHED(); break;
+    }
   }
+  return ResourceBundle::GetSharedInstance().GetBitmapNamed(icon);
 }
 
 int AutocompleteResultView::DrawString(
@@ -421,31 +479,31 @@ int AutocompleteResultView::DrawString(
     bool force_dim,
     int x,
     int y) {
-  if (!text.length())
+  if (text.empty())
     return x;
 
-  // Initialize a bidirectional line iterator of ICU and split the text into
-  // visual runs. (A visual run is consecutive characters which have the same
-  // display direction and should be displayed at once.)
+  // Check whether or not this text is a URL.  URLs are always displayed LTR
+  // regardless of locale.
+  bool is_url = true;
+  for (ACMatchClassifications::const_iterator i(classifications.begin());
+       i != classifications.end(); ++i) {
+    if (!(i->style & ACMatchClassification::URL)) {
+      is_url = false;
+      break;
+    }
+  }
+
+  // Split the text into visual runs.  We do this first so that we don't need to
+  // worry about whether our eliding might change the visual display in
+  // unintended ways, e.g. by removing directional markings or by adding an
+  // ellipsis that's not enclosed in appropriate markings.
   BiDiLineIterator bidi_line;
-  if (!bidi_line.Open(text, mirroring_context_->mirrored(), false))
+  if (!bidi_line.Open(text, base::i18n::IsRTL(), is_url))
     return x;
-  const int runs = bidi_line.CountRuns();
-
-  // Draw the visual runs.
-  // This loop splits each run into text fragments with the given
-  // classifications and draws the text fragments.
-  // When the direction of a run is right-to-left, we have to mirror the
-  // x-coordinate of this run and render the fragments in the right-to-left
-  // reading order. To handle this display order independently from the one of
-  // this popup window, this loop renders a run with the steps below:
-  // 1. Create a local display context for each run;
-  // 2. Render the run into the local display context, and;
-  // 3. Copy the local display context to the one of the popup window.
-  for (int run = 0; run < runs; ++run) {
-    int run_start = 0;
-    int run_length = 0;
-
+  const int num_runs = bidi_line.CountRuns();
+  Runs runs;
+  for (int run = 0; run < num_runs; ++run) {
+    int run_start_int = 0, run_length_int = 0;
     // The index we pass to GetVisualRun corresponds to the position of the run
     // in the displayed text. For example, the string "Google in HEBREW" (where
     // HEBREW is text in the Hebrew language) has two runs: "Google in " which
@@ -454,100 +512,194 @@ int AutocompleteResultView::DrawString(
     // displayed). In an RTL context, the same run has the index 1 because it
     // is the rightmost run. This is why the order in which we traverse the
     // runs is different depending on the locale direction.
-    //
-    // Note that for URLs we always traverse the runs from lower to higher
-    // indexes because the return order of runs for a URL always matches the
-    // physical order of the context.
-    int current_run = mirroring_context_->GetRun(run, runs);
-    const UBiDiDirection run_direction = bidi_line.GetVisualRun(current_run,
-                                                                &run_start,
-                                                                &run_length);
-    const int run_end = run_start + run_length;
+    const UBiDiDirection run_direction = bidi_line.GetVisualRun(
+        (base::i18n::IsRTL() && !is_url) ? (num_runs - run - 1) : run,
+        &run_start_int, &run_length_int);
+    DCHECK_GT(run_length_int, 0);
+    runs.push_back(RunData());
+    RunData* current_run = &runs.back();
+    current_run->run_start = run_start_int;
+    const size_t run_end = current_run->run_start + run_length_int;
+    current_run->visual_order = run;
+    current_run->is_rtl = !is_url && (run_direction == UBIDI_RTL);
+    current_run->pixel_width = 0;
 
-    // Split this run with the given classifications and draw the fragments.
-    for (size_t classification = 0; classification < classifications.size();
-         ++classification) {
-      size_t i = mirroring_context_->GetClassification(
-          classification, classifications.size(), run_direction == UBIDI_RTL);
-      size_t text_start = std::max(static_cast<size_t>(run_start),
-                                   classifications[i].offset);
-      size_t text_end = std::min(static_cast<size_t>(run_end),
-          i < classifications.size() - 1 ?
-          classifications[i + 1].offset : run_end);
-      int style = classifications[i].style;
-      if (force_dim)
-        style |= ACMatchClassification::DIM;
+    // Compute classifications for this run.
+    for (size_t i = 0; i < classifications.size(); ++i) {
+      const size_t text_start =
+          std::max(classifications[i].offset, current_run->run_start);
+      if (text_start >= run_end)
+        break;  // We're past the last classification in the run.
 
-      // We specify RTL directionlity explicitly only if the run is an RTL run
-      // and we can't specify the string directionlaity using an LRE/PDF pair.
-      // Note that URLs are always displayed using LTR directionality
-      // (regardless of the locale) and therefore they are excluded.
-      const bool force_rtl_directionality =
-           !(classifications[i].style & ACMatchClassification::URL) &&
-           (run_direction == UBIDI_RTL) &&
-           !base::i18n::IsRTL();
+      const size_t text_end = (i < (classifications.size() - 1)) ?
+          std::min(classifications[i + 1].offset, run_end) : run_end;
+      if (text_end <= current_run->run_start)
+        continue;  // We haven't reached the first classification in the run.
 
-      if (text_start < text_end) {
-        x += DrawStringFragment(canvas,
-                                text.substr(text_start, text_end - text_start),
-                                style, x, y, force_rtl_directionality);
+      current_run->classifications.push_back(ClassificationData());
+      ClassificationData* current_data =
+          &current_run->classifications.back();
+      current_data->text = text.substr(text_start, text_end - text_start);
+
+      // Calculate style-related data.
+      const int style = classifications[i].style;
+      const bool use_bold_font = !!(style & ACMatchClassification::MATCH);
+      current_data->font = &(use_bold_font ? bold_font_ : normal_font_);
+      const ResultViewState state = GetState();
+      if (style & ACMatchClassification::URL)
+        current_data->color = GetColor(state, URL);
+      else if (style & ACMatchClassification::DIM)
+        current_data->color = GetColor(state, DIMMED_TEXT);
+      else
+        current_data->color = GetColor(state, force_dim ? DIMMED_TEXT : TEXT);
+      current_data->pixel_width =
+          current_data->font->GetStringWidth(current_data->text);
+      current_run->pixel_width += current_data->pixel_width;
+    }
+    DCHECK(!current_run->classifications.empty());
+  }
+  DCHECK(!runs.empty());
+
+  // Sort into logical order so we can elide logically.
+  std::sort(runs.begin(), runs.end(), &SortRunsLogically);
+
+  // Now determine what to elide, if anything.  Several subtle points:
+  //   * Because we have the run data, we can get edge cases correct, like
+  //     whether to place an ellipsis before or after the end of a run when the
+  //     text needs to be elided at the run boundary.
+  //   * The "or one before it" comments below refer to cases where an earlier
+  //     classification fits completely, but leaves too little space for an
+  //     ellipsis that turns out to be needed later.  These cases are commented
+  //     more completely in Elide().
+  int remaining_width = mirroring_context_->remaining_width(x);
+  for (Runs::iterator i(runs.begin()); i != runs.end(); ++i) {
+    if (i->pixel_width > remaining_width) {
+      // This run or one before it needs to be elided.
+      for (Classifications::iterator j(i->classifications.begin());
+           j != i->classifications.end(); ++j) {
+        if (j->pixel_width > remaining_width) {
+          // This classification or one before it needs to be elided.  Erase all
+          // further classifications and runs so Elide() can simply reverse-
+          // iterate over everything to find the specific classification to
+          // elide.
+          i->classifications.erase(++j, i->classifications.end());
+          runs.erase(++i, runs.end());
+          Elide(&runs, remaining_width);
+          break;
+        }
+        remaining_width -= j->pixel_width;
       }
+      break;
+    }
+    remaining_width -= i->pixel_width;
+  }
+
+  // Sort back into visual order so we can display the runs correctly.
+  std::sort(runs.begin(), runs.end(), &SortRunsVisually);
+
+  // Draw the runs.
+  for (Runs::iterator i(runs.begin()); i != runs.end(); ++i) {
+    const bool reverse_visible_order = (i->is_rtl != base::i18n::IsRTL());
+    int flags = gfx::Canvas::NO_ELLIPSIS;  // We've already elided.
+    if (reverse_visible_order) {
+      std::reverse(i->classifications.begin(), i->classifications.end());
+      if (i->is_rtl)
+        flags |= gfx::Canvas::FORCE_RTL_DIRECTIONALITY;
+    }
+    for (Classifications::const_iterator j(i->classifications.begin());
+         j != i->classifications.end(); ++j) {
+      int left = mirroring_context_->mirrored_left_coord(x, x + j->pixel_width);
+      canvas->DrawStringInt(j->text, *j->font, j->color, left, y,
+                            j->pixel_width, j->font->GetHeight(), flags);
+      x += j->pixel_width;
     }
   }
+
   return x;
 }
 
-int AutocompleteResultView::DrawStringFragment(
-    gfx::Canvas* canvas,
-    const std::wstring& text,
-    int style,
-    int x,
-    int y,
-    bool force_rtl_directionality) {
-  gfx::Font display_font = GetFragmentFont(style);
-  // Clamp text width to the available width within the popup so we elide if
-  // necessary.
-  int string_width = std::min(display_font.GetStringWidth(text),
-                              width() - kRowRightPadding - x);
-  int string_left = mirroring_context_->GetLeft(x, x + string_width);
-  const int flags = force_rtl_directionality ?
-      gfx::Canvas::FORCE_RTL_DIRECTIONALITY : 0;
-  canvas->DrawStringInt(text, GetFragmentFont(style),
-                        GetFragmentTextColor(style), string_left, y,
-                        string_width, display_font.height(), flags);
-  return string_width;
-}
+void AutocompleteResultView::Elide(Runs* runs, int remaining_width) const {
+  // The complexity of this function is due to edge cases like the following:
+  // We have 100 px of available space, an initial classification that takes 86
+  // px, and a font that has a 15 px wide ellipsis character.  Now if the first
+  // classification is followed by several very narrow classifications (e.g. 3
+  // px wide each), we don't know whether we need to elide or not at the time we
+  // see the first classification -- it depends on how many subsequent
+  // classifications follow, and some of those may be in the next run (or
+  // several runs!).  This is why instead we let our caller move forward until
+  // we know we definitely need to elide, and then in this function we move
+  // backward again until we find a string that we can successfully do the
+  // eliding on.
+  bool first_classification = true;
+  for (Runs::reverse_iterator i(runs->rbegin()); i != runs->rend(); ++i) {
+    for (Classifications::reverse_iterator j(i->classifications.rbegin());
+         j != i->classifications.rend(); ++j) {
+      if (!first_classification) {
+        // For all but the first classification we consider, we need to append
+        // an ellipsis, since there isn't enough room to draw it after this
+        // classification.
+        j->text += kEllipsis;
 
-gfx::Font AutocompleteResultView::GetFragmentFont(int style) const {
-  return (style & ACMatchClassification::MATCH) ?
-      font_.DeriveFont(0, gfx::Font::BOLD) : font_;
-}
+        // We also add this classification's width (sans ellipsis) back to the
+        // available width since we want to consider the available space we'll
+        // have when we draw this classification.
+        remaining_width += j->pixel_width;
+      }
+      first_classification = false;
 
-SkColor AutocompleteResultView::GetFragmentTextColor(int style) const {
-  const ResultViewState state = GetState();
-  if (style & ACMatchClassification::URL)
-    return GetColor(state, URL);
-  return GetColor(state,
-      (style & ACMatchClassification::DIM) ? DIMMED_TEXT : TEXT);
-}
+      // Can we fit at least an ellipsis?
+      std::wstring elided_text(
+          gfx::ElideText(j->text, *j->font, remaining_width, false));
+      Classifications::reverse_iterator prior_classification(j);
+      ++prior_classification;
+      const bool on_first_classification =
+        (prior_classification == i->classifications.rend());
+      if (elided_text.empty() && (remaining_width >= ellipsis_width_) &&
+          on_first_classification) {
+        // Edge case: This classification is bold, we can't fit a bold ellipsis
+        // but we can fit a normal one, and this is the first classification in
+        // the run.  We should display a lone normal ellipsis, because appending
+        // one to the end of the previous run might put it in the wrong visual
+        // location (if the previous run is reversed from the normal visual
+        // order).
+        // NOTE: If this isn't the first classification in the run, we don't
+        // need to bother with this; see note below.
+        elided_text = kEllipsis;
+      }
+      if (!elided_text.empty()) {
+        // Success.  Elide this classification and stop.
+        j->text = elided_text;
 
-void AutocompleteResultView::InitClass() {
-  if (!initialized_) {
-    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    icon_url_ = rb.GetBitmapNamed(IDR_O2_GLOBE);
-    icon_url_selected_ = rb.GetBitmapNamed(IDR_O2_GLOBE_SELECTED);
-    icon_history_ = rb.GetBitmapNamed(IDR_O2_HISTORY);
-    icon_history_selected_ = rb.GetBitmapNamed(IDR_O2_HISTORY_SELECTED);
-    icon_search_ = rb.GetBitmapNamed(IDR_O2_SEARCH);
-    icon_search_selected_ = rb.GetBitmapNamed(IDR_O2_SEARCH_SELECTED);
-    icon_star_ = rb.GetBitmapNamed(IDR_O2_STAR);
-    icon_star_selected_ = rb.GetBitmapNamed(IDR_O2_STAR_SELECTED);
-    icon_more_ = rb.GetBitmapNamed(IDR_O2_MORE);
-    icon_more_selected_ = rb.GetBitmapNamed(IDR_O2_MORE_SELECTED);
-    // All icons are assumed to be square, and the same size.
-    icon_size_ = icon_url_->width();
-    initialized_ = true;
+        // If we could only fit an ellipsis, then only make it bold if there was
+        // an immediate prior classification in this run that was also bold, or
+        // it will look orphaned.
+        if ((elided_text.length() == 1) &&
+            (on_first_classification ||
+             (prior_classification->font == &normal_font_)))
+          j->font = &normal_font_;
+
+        j->pixel_width = j->font->GetStringWidth(elided_text);
+
+        // Erase any other classifications that come after the elided one.
+        i->classifications.erase(j.base(), i->classifications.end());
+        runs->erase(i.base(), runs->end());
+        return;
+      }
+
+      // We couldn't fit an ellipsis.  Move back one classification,
+      // append an ellipsis, and try again.
+      // NOTE: In the edge case that a bold ellipsis doesn't fit but a
+      // normal one would, and we reach here, then there is a previous
+      // classification in this run, and so either:
+      //   * It's normal, and will be able to draw successfully with the
+      //     ellipsis we'll append to it, or
+      //   * It is also bold, in which case we don't want to fall back
+      //     to a normal ellipsis anyway (see comment above).
+    }
   }
+
+  // We couldn't draw anything.
+  runs->clear();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -558,16 +710,18 @@ AutocompletePopupContentsView::AutocompletePopupContentsView(
     AutocompleteEditView* edit_view,
     AutocompleteEditModel* edit_model,
     Profile* profile,
-    const BubblePositioner* bubble_positioner)
+    const views::View* location_bar)
     : model_(new AutocompletePopupModel(this, edit_model, profile)),
       edit_view_(edit_view),
-      bubble_positioner_(bubble_positioner),
+      location_bar_(location_bar),
       result_font_(font.DeriveFont(kEditFontAdjust)),
+      result_bold_font_(result_font_.DeriveFont(0, gfx::Font::BOLD)),
       ignore_mouse_drag_(false),
-      ALLOW_THIS_IN_INITIALIZER_LIST(size_animation_(this)) {
+      ALLOW_THIS_IN_INITIALIZER_LIST(size_animation_(this)),
+      opt_in_view_(NULL) {
   // The following little dance is required because set_border() requires a
   // pointer to a non-const object.
-  BubbleBorder* bubble_border = new BubbleBorder;
+  BubbleBorder* bubble_border = new BubbleBorder(BubbleBorder::NONE);
   bubble_border_ = bubble_border;
   set_border(bubble_border);
 }
@@ -579,7 +733,7 @@ AutocompletePopupContentsView::~AutocompletePopupContentsView() {
 }
 
 gfx::Rect AutocompletePopupContentsView::GetPopupBounds() const {
-  if (!size_animation_.IsAnimating())
+  if (!size_animation_.is_animating())
     return target_bounds_;
 
   gfx::Rect current_frame_bounds = start_bounds_;
@@ -623,24 +777,36 @@ void AutocompletePopupContentsView::UpdatePopupAppearance() {
   // Update the match cached by each row, in the process of doing so make sure
   // we have enough row views.
   int total_child_height = 0;
-  size_t child_view_count = GetChildViewCount();
+  size_t child_rv_count = GetChildViewCount();
+  if (opt_in_view_) {
+    DCHECK(child_rv_count > 0);
+    child_rv_count--;
+  }
   for (size_t i = 0; i < model_->result().size(); ++i) {
     AutocompleteResultView* result_view;
-    if (i >= child_view_count) {
-      result_view = new AutocompleteResultView(this, i, result_font_);
-      AddChildView(result_view);
+    if (i >= child_rv_count) {
+      result_view =
+          new AutocompleteResultView(this, i, result_font_, result_bold_font_);
+      AddChildView(static_cast<int>(i), result_view);
     } else {
       result_view = static_cast<AutocompleteResultView*>(GetChildViewAt(i));
+      result_view->SetVisible(true);
     }
     result_view->set_match(GetMatchAtIndex(i));
     total_child_height += result_view->GetPreferredSize().height();
   }
+  for (size_t i = model_->result().size(); i < child_rv_count; ++i)
+    GetChildViewAt(i)->SetVisible(false);
 
-  // Calculate desired bounds.
-  gfx::Rect location_stack_bounds =
-      bubble_positioner_->GetLocationStackBounds();
-  gfx::Rect new_target_bounds(bubble_border_->GetBounds(location_stack_bounds,
-      gfx::Size(location_stack_bounds.width(), total_child_height)));
+  if (!opt_in_view_ && browser::ShouldShowInstantOptIn(model_->profile())) {
+    opt_in_view_ = new InstantOptInView(this, result_bold_font_, result_font_);
+    AddChildView(opt_in_view_);
+  }
+
+  if (opt_in_view_)
+    total_child_height += opt_in_view_->GetPreferredSize().height();
+
+  gfx::Rect new_target_bounds = CalculateTargetBounds(total_child_height);
 
   // If we're animating and our target height changes, reset the animation.
   // NOTE: If we just reset blindly on _every_ update, then when the user types
@@ -667,6 +833,10 @@ void AutocompletePopupContentsView::UpdatePopupAppearance() {
   SchedulePaint();
 }
 
+gfx::Rect AutocompletePopupContentsView::GetTargetBounds() {
+  return target_bounds_;
+}
+
 void AutocompletePopupContentsView::PaintUpdatesNow() {
   // TODO(beng): remove this from the interface.
 }
@@ -679,6 +849,15 @@ AutocompletePopupModel* AutocompletePopupContentsView::GetModel() {
   return model_.get();
 }
 
+int AutocompletePopupContentsView::GetMaxYCoordinate() {
+  // Add one to kMaxMatches to account for the history shortcut that may be
+  // added.
+  return CalculateTargetBounds(
+      (static_cast<int>(AutocompleteResult::kMaxMatches) + 1) *
+      AutocompleteResultView::GetPreferredHeight(
+          result_font_, result_bold_font_)).bottom();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // AutocompletePopupContentsView, AutocompleteResultViewModel implementation:
 
@@ -688,6 +867,13 @@ bool AutocompletePopupContentsView::IsSelectedIndex(size_t index) const {
 
 bool AutocompletePopupContentsView::IsHoveredIndex(size_t index) const {
   return HasMatchAt(index) ? index == model_->hovered_line() : false;
+}
+
+const SkBitmap* AutocompletePopupContentsView::GetSpecialIcon(
+    size_t index) const {
+  if (!HasMatchAt(index))
+    return NULL;
+  return model_->GetSpecialIconForMatch(GetMatchAtIndex(index));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -714,7 +900,7 @@ void AutocompletePopupContentsView::Paint(gfx::Canvas* canvas) {
   // Instead, we paint all our children into a second canvas and use that as a
   // shader to fill a path representing the round-rect clipping region. This
   // yields a nice anti-aliased edge.
-  gfx::Canvas contents_canvas(width(), height(), true);
+  gfx::CanvasSkia contents_canvas(width(), height(), true);
   contents_canvas.drawColor(GetColor(NORMAL, BACKGROUND));
   View::PaintChildren(&contents_canvas);
   // We want the contents background to be slightly transparent so we can see
@@ -736,7 +922,7 @@ void AutocompletePopupContentsView::Paint(gfx::Canvas* canvas) {
 
   gfx::Path path;
   MakeContentsPath(&path, GetLocalBounds(false));
-  canvas->drawPath(path, paint);
+  canvas->AsCanvasSkia()->drawPath(path, paint);
 
   // Now we paint the border, so it will be alpha-blended atop the contents.
   // This looks slightly better in the corners than drawing the contents atop
@@ -753,9 +939,11 @@ void AutocompletePopupContentsView::Layout() {
   int top = contents_rect.y();
   for (int i = 0; i < child_count; ++i) {
     View* v = GetChildViewAt(i);
-    v->SetBounds(contents_rect.x(), top, contents_rect.width(),
-                 v->GetPreferredSize().height());
-    top = v->bounds().bottom();
+    if (v->IsVisible()) {
+      v->SetBounds(contents_rect.x(), top, contents_rect.width(),
+                   v->GetPreferredSize().height());
+      top = v->bounds().bottom();
+    }
   }
 
   // We need to manually schedule a paint here since we are a layered window and
@@ -818,10 +1006,17 @@ bool AutocompletePopupContentsView::OnMouseDragged(
 }
 
 views::View* AutocompletePopupContentsView::GetViewForPoint(
-    const gfx::Point& /*point*/) {
-  // This View takes control of the mouse events, so it should be considered the
-  // active view for any point inside of it.
-  return this;
+    const gfx::Point& point) {
+  // If there is no opt in view, then we want all mouse events. Otherwise let
+  // any descendants of the opt-in view get mouse events.
+  if (!opt_in_view_)
+    return this;
+
+  views::View* child = views::View::GetViewForPoint(point);
+  views::View* ancestor = child;
+  while (ancestor && ancestor != opt_in_view_)
+    ancestor = ancestor->GetParent();
+  return ancestor ? child : this;
 }
 
 
@@ -883,8 +1078,9 @@ void AutocompletePopupContentsView::MakeCanvasTransparent(
   // Allow the window blur effect to show through the popup background.
   SkAlpha alpha = GetThemeProvider()->ShouldUseNativeFrame() ?
       kGlassPopupAlpha : kOpaquePopupAlpha;
-  canvas->drawColor(SkColorSetA(GetColor(NORMAL, BACKGROUND), alpha),
-                    SkXfermode::kDstIn_Mode);
+  canvas->AsCanvasSkia()->drawColor(
+      SkColorSetA(GetColor(NORMAL, BACKGROUND), alpha),
+      SkXfermode::kDstIn_Mode);
 }
 
 void AutocompletePopupContentsView::OpenIndex(
@@ -921,13 +1117,33 @@ size_t AutocompletePopupContentsView::GetIndexForPoint(
   return AutocompletePopupModel::kNoMatch;
 }
 
-// static
-AutocompletePopupView* AutocompletePopupView::CreatePopupView(
-    const gfx::Font& font,
-    AutocompleteEditView* edit_view,
-    AutocompleteEditModel* edit_model,
-    Profile* profile,
-    const BubblePositioner* bubble_positioner) {
-  return new AutocompletePopupContentsView(font, edit_view, edit_model,
-                                           profile, bubble_positioner);
+gfx::Rect AutocompletePopupContentsView::CalculateTargetBounds(int h) {
+  gfx::Rect location_bar_bounds(gfx::Point(), location_bar_->size());
+  const views::Border* border = location_bar_->border();
+  if (border) {
+    // Adjust for the border so that the bubble and location bar borders are
+    // aligned.
+    gfx::Insets insets;
+    border->GetInsets(&insets);
+    location_bar_bounds.Inset(insets.left(), 0, insets.right(), 0);
+  } else {
+    // The normal location bar is drawn using a background graphic that includes
+    // the border, so we inset by enough to make the edges line up, and the
+    // bubble appear at the same height as the Star bubble.
+    location_bar_bounds.Inset(LocationBarView::kNormalHorizontalEdgeThickness,
+                              0);
+  }
+  gfx::Point location_bar_origin(location_bar_bounds.origin());
+  views::View::ConvertPointToScreen(location_bar_, &location_bar_origin);
+  location_bar_bounds.set_origin(location_bar_origin);
+  return bubble_border_->GetBounds(
+      location_bar_bounds, gfx::Size(location_bar_bounds.width(), h));
+}
+
+void AutocompletePopupContentsView::UserPressedOptIn(bool opt_in) {
+  delete opt_in_view_;
+  opt_in_view_ = NULL;
+  browser::UserPickedInstantOptIn(location_bar_->GetWindow()->GetNativeWindow(),
+                                  model_->profile(), opt_in);
+  UpdatePopupAppearance();
 }

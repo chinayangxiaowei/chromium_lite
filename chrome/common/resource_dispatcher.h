@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #ifndef CHROME_COMMON_RESOURCE_DISPATCHER_H__
 #define CHROME_COMMON_RESOURCE_DISPATCHER_H__
+#pragma once
 
 #include <deque>
 #include <string>
@@ -13,7 +14,6 @@
 #include "base/hash_tables.h"
 #include "base/shared_memory.h"
 #include "base/task.h"
-#include "chrome/common/filter_policy.h"
 #include "ipc/ipc_channel.h"
 #include "webkit/glue/resource_loader_bridge.h"
 
@@ -70,19 +70,21 @@ class ResourceDispatcher {
                        const GURL& request_url)
         : peer(peer),
           resource_type(resource_type),
-          filter_policy(FilterPolicy::DONT_FILTER),
           is_deferred(false),
           url(request_url) {
     }
     ~PendingRequestInfo() { }
     webkit_glue::ResourceLoaderBridge::Peer* peer;
     ResourceType::Type resource_type;
-    FilterPolicy::Type filter_policy;
     MessageQueue deferred_message_queue;
     bool is_deferred;
     GURL url;
   };
   typedef base::hash_map<int, PendingRequestInfo> PendingRequestList;
+
+  // Helper to lookup the info based on the request_id.
+  // May return NULL if the request as been canceled from the client side.
+  PendingRequestInfo* GetPendingRequestInfo(int request_id);
 
   // Message response handlers, called by the message handler for this process.
   void OnUploadProgress(
@@ -91,20 +93,26 @@ class ResourceDispatcher {
       int64 position,
       int64 size);
   void OnReceivedResponse(int request_id, const ResourceResponseHead&);
+  void OnReceivedCachedMetadata(int request_id, const std::vector<char>& data);
   void OnReceivedRedirect(
       const IPC::Message& message,
       int request_id,
       const GURL& new_url,
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info);
+      const webkit_glue::ResourceResponseInfo& info);
   void OnReceivedData(
       const IPC::Message& message,
       int request_id,
       base::SharedMemoryHandle data,
       int data_len);
+  void OnDownloadedData(
+      const IPC::Message& message,
+      int request_id,
+      int data_len);
   void OnRequestComplete(
       int request_id,
       const URLRequestStatus& status,
-      const std::string& security_info);
+      const std::string& security_info,
+      const base::Time& completion_time);
 
   // Dispatch the message to one of the message response handlers.
   void DispatchMessage(const IPC::Message& message);

@@ -7,16 +7,14 @@
 #include "build/build_config.h"
 
 #include "app/l10n_util.h"
-#include "app/resource_bundle.h"
 #include "base/compiler_specific.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/gtk/certificate_viewer.h"
+#include "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/page_info_model.h"
 #include "chrome/browser/page_info_window.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
-#include "grit/theme_resources.h"
 
 namespace {
 
@@ -42,6 +40,8 @@ class PageInfoWindowGtk : public PageInfoModel::PageInfoModelObserver {
   // Shows the certificate info window.
   void ShowCertDialog();
 
+  GtkWidget* widget() { return dialog_; }
+
  private:
   // Layouts the different sections retrieved from the model.
   void InitContents();
@@ -55,6 +55,9 @@ class PageInfoWindowGtk : public PageInfoModel::PageInfoModelObserver {
   // The page info dialog.
   GtkWidget* dialog_;
 
+  // The url for this dialog. Should be unique among active dialogs.
+  GURL url_;
+
   // The virtual box containing the sections.
   GtkWidget* contents_;
 
@@ -63,6 +66,10 @@ class PageInfoWindowGtk : public PageInfoModel::PageInfoModelObserver {
 
   DISALLOW_COPY_AND_ASSIGN(PageInfoWindowGtk);
 };
+
+// We only show one page info per URL (keyed on url.spec()).
+typedef std::map<std::string, PageInfoWindowGtk*> PageInfoWindowMap;
+PageInfoWindowMap g_page_info_window_map;
 
 // Button callbacks.
 void OnDialogResponse(GtkDialog* dialog, gint response_id,
@@ -88,6 +95,7 @@ PageInfoWindowGtk::PageInfoWindowGtk(gfx::NativeWindow parent,
                                      bool show_history)
     : ALLOW_THIS_IN_INITIALIZER_LIST(model_(profile, url, ssl,
                                             show_history, this)),
+      url_(url),
       contents_(NULL),
       cert_id_(ssl.cert_id()) {
   dialog_ = gtk_dialog_new_with_buttons(
@@ -112,9 +120,13 @@ PageInfoWindowGtk::PageInfoWindowGtk(gfx::NativeWindow parent,
   g_signal_connect(dialog_, "destroy", G_CALLBACK(OnDestroy), this);
 
   InitContents();
+
+  g_page_info_window_map[url.spec()] = this;
 }
 
-PageInfoWindowGtk::~PageInfoWindowGtk() {}
+PageInfoWindowGtk::~PageInfoWindowGtk() {
+  g_page_info_window_map.erase(url_.spec());
+}
 
 void PageInfoWindowGtk::ModelChanged() {
   InitContents();
@@ -134,17 +146,15 @@ GtkWidget* PageInfoWindowGtk::CreateSection(
   gtk_box_pack_start(GTK_BOX(vbox), label, FALSE, FALSE, 0);
 
   GtkWidget* section_box = gtk_hbox_new(FALSE, 0);
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  GtkWidget* image = gtk_image_new_from_pixbuf(section.state ?
-      rb.GetPixbufNamed(IDR_PAGEINFO_GOOD) :
-      rb.GetPixbufNamed(IDR_PAGEINFO_BAD));
+  GtkWidget* image = gtk_image_new_from_pixbuf(
+      model_.GetIconImage(section.icon_id));
   gtk_box_pack_start(GTK_BOX(section_box), image, FALSE, FALSE,
                      gtk_util::kControlSpacing);
   gtk_misc_set_alignment(GTK_MISC(image), 0, 0);
 
   GtkWidget* text_box = gtk_vbox_new(FALSE, gtk_util::kControlSpacing);
-  if (!section.head_line.empty()) {
-    label = gtk_label_new(UTF16ToUTF8(section.head_line).c_str());
+  if (!section.headline.empty()) {
+    label = gtk_label_new(UTF16ToUTF8(section.headline).c_str());
     gtk_misc_set_alignment(GTK_MISC(label), 0, 0);
     gtk_box_pack_start(GTK_BOX(text_box), label, FALSE, FALSE, 0);
   }
@@ -181,7 +191,7 @@ void PageInfoWindowGtk::Show() {
 }
 
 void PageInfoWindowGtk::ShowCertDialog() {
-  ShowCertificateViewer(GTK_WINDOW(dialog_), cert_id_);
+  ShowCertificateViewerByID(GTK_WINDOW(dialog_), cert_id_);
 }
 
 }  // namespace
@@ -193,9 +203,16 @@ void ShowPageInfo(gfx::NativeWindow parent,
                   const GURL& url,
                   const NavigationEntry::SSLStatus& ssl,
                   bool show_history) {
-  PageInfoWindowGtk* window = new PageInfoWindowGtk(parent, profile, url,
-                                                    ssl, show_history);
-  window->Show();
+  PageInfoWindowMap::iterator iter =
+      g_page_info_window_map.find(url.spec());
+  if (iter != g_page_info_window_map.end()) {
+    gtk_window_present(GTK_WINDOW(iter->second->widget()));
+    return;
+  }
+
+  PageInfoWindowGtk* page_info_window =
+      new PageInfoWindowGtk(parent, profile, url, ssl, show_history);
+  page_info_window->Show();
 }
 
 }  // namespace browser

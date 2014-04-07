@@ -56,16 +56,8 @@ void LocationProviderBase::UpdateListeners() {
   }
 }
 
-void LocationProviderBase::InformListenersOfMovement() {
-  DCHECK(CalledOnValidThread());
-  for (ListenerMap::const_iterator iter = listeners_.begin();
-       iter != listeners_.end();
-       ++iter) {
-    iter->first->MovementDetected(this);
-  }
-}
-
-// Currently no platforms have a GPS location provider.
-LocationProviderBase* NewGpsLocationProvider() {
+#if !defined(OS_LINUX) && !defined(OS_MACOSX) && !defined(OS_WIN)
+LocationProviderBase* NewSystemLocationProvider() {
   return NULL;
 }
+#endif

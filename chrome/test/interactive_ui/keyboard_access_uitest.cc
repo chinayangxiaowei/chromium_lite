@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/keyboard_codes.h"
+#include "app/keyboard_codes.h"
 #include "chrome/test/automation/browser_proxy.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/automation/window_proxy.h"
 #include "chrome/test/ui/ui_test.h"
 #include "googleurl/src/gurl.h"
+#include "views/event.h"
 
 // This functionality currently works on Windows and on Linux when
 // toolkit_views is defined (i.e. for Chrome OS). It's not needed
@@ -24,18 +25,19 @@ class KeyboardAccessTest : public UITest {
   }
 
   // Use the keyboard to select "New Tab" from the app menu.
-  // This test depends on the fact that there are two menus and that
-  // New Tab is the first item in the app menu. If the menus change,
+  // This test depends on the fact that there is one menu and that
+  // New Tab is the first item in the menu. If the menus change,
   // this test will need to be changed to reflect that.
   //
   // If alternate_key_sequence is true, use "Alt" instead of "F10" to
   // open the menu bar, and "Down" instead of "Enter" to open a menu.
-  void TestMenuKeyboardAccess(bool alternate_key_sequence);
+  void TestMenuKeyboardAccess(bool alternate_key_sequence, int modifiers);
 
   DISALLOW_COPY_AND_ASSIGN(KeyboardAccessTest);
 };
 
-void KeyboardAccessTest::TestMenuKeyboardAccess(bool alternate_key_sequence) {
+void KeyboardAccessTest::TestMenuKeyboardAccess(bool alternate_key_sequence,
+                                                int modifiers) {
   scoped_refptr<BrowserProxy> browser = automation()->GetBrowserWindow(0);
   ASSERT_TRUE(browser.get());
   scoped_refptr<WindowProxy> window = browser->GetWindow();
@@ -58,10 +60,24 @@ void KeyboardAccessTest::TestMenuKeyboardAccess(bool alternate_key_sequence) {
   int original_view_id = -1;
   ASSERT_TRUE(window->GetFocusedViewID(&original_view_id));
 
-  if (alternate_key_sequence)
-    ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_MENU, 0));
-  else
-    ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_F10, 0));
+  app::KeyboardCode menu_key =
+      alternate_key_sequence ? app::VKEY_MENU : app::VKEY_F10;
+#if defined(OS_CHROMEOS)
+  // Chrome OS has different function key accelerators, so we always use the
+  // menu key there.
+  menu_key = app::VKEY_MENU;
+#endif
+  ASSERT_TRUE(window->SimulateOSKeyPress(menu_key, modifiers));
+
+  if (modifiers) {
+    // Verify Chrome does not move the view focus. We should not move the view
+    // focus when typing a menu key with modifier keys, such as shift keys or
+    // control keys.
+    int new_view_id = -1;
+    ASSERT_TRUE(window->GetFocusedViewID(&new_view_id));
+    ASSERT_EQ(original_view_id, new_view_id);
+    return;
+  }
 
   int new_view_id = -1;
   ASSERT_TRUE(window->WaitForFocusedViewIDToChange(
@@ -69,22 +85,20 @@ void KeyboardAccessTest::TestMenuKeyboardAccess(bool alternate_key_sequence) {
 
   ASSERT_TRUE(browser->StartTrackingPopupMenus());
 
-  // Press RIGHT to focus the app menu, then RETURN or DOWN to open it.
-  ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_RIGHT, 0));
   if (alternate_key_sequence)
-    ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_DOWN, 0));
+    ASSERT_TRUE(window->SimulateOSKeyPress(app::VKEY_DOWN, 0));
   else
-    ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_RETURN, 0));
+    ASSERT_TRUE(window->SimulateOSKeyPress(app::VKEY_RETURN, 0));
 
   // Wait until the popup menu actually opens.
   ASSERT_TRUE(browser->WaitForPopupMenuToOpen());
 
   // Press DOWN to select the first item, then RETURN to select it.
-  ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_DOWN, 0));
-  ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_RETURN, 0));
+  ASSERT_TRUE(window->SimulateOSKeyPress(app::VKEY_DOWN, 0));
+  ASSERT_TRUE(window->SimulateOSKeyPress(app::VKEY_RETURN, 0));
 
   // Wait for the new tab to appear.
-  ASSERT_TRUE(browser->WaitForTabCountToBecome(2, action_timeout_ms()));
+  ASSERT_TRUE(browser->WaitForTabCountToBecome(2));
 
   // Make sure that the new tab index is 1.
   ASSERT_TRUE(browser->GetActiveTabIndex(&tab_index));
@@ -92,11 +106,58 @@ void KeyboardAccessTest::TestMenuKeyboardAccess(bool alternate_key_sequence) {
 }
 
 TEST_F(KeyboardAccessTest, TestMenuKeyboardAccess) {
-  TestMenuKeyboardAccess(false);
+  TestMenuKeyboardAccess(false, 0);
 }
 
 TEST_F(KeyboardAccessTest, TestAltMenuKeyboardAccess) {
-  TestMenuKeyboardAccess(true);
+  TestMenuKeyboardAccess(true, 0);
+}
+
+TEST_F(KeyboardAccessTest, TestShiftAltMenuKeyboardAccess) {
+  TestMenuKeyboardAccess(true, views::Event::EF_SHIFT_DOWN);
+}
+
+// TODO(isherman): This test times out on ChromeOS.  We should merge it with
+// BrowserKeyEventsTest.ReservedAccelerators, but just disable for now.
+#if defined(OS_CHROMEOS)
+#define MAYBE_ReserveKeyboardAccelerators DISABLED_ReserveKeyboardAccelerators
+#else
+#define MAYBE_ReserveKeyboardAccelerators ReserveKeyboardAccelerators
+#endif
+
+// Test that JavaScript cannot intercept reserved keyboard accelerators like
+// ctrl-t to open a new tab or ctrl-f4 to close a tab.
+TEST_F(KeyboardAccessTest, MAYBE_ReserveKeyboardAccelerators) {
+  const std::string kBadPage =
+      "<html><script>"
+      "document.onkeydown = function() {"
+      "  event.preventDefault();"
+      "  return false;"
+      "}"
+      "</script></html>";
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser);
+  ASSERT_TRUE(browser->AppendTab(GURL("data:text/html," + kBadPage)));
+  int tab_count = 0;
+  ASSERT_TRUE(browser->GetTabCount(&tab_count));
+  ASSERT_EQ(tab_count, 2);
+
+  int active_tab = 0;
+  ASSERT_TRUE(browser->GetActiveTabIndex(&active_tab));
+  ASSERT_EQ(active_tab, 1);
+
+  scoped_refptr<WindowProxy> window(browser->GetWindow());
+  ASSERT_TRUE(window);
+  ASSERT_TRUE(window->SimulateOSKeyPress(
+      app::VKEY_TAB, views::Event::EF_CONTROL_DOWN));
+  ASSERT_TRUE(browser->WaitForTabToBecomeActive(0, action_max_timeout_ms()));
+
+#if !defined(OS_MACOSX)  // see BrowserWindowCocoa::GetCommandId
+  ASSERT_TRUE(browser->ActivateTab(1));
+  ASSERT_TRUE(window->SimulateOSKeyPress(
+      app::VKEY_F4, views::Event::EF_CONTROL_DOWN));
+  ASSERT_TRUE(browser->WaitForTabCountToBecome(1));
+#endif
 }
 
 }  // namespace

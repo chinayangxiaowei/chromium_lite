@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,9 +21,10 @@
 #include "base/file_path.h"
 #include "base/logging.h"
 #include "base/singleton.h"
-#include "base/string_piece.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
 
 #if defined(OS_LINUX)
 // Linux/glibc doesn't natively have setproctitle().
@@ -55,6 +56,9 @@ static void Lowercase(std::string* parameter) {
 }
 #endif
 
+CommandLine::~CommandLine() {
+}
+
 #if defined(OS_WIN)
 CommandLine::CommandLine(ArgumentsOnly args_only) {
 }
@@ -79,7 +83,7 @@ void CommandLine::ParseFromString(const std::wstring& command_line) {
     TrimWhitespace(args[i], TRIM_ALL, &arg);
 
     if (!parse_switches) {
-      loose_values_.push_back(arg);
+      args_.push_back(arg);
       continue;
     }
 
@@ -93,7 +97,7 @@ void CommandLine::ParseFromString(const std::wstring& command_line) {
     if (IsSwitch(arg, &switch_string, &switch_value)) {
       switches_[switch_string] = switch_value;
     } else {
-      loose_values_.push_back(arg);
+      args_.push_back(arg);
     }
   }
 
@@ -101,9 +105,17 @@ void CommandLine::ParseFromString(const std::wstring& command_line) {
     LocalFree(args);
 }
 
+// static
+CommandLine CommandLine::FromString(const std::wstring& command_line) {
+  CommandLine cmd;
+  cmd.ParseFromString(command_line);
+  return cmd;
+}
+
 CommandLine::CommandLine(const FilePath& program) {
   if (!program.empty()) {
     program_ = program.value();
+    // TODO(evanm): proper quoting here.
     command_line_string_ = L'"' + program.value() + L'"';
   }
 }
@@ -112,6 +124,14 @@ CommandLine::CommandLine(const FilePath& program) {
 CommandLine::CommandLine(ArgumentsOnly args_only) {
   // Push an empty argument, because we always assume argv_[0] is a program.
   argv_.push_back("");
+}
+
+CommandLine::CommandLine(int argc, const char* const* argv) {
+  InitFromArgv(argc, argv);
+}
+
+CommandLine::CommandLine(const std::vector<std::string>& argv) {
+  InitFromArgv(argv);
 }
 
 void CommandLine::InitFromArgv(int argc, const char* const* argv) {
@@ -127,7 +147,7 @@ void CommandLine::InitFromArgv(const std::vector<std::string>& argv) {
     const std::string& arg = argv_[i];
 
     if (!parse_switches) {
-      loose_values_.push_back(arg);
+      args_.push_back(arg);
       continue;
     }
 
@@ -141,7 +161,7 @@ void CommandLine::InitFromArgv(const std::vector<std::string>& argv) {
     if (IsSwitch(arg, &switch_string, &switch_value)) {
       switches_[switch_string] = switch_value;
     } else {
-      loose_values_.push_back(arg);
+      args_.push_back(arg);
     }
   }
 }
@@ -254,6 +274,12 @@ void CommandLine::Reset() {
   current_process_commandline_ = NULL;
 }
 
+// static
+CommandLine* CommandLine::ForCurrentProcess() {
+  DCHECK(current_process_commandline_);
+  return current_process_commandline_;
+}
+
 bool CommandLine::HasSwitch(const std::string& switch_string) const {
   std::string lowercased_switch(switch_string);
 #if defined(OS_WIN)
@@ -262,7 +288,33 @@ bool CommandLine::HasSwitch(const std::string& switch_string) const {
   return switches_.find(lowercased_switch) != switches_.end();
 }
 
-std::wstring CommandLine::GetSwitchValue(
+#if defined(OS_WIN)
+// Deprecated; still temporarily available on Windows.
+bool CommandLine::HasSwitch(const std::wstring& switch_string) const {
+  return HasSwitch(WideToASCII(switch_string));
+}
+#endif
+
+std::string CommandLine::GetSwitchValueASCII(
+    const std::string& switch_string) const {
+  CommandLine::StringType value = GetSwitchValueNative(switch_string);
+  if (!IsStringASCII(value)) {
+    LOG(WARNING) << "Value of --" << switch_string << " must be ASCII.";
+    return "";
+  }
+#if defined(OS_WIN)
+  return WideToASCII(value);
+#else
+  return value;
+#endif
+}
+
+FilePath CommandLine::GetSwitchValuePath(
+    const std::string& switch_string) const {
+  return FilePath(GetSwitchValueNative(switch_string));
+}
+
+CommandLine::StringType CommandLine::GetSwitchValueNative(
     const std::string& switch_string) const {
   std::string lowercased_switch(switch_string);
 #if defined(OS_WIN)
@@ -273,108 +325,118 @@ std::wstring CommandLine::GetSwitchValue(
       switches_.find(lowercased_switch);
 
   if (result == switches_.end()) {
-    return L"";
+    return CommandLine::StringType();
   } else {
-#if defined(OS_WIN)
     return result->second;
-#else
-    return base::SysNativeMBToWide(result->second);
-#endif
   }
 }
 
+FilePath CommandLine::GetProgram() const {
 #if defined(OS_WIN)
-std::vector<std::wstring> CommandLine::GetLooseValues() const {
-  return loose_values_;
+  return FilePath(program_);
+#else
+  DCHECK_GT(argv_.size(), 0U);
+  return FilePath(argv_[0]);
+#endif
 }
+
+#if defined(OS_WIN)
 std::wstring CommandLine::program() const {
   return program_;
 }
-#else
-std::vector<std::wstring> CommandLine::GetLooseValues() const {
-  std::vector<std::wstring> values;
-  for (size_t i = 0; i < loose_values_.size(); ++i)
-    values.push_back(base::SysNativeMBToWide(loose_values_[i]));
-  return values;
-}
-std::wstring CommandLine::program() const {
-  DCHECK_GT(argv_.size(), 0U);
-  return base::SysNativeMBToWide(argv_[0]);
-}
 #endif
 
-
-// static
-std::wstring CommandLine::PrefixedSwitchString(
-    const std::string& switch_string) {
-#if defined(OS_WIN)
-  return kSwitchPrefixes[0] + ASCIIToWide(switch_string);
-#else
-  return ASCIIToWide(kSwitchPrefixes[0] + switch_string);
-#endif
+#if defined(OS_POSIX)
+std::string CommandLine::command_line_string() const {
+  return JoinString(argv_, ' ');
 }
-
-// static
-std::wstring CommandLine::PrefixedSwitchStringWithValue(
-    const std::string& switch_string, const std::wstring& value_string) {
-  if (value_string.empty()) {
-    return PrefixedSwitchString(switch_string);
-  }
-
-  return PrefixedSwitchString(switch_string +
-#if defined(OS_WIN)
-                              WideToASCII(kSwitchValueSeparator)
-#else
-                              kSwitchValueSeparator
 #endif
-                              ) + value_string;
-}
 
 #if defined(OS_WIN)
 void CommandLine::AppendSwitch(const std::string& switch_string) {
-  std::wstring prefixed_switch_string = PrefixedSwitchString(switch_string);
   command_line_string_.append(L" ");
-  command_line_string_.append(prefixed_switch_string);
+  command_line_string_.append(kSwitchPrefixes[0] + ASCIIToWide(switch_string));
   switches_[switch_string] = L"";
 }
 
-void CommandLine::AppendSwitchWithValue(const std::string& switch_string,
-                                        const std::wstring& value_string) {
-  std::wstring value_string_edit;
+void CommandLine::AppendSwitchASCII(const std::string& switch_string,
+                                    const std::string& value_string) {
+  AppendSwitchNative(switch_string, ASCIIToWide(value_string));
+}
 
-  // NOTE(jhughes): If the value contains a quotation mark at one
-  //                end but not both, you may get unusable output.
-  if (!value_string.empty() &&
-      (value_string.find(L" ") != std::wstring::npos) &&
-      (value_string[0] != L'"') &&
-      (value_string[value_string.length() - 1] != L'"')) {
-    // need to provide quotes
-    value_string_edit = StringPrintf(L"\"%ls\"", value_string.c_str());
-  } else {
-    value_string_edit = value_string;
+// Quote a string if necessary, such that CommandLineToArgvW() will
+// always process it as a single argument.
+static std::wstring WindowsStyleQuote(const std::wstring& arg) {
+  // We follow the quoting rules of CommandLineToArgvW.
+  // http://msdn.microsoft.com/en-us/library/17w5ykft.aspx
+  if (arg.find_first_of(L" \\\"") == std::wstring::npos) {
+    // No quoting necessary.
+    return arg;
   }
 
+  std::wstring out;
+  out.push_back(L'"');
+  for (size_t i = 0; i < arg.size(); ++i) {
+    if (arg[i] == '\\') {
+      // Find the extent of this run of backslashes.
+      size_t start = i, end = start + 1;
+      for (; end < arg.size() && arg[end] == '\\'; ++end)
+        /* empty */;
+      size_t backslash_count = end - start;
+
+      // Backslashes are escapes only if the run is followed by a double quote.
+      // Since we also will end the string with a double quote, we escape for
+      // either a double quote or the end of the string.
+      if (end == arg.size() || arg[end] == '"') {
+        // To quote, we need to output 2x as many backslashes.
+        backslash_count *= 2;
+      }
+      for (size_t j = 0; j < backslash_count; ++j)
+        out.push_back('\\');
+
+      // Advance i to one before the end to balance i++ in loop.
+      i = end - 1;
+    } else if (arg[i] == '"') {
+      out.push_back('\\');
+      out.push_back('"');
+    } else {
+      out.push_back(arg[i]);
+    }
+  }
+  out.push_back('"');
+
+  return out;
+}
+
+void CommandLine::AppendSwitchNative(const std::string& switch_string,
+                                     const std::wstring& value) {
   std::wstring combined_switch_string =
-      PrefixedSwitchStringWithValue(switch_string, value_string_edit);
+      kSwitchPrefixes[0] + ASCIIToWide(switch_string);
+  if (!value.empty())
+    combined_switch_string += kSwitchValueSeparator + WindowsStyleQuote(value);
 
   command_line_string_.append(L" ");
   command_line_string_.append(combined_switch_string);
 
-  switches_[switch_string] = value_string;
+  switches_[switch_string] = value;
 }
 
-void CommandLine::AppendLooseValue(const std::wstring& value) {
-  // TODO(evan): quoting?
+void CommandLine::AppendArg(const std::string& value) {
+  DCHECK(IsStringUTF8(value));
+  AppendArgNative(UTF8ToWide(value));
+}
+
+void CommandLine::AppendArgNative(const std::wstring& value) {
   command_line_string_.append(L" ");
-  command_line_string_.append(value);
-  loose_values_.push_back(value);
+  command_line_string_.append(WindowsStyleQuote(value));
+  args_.push_back(value);
 }
 
 void CommandLine::AppendArguments(const CommandLine& other,
                                   bool include_program) {
   // Verify include_program is used correctly.
   // Logic could be shorter but this is clearer.
-  DCHECK(include_program ? !other.program().empty() : other.program().empty());
+  DCHECK_EQ(include_program, !other.GetProgram().empty());
   command_line_string_ += L" " + other.command_line_string_;
   std::map<std::string, StringType>::const_iterator i;
   for (i = other.switches_.begin(); i != other.switches_.end(); ++i)
@@ -382,6 +444,8 @@ void CommandLine::AppendArguments(const CommandLine& other,
 }
 
 void CommandLine::PrependWrapper(const std::wstring& wrapper) {
+  if (wrapper.empty())
+    return;
   // The wrapper may have embedded arguments (like "gdb --args"). In this case,
   // we don't pretend to do anything fancy, we just split on spaces.
   std::vector<std::wstring> wrapper_and_args;
@@ -396,25 +460,34 @@ void CommandLine::AppendSwitch(const std::string& switch_string) {
   switches_[switch_string] = "";
 }
 
-void CommandLine::AppendSwitchWithValue(const std::string& switch_string,
-                                        const std::wstring& value_string) {
-  std::string mb_value = base::SysWideToNativeMB(value_string);
-
-  argv_.push_back(kSwitchPrefixes[0] + switch_string +
-                  kSwitchValueSeparator + mb_value);
-  switches_[switch_string] = mb_value;
+void CommandLine::AppendSwitchNative(const std::string& switch_string,
+                                     const std::string& value) {
+  std::string combined_switch_string = kSwitchPrefixes[0] + switch_string;
+  if (!value.empty())
+    combined_switch_string += kSwitchValueSeparator + value;
+  argv_.push_back(combined_switch_string);
+  switches_[switch_string] = value;
 }
 
-void CommandLine::AppendLooseValue(const std::wstring& value) {
-  argv_.push_back(base::SysWideToNativeMB(value));
+void CommandLine::AppendSwitchASCII(const std::string& switch_string,
+                                    const std::string& value_string) {
+  AppendSwitchNative(switch_string, value_string);
+}
+
+void CommandLine::AppendArg(const std::string& value) {
+  AppendArgNative(value);
+}
+
+void CommandLine::AppendArgNative(const std::string& value) {
+  DCHECK(IsStringUTF8(value));
+  argv_.push_back(value);
 }
 
 void CommandLine::AppendArguments(const CommandLine& other,
                                   bool include_program) {
   // Verify include_program is used correctly.
   // Logic could be shorter but this is clearer.
-  DCHECK(include_program ? !other.program().empty() : other.program().empty());
-
+  DCHECK_EQ(include_program, !other.GetProgram().empty());
   size_t first_arg = include_program ? 0 : 1;
   for (size_t i = first_arg; i < other.argv_.size(); ++i)
     argv_.push_back(other.argv_[i]);
@@ -423,13 +496,42 @@ void CommandLine::AppendArguments(const CommandLine& other,
     switches_[i->first] = i->second;
 }
 
-void CommandLine::PrependWrapper(const std::wstring& wrapper_wide) {
+void CommandLine::PrependWrapper(const std::string& wrapper) {
   // The wrapper may have embedded arguments (like "gdb --args"). In this case,
   // we don't pretend to do anything fancy, we just split on spaces.
-  const std::string wrapper = base::SysWideToNativeMB(wrapper_wide);
   std::vector<std::string> wrapper_and_args;
   SplitString(wrapper, ' ', &wrapper_and_args);
   argv_.insert(argv_.begin(), wrapper_and_args.begin(), wrapper_and_args.end());
 }
 
 #endif
+
+void CommandLine::AppendArgPath(const FilePath& path) {
+  AppendArgNative(path.value());
+}
+
+void CommandLine::AppendSwitchPath(const std::string& switch_string,
+                                   const FilePath& path) {
+  AppendSwitchNative(switch_string, path.value());
+}
+
+void CommandLine::CopySwitchesFrom(const CommandLine& source,
+                                   const char* const switches[],
+                                   size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    if (source.HasSwitch(switches[i])) {
+      StringType value = source.GetSwitchValueNative(switches[i]);
+      AppendSwitchNative(switches[i], value);
+    }
+  }
+}
+
+// private
+CommandLine::CommandLine() {
+}
+
+// static
+CommandLine* CommandLine::ForCurrentProcessMutable() {
+  DCHECK(current_process_commandline_);
+  return current_process_commandline_;
+}

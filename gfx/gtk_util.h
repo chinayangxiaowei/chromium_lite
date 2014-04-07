@@ -4,6 +4,7 @@
 
 #ifndef GFX_GTK_UTIL_H_
 #define GFX_GTK_UTIL_H_
+#pragma once
 
 #include <stdint.h>
 #include <vector>
@@ -31,6 +32,7 @@ namespace gfx {
 class Rect;
 
 extern const GdkColor kGdkWhite;
+extern const GdkColor kGdkGray;
 extern const GdkColor kGdkBlack;
 extern const GdkColor kGdkGreen;
 

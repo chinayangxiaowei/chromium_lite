@@ -179,6 +179,22 @@ class RendererGLES2 : public Renderer {
     return next_texture_unit_++;
   }
 
+  // Programs the helper constants into the hardware.
+  void UpdateDxClippingUniform(GLint location);
+
+#if defined(GLES2_BACKEND_DESKTOP_GL)
+#if defined(OS_LINUX)
+  inline GLXContext glx_context() const { return context_; }
+#endif
+#if defined(OS_MACOSX)
+  // We need to be able to reset the CGLContextObj when we go into and
+  // out of full-screen mode.
+  void set_mac_cgl_context(CGLContextObj obj);
+#endif
+#elif defined(GLES2_BACKEND_NATIVE_GLES2)
+  inline EGLContext egl_context() const { return egl_context_; }
+#endif
+
  protected:
   // Keep the constructor protected so only factory methods can create
   // renderers.
@@ -354,6 +370,9 @@ class RendererGLES2 : public Renderer {
   // The next texture unit to use. This is reset with ResetTextureUnit
   // and retrieved with GetNextTextureUnit.
   GLenum next_texture_unit_;
+
+  // Transform matrix coefficients to match DX clipping rules.
+  GLfloat dx_clipping_[4];
 };
 
 }  // namespace o3d

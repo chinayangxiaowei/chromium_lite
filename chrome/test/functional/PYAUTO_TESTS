@@ -15,23 +15,99 @@
 #      example: 'test_basic.SimpleTest'
 # 3. or as an individual test
 #      example: 'test_basic.SimpleTest.testCanOpenGoogle'
+#
+# Tests beginning with '-' will be excluded.  This can be used to enforce
+# exclusions for a particular platform.
 
 {
   'all': [
+    'autofill',
     'bookmark_bar',
     'bookmarks',
+    'browser',
+    'browsing_data',
+    'codesign',
+    'content',
+    'cookies',
+    'crash_reporter',
+    'downloads',
+    # 'find_in_page',  crashes during shutdown. crbug.com/58516
+    'execute_javascript',
+    'history',
+    'imports',
+    'infobars',
+    'navigation',
+    'omnibox',
+    'passwords',
+    'plugins',
+    # 'popups',  crbug.com/59208
+    'prefs',
+    'search_engines',
+    'special_tabs',
     'test_basic.SimpleTest.testCanOpenGoogle',
-    'downloads'
+    'themes',
+    'translate',
+    # This test fails due to crbug.com/35485
+    '-translate.TranslateTest.testBarNotVisibleOnSSLErrorPage',
+    # This test fails due to crbug.com/50706
+    '-translate.TranslateTest.testToggleTranslateOption'
   ],
 
   'win': [
+    # testBookmarkBarVisible fails on windows. crbug.com/42823
+    '-bookmark_bar.BookmarkBarTest.testBookmarkBarVisible',
+    # Some download test fails on win official builder, only thru buildbot when
+    # downloading the small zip file.
+    # crbug.com/50481, crbug.com/54942
+    '-downloads.DownloadsTest.testZip',
+    '-downloads.DownloadsTest.testRemoveDownload',
+    '-prefs.PrefsTest.testDownloadDirPref',
   ],
 
   'mac': [
+    # Keychain popups make password & autofill tests difficult. crbug.com/49378
+    '-passwords',
+    '-autofill',
+    # codesign tests should run *after* signing. crbug.com/50481
+    '-codesign',
+    '-content.ContentTest.testThreeWindows',  # crbug.com/47457
+    '-downloads.DownloadsTest.testSaveDangerousFile',  # crbug.com/57875
   ],
 
-  'linux': [
+  'linux': [  # linux != chromeos
+    '-omnibox',  # http://crbug.com/44203
+    '-browser.BrowserTest.testWindowResize',  # crbug.com/44963
+    '-content.ContentTest.testThreeWindows',  # crbug.com/47457
   ],
 
-  # TODO(nirnimesh): Add a ChromeOS section
+  # ChromeOS is linux, but note that this section does not include the
+  # entries in the linux section above.
+  'chromeos': [
+    # you cannot resize browser window on chromeos
+    '-browser.BrowserTest.testWindowResize',
+    # Importer tests are invalid on chromeos since chrome is the only browser
+    '-imports',
+
+    # crbug.com/42823
+    '-bookmark_bar.BookmarkBarTest.testBookmarkBarVisible',
+    # chrome/test/data/plugins dir missing in autotest pkg. crosbug.com/6855
+    '-browser.BrowserTest.testCanLoadFlash',
+    '-browser.BrowserTest.testFlashLoadsAfterKill',
+    '-browser.BrowserTest.testSingleFlashPluginProcess',
+    '-infobars.InfobarTest.testPluginCrashInfobar',
+    '-omnibox',  # http://crbug.com/44203
+    # crosbug.com/6856
+    '-prefs.PrefsTest.testNavigationStateOnSessionRestore',
+    '-prefs.PrefsTest.testSessionRestoreURLs',
+    '-prefs.PrefsTest.testSessionRestore',
+    '-translate.TranslateTest.testSessionRestore',
+    '-downloads.DownloadsTest.testNoUnsafeDownloadsOnRestart',
+    '-downloads.DownloadsTest.testZip',
+    '-downloads.DownloadsTest.testZipInIncognito',
+    '-downloads.DownloadsTest.testCrazyFilenames',
+    '-downloads.DownloadsTest.testBigZip',
+    '-downloads.DownloadsTest.testCancelDownload',
+    '-downloads.DownloadsTest.testPauseAndResume',
+    '-translate.TranslateTest.testDownloadsNotTranslated',
+  ],
 }

@@ -79,6 +79,7 @@ class FFmpegDemuxerTest : public testing::Test {
 
     // Initialize FFmpeg fixtures.
     memset(&format_context_, 0, sizeof(format_context_));
+    memset(&input_format_, 0, sizeof(input_format_));
     memset(&streams_, 0, sizeof(streams_));
     memset(&codecs_, 0, sizeof(codecs_));
 
@@ -95,6 +96,9 @@ class FFmpegDemuxerTest : public testing::Test {
     codecs_[AV_STREAM_AUDIO].codec_id = CODEC_ID_VORBIS;
     codecs_[AV_STREAM_AUDIO].channels = kChannels;
     codecs_[AV_STREAM_AUDIO].sample_rate = kSampleRate;
+
+    input_format_.name = "foo";
+    format_context_.iformat = &input_format_;
 
     // Initialize AVStream and AVFormatContext structures.  We set the time base
     // of the streams such that duration is reported in microseconds.
@@ -113,7 +117,9 @@ class FFmpegDemuxerTest : public testing::Test {
 
   virtual ~FFmpegDemuxerTest() {
     // Call Stop() to shut down internal threads.
-    demuxer_->Stop();
+    EXPECT_CALL(callback_, OnFilterCallback());
+    EXPECT_CALL(callback_, OnCallbackDestroyed());
+    demuxer_->Stop(callback_.NewCallback());
 
     // Finish up any remaining tasks.
     message_loop_.RunAllPending();
@@ -162,6 +168,7 @@ class FFmpegDemuxerTest : public testing::Test {
 
   // FFmpeg fixtures.
   AVFormatContext format_context_;
+  AVInputFormat input_format_;
   AVCodecContext codecs_[AV_STREAM_MAX];
   AVStream streams_[AV_STREAM_MAX];
   MockFFmpeg mock_ffmpeg_;
@@ -434,7 +441,7 @@ TEST_F(FFmpegDemuxerTest, Seek) {
 
   // Expected values.
   const int64 kExpectedTimestamp = 1234;
-  const int64 kExpectedFlags = 0;
+  const int64 kExpectedFlags = AVSEEK_FLAG_BACKWARD;
 
   // Ignore all AVFreePacket() calls.  We check this via valgrind.
   EXPECT_CALL(*MockFFmpeg::get(), AVFreePacket(_)).Times(AnyNumber());
@@ -459,15 +466,7 @@ TEST_F(FFmpegDemuxerTest, Seek) {
 
   EXPECT_CALL(*MockFFmpeg::get(), CheckPoint(1));
 
-
-  // ... then we'll call Seek() to get around the first seek hack...
-  //
-  // TODO(scherkus): fix the av_seek_frame() hackery!
-  StrictMock<MockFilterCallback> hack_callback;
-  EXPECT_CALL(hack_callback, OnFilterCallback());
-  EXPECT_CALL(hack_callback, OnCallbackDestroyed());
-
-  // ...then we'll expect the actual seek call...
+  // ...then we'll expect a seek call...
   EXPECT_CALL(*MockFFmpeg::get(),
       AVSeekFrame(&format_context_, -1, kExpectedTimestamp, kExpectedFlags))
       .WillOnce(Return(0));
@@ -517,13 +516,7 @@ TEST_F(FFmpegDemuxerTest, Seek) {
   message_loop_.RunAllPending();
   MockFFmpeg::get()->CheckPoint(1);
 
-  // Issue a preliminary seek to get around the "first seek" hack.
-  //
-  // TODO(scherkus): fix the av_seek_frame() hackery!
-  demuxer_->Seek(base::TimeDelta(), hack_callback.NewCallback());
-  message_loop_.RunAllPending();
-
-  // Now issue a simple forward seek, which should discard queued packets.
+  // Issue a simple forward seek, which should discard queued packets.
   demuxer_->Seek(base::TimeDelta::FromMicroseconds(kExpectedTimestamp),
                  seek_callback.NewCallback());
   message_loop_.RunAllPending();
@@ -618,7 +611,9 @@ TEST_F(FFmpegDemuxerTest, Stop) {
   ASSERT_TRUE(audio);
 
   // Stop the demuxer.
-  demuxer_->Stop();
+  EXPECT_CALL(callback_, OnFilterCallback());
+  EXPECT_CALL(callback_, OnCallbackDestroyed());
+  demuxer_->Stop(callback_.NewCallback());
 
   // Expect all calls in sequence.
   InSequence s;
@@ -647,7 +642,7 @@ TEST_F(FFmpegDemuxerTest, DisableAudioStream) {
   }
 
   // Submit a "disable audio stream" message to the demuxer.
-  demuxer_->OnReceivedMessage(kMsgDisableAudio);
+  demuxer_->OnAudioRendererDisabled();
   message_loop_.RunAllPending();
 
   // Ignore all AVFreePacket() calls.  We check this via valgrind.
@@ -711,6 +706,7 @@ TEST_F(FFmpegDemuxerTest, ProtocolRead) {
   EXPECT_CALL(*demuxer, SignalReadCompleted(512));
   EXPECT_CALL(*demuxer, WaitForRead())
       .WillOnce(Return(512));
+  EXPECT_CALL(host_, SetCurrentReadPosition(512));
 
   // Second read.
   EXPECT_CALL(*data_source_, GetSize(_))
@@ -720,13 +716,11 @@ TEST_F(FFmpegDemuxerTest, ProtocolRead) {
   EXPECT_CALL(*demuxer, SignalReadCompleted(512));
   EXPECT_CALL(*demuxer, WaitForRead())
       .WillOnce(Return(512));
+  EXPECT_CALL(host_, SetCurrentReadPosition(1024));
 
   // Third read will fail because it exceeds the file size.
   EXPECT_CALL(*data_source_, GetSize(_))
       .WillOnce(DoAll(SetArgumentPointee<0>(1024), Return(true)));
-
-  // This read complete signal is generated when demuxer is stopped.
-  EXPECT_CALL(*demuxer, SignalReadCompleted(DataSource::kReadError));
 
   // First read.
   EXPECT_EQ(512, demuxer->Read(512, kBuffer));
@@ -742,7 +736,12 @@ TEST_F(FFmpegDemuxerTest, ProtocolRead) {
   // Third read will get an end-of-file error.
   EXPECT_EQ(AVERROR_EOF, demuxer->Read(512, kBuffer));
 
-  demuxer->Stop();
+  // This read complete signal is generated when demuxer is stopped.
+  EXPECT_CALL(*demuxer, SignalReadCompleted(DataSource::kReadError));
+  EXPECT_CALL(callback_, OnFilterCallback());
+  EXPECT_CALL(callback_, OnCallbackDestroyed());
+  demuxer->Stop(callback_.NewCallback());
+  message_loop_.RunAllPending();
 }
 
 TEST_F(FFmpegDemuxerTest, ProtocolGetSetPosition) {

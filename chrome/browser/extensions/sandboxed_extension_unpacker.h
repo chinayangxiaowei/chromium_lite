@@ -1,20 +1,20 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_SANDBOXED_EXTENSION_UNPACKER_H_
 #define CHROME_BROWSER_EXTENSIONS_SANDBOXED_EXTENSION_UNPACKER_H_
+#pragma once
 
 #include <string>
 
 #include "base/file_path.h"
 #include "base/ref_counted.h"
 #include "base/scoped_temp_dir.h"
-#include "base/values.h"
 #include "chrome/browser/utility_process_host.h"
 
+class DictionaryValue;
 class Extension;
-class MessageLoop;
 class ResourceDispatcherHost;
 
 class SandboxedExtensionUnpackerClient
@@ -93,13 +93,9 @@ class SandboxedExtensionUnpacker : public UtilityProcessHost::Client {
   // |client| with the result. If |rdh| is provided, unpacking is done in a
   // sandboxed subprocess. Otherwise, it is done in-process.
   SandboxedExtensionUnpacker(const FilePath& crx_path,
+                             const FilePath& temp_path,
                              ResourceDispatcherHost* rdh,
                              SandboxedExtensionUnpackerClient* cilent);
-
-  const GURL& web_origin() const { return web_origin_; }
-  void set_web_origin(const GURL& val) {
-    web_origin_ = val;
-  }
 
   // Start unpacking the extension. The client is called with the results.
   void Start();
@@ -109,7 +105,7 @@ class SandboxedExtensionUnpacker : public UtilityProcessHost::Client {
   friend class ProcessHostClient;
   friend class SandboxedExtensionUnpackerTest;
 
-  ~SandboxedExtensionUnpacker() {}
+  virtual ~SandboxedExtensionUnpacker();
 
   // Validates the signature of the extension and extract the key to
   // |public_key_|. Returns true if the signature validates, false otherwise.
@@ -145,8 +141,11 @@ class SandboxedExtensionUnpacker : public UtilityProcessHost::Client {
   // The path to the CRX to unpack.
   FilePath crx_path_;
 
+  // A path to a temp dir to unpack in.
+  FilePath temp_path_;
+
   // Our client's thread. This is the thread we respond on.
-  ChromeThread::ID thread_identifier_;
+  BrowserThread::ID thread_identifier_;
 
   // ResourceDispatcherHost to pass to the utility process.
   ResourceDispatcherHost* rdh_;
@@ -168,11 +167,6 @@ class SandboxedExtensionUnpacker : public UtilityProcessHost::Client {
 
   // The public key that was extracted from the CRX header.
   std::string public_key_;
-
-  // If the unpacked extension uses web content, its origin will be set to this
-  // value. This is used when an app is self-hosted. The only valid origin is
-  // the origin it is served from.
-  GURL web_origin_;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_SANDBOXED_EXTENSION_UNPACKER_H_

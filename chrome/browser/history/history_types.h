@@ -1,21 +1,26 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_HISTORY_HISTORY_TYPES_H_
 #define CHROME_BROWSER_HISTORY_HISTORY_TYPES_H_
+#pragma once
 
+#include <deque>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/ref_counted_memory.h"
 #include "base/stack_container.h"
+#include "base/string16.h"
 #include "base/time.h"
 #include "chrome/browser/history/snippet.h"
 #include "chrome/common/page_transition_types.h"
 #include "chrome/common/ref_counted_util.h"
+#include "chrome/common/thumbnail_score.h"
 #include "googleurl/src/gurl.h"
 
 namespace history {
@@ -55,22 +60,24 @@ typedef int64 URLID;
 // dirty bits will not be in sync for these copies.
 class URLRow {
  public:
-  URLRow() {
-    Initialize();
-  }
-  explicit URLRow(const GURL& url) : url_(url) {
-    // Initialize will not set the URL, so our initialization above will stay.
-    Initialize();
-  }
-  virtual ~URLRow() {}
+  URLRow();
+
+  explicit URLRow(const GURL& url);
+
+  // We need to be able to set the id of a URLRow that's being passed through
+  // an IPC message.  This constructor should probably not be used otherwise.
+  URLRow(const GURL& url, URLID id);
+
+  virtual ~URLRow();
+  URLRow& operator=(const URLRow& other);
 
   URLID id() const { return id_; }
   const GURL& url() const { return url_; }
 
-  const std::wstring& title() const {
+  const string16& title() const {
     return title_;
   }
-  void set_title(const std::wstring& title) {
+  void set_title(const string16& title) {
     // The title is frequently set to the same thing, so we don't bother
     // updating unless the string has changed.
     if (title != title_) {
@@ -138,7 +145,7 @@ class URLRow {
   // the constructor to make a new one.
   GURL url_;
 
-  std::wstring title_;
+  string16 title_;
 
   // Total number of times this URL has been visited.
   int visit_count_;
@@ -160,9 +167,27 @@ class URLRow {
   // We support the implicit copy constuctor and operator=.
 };
 
-// VisitRow -------------------------------------------------------------------
+// The enumeration of all possible sources of visits is listed below.
+// The source will be propogated along with a URL or a visit item
+// and eventually be stored in the history database,
+// visit_source table specifically.
+// Different from page transition types, they describe the origins of visits.
+// (Warning): Please don't change any existing values while it is ok to add
+// new values when needed.
+typedef enum {
+  SOURCE_SYNCED = 0,         // Synchronized from somewhere else.
+  SOURCE_BROWSED = 1,        // User browsed.
+  SOURCE_EXTENSION = 2,      // Added by an externsion.
+  SOURCE_FIREFOX_IMPORTED = 3,
+  SOURCE_IE_IMPORTED = 4,
+  SOURCE_SAFARI_IMPORTED = 5,
+} VisitSource;
 
 typedef int64 VisitID;
+// Structure to hold the mapping between each visit's id and its source.
+typedef std::map<VisitID, VisitSource> VisitSourceMap;
+
+// VisitRow -------------------------------------------------------------------
 
 // Holds all information associated with a specific visit. A visit holds time
 // and referrer information for one time a URL is visited.
@@ -174,6 +199,7 @@ class VisitRow {
            VisitID arg_referring_visit,
            PageTransition::Type arg_transition,
            SegmentID arg_segment_id);
+  ~VisitRow();
 
   // ID of this row (visit ID, used a a referrer for other visits).
   VisitID visit_id;
@@ -216,6 +242,9 @@ typedef std::vector<VisitRow> VisitVector;
 
 // Used by the importer to set favicons for imported bookmarks.
 struct ImportedFavIconUsage {
+  ImportedFavIconUsage();
+  ~ImportedFavIconUsage();
+
   // The URL of the favicon.
   GURL favicon_url;
 
@@ -265,6 +294,7 @@ struct StarredEntry {
   };
 
   StarredEntry();
+  ~StarredEntry();
 
   void Swap(StarredEntry* other);
 
@@ -272,7 +302,7 @@ struct StarredEntry {
   StarID id;
 
   // Title.
-  std::wstring title;
+  string16 title;
 
   // When this was added.
   base::Time date_added;
@@ -298,7 +328,7 @@ struct StarredEntry {
 
   // If type == URL, this is the ID of the URL of the primary page that was
   // starred.
-  history::URLID url_id;
+  URLID url_id;
 
   // Time the entry was last modified. This is only used for groups and
   // indicates the last time a URL was added as a child to the group.
@@ -309,17 +339,12 @@ struct StarredEntry {
 
 class URLResult : public URLRow {
  public:
-  URLResult() {}
-  URLResult(const GURL& url, base::Time visit_time)
-      : URLRow(url),
-        visit_time_(visit_time) {
-  }
+  URLResult();
+  URLResult(const GURL& url, base::Time visit_time);
   // Constructor that create a URLResult from the specified URL and title match
   // positions from title_matches.
-  URLResult(const GURL& url, const Snippet::MatchPositions& title_matches)
-      : URLRow(url) {
-    title_match_positions_ = title_matches;
-  }
+  URLResult(const GURL& url, const Snippet::MatchPositions& title_matches);
+  ~URLResult();
 
   base::Time visit_time() const { return visit_time_; }
   void set_visit_time(base::Time visit_time) { visit_time_ = visit_time; }
@@ -451,13 +476,13 @@ class QueryResults {
   // Maps URLs to entries in results_.
   URLToResultIndices url_to_results_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(QueryResults);
+  DISALLOW_COPY_AND_ASSIGN(QueryResults);
 };
 
 // QueryOptions ----------------------------------------------------------------
 
 struct QueryOptions {
-  QueryOptions() : max_count(0) {}
+  QueryOptions();
 
   // The time range to search for matches in.
   //
@@ -475,10 +500,7 @@ struct QueryOptions {
   base::Time end_time;
 
   // Sets the query time to the last |days_ago| days to the present time.
-  void SetRecentDayRange(int days_ago) {
-    end_time = base::Time::Now();
-    begin_time = end_time - base::TimeDelta::FromDays(days_ago);
-  }
+  void SetRecentDayRange(int days_ago);
 
   // The maximum number of results to return. The results will be sorted with
   // the most recent first, so older results may not be returned if there is not
@@ -491,11 +513,14 @@ struct QueryOptions {
 // KeywordSearchTermVisit is returned from GetMostRecentKeywordSearchTerms. It
 // gives the time and search term of the keyword visit.
 struct KeywordSearchTermVisit {
+  KeywordSearchTermVisit();
+  ~KeywordSearchTermVisit();
+
   // The time of the visit.
   base::Time time;
 
   // The search term that was used.
-  std::wstring term;
+  string16 term;
 };
 
 // MostVisitedURL --------------------------------------------------------------
@@ -504,11 +529,69 @@ struct KeywordSearchTermVisit {
 struct MostVisitedURL {
   GURL url;
   GURL favicon_url;
-  std::wstring title;
+  string16 title;
 
   RedirectList redirects;
+
+  bool operator==(const MostVisitedURL& other) {
+    return url == other.url;
+  }
 };
 
-}  // history
+// Used by TopSites to store the thumbnails.
+struct Images {
+  Images();
+  ~Images();
+
+  scoped_refptr<RefCountedBytes> thumbnail;
+  ThumbnailScore thumbnail_score;
+
+  // TODO(brettw): this will eventually store the favicon.
+  // scoped_refptr<RefCountedBytes> favicon;
+};
+
+typedef std::vector<MostVisitedURL> MostVisitedURLList;
+
+// Navigation -----------------------------------------------------------------
+
+// Marshalling structure for AddPage.
+class HistoryAddPageArgs
+    : public base::RefCountedThreadSafe<HistoryAddPageArgs> {
+ public:
+  HistoryAddPageArgs(const GURL& arg_url,
+                     base::Time arg_time,
+                     const void* arg_id_scope,
+                     int32 arg_page_id,
+                     const GURL& arg_referrer,
+                     const history::RedirectList& arg_redirects,
+                     PageTransition::Type arg_transition,
+                     VisitSource arg_source,
+                     bool arg_did_replace_entry);
+
+  // Returns a new HistoryAddPageArgs that is a copy of this (ref count is
+  // of course reset). Ownership of returned object passes to caller.
+  HistoryAddPageArgs* Clone() const;
+
+  GURL url;
+  base::Time time;
+
+  const void* id_scope;
+  int32 page_id;
+
+  GURL referrer;
+  history::RedirectList redirects;
+  PageTransition::Type transition;
+  VisitSource visit_source;
+  bool did_replace_entry;
+
+ private:
+  friend class base::RefCountedThreadSafe<HistoryAddPageArgs>;
+
+  ~HistoryAddPageArgs();
+
+  DISALLOW_COPY_AND_ASSIGN(HistoryAddPageArgs);
+};
+
+}  // namespace history
 
 #endif  // CHROME_BROWSER_HISTORY_HISTORY_TYPES_H_

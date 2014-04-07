@@ -3,6 +3,9 @@
 # found in the LICENSE file.
 
 {
+  'variables': {
+    'chromium_code': 1,
+  },
   'target_defaults': {
     'sources/': [
       ['exclude', '/win/'],
@@ -35,6 +38,7 @@
         'ipc',
         '../base/base.gyp:base',
         '../base/base.gyp:base_i18n',
+        '../base/base.gyp:test_support_base',
         '../testing/gtest.gyp:gtest',
       ],
       'include_dirs': [
@@ -56,11 +60,6 @@
         ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
           'dependencies': [
             '../build/linux/system.gyp:gtk',
-          ],
-        }],
-        ['OS=="linux" and toolkit_views==1', {
-          'dependencies': [
-            '../views/views.gyp:views',
           ],
         }],
         ['OS=="linux"', {

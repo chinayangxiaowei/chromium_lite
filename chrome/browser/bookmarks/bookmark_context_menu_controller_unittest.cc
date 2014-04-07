@@ -3,11 +3,12 @@
 // found in the LICENSE file.
 
 #include "base/scoped_ptr.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_context_menu_controller.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
-#include "chrome/browser/chrome_thread.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/browser_thread.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/page_navigator.h"
 #include "chrome/common/pref_names.h"
@@ -35,8 +36,8 @@ class TestingPageNavigator : public PageNavigator {
 class BookmarkContextMenuControllerTest : public testing::Test {
  public:
   BookmarkContextMenuControllerTest()
-      : ui_thread_(ChromeThread::UI, &message_loop_),
-        file_thread_(ChromeThread::FILE, &message_loop_),
+      : ui_thread_(BrowserThread::UI, &message_loop_),
+        file_thread_(BrowserThread::FILE, &message_loop_),
         model_(NULL) {
   }
 
@@ -66,8 +67,8 @@ class BookmarkContextMenuControllerTest : public testing::Test {
 
  protected:
   MessageLoopForUI message_loop_;
-  ChromeThread ui_thread_;
-  ChromeThread file_thread_;
+  BrowserThread ui_thread_;
+  BrowserThread file_thread_;
   scoped_ptr<TestingProfile> profile_;
   BookmarkModel* model_;
   TestingPageNavigator navigator_;
@@ -86,18 +87,18 @@ class BookmarkContextMenuControllerTest : public testing::Test {
   void AddTestData() {
     std::string test_base = "file:///c:/tmp/";
 
-    model_->AddURL(model_->GetBookmarkBarNode(), 0, L"a",
+    model_->AddURL(model_->GetBookmarkBarNode(), 0, ASCIIToUTF16("a"),
                    GURL(test_base + "a"));
     const BookmarkNode* f1 =
-        model_->AddGroup(model_->GetBookmarkBarNode(), 1, L"F1");
-    model_->AddURL(f1, 0, L"f1a", GURL(test_base + "f1a"));
-    const BookmarkNode* f11 = model_->AddGroup(f1, 1, L"F11");
-    model_->AddURL(f11, 0, L"f11a", GURL(test_base + "f11a"));
-    model_->AddGroup(model_->GetBookmarkBarNode(), 2, L"F2");
-    model_->AddGroup(model_->GetBookmarkBarNode(), 3, L"F3");
+        model_->AddGroup(model_->GetBookmarkBarNode(), 1, ASCIIToUTF16("F1"));
+    model_->AddURL(f1, 0, ASCIIToUTF16("f1a"), GURL(test_base + "f1a"));
+    const BookmarkNode* f11 = model_->AddGroup(f1, 1, ASCIIToUTF16("F11"));
+    model_->AddURL(f11, 0, ASCIIToUTF16("f11a"), GURL(test_base + "f11a"));
+    model_->AddGroup(model_->GetBookmarkBarNode(), 2, ASCIIToUTF16("F2"));
+    model_->AddGroup(model_->GetBookmarkBarNode(), 3, ASCIIToUTF16("F3"));
     const BookmarkNode* f4 =
-        model_->AddGroup(model_->GetBookmarkBarNode(), 4, L"F4");
-    model_->AddURL(f4, 0, L"f4a", GURL(test_base + "f4a"));
+        model_->AddGroup(model_->GetBookmarkBarNode(), 4, ASCIIToUTF16("F4"));
+    model_->AddURL(f4, 0, ASCIIToUTF16("f4a"), GURL(test_base + "f4a"));
   }
 };
 
@@ -106,8 +107,7 @@ TEST_F(BookmarkContextMenuControllerTest, DeleteURL) {
   std::vector<const BookmarkNode*> nodes;
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(0));
   BookmarkContextMenuController controller(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes,
-      BookmarkContextMenuController::BOOKMARK_BAR);
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes);
   GURL url = model_->GetBookmarkBarNode()->GetChild(0)->GetURL();
   ASSERT_TRUE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
   // Delete the URL.
@@ -133,16 +133,13 @@ TEST_F(BookmarkContextMenuControllerTest, OpenAll) {
 TEST_F(BookmarkContextMenuControllerTest, EmptyNodes) {
   BookmarkContextMenuController controller(
       NULL, NULL, profile_.get(), NULL, model_->other_node(),
-      std::vector<const BookmarkNode*>(),
-      BookmarkContextMenuController::BOOKMARK_BAR);
+      std::vector<const BookmarkNode*>());
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_NEW_WINDOW));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_INCOGNITO));
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
-  EXPECT_FALSE(
-      controller.IsCommandIdEnabled(IDS_BOOKMARK_MANAGER_SHOW_IN_FOLDER));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_ADD_NEW_BOOKMARK));
   EXPECT_TRUE(
@@ -155,16 +152,13 @@ TEST_F(BookmarkContextMenuControllerTest, SingleURL) {
   std::vector<const BookmarkNode*> nodes;
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(0));
   BookmarkContextMenuController controller(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(),
-      nodes, BookmarkContextMenuController::BOOKMARK_BAR);
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes);
   EXPECT_TRUE(controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_NEW_WINDOW));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_INCOGNITO));
   EXPECT_TRUE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
-  EXPECT_FALSE(
-      controller.IsCommandIdEnabled(IDS_BOOKMARK_MANAGER_SHOW_IN_FOLDER));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_ADD_NEW_BOOKMARK));
   EXPECT_TRUE(
@@ -178,16 +172,13 @@ TEST_F(BookmarkContextMenuControllerTest, MultipleURLs) {
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(0));
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(1)->GetChild(0));
   BookmarkContextMenuController controller(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(),
-      nodes, BookmarkContextMenuController::BOOKMARK_BAR);
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes);
   EXPECT_TRUE(controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_NEW_WINDOW));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_INCOGNITO));
   EXPECT_TRUE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
-  EXPECT_FALSE(
-      controller.IsCommandIdEnabled(IDS_BOOKMARK_MANAGER_SHOW_IN_FOLDER));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_ADD_NEW_BOOKMARK));
   EXPECT_TRUE(
@@ -200,16 +191,13 @@ TEST_F(BookmarkContextMenuControllerTest, SingleFolder) {
   std::vector<const BookmarkNode*> nodes;
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(2));
   BookmarkContextMenuController controller(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(),
-      nodes, BookmarkContextMenuController::BOOKMARK_BAR);
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes);
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_NEW_WINDOW));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_INCOGNITO));
   EXPECT_TRUE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
-  EXPECT_FALSE(
-      controller.IsCommandIdEnabled(IDS_BOOKMARK_MANAGER_SHOW_IN_FOLDER));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_ADD_NEW_BOOKMARK));
   EXPECT_TRUE(
@@ -223,16 +211,13 @@ TEST_F(BookmarkContextMenuControllerTest, MultipleEmptyFolders) {
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(2));
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(3));
   BookmarkContextMenuController controller(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(),
-      nodes, BookmarkContextMenuController::BOOKMARK_BAR);
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes);
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_NEW_WINDOW));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_INCOGNITO));
   EXPECT_TRUE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
-  EXPECT_FALSE(
-      controller.IsCommandIdEnabled(IDS_BOOKMARK_MANAGER_SHOW_IN_FOLDER));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_ADD_NEW_BOOKMARK));
   EXPECT_TRUE(
@@ -246,16 +231,13 @@ TEST_F(BookmarkContextMenuControllerTest, MultipleFoldersWithURLs) {
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(3));
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(4));
   BookmarkContextMenuController controller(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(),
-      nodes, BookmarkContextMenuController::BOOKMARK_BAR);
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes);
   EXPECT_TRUE(controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_NEW_WINDOW));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_INCOGNITO));
   EXPECT_TRUE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
-  EXPECT_FALSE(
-      controller.IsCommandIdEnabled(IDS_BOOKMARK_MANAGER_SHOW_IN_FOLDER));
   EXPECT_TRUE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_ADD_NEW_BOOKMARK));
   EXPECT_TRUE(
@@ -267,8 +249,7 @@ TEST_F(BookmarkContextMenuControllerTest, DisableIncognito) {
   std::vector<const BookmarkNode*> nodes;
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(0));
   BookmarkContextMenuController controller(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(),
-      nodes, BookmarkContextMenuController::BOOKMARK_BAR);
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes);
   profile_->set_off_the_record(true);
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_INCOGNITO));
   EXPECT_FALSE(
@@ -280,8 +261,7 @@ TEST_F(BookmarkContextMenuControllerTest, DisabledItemsWithOtherNode) {
   std::vector<const BookmarkNode*> nodes;
   nodes.push_back(model_->other_node());
   BookmarkContextMenuController controller(
-      NULL, NULL, profile_.get(), NULL, nodes[0], nodes,
-      BookmarkContextMenuController::BOOKMARK_BAR);
+      NULL, NULL, profile_.get(), NULL, nodes[0], nodes);
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_EDIT));
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
 }
@@ -291,16 +271,13 @@ TEST_F(BookmarkContextMenuControllerTest, DisabledItemsWithOtherNode) {
 TEST_F(BookmarkContextMenuControllerTest, EmptyNodesNullParent) {
   BookmarkContextMenuController controller(
       NULL, NULL, profile_.get(), NULL, NULL,
-      std::vector<const BookmarkNode*>(),
-      BookmarkContextMenuController::BOOKMARK_MANAGER_ORGANIZE_MENU);
+      std::vector<const BookmarkNode*>());
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_NEW_WINDOW));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_OPEN_ALL_INCOGNITO));
   EXPECT_FALSE(controller.IsCommandIdEnabled(IDS_BOOKMARK_BAR_REMOVE));
-  EXPECT_FALSE(
-      controller.IsCommandIdEnabled(IDS_BOOKMARK_MANAGER_SHOW_IN_FOLDER));
   EXPECT_FALSE(
       controller.IsCommandIdEnabled(IDS_BOOMARK_BAR_ADD_NEW_BOOKMARK));
   EXPECT_FALSE(
@@ -312,8 +289,7 @@ TEST_F(BookmarkContextMenuControllerTest, CutCopyPasteNode) {
   nodes.push_back(model_->GetBookmarkBarNode()->GetChild(0));
   scoped_ptr<BookmarkContextMenuController> controller(
       new BookmarkContextMenuController(
-          NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes,
-          BookmarkContextMenuController::BOOKMARK_BAR));
+          NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes));
   EXPECT_TRUE(controller->IsCommandIdEnabled(IDS_COPY));
   EXPECT_TRUE(controller->IsCommandIdEnabled(IDS_CUT));
 
@@ -321,8 +297,7 @@ TEST_F(BookmarkContextMenuControllerTest, CutCopyPasteNode) {
   controller->ExecuteCommand(IDS_COPY);
 
   controller.reset(new BookmarkContextMenuController(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes,
-      BookmarkContextMenuController::BOOKMARK_BAR));
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes));
   int old_count = model_->GetBookmarkBarNode()->GetChildCount();
   controller->ExecuteCommand(IDS_PASTE);
 
@@ -332,8 +307,7 @@ TEST_F(BookmarkContextMenuControllerTest, CutCopyPasteNode) {
             model_->GetBookmarkBarNode()->GetChild(1)->GetURL());
 
   controller.reset(new BookmarkContextMenuController(
-      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes,
-      BookmarkContextMenuController::BOOKMARK_BAR));
+      NULL, NULL, profile_.get(), NULL, nodes[0]->GetParent(), nodes));
   // Cut the URL.
   controller->ExecuteCommand(IDS_CUT);
   ASSERT_TRUE(model_->GetBookmarkBarNode()->GetChild(0)->is_url());

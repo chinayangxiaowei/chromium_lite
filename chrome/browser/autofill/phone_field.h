@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_AUTOFILL_PHONE_FIELD_H_
 #define CHROME_BROWSER_AUTOFILL_PHONE_FIELD_H_
+#pragma once
 
 #include <vector>
 
@@ -25,16 +26,17 @@ class PhoneField : public FormField {
 
   virtual bool GetFieldInfo(FieldTypeMap* field_type_map) const;
 
- protected:
+ private:
   PhoneField();
 
- private:
   // Always present; holds suffix if prefix is present.
   AutoFillField* phone_;
 
   AutoFillField* area_code_;  // optional
   AutoFillField* prefix_;     // optional
   AutoFillField* extension_;  // optional
+
+  DISALLOW_COPY_AND_ASSIGN(PhoneField);
 };
 
 #endif  // CHROME_BROWSER_AUTOFILL_PHONE_FIELD_H_

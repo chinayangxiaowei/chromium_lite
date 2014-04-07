@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,13 +21,17 @@
 #include "base/file_util.h"
 #include "base/registry.h"
 #include "base/scoped_comptr_win.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/time.h"
+#include "base/values.h"
+#include "base/utf_string_conversions.h"
 #include "base/win_util.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/importer/importer_bridge.h"
 #include "chrome/browser/importer/importer_data_types.h"
 #include "chrome/browser/password_manager/ie7_password.h"
+#include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/common/time_format.h"
 #include "chrome/common/url_constants.h"
@@ -68,7 +72,7 @@ void IEImporter::StartImport(ProfileInfo profile_info,
                              uint16 items,
                              ImporterBridge* bridge) {
   bridge_ = bridge;
-  source_path_ = profile_info.source_path;
+  source_path_ = profile_info.source_path.ToWStringHack();
 
   bridge_->NotifyStarted();
 
@@ -258,11 +262,13 @@ void IEImporter::ImportPasswordsIE7() {
   while (reg_iterator.Valid() && !cancelled()) {
     // Get the size of the encrypted data.
     DWORD value_len = 0;
-    if (key.ReadValue(reg_iterator.Name(), NULL, &value_len) && value_len) {
+    if (key.ReadValue(reg_iterator.Name(), NULL, &value_len, NULL) &&
+        value_len) {
       // Query the encrypted data.
       std::vector<unsigned char> value;
       value.resize(value_len);
-      if (key.ReadValue(reg_iterator.Name(), &value.front(), &value_len)) {
+      if (key.ReadValue(reg_iterator.Name(), &value.front(), &value_len,
+                        NULL)) {
         IE7PasswordInfo password_info;
         password_info.url_hash = reg_iterator.Name();
         password_info.encrypted_data = value;
@@ -329,7 +335,7 @@ void IEImporter::ImportHistory() {
     }
 
     if (!rows.empty() && !cancelled()) {
-      bridge_->SetHistoryItems(rows);
+      bridge_->SetHistoryItems(rows, history::SOURCE_IE_IMPORTED);
     }
   }
 }
@@ -346,15 +352,15 @@ void IEImporter::ImportSearchEngines() {
   RegKey key(HKEY_CURRENT_USER, kSearchScopePath, KEY_READ);
   std::wstring default_search_engine_name;
   const TemplateURL* default_search_engine = NULL;
-  std::map<std::wstring, TemplateURL*> search_engines_map;
+  std::map<std::string, TemplateURL*> search_engines_map;
   key.ReadValue(L"DefaultScope", &default_search_engine_name);
   RegistryKeyIterator key_iterator(HKEY_CURRENT_USER, kSearchScopePath);
   while (key_iterator.Valid()) {
     std::wstring sub_key_name = kSearchScopePath;
     sub_key_name.append(L"\\").append(key_iterator.Name());
     RegKey sub_key(HKEY_CURRENT_USER, sub_key_name.c_str(), KEY_READ);
-    std::wstring url;
-    if (!sub_key.ReadValue(L"URL", &url) || url.empty()) {
+    std::wstring wide_url;
+    if (!sub_key.ReadValue(L"URL", &wide_url) || wide_url.empty()) {
       LOG(INFO) << "No URL for IE search engine at " << key_iterator.Name();
       ++key_iterator;
       continue;
@@ -372,7 +378,8 @@ void IEImporter::ImportSearchEngines() {
       }
     }
 
-    std::map<std::wstring, TemplateURL*>::iterator t_iter =
+    std::string url(WideToUTF8(wide_url));
+    std::map<std::string, TemplateURL*>::iterator t_iter =
         search_engines_map.find(url);
     TemplateURL* template_url =
         (t_iter != search_engines_map.end()) ? t_iter->second : NULL;
@@ -395,7 +402,7 @@ void IEImporter::ImportSearchEngines() {
   }
 
   // ProfileWriter::AddKeywords() requires a vector and we have a map.
-  std::map<std::wstring, TemplateURL*>::iterator t_iter;
+  std::map<std::string, TemplateURL*>::iterator t_iter;
   std::vector<TemplateURL*> search_engines;
   int default_search_engine_index = -1;
   for (t_iter = search_engines_map.begin(); t_iter != search_engines_map.end();
@@ -459,9 +466,10 @@ bool IEImporter::GetFavoritesInfo(IEImporter::FavoritesInfo *info) {
   if (win_util::GetWinVersion() < win_util::WINVERSION_VISTA) {
     // The Link folder name is stored in the registry.
     DWORD buffer_length = sizeof(buffer);
-    if (!ReadFromRegistry(HKEY_CURRENT_USER,
-            L"Software\\Microsoft\\Internet Explorer\\Toolbar",
-            L"LinksFolderName", buffer, &buffer_length))
+    RegKey reg_key(HKEY_CURRENT_USER,
+                   L"Software\\Microsoft\\Internet Explorer\\Toolbar",
+                   KEY_READ);
+    if (!reg_key.ReadValue(L"LinksFolderName", buffer, &buffer_length, NULL))
       return false;
     info->links_folder = buffer;
   } else {
@@ -568,9 +576,9 @@ int IEImporter::CurrentIEVersion() const {
   if (version < 0) {
     wchar_t buffer[128];
     DWORD buffer_length = sizeof(buffer);
-    bool result = ReadFromRegistry(HKEY_LOCAL_MACHINE,
-        L"Software\\Microsoft\\Internet Explorer",
-        L"Version", buffer, &buffer_length);
+    RegKey reg_key(HKEY_LOCAL_MACHINE,
+                   L"Software\\Microsoft\\Internet Explorer", KEY_READ);
+    bool result = reg_key.ReadValue(L"Version", buffer, &buffer_length, NULL);
     version = (result ? _wtoi(buffer) : 0);
   }
   return version;

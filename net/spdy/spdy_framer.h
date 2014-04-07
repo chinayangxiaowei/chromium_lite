@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_SPDY_SPDY_FRAMER_H_
 #define NET_SPDY_SPDY_FRAMER_H_
+#pragma once
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -16,16 +17,20 @@
 #include <utility>
 
 #include "base/basictypes.h"
-#include "base/logging.h"
+#include "base/gtest_prod_util.h"
 #include "base/scoped_ptr.h"
 #include "net/spdy/spdy_protocol.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 typedef struct z_stream_s z_stream;  // Forward declaration for zlib.
 
 namespace net {
 class HttpNetworkLayer;
+class HttpNetworkTransactionTest;
+class SpdyHttpStreamTest;
 class SpdyNetworkTransactionTest;
+class SpdyProxyClientSocketTest;
+class SpdySessionTest;
+class SpdyStreamTest;
 }
 
 namespace spdy {
@@ -152,7 +157,7 @@ class SpdyFramer {
                                              SpdyHeaderBlock* headers);
 
   static SpdyRstStreamControlFrame* CreateRstStream(SpdyStreamId stream_id,
-                                                    int status);
+                                                    SpdyStatusCodes status);
 
   // Creates an instance of SpdyGoAwayControlFrame. The GOAWAY frame is used
   // prior to the shutting down of the TCP connection, and includes the
@@ -160,6 +165,11 @@ class SpdyFramer {
   // to completion.
   static SpdyGoAwayControlFrame* CreateGoAway(
       SpdyStreamId last_accepted_stream_id);
+
+  // Creates an instance of SpdyWindowUpdateControlFrame. The WINDOW_UPDATE
+  // frame is used to implement per stream flow control in SPDY.
+  static SpdyWindowUpdateControlFrame* CreateWindowUpdate(
+      SpdyStreamId stream_id, uint32 delta_window_size);
 
   // Creates an instance of SpdySettingsControlFrame. The SETTINGS frame is
   // used to communicate name/value pairs relevant to the communication channel.
@@ -210,34 +220,42 @@ class SpdyFramer {
   // Compression state is maintained as part of the SpdyFramer.
   // Returned frame must be freed with "delete".
   // On failure, returns NULL.
-  SpdyFrame* CompressFrame(const SpdyFrame* frame);
+  SpdyFrame* CompressFrame(const SpdyFrame& frame);
 
   // Decompresses a SpdyFrame.
   // On success, returns a new SpdyFrame with the payload decompressed.
   // Compression state is maintained as part of the SpdyFramer.
   // Returned frame must be freed with "delete".
   // On failure, returns NULL.
-  SpdyFrame* DecompressFrame(const SpdyFrame* frame);
+  SpdyFrame* DecompressFrame(const SpdyFrame& frame);
 
   // Create a copy of a frame.
   // Returned frame must be freed with "delete".
-  SpdyFrame* DuplicateFrame(const SpdyFrame* frame);
+  SpdyFrame* DuplicateFrame(const SpdyFrame& frame);
 
   // Returns true if a frame could be compressed.
-  bool IsCompressible(const SpdyFrame* frame) const;
+  bool IsCompressible(const SpdyFrame& frame) const;
 
   // For debugging.
   static const char* StateToString(int state);
   static const char* ErrorCodeToString(int error_code);
+  static void set_protocol_version(int version) { spdy_version_= version; }
+  static int protocol_version() { return spdy_version_; }
 
   // Export the compression dictionary
   static const char kDictionary[];
   static const int kDictionarySize;
 
  protected:
-  FRIEND_TEST(SpdyFramerTest, HeaderBlockBarfsOnOutOfOrderHeaders);
-  friend class net::SpdyNetworkTransactionTest;
+  FRIEND_TEST_ALL_PREFIXES(SpdyFramerTest, DataCompression);
+  FRIEND_TEST_ALL_PREFIXES(SpdyFramerTest, UnclosedStreamDataCompressors);
   friend class net::HttpNetworkLayer;  // This is temporary for the server.
+  friend class net::HttpNetworkTransactionTest;
+  friend class net::SpdyHttpStreamTest;
+  friend class net::SpdyNetworkTransactionTest;
+  friend class net::SpdyProxyClientSocketTest;
+  friend class net::SpdySessionTest;
+  friend class net::SpdyStreamTest;
   friend class test::TestSpdyVisitor;
   friend void test::FramerSetEnableCompressionHelper(SpdyFramer* framer,
                                                      bool compress);
@@ -247,6 +265,8 @@ class SpdyFramer {
   static void set_enable_compression_default(bool value);
 
  private:
+  typedef std::map<SpdyStreamId, z_stream*> CompressorMap;
+
   // Internal breakout from ProcessInput.  Returns the number of bytes
   // consumed from the data.
   size_t ProcessCommonHeader(const char* data, size_t len);
@@ -254,9 +274,24 @@ class SpdyFramer {
   size_t ProcessControlFramePayload(const char* data, size_t len);
   size_t ProcessDataFramePayload(const char* data, size_t len);
 
-  // Initialize the ZLib state.
-  bool InitializeCompressor();
-  bool InitializeDecompressor();
+  // Get (and lazily initialize) the ZLib state.
+  z_stream* GetHeaderCompressor();
+  z_stream* GetHeaderDecompressor();
+  z_stream* GetStreamCompressor(SpdyStreamId id);
+  z_stream* GetStreamDecompressor(SpdyStreamId id);
+
+  // Compression helpers
+  SpdyControlFrame* CompressControlFrame(const SpdyControlFrame& frame);
+  SpdyDataFrame* CompressDataFrame(const SpdyDataFrame& frame);
+  SpdyControlFrame* DecompressControlFrame(const SpdyControlFrame& frame);
+  SpdyDataFrame* DecompressDataFrame(const SpdyDataFrame& frame);
+  SpdyFrame* CompressFrameWithZStream(const SpdyFrame& frame,
+                                      z_stream* compressor);
+  SpdyFrame* DecompressFrameWithZStream(const SpdyFrame& frame,
+                                        z_stream* decompressor);
+  void CleanupCompressorForStream(SpdyStreamId id);
+  void CleanupDecompressorForStream(SpdyStreamId id);
+  void CleanupStreamCompressorsAndDecompressors();
 
   // Not used (yet)
   size_t BytesSafeToRead() const;
@@ -269,8 +304,11 @@ class SpdyFramer {
 
   // Given a frame, breakdown the variable payload length, the static header
   // header length, and variable payload pointer.
-  bool GetFrameBoundaries(const SpdyFrame* frame, int* payload_length,
+  bool GetFrameBoundaries(const SpdyFrame& frame, int* payload_length,
                           int* header_length, const char** payload) const;
+
+  int num_stream_compressors() const { return stream_compressors_.size(); }
+  int num_stream_decompressors() const { return stream_decompressors_.size(); }
 
   SpdyState state_;
   SpdyError error_code_;
@@ -281,15 +319,21 @@ class SpdyFramer {
   size_t current_frame_len_;  // Number of bytes read into the current_frame_.
   size_t current_frame_capacity_;
 
-  bool enable_compression_;
-  scoped_ptr<z_stream> compressor_;
-  scoped_ptr<z_stream> decompressor_;
+  bool enable_compression_;  // Controls all compression
+  // SPDY header compressors.
+  scoped_ptr<z_stream> header_compressor_;
+  scoped_ptr<z_stream> header_decompressor_;
+
+  // Per-stream data compressors.
+  CompressorMap stream_compressors_;
+  CompressorMap stream_decompressors_;
+
   SpdyFramerVisitorInterface* visitor_;
 
   static bool compression_default_;
+  static int spdy_version_;
 };
 
 }  // namespace spdy
 
 #endif  // NET_SPDY_SPDY_FRAMER_H_
-

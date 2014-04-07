@@ -1,25 +1,26 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_GTK_MENU_GTK_H_
 #define CHROME_BROWSER_GTK_MENU_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
 #include <string>
 #include <vector>
 
+#include "app/gtk_signal.h"
 #include "base/task.h"
 #include "gfx/point.h"
 
 class SkBitmap;
 
 namespace menus {
+class ButtonMenuItemModel;
 class MenuModel;
 }
-
-struct MenuCreateMaterial;
 
 class MenuGtk {
  public:
@@ -27,18 +28,6 @@ class MenuGtk {
   class Delegate {
    public:
     virtual ~Delegate() { }
-
-    // Returns whether the menu item for this command should be enabled.
-    virtual bool IsCommandEnabled(int command_id) const { return false; }
-
-    // Returns whether this command is checked (for checkbox menu items only).
-    virtual bool IsItemChecked(int command_id) const { return false; }
-
-    // Gets the label. Only needs to be implemented for custom (dynamic) labels.
-    virtual std::string GetLabel(int command_id) const { return std::string(); }
-
-    // Executes the command.
-    virtual void ExecuteCommandById(int command_id) {}
 
     // Called before a command is executed. This exists for the case where a
     // model is handling the actual execution of commands, but the delegate
@@ -54,17 +43,17 @@ class MenuGtk {
 
     // Return true if we should override the "gtk-menu-images" system setting
     // when showing image menu items for this menu.
-    virtual bool AlwaysShowImages() const { return false; }
+    virtual bool AlwaysShowIconForCmd(int command_id) const { return false; }
+
+    // Returns a tinted image used in button in a menu.
+    virtual GtkIconSet* GetIconSetForId(int idr) { return NULL; }
+
+    // Returns an icon for the menu item, if available.
+    virtual GtkWidget* GetImageForCommandId(int command_id) const;
+
+    static GtkWidget* GetDefaultImageForCommandId(int command_id);
   };
 
-  // Builds a MenuGtk that uses |delegate| to perform actions and |menu_data|
-  // to create the menu.
-  MenuGtk(MenuGtk::Delegate* delegate, const MenuCreateMaterial* menu_data);
-  // Builds a MenuGtk that uses |delegate| to perform actions and build the
-  // menu.
-  explicit MenuGtk(MenuGtk::Delegate* delegate);
-  // Creates a MenuGtk that uses |delegate| to perform actions.  Builds the
-  // menu using |model_|.
   MenuGtk(MenuGtk::Delegate* delegate, menus::MenuModel* model);
   ~MenuGtk();
 
@@ -80,9 +69,11 @@ class MenuGtk {
                                           const std::string& label);
   GtkWidget* AppendSeparator();
   GtkWidget* AppendMenuItem(int command_id, GtkWidget* menu_item);
-  GtkWidget* AppendMenuItemToMenu(int command_id,
+  GtkWidget* AppendMenuItemToMenu(int index,
+                                  menus::MenuModel* model,
                                   GtkWidget* menu_item,
-                                  GtkWidget* menu);
+                                  GtkWidget* menu,
+                                  bool connect_to_activate);
 
   // Displays the menu. |timestamp| is the time of activation. The popup is
   // statically positioned at |widget|.
@@ -98,6 +89,10 @@ class MenuGtk {
 
   // Displays the menu at the given coords. |point| is intentionally not const.
   void PopupAsContextAt(guint32 event_time, gfx::Point point);
+
+  // Displays the menu as a context menu for the passed status icon.
+  void PopupAsContextForStatusIcon(guint32 event_time, guint32 button,
+                                   GtkStatusIcon* icon);
 
   // Displays the menu following a keyboard event (such as selecting |widget|
   // and pressing "enter").
@@ -127,44 +122,52 @@ class MenuGtk {
 
   GtkWidget* widget() const { return menu_; }
 
- private:
-  // A recursive function that transforms a MenuCreateMaterial tree into a set
-  // of GtkMenuItems.
-  void BuildMenuIn(GtkWidget* menu,
-                   const MenuCreateMaterial* menu_data);
+  // Updates all the enabled/checked states and the dynamic labels.
+  void UpdateMenu();
 
+ private:
   // Builds a GtkImageMenuItem.
   GtkWidget* BuildMenuItemWithImage(const std::string& label,
                                     const SkBitmap& icon);
+
+  GtkWidget* BuildMenuItemWithImage(const std::string& label,
+                                    GtkWidget* image);
+
+  GtkWidget* BuildMenuItemWithLabel(const std::string& label,
+                                    int command_id);
 
   // A function that creates a GtkMenu from |model_|.
   void BuildMenuFromModel();
   // Implementation of the above; called recursively.
   void BuildSubmenuFromModel(menus::MenuModel* model, GtkWidget* menu);
+  // Builds a menu item with buttons in it from the data in the model.
+  GtkWidget* BuildButtomMenuItem(menus::ButtonMenuItemModel* model,
+                                 GtkWidget* menu);
 
-  // Contains implementation for OnMenuShow.
-  void UpdateMenu();
-
-  // Dispatches to either |model| (if it is non-null) or |delegate_|. The
-  // reason for this awkwardness is that we are in a transitional period where
-  // we support both MenuModel and Delegate as a menu controller.
-  // TODO(estade): remove controller functions from Delegate.
-  // http://crbug.com/31365
-  bool IsCommandEnabled(menus::MenuModel* model, int id);
   void ExecuteCommand(menus::MenuModel* model, int id);
-  bool IsItemChecked(menus::MenuModel* model, int id);
 
   // Callback for when a menu item is clicked.
-  static void OnMenuItemActivated(GtkMenuItem* menuitem, MenuGtk* menu);
+  CHROMEGTK_CALLBACK_0(MenuGtk, void, OnMenuItemActivated);
 
-  // Sets the check mark and enabled/disabled state on our menu items.
-  static void SetMenuItemInfo(GtkWidget* widget, void* raw_menu);
+  // Called when one of the buttons are pressed.
+  CHROMEGTK_CALLBACK_1(MenuGtk, void, OnMenuButtonPressed, int);
+
+  // Called to maybe activate a button if that button isn't supposed to dismiss
+  // the menu.
+  CHROMEGTK_CALLBACK_1(MenuGtk, gboolean, OnMenuTryButtonPressed, int);
 
   // Updates all the menu items' state.
-  static void OnMenuShow(GtkWidget* widget, MenuGtk* menu);
+  CHROMEGTK_CALLBACK_0(MenuGtk, void, OnMenuShow);
 
   // Sets the activating widget back to a normal appearance.
-  static void OnMenuHidden(GtkWidget* widget, MenuGtk* menu);
+  CHROMEGTK_CALLBACK_0(MenuGtk, void, OnMenuHidden);
+
+  // Sets the enable/disabled state and dynamic labels on our menu items.
+  static void SetButtonItemInfo(GtkWidget* button, gpointer userdata);
+
+  // Sets the check mark, enabled/disabled state and dynamic labels on our menu
+  // items.
+  static void SetMenuItemInfo(GtkWidget* widget, void* raw_menu);
 
   // Queries this object about the menu state.
   MenuGtk::Delegate* delegate_;

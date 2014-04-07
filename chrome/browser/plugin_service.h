@@ -7,22 +7,28 @@
 
 #ifndef CHROME_BROWSER_PLUGIN_SERVICE_H_
 #define CHROME_BROWSER_PLUGIN_SERVICE_H_
+#pragma once
 
-#include <vector>
+#include <string>
 
 #include "base/basictypes.h"
+#include "base/file_path.h"
 #include "base/hash_tables.h"
-#include "base/ref_counted.h"
 #include "base/singleton.h"
 #include "base/waitable_event_watcher.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "googleurl/src/gurl.h"
-#include "webkit/glue/plugins/webplugininfo.h"
 
 #if defined(OS_WIN)
 #include "base/registry.h"
+#include "base/scoped_ptr.h"
+#endif
+
+#if defined(OS_CHROMEOS)
+namespace chromeos {
+class PluginSelectionPolicy;
+}
 #endif
 
 namespace IPC {
@@ -32,9 +38,10 @@ class Message;
 class MessageLoop;
 class PluginProcessHost;
 class Profile;
-class URLRequestContext;
 class ResourceDispatcherHost;
 class ResourceMessageFilter;
+class URLRequestContext;
+struct WebPluginInfo;
 
 // This must be created on the main thread but it's only called on the IO/file
 // thread.
@@ -59,7 +66,7 @@ class PluginService
   const FilePath& GetChromePluginDataDir();
 
   // Gets the browser's UI locale.
-  const std::wstring& GetUILocale();
+  const std::string& GetUILocale();
 
   // Returns the plugin process host corresponding to the plugin process that
   // has been started by this service. Returns NULL if no process has been
@@ -78,16 +85,18 @@ class PluginService
   void OpenChannelToPlugin(ResourceMessageFilter* renderer_msg_filter,
                            const GURL& url,
                            const std::string& mime_type,
-                           const std::wstring& locale,
                            IPC::Message* reply_msg);
 
-  // Get the path to the plugin specified.  policy_url is the URL of the page
-  // requesting the plugin, so we can verify whether the plugin is allowed
-  // on that page.
-  FilePath GetPluginPath(const GURL& url,
-                         const GURL& policy_url,
-                         const std::string& mime_type,
-                         std::string* actual_mime_type);
+  // Gets the first allowed plugin in the list of plugins that matches
+  // the given url and mime type.  Must be called on the FILE thread.
+  bool GetFirstAllowedPluginInfo(const GURL& url,
+                                 const std::string& mime_type,
+                                 WebPluginInfo* info,
+                                 std::string* actual_mime_type);
+
+  // Returns true if the given plugin is allowed to be used by a page with
+  // the given URL.
+  bool PrivatePluginAllowedForURL(const FilePath& plugin_path, const GURL& url);
 
   // The UI thread's message loop
   MessageLoop* main_message_loop() { return main_message_loop_; }
@@ -113,9 +122,22 @@ class PluginService
   virtual void Observe(NotificationType type, const NotificationSource& source,
                        const NotificationDetails& details);
 
-  // Returns true if the given plugin is allowed to be used by a page with
-  // the given URL.
-  bool PluginAllowedForURL(const FilePath& plugin_path, const GURL& url);
+  void RegisterPepperPlugins();
+
+  // Helper so we can do the plugin lookup on the FILE thread.
+  void GetAllowedPluginForOpenChannelToPlugin(
+      ResourceMessageFilter* renderer_msg_filter,
+      const GURL& url,
+      const std::string& mime_type,
+      IPC::Message* reply_msg);
+
+  // Helper so we can finish opening the channel after looking up the
+  // plugin.
+  void FinishOpenChannelToPlugin(
+      ResourceMessageFilter* renderer_msg_filter,
+      const std::string& mime_type,
+      const FilePath& plugin_path,
+      IPC::Message* reply_msg);
 
   // mapping between plugin path and PluginProcessHost
   typedef base::hash_map<FilePath, PluginProcessHost*> PluginMap;
@@ -131,7 +153,7 @@ class PluginService
   FilePath chrome_plugin_data_dir_;
 
   // The browser's UI locale.
-  const std::wstring ui_locale_;
+  const std::string ui_locale_;
 
   // Map of plugin paths to the origin they are restricted to.  Used for
   // extension-only plugins.
@@ -139,6 +161,10 @@ class PluginService
   PrivatePluginMap private_plugins_;
 
   NotificationRegistrar registrar_;
+
+#if defined(OS_CHROMEOS)
+  scoped_refptr<chromeos::PluginSelectionPolicy> plugin_selection_policy_;
+#endif
 
 #if defined(OS_WIN)
   // Registry keys for getting notifications when new plugins are installed.
@@ -155,5 +181,7 @@ class PluginService
 
   DISALLOW_COPY_AND_ASSIGN(PluginService);
 };
+
+DISABLE_RUNNABLE_METHOD_REFCOUNT(PluginService);
 
 #endif  // CHROME_BROWSER_PLUGIN_SERVICE_H_

@@ -5,58 +5,17 @@
 #include "chrome/browser/views/frame/browser_frame_gtk.h"
 
 #include "base/logging.h"
-#include "chrome/browser/browser_theme_provider.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/status_bubble.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/browser/views/frame/app_panel_browser_frame_view.h"
-#include "chrome/browser/views/frame/browser_extender.h"
 #include "chrome/browser/views/frame/browser_root_view.h"
 #include "chrome/browser/views/frame/browser_view.h"
 #include "chrome/browser/views/frame/opaque_browser_frame_view.h"
+#include "chrome/browser/views/frame/popup_non_client_frame_view.h"
 #include "gfx/font.h"
 #include "views/widget/root_view.h"
 #include "views/window/hit_test.h"
-
-namespace {
-
-// BrowserNonClientFrameView implementation for popups. We let the window
-// manager implementation render the decorations for popups, so this draws
-// nothing.
-class PopupNonClientFrameView : public BrowserNonClientFrameView {
- public:
-  PopupNonClientFrameView() {
-  }
-
-  // NonClientFrameView:
-  virtual gfx::Rect GetBoundsForClientView() const {
-    return gfx::Rect(0, 0, width(), height());
-  }
-  virtual bool AlwaysUseCustomFrame() const { return false; }
-  virtual bool AlwaysUseNativeFrame() const { return true; }
-  virtual gfx::Rect GetWindowBoundsForClientBounds(
-      const gfx::Rect& client_bounds) const {
-    return client_bounds;
-  }
-  virtual int NonClientHitTest(const gfx::Point& point) {
-    return bounds().Contains(point) ? HTCLIENT : HTNOWHERE;
-  }
-  virtual void GetWindowMask(const gfx::Size& size,
-                             gfx::Path* window_mask) {}
-  virtual void EnableClose(bool enable) {}
-  virtual void ResetWindowControls() {}
-
-  // BrowserNonClientFrameView:
-  virtual gfx::Rect GetBoundsForTabStrip(BaseTabStrip* tabstrip) const {
-    return gfx::Rect(0, 0, width(), tabstrip->GetPreferredHeight());
-  }
-  virtual void UpdateThrobber(bool running) {}
-  virtual void PaintTabStripShadow(gfx::Canvas* canvas) {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PopupNonClientFrameView);
-};
-
-}
 
 #if !defined(OS_CHROMEOS)
 // static (Factory method.)
@@ -88,7 +47,7 @@ BrowserFrameGtk::~BrowserFrameGtk() {
 
 void BrowserFrameGtk::Init() {
   if (browser_frame_view_ == NULL) {
-    if (browser_view_->browser()->type() == Browser::TYPE_POPUP)
+    if (browser_view_->browser()->type() & Browser::TYPE_POPUP)
       browser_frame_view_ = new PopupNonClientFrameView();
     else
       browser_frame_view_ = new OpaqueBrowserFrameView(this, browser_view_);
@@ -102,9 +61,6 @@ views::Window* BrowserFrameGtk::GetWindow() {
   return this;
 }
 
-void BrowserFrameGtk::TabStripCreated(BaseTabStrip* tabstrip) {
-}
-
 int BrowserFrameGtk::GetMinimizeButtonOffset() const {
   NOTIMPLEMENTED();
   return 0;
@@ -112,6 +68,10 @@ int BrowserFrameGtk::GetMinimizeButtonOffset() const {
 
 gfx::Rect BrowserFrameGtk::GetBoundsForTabStrip(BaseTabStrip* tabstrip) const {
   return browser_frame_view_->GetBoundsForTabStrip(tabstrip);
+}
+
+int BrowserFrameGtk::GetHorizontalTabStripVerticalOffset(bool restored) const {
+  return browser_frame_view_->GetHorizontalTabStripVerticalOffset(restored);
 }
 
 void BrowserFrameGtk::UpdateThrobber(bool running) {
@@ -136,7 +96,12 @@ views::View* BrowserFrameGtk::GetFrameView() const {
   return browser_frame_view_;
 }
 
-void BrowserFrameGtk::PaintTabStripShadow(gfx::Canvas* canvas) {
+void BrowserFrameGtk::TabStripDisplayModeChanged() {
+  if (GetRootView()->GetChildViewCount() > 0) {
+    // Make sure the child of the root view gets Layout again.
+    GetRootView()->GetChildViewAt(0)->InvalidateLayout();
+  }
+  GetRootView()->Layout();
 }
 
 ThemeProvider* BrowserFrameGtk::GetThemeProvider() const {

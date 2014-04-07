@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_NOTIFICATIONS_BALLOON_VIEW_BRIDGE_H_
 #define CHROME_BROWSER_COCOA_NOTIFICATIONS_BALLOON_VIEW_BRIDGE_H_
+#pragma once
 
 #include "base/scoped_nsobject.h"
 #import "chrome/browser/cocoa/notifications/balloon_controller.h"
@@ -19,7 +20,7 @@ class BalloonViewBridge : public BalloonView {
 
   // BalloonView interface.
   virtual void Show(Balloon* balloon);
-  virtual void Update() {}
+  virtual void Update();
   virtual void RepositionToBalloon();
   virtual void Close(bool by_user);
   virtual gfx::Size GetSize() const;

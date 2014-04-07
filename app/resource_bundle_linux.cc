@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 #include <gtk/gtk.h>
 
 #include "app/app_paths.h"
-#include "app/l10n_util.h"
 #include "base/base_paths.h"
-#include "base/data_pack.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/i18n/rtl.h"
+#include "base/lock.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/string_piece.h"
@@ -67,10 +66,8 @@ void ResourceBundle::FreeGdkPixBufs() {
 // static
 FilePath ResourceBundle::GetResourcesFilePath() {
   FilePath resources_file_path;
-  PathService::Get(base::DIR_EXE, &resources_file_path);
-  if (resources_file_path.empty())
-    return resources_file_path;
-  return resources_file_path.Append(FILE_PATH_LITERAL("chrome.pak"));
+  PathService::Get(app::FILE_RESOURCES_PAK, &resources_file_path);
+  return resources_file_path;
 }
 
 // static
@@ -93,7 +90,7 @@ GdkPixbuf* ResourceBundle::GetPixbufImpl(int resource_id, bool rtl_enabled) {
 
   // Check to see if we already have the pixbuf in the cache.
   {
-    AutoLock lock_scope(lock_);
+    AutoLock lock_scope(*lock_);
     GdkPixbufMap::const_iterator found = gdk_pixbufs_.find(key);
     if (found != gdk_pixbufs_.end())
       return found->second;
@@ -105,7 +102,7 @@ GdkPixbuf* ResourceBundle::GetPixbufImpl(int resource_id, bool rtl_enabled) {
 
   // We loaded successfully.  Cache the pixbuf.
   if (pixbuf) {
-    AutoLock lock_scope(lock_);
+    AutoLock lock_scope(*lock_);
 
     // Another thread raced us, and has already cached the pixbuf.
     if (gdk_pixbufs_.count(key)) {
@@ -122,7 +119,7 @@ GdkPixbuf* ResourceBundle::GetPixbufImpl(int resource_id, bool rtl_enabled) {
     LOG(WARNING) << "Unable to load GdkPixbuf with id " << resource_id;
     NOTREACHED();  // Want to assert in debug mode.
 
-    AutoLock lock_scope(lock_);  // Guard empty_bitmap initialization.
+    AutoLock lock_scope(*lock_);  // Guard empty_bitmap initialization.
 
     static GdkPixbuf* empty_bitmap = NULL;
     if (!empty_bitmap) {

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_PLUGIN_PROCESS_HOST_H_
 #define CHROME_BROWSER_PLUGIN_PROCESS_HOST_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -13,14 +14,16 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/scoped_ptr.h"
-#include "base/task.h"
-#include "chrome/browser/child_process_host.h"
+#include "base/ref_counted.h"
+#include "chrome/browser/browser_child_process_host.h"
 #include "chrome/browser/net/resolve_proxy_msg_helper.h"
 #include "chrome/browser/renderer_host/resource_message_filter.h"
-#include "gfx/native_widget_types.h"
 #include "ipc/ipc_channel_handle.h"
 #include "webkit/glue/plugins/webplugininfo.h"
+
+namespace gfx {
+class Rect;
+}
 
 class URLRequestContext;
 struct ViewHostMsg_Resource_Request;
@@ -34,7 +37,7 @@ class GURL;
 // starting the plugin process when a plugin is created that doesn't already
 // have a process.  After that, most of the communication is directly between
 // the renderer and plugin processes.
-class PluginProcessHost : public ChildProcessHost,
+class PluginProcessHost : public BrowserChildProcessHost,
                           public ResolveProxyMsgHelper::Delegate {
  public:
   PluginProcessHost();
@@ -42,7 +45,7 @@ class PluginProcessHost : public ChildProcessHost,
 
   // Initialize the new plugin process, returning true on success. This must
   // be called before the object can be used.
-  bool Init(const WebPluginInfo& info, const std::wstring& locale);
+  bool Init(const WebPluginInfo& info, const std::string& locale);
 
   // Force the plugin process to shutdown (cleanly).
   void ForceShutdown();
@@ -131,7 +134,6 @@ class PluginProcessHost : public ChildProcessHost,
   void OnPluginShowWindow(uint32 window_id, gfx::Rect window_rect,
                           bool modal);
   void OnPluginHideWindow(uint32 window_id, gfx::Rect window_rect);
-  void OnPluginReceivedFocus(int process_id, int instance_id);
   void OnPluginSetCursorVisibility(bool visible);
 #endif
 

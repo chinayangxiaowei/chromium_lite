@@ -5,6 +5,9 @@
 {
   'variables': {
     'chromium_code': 1,
+    'grit_info_cmd': ['python', '../tools/grit/grit_info.py'],
+    'grit_cmd': ['python', '../tools/grit/grit.py'],    
+    'grit_out_dir': '<(SHARED_INTERMEDIATE_DIR)/gfx',
   },
   'targets': [
     {
@@ -13,10 +16,13 @@
       'msvs_guid': 'C8BD2821-EAE5-4AC6-A0E4-F82CAC2956CC',
       'dependencies': [
         'gfx',
+        'gfx_resources',
+        '../base/base.gyp:test_support_base',
         '../skia/skia.gyp:skia',
         '../testing/gtest.gyp:gtest',
       ],
       'sources': [
+        'blit_unittest.cc',
         'codec/jpeg_codec_unittest.cc',
         'codec/png_codec_unittest.cc',
         'color_utils_unittest.cc',
@@ -26,6 +32,7 @@
         'run_all_unittests.cc',
         'skbitmap_operations_unittest.cc',
         'test_suite.h',
+        '<(SHARED_INTERMEDIATE_DIR)/gfx/gfx_resources.rc',
       ],
       'include_dirs': [
         '..',
@@ -33,9 +40,26 @@
       'conditions': [
         ['OS=="win"', {
           'sources': [
+            'canvas_direct2d_unittest.cc',
             'icon_util_unittest.cc',
             'native_theme_win_unittest.cc',
           ],
+          'include_dirs': [
+            '..',
+            '<(DEPTH)/third_party/wtl/include',
+          ],
+          'msvs_settings': {
+            'VCLinkerTool': {
+              'DelayLoadDLLs': [
+                'd2d1.dll',
+                'd3d10_1.dll',
+              ],
+              'AdditionalDependencies': [
+                'd2d1.lib',
+                'd3d10_1.lib',
+              ],
+            },
+          }
         }],
         ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
           'dependencies': [
@@ -58,15 +82,19 @@
         '../third_party/libpng/libpng.gyp:libpng',
         '../third_party/sqlite/sqlite.gyp:sqlite',
         '../third_party/zlib/zlib.gyp:zlib',
+        'gfx_resources',
       ],
       'sources': [
         'blit.cc',
         'blit.h',
-        'canvas.cc',
+        'brush.h',
         'canvas.h',
-        'canvas_linux.cc',
-        'canvas_mac.mm',
-        'canvas_win.cc',
+        'canvas_skia.h',
+        'canvas_skia.cc',
+        'canvas_skia_linux.cc',
+        'canvas_skia_mac.mm',
+        'canvas_skia_paint.h',
+        'canvas_skia_win.cc',
         'codec/jpeg_codec.cc',
         'codec/jpeg_codec.h',
         'codec/png_codec.cc',
@@ -75,10 +103,7 @@
         'color_utils.h',
         'favicon_size.h',
         'font.h',
-        'font_gtk.cc',
-        'font_mac.mm',
-        'font_skia.cc',
-        'font_win.cc',
+        'font.cc',
         'gfx_paths.cc',
         'gfx_paths.h',
         'insets.cc',
@@ -88,6 +113,13 @@
         'path.h',
         'path_gtk.cc',
         'path_win.cc',
+        'platform_font.h',
+        'platform_font_gtk.h',
+        'platform_font_gtk.cc',
+        'platform_font_mac.h',
+        'platform_font_mac.mm',
+        'platform_font_win.h',
+        'platform_font_win.cc',
         'point.cc',
         'point.h',
         'rect.cc',
@@ -106,30 +138,85 @@
       'conditions': [
         ['OS=="win"', {
           'sources': [
+            'canvas_direct2d.cc',
+            'canvas_direct2d.h',
             'gdi_util.cc',
             'gdi_util.h',
             'icon_util.cc',
             'icon_util.h',
             'native_theme_win.cc',
             'native_theme_win.h',
+            'window_impl.cc',
+            'window_impl.h',
+            'win_util.cc',
+            'win_util.h',
           ],
+          'include_dirs': [
+            '..',
+            '<(DEPTH)/third_party/wtl/include',
+          ],          
         }],
         ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
           'dependencies': [
             # font_gtk.cc uses fontconfig.
             # TODO(evanm): I think this is wrong; it should just use GTK.
             '../build/linux/system.gyp:fontconfig',
+            '../build/linux/system.gyp:gtk',
           ],
           'sources': [
             'gtk_native_view_id_manager.cc',
             'gtk_native_view_id_manager.h',
             'gtk_util.cc',
             'gtk_util.h',
+            'native_theme_linux.cc',
+            'native_theme_linux.h',
             'native_widget_types_gtk.cc',
           ],
         }],
       ],
-    },    
+    },
+    {
+      # theme_resources also generates a .cc file, so it can't use the rules above.
+      'target_name': 'gfx_resources',
+      'type': 'none',
+      'msvs_guid' : '5738AE53-E919-4987-A2EF-15FDBD8F90F6',
+      'actions': [
+        {
+          'action_name': 'gfx_resources',
+          'variables': {
+            'input_path': 'gfx_resources.grd',
+          },
+          'inputs': [
+            '<!@(<(grit_info_cmd) --inputs <(input_path))',
+          ],
+          'outputs': [
+            '<!@(<(grit_info_cmd) --outputs \'<(grit_out_dir)\' <(input_path))',
+          ],
+          'action': [
+            '<@(grit_cmd)',
+            '-i', '<(input_path)', 'build',
+            '-o', '<(grit_out_dir)',
+          ],
+          'conditions': [
+            ['use_titlecase_in_grd_files==1', {
+              'action': ['-D', 'use_titlecase'],
+            }],
+          ],
+          'message': 'Generating resources from <(input_path)',
+        },
+      ],
+      'direct_dependent_settings': {
+        'include_dirs': [
+          '<(grit_out_dir)',
+        ],
+      },
+      'conditions': [
+        ['OS=="win"', {
+          'dependencies': ['../build/win/system.gyp:cygwin'],
+        }],
+      ],
+    },
+    
   ],
 }
 

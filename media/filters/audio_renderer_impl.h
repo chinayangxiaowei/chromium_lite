@@ -18,7 +18,7 @@
 #include <deque>
 
 #include "base/lock.h"
-#include "media/audio/audio_output.h"
+#include "media/audio/audio_io.h"
 #include "media/base/buffers.h"
 #include "media/base/factory.h"
 #include "media/base/filters.h"
@@ -43,8 +43,8 @@ class AudioRendererImpl : public AudioRendererBase,
   virtual void SetVolume(float volume);
 
   // AudioSourceCallback implementation.
-  virtual uint32 OnMoreData(AudioOutputStream* stream, void* dest,
-                            uint32 len, uint32 pending_bytes);
+  virtual uint32 OnMoreData(AudioOutputStream* stream, uint8* dest,
+                            uint32 len, AudioBuffersState buffers_state);
   virtual void OnClose(AudioOutputStream* stream);
   virtual void OnError(AudioOutputStream* stream, int code);
 

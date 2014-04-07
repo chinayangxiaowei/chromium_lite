@@ -7,8 +7,9 @@
 #include "base/hash_tables.h"
 #include "base/histogram.h"
 #include "chrome/browser/chrome_thread.h"
-#include "chrome/browser/net/url_request_context_getter.h"
 #include "chrome/browser/profile.h"
+#include "chrome/common/net/url_request_context_getter.h"
+#include "net/base/host_resolver.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/websockets/websocket.h"
@@ -185,7 +186,7 @@ static Histogram* GetTimesHistogramForConfig(
   if (found != g_histogram_table->end()) {
     return found->second;
   }
-  Histogram* counter = Histogram::FactoryGet(
+  Histogram* counter = Histogram::FactoryTimeGet(
       counter_name, min, max, bucket_count,
       Histogram::kUmaTargetedHistogramFlag);
   counter->AddRef();  // Released in ReleaseHistogram().
@@ -622,8 +623,8 @@ int WebSocketExperimentTask::DoWebSocketCloseComplete(int result) {
 }
 
 void WebSocketExperimentTask::SetTimeout(int64 deadline_ms) {
-  bool r = ChromeThread::PostDelayedTask(
-      ChromeThread::IO,
+  bool r = BrowserThread::PostDelayedTask(
+      BrowserThread::IO,
       FROM_HERE,
       method_factory_.NewRunnableMethod(&WebSocketExperimentTask::OnTimedOut),
       deadline_ms);

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_DOM_UI_DOM_UI_H_
 #define CHROME_BROWSER_DOM_UI_DOM_UI_H_
+#pragma once
 
 #include <map>
 #include <string>
@@ -16,11 +17,13 @@
 class DictionaryValue;
 class DOMMessageHandler;
 class GURL;
+class ListValue;
 class Profile;
 class RenderViewHost;
-class Value;
 class TabContents;
 class ThemeProvider;
+class Value;
+struct ViewHostMsg_DomMessage_Params;
 
 // A DOMUI sets up the datasources and message handlers for a given HTML-based
 // UI. It is contained by a DOMUIManager.
@@ -40,14 +43,10 @@ class DOMUI {
   virtual void RenderViewReused(RenderViewHost* render_view_host) {}
 
   // Called from TabContents.
-  virtual void ProcessDOMUIMessage(const std::string& message,
-                                   const Value* content,
-                                   const GURL& source_url,
-                                   int request_id,
-                                   bool has_callback);
+  virtual void ProcessDOMUIMessage(const ViewHostMsg_DomMessage_Params& params);
 
   // Used by DOMMessageHandlers.
-  typedef Callback1<const Value*>::Type MessageCallback;
+  typedef Callback1<const ListValue*>::Type MessageCallback;
   void RegisterMessageCallback(const std::string& message,
                                MessageCallback* callback);
 
@@ -60,12 +59,6 @@ class DOMUI {
   // overriding the user's preference.
   bool force_bookmark_bar_visible() const {
     return force_bookmark_bar_visible_;
-  }
-
-  // Returns true if the extension shelf should be forced to being visible
-  // (if it contains any items), overriding the user's preference.
-  bool force_extension_shelf_visible() const {
-    return force_extension_shelf_visible_;
   }
 
   // Returns true if the location bar should be focused by default rather than
@@ -102,19 +95,34 @@ class DOMUI {
   // the renderer.  This is asynchronous; there's no way to get the result
   // of the call, and should be thought of more like sending a message to
   // the page.
-  // There are two function variants for one-arg and two-arg calls.
+  // There are variants for calls with more arguments.
   void CallJavascriptFunction(const std::wstring& function_name);
   void CallJavascriptFunction(const std::wstring& function_name,
                               const Value& arg);
   void CallJavascriptFunction(const std::wstring& function_name,
                               const Value& arg1,
                               const Value& arg2);
+  void CallJavascriptFunction(const std::wstring& function_name,
+                              const Value& arg1,
+                              const Value& arg2,
+                              const Value& arg3);
+  void CallJavascriptFunction(const std::wstring& function_name,
+                              const Value& arg1,
+                              const Value& arg2,
+                              const Value& arg3,
+                              const Value& arg4);
+  void CallJavascriptFunction(const std::wstring& function_name,
+                              const std::vector<const Value*>& args);
 
   ThemeProvider* GetThemeProvider() const;
 
-  TabContents* tab_contents() const { return tab_contents_; }
+  // May be overridden by DOMUI's which do not have a tab contents.
+  virtual Profile* GetProfile() const;
 
-  Profile* GetProfile();
+  // May be overridden by DOMUI's which do not have a tab contents.
+  virtual RenderViewHost* GetRenderViewHost() const;
+
+  TabContents* tab_contents() const { return tab_contents_; }
 
  protected:
   void AddMessageHandler(DOMMessageHandler* handler);
@@ -123,7 +131,6 @@ class DOMUI {
   // bool options default to false. See the public getters for more information.
   bool hide_favicon_;
   bool force_bookmark_bar_visible_;
-  bool force_extension_shelf_visible_;
   bool focus_location_bar_by_default_;
   bool should_hide_url_;
   string16 overridden_title_;  // Defaults to empty string.
@@ -131,15 +138,15 @@ class DOMUI {
   int bindings_;  // The bindings from BindingsPolicy that should be enabled for
                   // this page.
 
- private:
-  // Execute a string of raw Javascript on the page.
-  void ExecuteJavascript(const std::wstring& javascript);
+  // The DOMMessageHandlers we own.
+  std::vector<DOMMessageHandler*> handlers_;
 
   // Non-owning pointer to the TabContents this DOMUI is associated with.
   TabContents* tab_contents_;
 
-  // The DOMMessageHandlers we own.
-  std::vector<DOMMessageHandler*> handlers_;
+ private:
+  // Execute a string of raw Javascript on the page.
+  void ExecuteJavascript(const std::wstring& javascript);
 
   // A map of message name -> message handling callback.
   typedef std::map<std::string, MessageCallback*> MessageCallbackMap;
@@ -160,21 +167,22 @@ class DOMMessageHandler {
   // virtual so that subclasses can do special init work as soon as the dom_ui
   // is provided.  Returns |this| for convenience.
   virtual DOMMessageHandler* Attach(DOMUI* dom_ui);
+
  protected:
   // Adds "url" and "title" keys on incoming dictionary, setting title
   // as the url as a fallback on empty title.
   static void SetURLAndTitle(DictionaryValue* dictionary,
-                             std::wstring title,
+                             string16 title,
                              const GURL& gurl);
 
   // This is where subclasses specify which messages they'd like to handle.
   virtual void RegisterMessages() = 0;
 
-  // Extract an integer value from a Value.
-  bool ExtractIntegerValue(const Value* value, int* out_int);
+  // Extract an integer value from a list Value.
+  bool ExtractIntegerValue(const ListValue* value, int* out_int);
 
-  // Extract a string value from a Value.
-  std::wstring ExtractStringValue(const Value* value);
+  // Extract a string value from a list Value.
+  std::wstring ExtractStringValue(const ListValue* value);
 
   DOMUI* dom_ui_;
 

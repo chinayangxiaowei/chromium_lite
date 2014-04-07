@@ -8,12 +8,12 @@
 
 #ifndef CHROME_COMMON_NOTIFICATION_SERVICE_H_
 #define CHROME_COMMON_NOTIFICATION_SERVICE_H_
+#pragma once
 
 #include <map>
 
 #include "base/observer_list.h"
 #include "chrome/common/notification_details.h"
-#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_source.h"
 #include "chrome/common/notification_type.h"
 
@@ -67,8 +67,8 @@ class NotificationService {
   // Registers a NotificationObserver to be called whenever a matching
   // notification is posted.  Observer is a pointer to an object subclassing
   // NotificationObserver to be notified when an event matching the other two
-  // parameters is posted to this service.  Type is the type of events to
-  // be notified about (or NOTIFY_ALL to receive events of all types).
+  // parameters is posted to this service.  Type is the type of events to be
+  // notified about (or NotificationType::ALL to receive events of all types).
   // Source is a NotificationSource object (created using
   // "Source<classname>(pointer)"), if this observer only wants to
   // receive events from that object, or NotificationService::AllSources()

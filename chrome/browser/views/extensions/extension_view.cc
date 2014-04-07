@@ -12,6 +12,8 @@
 
 #if defined(OS_WIN)
 #include "chrome/browser/renderer_host/render_widget_host_view_win.h"
+#elif defined(TOUCH_UI)
+#include "chrome/browser/renderer_host/render_widget_host_view_views.h"
 #elif defined(OS_LINUX)
 #include "chrome/browser/renderer_host/render_widget_host_view_gtk.h"
 #endif
@@ -100,6 +102,11 @@ void ExtensionView::CreateWidgetHostView() {
   HWND hwnd = view_win->Create(GetWidget()->GetNativeView());
   view_win->ShowWindow(SW_SHOW);
   Attach(hwnd);
+#elif defined(TOUCH_UI)
+  RenderWidgetHostViewViews* view_views =
+      static_cast<RenderWidgetHostViewViews*>(view);
+  view_views->InitAsChild();
+  Attach(view_views->GetNativeView());
 #elif defined(OS_LINUX)
   RenderWidgetHostViewGtk* view_gtk =
       static_cast<RenderWidgetHostViewGtk*>(view);
@@ -120,13 +127,7 @@ void ExtensionView::ShowIfCompletelyLoaded() {
   // We wait to show the ExtensionView until it has loaded, and the view has
   // actually been created. These can happen in different orders.
   if (host_->did_stop_loading()) {
-    // For toolstrips, also wait until our parent has given us a background.
-    if (host_->GetRenderViewType() == ViewType::EXTENSION_TOOLSTRIP &&
-        render_view_host()->view()->background().empty()) {
-      return;
-    }
     SetVisible(true);
-
     UpdatePreferredSize(pending_preferred_size_);
   }
 }
@@ -179,12 +180,12 @@ void ExtensionView::PreferredSizeChanged() {
 bool ExtensionView::SkipDefaultKeyEventProcessing(const views::KeyEvent& e) {
   // Let the tab key event be processed by the renderer (instead of moving the
   // focus to the next focusable view).
-  return (e.GetKeyCode() == base::VKEY_TAB);
+  return (e.GetKeyCode() == app::VKEY_TAB);
 }
 
-void ExtensionView::HandleMouseEvent() {
+void ExtensionView::HandleMouseMove() {
   if (container_)
-    container_->OnExtensionMouseEvent(this);
+    container_->OnExtensionMouseMove(this);
 }
 
 void ExtensionView::HandleMouseLeave() {

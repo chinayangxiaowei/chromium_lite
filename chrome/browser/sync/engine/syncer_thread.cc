@@ -15,15 +15,14 @@
 #include <map>
 #include <queue>
 
-#include "base/dynamic_annotations.h"
-#include "chrome/browser/sync/engine/auth_watcher.h"
+#include "base/rand_util.h"
+#include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "chrome/browser/sync/engine/model_safe_worker.h"
 #include "chrome/browser/sync/engine/net/server_connection_manager.h"
 #include "chrome/browser/sync/engine/syncer.h"
-#include "chrome/browser/sync/notifier/listener/talk_mediator.h"
-#include "chrome/browser/sync/notifier/listener/talk_mediator_impl.h"
-#include "chrome/browser/sync/syncable/directory_manager.h"
+#include "chrome/browser/sync/sessions/session_state.h"
 #include "chrome/common/chrome_switches.h"
+#include "jingle/notifier/listener/notification_constants.h"
 
 using std::priority_queue;
 using std::min;
@@ -31,8 +30,9 @@ using base::Time;
 using base::TimeDelta;
 using base::TimeTicks;
 
-
 namespace browser_sync {
+
+using sessions::SyncSessionSnapshot;
 
 // We use high values here to ensure that failure to receive poll updates from
 // the server doesn't result in rapid-fire polling from the client due to low
@@ -48,6 +48,11 @@ const int SyncerThread::kDefaultLongPollIntervalSeconds = 3600 * 12;
 // is really something we want and make sure it works, if it is.
 const int SyncerThread::kDefaultMaxPollIntervalMs = 30 * 60 * 1000;
 
+// Backoff interval randomization factor.
+static const int kBackoffRandomizationFactor = 2;
+
+const int SyncerThread::kMaxBackoffSeconds = 60 * 60 * 4;  // 4 hours.
+
 void SyncerThread::NudgeSyncer(int milliseconds_from_now, NudgeSource source) {
   AutoLock lock(lock_);
   if (vault_.syncer_ == NULL) {
@@ -57,33 +62,18 @@ void SyncerThread::NudgeSyncer(int milliseconds_from_now, NudgeSource source) {
   NudgeSyncImpl(milliseconds_from_now, source);
 }
 
-SyncerThread::SyncerThread(sessions::SyncSessionContext* context,
-    AllStatus* all_status)
+SyncerThread::SyncerThread(sessions::SyncSessionContext* context)
     : thread_main_started_(false, false),
       thread_("SyncEngine_SyncerThread"),
       vault_field_changed_(&lock_),
-      p2p_authenticated_(false),
-      p2p_subscribed_(false),
       conn_mgr_hookup_(NULL),
-      allstatus_(all_status),
       syncer_short_poll_interval_seconds_(kDefaultShortPollIntervalSeconds),
       syncer_long_poll_interval_seconds_(kDefaultLongPollIntervalSeconds),
       syncer_polling_interval_(kDefaultShortPollIntervalSeconds),
       syncer_max_interval_(kDefaultMaxPollIntervalMs),
-      talk_mediator_hookup_(NULL),
-      directory_manager_hookup_(NULL),
-      syncer_events_(NULL),
       session_context_(context),
       disable_idle_detection_(false) {
   DCHECK(context);
-  syncer_event_relay_channel_.reset(new SyncerEventChannel(SyncerEvent(
-      SyncerEvent::SHUTDOWN_USE_WITH_CARE)));
-
-  if (context->directory_manager()) {
-    directory_manager_hookup_.reset(NewEventListenerHookup(
-        context->directory_manager()->channel(), this,
-            &SyncerThread::HandleDirectoryManagerEvent));
-  }
 
   if (context->connection_manager())
     WatchConnectionManager(context->connection_manager());
@@ -92,11 +82,7 @@ SyncerThread::SyncerThread(sessions::SyncSessionContext* context,
 
 SyncerThread::~SyncerThread() {
   conn_mgr_hookup_.reset();
-  syncer_event_relay_channel_.reset();
-  directory_manager_hookup_.reset();
-  syncer_events_.reset();
   delete vault_.syncer_;
-  talk_mediator_hookup_.reset();
   CHECK(!thread_.IsRunning());
 }
 
@@ -130,6 +116,14 @@ bool SyncerThread::Start() {
 // Stop processing. A max wait of at least 2*server RTT time is recommended.
 // Returns true if we stopped, false otherwise.
 bool SyncerThread::Stop(int max_wait) {
+  RequestSyncerExitAndSetThreadStopConditions();
+
+  // This will join, and finish when ThreadMain terminates.
+  thread_.Stop();
+  return true;
+}
+
+void SyncerThread::RequestSyncerExitAndSetThreadStopConditions() {
   {
     AutoLock lock(lock_);
     // If the thread has been started, then we either already have or are about
@@ -137,7 +131,7 @@ bool SyncerThread::Stop(int max_wait) {
     // it to finish.  If the thread has not been started --and we now own the
     // lock-- then we can early out because the caller has not called Start().
     if (!thread_.IsRunning())
-      return true;
+      return;
 
     LOG(INFO) << "SyncerThread::Stop - setting ThreadMain exit condition to "
               << "true (vault_.stop_syncer_thread_)";
@@ -157,29 +151,55 @@ bool SyncerThread::Stop(int max_wait) {
     // end of ThreadMain.
     vault_field_changed_.Broadcast();
   }
-
-  // This will join, and finish when ThreadMain terminates.
-  thread_.Stop();
-  return true;
 }
 
 bool SyncerThread::RequestPause() {
   AutoLock lock(lock_);
-  if (!thread_.IsRunning())
+  if (vault_.pause_requested_ || vault_.paused_)
     return false;
 
-  vault_.pause_ = true;
-  vault_field_changed_.Broadcast();
+  if (thread_.IsRunning()) {
+    // Set the pause request.  The syncer thread will read this
+    // request, enter the paused state, and send the PAUSED
+    // notification.
+    vault_.pause_requested_ = true;
+    vault_field_changed_.Broadcast();
+    LOG(INFO) << "Pause requested.";
+  } else {
+    // If the thread is not running, go directly into the paused state
+    // and notify.
+    EnterPausedState();
+    LOG(INFO) << "Paused while not running.";
+  }
   return true;
+}
+
+void SyncerThread::Notify(SyncEngineEvent::EventCause cause) {
+  session_context_->NotifyListeners(SyncEngineEvent(cause));
 }
 
 bool SyncerThread::RequestResume() {
   AutoLock lock(lock_);
-  if (!thread_.IsRunning() || !vault_.pause_)
+  // Only valid to request a resume when we are already paused or we
+  // have a pause pending.
+  if (!(vault_.paused_ || vault_.pause_requested_))
     return false;
 
-  vault_.pause_ = false;
-  vault_field_changed_.Broadcast();
+  if (thread_.IsRunning()) {
+    if (vault_.pause_requested_) {
+      // If pause was requested we have not yet paused.  In this case,
+      // the resume cancels the pause request.
+      Notify(SyncEngineEvent::SYNCER_THREAD_RESUMED);
+      LOG(INFO) << "Pending pause canceled by resume.";
+    } else {
+      // Unpause and notify.
+      vault_.paused_ = false;
+      vault_field_changed_.Broadcast();
+    }
+  } else {
+    ExitPausedState();
+    LOG(INFO) << "Resumed while not running.";
+  }
   return true;
 }
 
@@ -208,6 +228,11 @@ bool SyncerThread::IsSyncingCurrentlySilenced() {
   return ret;
 }
 
+void SyncerThread::OnShouldStopSyncingPermanently() {
+  RequestSyncerExitAndSetThreadStopConditions();
+  Notify(SyncEngineEvent::STOP_SYNCING_PERMANENTLY);
+}
+
 void SyncerThread::ThreadMainLoop() {
   // This is called with lock_ acquired.
   lock_.AssertAcquired();
@@ -225,29 +250,33 @@ void SyncerThread::ThreadMainLoop() {
   idle_query_.reset(new IdleQueryLinux());
 #endif
 
+  if (vault_.syncer_ == NULL) {
+    LOG(INFO) << "Syncer thread waiting for database initialization.";
+    while (vault_.syncer_ == NULL && !vault_.stop_syncer_thread_)
+      vault_field_changed_.Wait();
+    LOG_IF(INFO, !(vault_.syncer_ == NULL))
+        << "Syncer was found after DB started.";
+  }
+
   while (!vault_.stop_syncer_thread_) {
     // The Wait()s in these conditionals using |vault_| are not TimedWait()s (as
     // below) because we cannot poll until these conditions are met, so we wait
     // indefinitely.
-    if (!vault_.connected_) {
-      LOG(INFO) << "Syncer thread waiting for connection.";
-      while (!vault_.connected_ && !vault_.stop_syncer_thread_)
-        vault_field_changed_.Wait();
-      LOG_IF(INFO, vault_.connected_) << "Syncer thread found connection.";
+
+    // If we are not connected, enter WaitUntilConnectedOrQuit() which
+    // will return only when the network is connected or a quit is
+    // requested.  Note that it is possible to exit
+    // WaitUntilConnectedOrQuit() in the paused state which will be
+    // handled by the next statement.
+    if (!vault_.connected_ && !initial_sync_for_thread) {
+      WaitUntilConnectedOrQuit();
       continue;
     }
 
-    if (vault_.syncer_ == NULL) {
-      LOG(INFO) << "Syncer thread waiting for database initialization.";
-      while (vault_.syncer_ == NULL && !vault_.stop_syncer_thread_)
-        vault_field_changed_.Wait();
-      LOG_IF(INFO, !(vault_.syncer_ == NULL))
-          << "Syncer was found after DB started.";
-      continue;
-    }
-
-    // Check if a pause was requested.
-    if (vault_.pause_) {
+    // Check if we should be paused or if a pause was requested.  Note
+    // that we don't check initial_sync_for_thread here since we want
+    // the pause to happen regardless if it is the initial sync or not.
+    if (vault_.pause_requested_ || vault_.paused_) {
       PauseUntilResumedOrQuit();
       continue;
     }
@@ -258,10 +287,10 @@ void SyncerThread::ThreadMainLoop() {
         WaitInterval::THROTTLED;
     // If we are throttled, we must wait.  Otherwise, wait until either the next
     // nudge (if one exists) or the poll interval.
-    const TimeTicks end_wait = throttled ? next_poll :
-        !vault_.nudge_queue_.empty() &&
-        vault_.nudge_queue_.top().first < next_poll ?
-        vault_.nudge_queue_.top().first : next_poll;
+    TimeTicks end_wait = next_poll;
+    if (!throttled && !vault_.pending_nudge_time_.is_null()) {
+      end_wait = std::min(end_wait, vault_.pending_nudge_time_);
+    }
     LOG(INFO) << "end_wait is " << end_wait.ToInternalValue();
     LOG(INFO) << "next_poll is " << next_poll.ToInternalValue();
 
@@ -296,7 +325,6 @@ void SyncerThread::ThreadMainLoop() {
 
     LOG(INFO) << "Updating the next polling time after SyncMain";
     vault_.current_wait_interval_ = CalculatePollingWaitTime(
-        allstatus_->status(),
         static_cast<int>(vault_.current_wait_interval_.poll_delta.InSeconds()),
         &user_idle_milliseconds, &continue_sync_cycle, nudged);
   }
@@ -305,29 +333,73 @@ void SyncerThread::ThreadMainLoop() {
 #endif
 }
 
+void SyncerThread::WaitUntilConnectedOrQuit() {
+  LOG(INFO) << "Syncer thread waiting for connection.";
+  Notify(SyncEngineEvent::SYNCER_THREAD_WAITING_FOR_CONNECTION);
+
+  bool is_paused = vault_.paused_;
+
+  while (!vault_.connected_ && !vault_.stop_syncer_thread_) {
+    if (!is_paused && vault_.pause_requested_) {
+      // If we get a pause request while waiting for a connection,
+      // enter the paused state.
+      EnterPausedState();
+      is_paused = true;
+      LOG(INFO) << "Syncer thread entering disconnected pause.";
+    }
+
+    if (is_paused && !vault_.paused_) {
+      ExitPausedState();
+      is_paused = false;
+      LOG(INFO) << "Syncer thread exiting disconnected pause.";
+    }
+
+    vault_field_changed_.Wait();
+  }
+
+  if (!vault_.stop_syncer_thread_) {
+    Notify(SyncEngineEvent::SYNCER_THREAD_CONNECTED);
+    LOG(INFO) << "Syncer thread found connection.";
+  }
+}
+
 void SyncerThread::PauseUntilResumedOrQuit() {
   LOG(INFO) << "Syncer thread entering pause.";
-  SyncerEvent event(SyncerEvent::PAUSED);
-  relay_channel()->NotifyListeners(event);
+  // If pause was requested (rather than already being paused), send
+  // the PAUSED notification.
+  if (vault_.pause_requested_)
+    EnterPausedState();
 
   // Thread will get stuck here until either a resume is requested
   // or shutdown is started.
-  while (vault_.pause_ && !vault_.stop_syncer_thread_)
+  while (vault_.paused_ && !vault_.stop_syncer_thread_)
     vault_field_changed_.Wait();
 
   // Notify that we have resumed if we are not shutting down.
-  if (!vault_.stop_syncer_thread_) {
-    SyncerEvent event(SyncerEvent::RESUMED);
-    relay_channel()->NotifyListeners(event);
-  }
+  if (!vault_.stop_syncer_thread_)
+    ExitPausedState();
+
   LOG(INFO) << "Syncer thread exiting pause.";
+}
+
+void SyncerThread::EnterPausedState() {
+  lock_.AssertAcquired();
+  vault_.pause_requested_ = false;
+  vault_.paused_ = true;
+  vault_field_changed_.Broadcast();
+  Notify(SyncEngineEvent::SYNCER_THREAD_PAUSED);
+}
+
+void SyncerThread::ExitPausedState() {
+  lock_.AssertAcquired();
+  vault_.paused_ = false;
+  vault_field_changed_.Broadcast();
+  Notify(SyncEngineEvent::SYNCER_THREAD_RESUMED);
 }
 
 // We check how long the user's been idle and sync less often if the machine is
 // not in use. The aim is to reduce server load.
-// TODO(timsteele): Should use Time(Delta).
 SyncerThread::WaitInterval SyncerThread::CalculatePollingWaitTime(
-    const AllStatus::Status& status,
     int last_poll_wait,  // Time in seconds.
     int* user_idle_milliseconds,
     bool* continue_sync_cycle,
@@ -346,15 +418,16 @@ SyncerThread::WaitInterval SyncerThread::CalculatePollingWaitTime(
   bool is_continuing_sync_cyle = *continue_sync_cycle;
   *continue_sync_cycle = false;
 
-  // Determine if the syncer has unfinished work to do from allstatus_.
-  const bool syncer_has_work_to_do =
-    status.updates_available > status.updates_received
-    || status.unsynced_count > 0;
+  // Determine if the syncer has unfinished work to do.
+  SyncSessionSnapshot* snapshot = session_context_->previous_session_snapshot();
+  const bool syncer_has_work_to_do = snapshot &&
+      (snapshot->num_server_changes_remaining > snapshot->max_local_timestamp
+          || snapshot->unsynced_count > 0);
   LOG(INFO) << "syncer_has_work_to_do is " << syncer_has_work_to_do;
 
   // First calculate the expected wait time, figuring in any backoff because of
   // user idle time.  next_wait is in seconds
-  syncer_polling_interval_ = (!status.notifications_enabled) ?
+  syncer_polling_interval_ = (!session_context_->notifications_enabled()) ?
       syncer_short_poll_interval_seconds_ :
       syncer_long_poll_interval_seconds_;
   int default_next_wait = syncer_polling_interval_;
@@ -374,15 +447,15 @@ SyncerThread::WaitInterval SyncerThread::CalculatePollingWaitTime(
       } else {
         // We weren't nudged, or we were in a NORMAL wait interval until now.
         return_interval.poll_delta = TimeDelta::FromSeconds(
-            AllStatus::GetRecommendedDelaySeconds(last_poll_wait));
+            GetRecommendedDelaySeconds(last_poll_wait));
       }
     } else {
       // No consecutive error.
       return_interval.poll_delta = TimeDelta::FromSeconds(
-           AllStatus::GetRecommendedDelaySeconds(0));
+           GetRecommendedDelaySeconds(0));
     }
     *continue_sync_cycle = true;
-  } else if (!status.notifications_enabled) {
+  } else if (!session_context_->notifications_enabled()) {
     // Ensure that we start exponential backoff from our base polling
     // interval when we are not continuing a sync cycle.
     last_poll_wait = std::max(last_poll_wait, syncer_polling_interval_);
@@ -413,6 +486,7 @@ void SyncerThread::ThreadMain() {
   thread_main_started_.Signal();
   ThreadMainLoop();
   LOG(INFO) << "Syncer thread ThreadMain is done.";
+  Notify(SyncEngineEvent::SYNCER_THREAD_EXITING);
 }
 
 void SyncerThread::SyncMain(Syncer* syncer) {
@@ -441,13 +515,17 @@ bool SyncerThread::UpdateNudgeSource(bool was_throttled,
   }
   // Update the nudge source if a new nudge has come through during the
   // previous sync cycle.
-  while (!vault_.nudge_queue_.empty() &&
-         TimeTicks::Now() >= vault_.nudge_queue_.top().first) {
+  if (!vault_.pending_nudge_time_.is_null()) {
     if (!was_throttled && !nudged) {
-      nudge_source = vault_.nudge_queue_.top().second;
+      nudge_source = vault_.pending_nudge_source_;
       nudged = true;
     }
-    vault_.nudge_queue_.pop();
+    LOG(INFO) << "Clearing pending nudge from "
+              << vault_.pending_nudge_source_
+              << " at tick "
+              << vault_.pending_nudge_time_.ToInternalValue();
+    vault_.pending_nudge_source_ = kUnknown;
+    vault_.pending_nudge_time_ = base::TimeTicks();
   }
   SetUpdatesSource(nudged, nudge_source, initial_sync);
   return nudged;
@@ -473,6 +551,9 @@ void SyncerThread::SetUpdatesSource(bool nudged, NudgeSource nudge_source,
       case kContinuation:
         updates_source = sync_pb::GetUpdatesCallerInfo::SYNC_CYCLE_CONTINUATION;
         break;
+      case kClearPrivateData:
+        updates_source = sync_pb::GetUpdatesCallerInfo::CLEAR_PRIVATE_DATA;
+        break;
       case kUnknown:
       default:
         updates_source = sync_pb::GetUpdatesCallerInfo::UNKNOWN;
@@ -482,32 +563,15 @@ void SyncerThread::SetUpdatesSource(bool nudged, NudgeSource nudge_source,
   vault_.syncer_->set_updates_source(updates_source);
 }
 
-void SyncerThread::HandleSyncerEvent(const SyncerEvent& event) {
+void SyncerThread::CreateSyncer(const std::string& dirname) {
   AutoLock lock(lock_);
-  relay_channel()->NotifyListeners(event);
-  if (SyncerEvent::REQUEST_SYNC_NUDGE != event.what_happened) {
-    return;
-  }
-  NudgeSyncImpl(event.nudge_delay_milliseconds, kUnknown);
-}
-
-void SyncerThread::HandleDirectoryManagerEvent(
-    const syncable::DirectoryManagerEvent& event) {
-  LOG(INFO) << "Handling a directory manager event";
-  if (syncable::DirectoryManagerEvent::OPENED == event.what_happened) {
-    AutoLock lock(lock_);
-    LOG(INFO) << "Syncer starting up for: " << event.dirname;
-    // The underlying database structure is ready, and we should create
-    // the syncer.
-    CHECK(vault_.syncer_ == NULL);
-    session_context_->set_account_name(event.dirname);
-    vault_.syncer_ = new Syncer(session_context_.get());
-
-    syncer_events_.reset(NewEventListenerHookup(
-        session_context_->syncer_event_channel(), this,
-        &SyncerThread::HandleSyncerEvent));
-    vault_field_changed_.Broadcast();
-  }
+  LOG(INFO) << "Creating syncer up for: " << dirname;
+  // The underlying database structure is ready, and we should create
+  // the syncer.
+  CHECK(vault_.syncer_ == NULL);
+  session_context_->set_account_name(dirname);
+  vault_.syncer_ = new Syncer(session_context_.get());
+  vault_field_changed_.Broadcast();
 }
 
 // Sets |*connected| to false if it is currently true but |code| suggests that
@@ -555,8 +619,25 @@ void SyncerThread::HandleServerConnectionEvent(
   }
 }
 
-SyncerEventChannel* SyncerThread::relay_channel() {
-  return syncer_event_relay_channel_.get();
+int SyncerThread::GetRecommendedDelaySeconds(int base_delay_seconds) {
+  if (base_delay_seconds >= kMaxBackoffSeconds)
+    return kMaxBackoffSeconds;
+
+  // This calculates approx. base_delay_seconds * 2 +/- base_delay_seconds / 2
+  int backoff_s =
+      std::max(1, base_delay_seconds * kBackoffRandomizationFactor);
+
+  // Flip a coin to randomize backoff interval by +/- 50%.
+  int rand_sign = base::RandInt(0, 1) * 2 - 1;
+
+  // Truncation is adequate for rounding here.
+  backoff_s = backoff_s +
+      (rand_sign * (base_delay_seconds / kBackoffRandomizationFactor));
+
+  // Cap the backoff interval.
+  backoff_s = std::max(1, std::min(backoff_s, kMaxBackoffSeconds));
+
+  return backoff_s;
 }
 
 // Inputs and return value in milliseconds.
@@ -573,7 +654,7 @@ int SyncerThread::CalculateSyncWaitTime(int last_interval, int user_idle_ms) {
   // If the user has been idle for a while, we'll start decreasing the poll
   // rate.
   if (idle >= kPollBackoffThresholdMultiplier * syncer_polling_interval_ms) {
-    next_wait = std::min(AllStatus::GetRecommendedDelaySeconds(
+    next_wait = std::min(GetRecommendedDelaySeconds(
         last_interval / 1000), syncer_max_interval_ / 1000) * 1000;
   }
 
@@ -595,54 +676,22 @@ void SyncerThread::NudgeSyncImpl(int milliseconds_from_now,
 
   const TimeTicks nudge_time = TimeTicks::Now() +
       TimeDelta::FromMilliseconds(milliseconds_from_now);
-  NudgeObject nudge_object(nudge_time, source);
-  vault_.nudge_queue_.push(nudge_object);
+  if (nudge_time <= vault_.pending_nudge_time_) {
+    LOG(INFO) << "Nudge for source " << source
+              << " dropped due to existing later pending nudge";
+    return;
+  }
+
+  LOG(INFO) << "Replacing pending nudge for source "
+            << source << " at " << nudge_time.ToInternalValue();
+  vault_.pending_nudge_source_ = source;
+  vault_.pending_nudge_time_ = nudge_time;
   vault_field_changed_.Broadcast();
 }
 
-void SyncerThread::WatchTalkMediator(TalkMediator* mediator) {
-  talk_mediator_hookup_.reset(
-      NewEventListenerHookup(
-          mediator->channel(),
-          this,
-          &SyncerThread::HandleTalkMediatorEvent));
-}
-
-void SyncerThread::HandleTalkMediatorEvent(const TalkMediatorEvent& event) {
+void SyncerThread::SetNotificationsEnabled(bool notifications_enabled) {
   AutoLock lock(lock_);
-  switch (event.what_happened) {
-    case TalkMediatorEvent::LOGIN_SUCCEEDED:
-      LOG(INFO) << "P2P: Login succeeded.";
-      p2p_authenticated_ = true;
-      break;
-    case TalkMediatorEvent::LOGOUT_SUCCEEDED:
-      LOG(INFO) << "P2P: Login succeeded.";
-      p2p_authenticated_ = false;
-      break;
-    case TalkMediatorEvent::SUBSCRIPTIONS_ON:
-      LOG(INFO) << "P2P: Subscriptions successfully enabled.";
-      p2p_subscribed_ = true;
-      if (NULL != vault_.syncer_) {
-        LOG(INFO) << "Subscriptions on.  Nudging syncer for initial push.";
-        NudgeSyncImpl(0, kLocal);
-      }
-      break;
-    case TalkMediatorEvent::SUBSCRIPTIONS_OFF:
-      LOG(INFO) << "P2P: Subscriptions are not enabled.";
-      p2p_subscribed_ = false;
-      break;
-    case TalkMediatorEvent::NOTIFICATION_RECEIVED:
-      LOG(INFO) << "P2P: Updates on server, pushing syncer";
-      if (NULL != vault_.syncer_) {
-        NudgeSyncImpl(0, kNotification);
-      }
-      break;
-    default:
-      break;
-  }
-
-  session_context_->set_notifications_enabled(p2p_authenticated_ &&
-                                              p2p_subscribed_);
+  session_context_->set_notifications_enabled(notifications_enabled);
 }
 
 // Returns the amount of time since the user last interacted with the computer,

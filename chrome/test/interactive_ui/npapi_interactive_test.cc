@@ -31,8 +31,8 @@
 // NPAPI interactive UI tests.
 //
 
+#include "app/keyboard_codes.h"
 #include "base/file_path.h"
-#include "base/keyboard_codes.h"
 #include "chrome/browser/net/url_request_mock_http_job.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/automation/window_proxy.h"
@@ -41,6 +41,7 @@
 
 const char kTestCompleteCookie[] = "status";
 const char kTestCompleteSuccess[] = "OK";
+static const FilePath::CharType* kTestDir = FILE_PATH_LITERAL("npapi");
 
 // Tests if a plugin executing a self deleting script in the context of
 // a synchronous mousemove works correctly
@@ -94,8 +95,28 @@ TEST_F(NPAPIVisiblePluginTester, GetURLRequest404Response) {
   automation()->WaitForAppModalDialog();
   scoped_refptr<WindowProxy> window(automation()->GetActiveWindow());
   ASSERT_TRUE(window.get());
-  ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_ESCAPE, 0));
+  ASSERT_TRUE(window->SimulateOSKeyPress(app::VKEY_ESCAPE, 0));
 
   WaitForFinish("geturl_404_response", "1", url, kTestCompleteCookie,
                 kTestCompleteSuccess, action_max_timeout_ms());
+}
+
+// Tests if a plugin executing a self deleting script using Invoke with
+// a modal dialog showing works without crashing or hanging
+// Disabled, flakily exceeds timeout, http://crbug.com/46257.
+TEST_F(NPAPIVisiblePluginTester, DISABLED_SelfDeletePluginInvokeAlert) {
+  const FilePath test_case(
+      FILE_PATH_LITERAL("self_delete_plugin_invoke_alert.html"));
+  GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
+  ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
+
+  // Wait for the alert dialog and then close it.
+  ASSERT_TRUE(automation()->WaitForAppModalDialog());
+  scoped_refptr<WindowProxy> window(automation()->GetActiveWindow());
+  ASSERT_TRUE(window.get());
+  ASSERT_TRUE(window->SimulateOSKeyPress(app::VKEY_ESCAPE, 0));
+
+  WaitForFinish("self_delete_plugin_invoke_alert", "1", url,
+                kTestCompleteCookie, kTestCompleteSuccess,
+                action_max_timeout_ms());
 }

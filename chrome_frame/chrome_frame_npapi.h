@@ -126,13 +126,15 @@ END_MSG_MAP()
   // Initialize string->identifier mapping, public to allow unittesting.
   static void InitializeIdentifiers();
 
+  bool PreProcessContextMenu(HMENU menu);
   bool HandleContextMenuCommand(UINT cmd, const IPC::ContextMenuParams& params);
  protected:
   // Handler for accelerator messages passed on from the hosted chrome
   // instance.
   virtual void OnAcceleratorPressed(int tab_handle, const MSG& accel_message);
   virtual void OnTabbedOut(int tab_handle, bool reverse);
-  virtual void OnOpenURL(int tab_handle, const GURL& url, int open_disposition);
+  virtual void OnOpenURL(int tab_handle, const GURL& url,
+                         const GURL& referrer, int open_disposition);
   virtual void OnLoad(int tab_handle, const GURL& url);
   virtual void OnMessageFromChromeFrame(int tab_handle,
                                         const std::string& message,
@@ -340,6 +342,9 @@ END_MSG_MAP()
   std::string src_;
   // Used to fetch network resources when host network stack is in use.
   NPAPIUrlRequestManager url_fetcher_;
+
+  // Set if we receive a navigation request before initializing Chrome.
+  bool navigate_after_initialization_;
 };
 
 #endif  // CHROME_FRAME_CHROME_FRAME_NPAPI_H_

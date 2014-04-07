@@ -7,6 +7,7 @@
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_model.h"
+#include "chrome/browser/search_engines/template_url_model_observer.h"
 
 NSString* const kSearchEngineListModelChangedNotification =
     @"kSearchEngineListModelChangedNotification";
@@ -114,4 +115,8 @@ class SearchEngineObserver : public TemplateURLModelObserver {
   }
 }
 
+// Return TRUE if the default is managed via policy.
+- (BOOL)isDefaultManaged {
+  return model_->is_default_search_managed();
+}
 @end

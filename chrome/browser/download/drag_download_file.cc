@@ -6,9 +6,9 @@
 
 #include "base/file_util.h"
 #include "base/message_loop.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/download/download_file.h"
-#include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/download/download_item.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "net/base/file_stream.h"
@@ -95,9 +95,9 @@ void DragDownloadFile::Stop() {
 void DragDownloadFile::InitiateDownload() {
 #if defined(OS_WIN)
   // DownloadManager could only be invoked from the UI thread.
-  if (!ChromeThread::CurrentlyOn(ChromeThread::UI)) {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+  if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(this,
                           &DragDownloadFile::InitiateDownload));
     return;
@@ -151,17 +151,13 @@ void DragDownloadFile::DownloadCompleted(bool is_successful) {
 void DragDownloadFile::ModelChanged() {
   AssertCurrentlyOnUIThread();
 
-  download_manager_->GetTemporaryDownloads(this, file_path_.DirName());
-}
-
-void DragDownloadFile::SetDownloads(std::vector<DownloadItem*>& downloads) {
-  AssertCurrentlyOnUIThread();
-
-  std::vector<DownloadItem*>::const_iterator it = downloads.begin();
-  for (; it != downloads.end(); ++it) {
-    if (!download_item_observer_added_ && (*it)->url() == url_) {
+  std::vector<DownloadItem*> downloads;
+  download_manager_->GetTemporaryDownloads(file_path_.DirName(), &downloads);
+  for (std::vector<DownloadItem*>::const_iterator i = downloads.begin();
+       i != downloads.end(); ++i) {
+    if (!download_item_observer_added_ && (*i)->url() == url_) {
       download_item_observer_added_ = true;
-      (*it)->AddObserver(this);
+      (*i)->AddObserver(this);
     }
   }
 }
@@ -197,7 +193,7 @@ void DragDownloadFile::AssertCurrentlyOnDragThread() {
 void DragDownloadFile::AssertCurrentlyOnUIThread() {
   // Only do the check on Windows where two threads are involved.
 #if defined(OS_WIN)
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 #endif
 }
 

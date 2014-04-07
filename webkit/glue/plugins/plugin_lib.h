@@ -2,20 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef WEBKIT_GLUE_PLUGIN_PLUGIN_LIB_H_
-#define WEBKIT_GLUE_PLUGIN_PLUGIN_LIB_H_
+#ifndef WEBKIT_GLUE_PLUGINS_PLUGIN_LIB_H_
+#define WEBKIT_GLUE_PLUGINS_PLUGIN_LIB_H_
 
 #include <string>
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/file_path.h"
 #include "base/native_library.h"
 #include "base/ref_counted.h"
 #include "build/build_config.h"
 #include "webkit/glue/plugins/plugin_list.h"
 #include "webkit/glue/plugins/webplugin.h"
 
+class FilePath;
 struct WebPluginInfo;
 
 namespace NPAPI {
@@ -78,7 +78,8 @@ class PluginLib : public base::RefCounted<PluginLib> {
   // some plugins crash if unloaded).
   void PreventLibraryUnload();
 
- private:
+  // protected for testability.
+ protected:
   friend class base::RefCounted<PluginLib>;
 
   // Creates a new PluginLib.
@@ -116,4 +117,4 @@ class PluginLib : public base::RefCounted<PluginLib> {
 
 }  // namespace NPAPI
 
-#endif  // WEBKIT_GLUE_PLUGIN_PLUGIN_LIB_H_
+#endif  // WEBKIT_GLUE_PLUGINS_PLUGIN_LIB_H_

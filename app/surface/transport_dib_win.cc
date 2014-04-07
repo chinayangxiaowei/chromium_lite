@@ -7,6 +7,7 @@
 
 #include "app/surface/transport_dib.h"
 #include "base/logging.h"
+#include "base/scoped_ptr.h"
 #include "base/sys_info.h"
 #include "skia/ext/platform_canvas.h"
 
@@ -28,7 +29,7 @@ TransportDIB* TransportDIB::Create(size_t size, uint32 sequence_num) {
 
   TransportDIB* dib = new TransportDIB;
 
-  if (!dib->shared_memory_.Create(L"", false /* read write */,
+  if (!dib->shared_memory_.Create("", false /* read write */,
                                   true /* open existing */, size)) {
     delete dib;
     return NULL;
@@ -65,7 +66,10 @@ bool TransportDIB::is_valid(Handle dib) {
 }
 
 skia::PlatformCanvas* TransportDIB::GetPlatformCanvas(int w, int h) {
-  return new skia::PlatformCanvas(w, h, true, handle());
+  scoped_ptr<skia::PlatformCanvas> canvas(new skia::PlatformCanvas);
+  if (!canvas->initialize(w, h, true, handle()))
+    return NULL;
+  return canvas.release();
 }
 
 void* TransportDIB::memory() const {

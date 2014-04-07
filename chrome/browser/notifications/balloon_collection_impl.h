@@ -6,27 +6,43 @@
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_BALLOON_COLLECTION_IMPL_H_
 #define CHROME_BROWSER_NOTIFICATIONS_BALLOON_COLLECTION_IMPL_H_
+#pragma once
 
 #include <deque>
 
 #include "base/basictypes.h"
+#include "base/message_loop.h"
 #include "chrome/browser/notifications/balloon_collection.h"
 #include "gfx/point.h"
 #include "gfx/rect.h"
+
+// Mac balloons grow from the top down and have close buttons on top, so
+// offsetting is not necessary for easy multiple-closing.  Other platforms grow
+// from the bottom up and have close buttons on top, so it is necessary.
+#if defined(OS_MACOSX)
+#define USE_OFFSETS 0
+#else
+#define USE_OFFSETS 1
+#endif
 
 // A balloon collection represents a set of notification balloons being
 // shown on the screen.  It positions new notifications according to
 // a layout, and monitors for balloons being closed, which it reports
 // up to its parent, the notification UI manager.
-class BalloonCollectionImpl : public BalloonCollection {
+class BalloonCollectionImpl : public BalloonCollection
+#if USE_OFFSETS
+                            , public MessageLoopForUI::Observer
+#endif
+{
  public:
   BalloonCollectionImpl();
   virtual ~BalloonCollectionImpl();
 
-  // BalloonCollectionInterface overrides
+  // BalloonCollection interface.
   virtual void Add(const Notification& notification,
                    Profile* profile);
   virtual bool Remove(const Notification& notification);
+  virtual void RemoveAll();
   virtual bool HasSpace() const;
   virtual void ResizeBalloon(Balloon* balloon, const gfx::Size& size);
   virtual void DisplayChanged();
@@ -34,6 +50,16 @@ class BalloonCollectionImpl : public BalloonCollection {
   virtual const Balloons& GetActiveBalloons() {
     return balloons_;
   }
+
+  // MessageLoopForUI::Observer interface.
+#if defined(OS_WIN)
+  virtual void WillProcessMessage(const MSG& event) {}
+  virtual void DidProcessMessage(const MSG& event);
+#endif
+#if defined(OS_LINUX)
+  virtual void WillProcessEvent(GdkEvent* event) {}
+  virtual void DidProcessEvent(GdkEvent* event);
+#endif
 
  protected:
   // Calculates layout values for the balloons including
@@ -50,6 +76,9 @@ class BalloonCollectionImpl : public BalloonCollection {
     static int max_balloon_width() { return kBalloonMaxWidth; }
     static int min_balloon_height() { return kBalloonMinHeight; }
     static int max_balloon_height() { return kBalloonMaxHeight; }
+
+    // Utility function constrains the input rectangle to the min and max sizes.
+    static gfx::Size ConstrainToSizeLimits(const gfx::Size& rect);
 
     // Returns both the total space available and the maximum
     // allowed per balloon.
@@ -75,10 +104,12 @@ class BalloonCollectionImpl : public BalloonCollection {
     gfx::Point NextPosition(const gfx::Size& balloon_size,
                             gfx::Point* position_iterator) const;
 
+    // Return a offscreen location which is offscreen for this layout,
+    // to be used as the initial position for an animation into view.
+    gfx::Point OffScreenLocation() const;
+
    private:
     enum Placement {
-      HORIZONTALLY_FROM_BOTTOM_LEFT,
-      HORIZONTALLY_FROM_BOTTOM_RIGHT,
       VERTICALLY_FROM_TOP_RIGHT,
       VERTICALLY_FROM_BOTTOM_RIGHT
     };
@@ -109,11 +140,30 @@ class BalloonCollectionImpl : public BalloonCollection {
   int count() const { return balloons_.size(); }
 
   // Adjusts the positions of the balloons (e.g., when one is closed).
+  // Implemented by each platform for specific UI requirements.
   void PositionBalloons(bool is_reposition);
+
+  // Cross-platform internal implementation for PositionBalloons.
+  void PositionBalloonsInternal(bool is_reposition);
 
 #if defined(OS_MACOSX)
   // Get the work area on Mac OS, without inverting the coordinates.
   static gfx::Rect GetMacWorkArea();
+#endif
+
+#if USE_OFFSETS
+  // Start and stop observing all UI events.
+  void AddMessageLoopObserver();
+  void RemoveMessageLoopObserver();
+
+  // Cancel all offset and reposition the balloons normally.
+  void CancelOffsets();
+
+  // Handles a mouse motion while the balloons are temporarily offset.
+  void HandleMouseMoveEvent();
+
+  // Is the current cursor in the balloon area?
+  bool IsCursorInBalloonCollection() const;
 #endif
 
   // Queue of active balloons.
@@ -122,6 +172,14 @@ class BalloonCollectionImpl : public BalloonCollection {
 
   // The layout parameters for balloons in this collection.
   Layout layout_;
+
+#if USE_OFFSETS
+  // Factory for generating delayed reposition tasks on mouse motion.
+  ScopedRunnableMethodFactory<BalloonCollectionImpl> reposition_factory_;
+
+  // Is the balloon collection currently listening for UI events?
+  bool added_as_message_loop_observer_;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(BalloonCollectionImpl);
 };

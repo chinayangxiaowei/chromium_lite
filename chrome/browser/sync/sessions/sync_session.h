@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,8 @@
 
 #ifndef CHROME_BROWSER_SYNC_SESSIONS_SYNC_SESSION_H_
 #define CHROME_BROWSER_SYNC_SESSIONS_SYNC_SESSION_H_
+#pragma once
 
-#include <string>
 #include <vector>
 
 #include "base/basictypes.h"
@@ -65,12 +65,19 @@ class SyncSession {
     virtual void OnReceivedLongPollIntervalUpdate(
         const base::TimeDelta& new_interval) = 0;
 
+    // The client needs to cease and desist syncing at once.  This occurs when
+    // the Syncer detects that the backend store has fundamentally changed or
+    // is a different instance altogether (e.g. swapping from a test instance
+    // to production, or a global stop syncing operation has wiped the store).
+    virtual void OnShouldStopSyncingPermanently() = 0;
+
    protected:
     virtual ~Delegate() {}
   };
 
   // Creates a new SyncSession with mandatory context and delegate.
   SyncSession(SyncSessionContext* context, Delegate* delegate);
+  ~SyncSession();
 
   // Builds a thread-safe and read-only copy of the current session state.
   SyncSessionSnapshot TakeSnapshot() const;

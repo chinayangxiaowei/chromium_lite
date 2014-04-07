@@ -1,20 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_COMMON_EXTENSIONS_UPDATE_MANIFEST_H_
 #define CHROME_COMMON_EXTENSIONS_UPDATE_MANIFEST_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
-#include "base/logging.h"
-#include "base/scoped_ptr.h"
-#include "base/values.h"
-#include "base/version.h"
 #include "googleurl/src/gurl.h"
-
-class Version;
 
 class UpdateManifest {
  public:
@@ -50,6 +45,9 @@ class UpdateManifest {
 
   static const int kNoDaystart = -1;
   struct Results {
+    Results();
+    ~Results();
+
     std::vector<Result> list;
     // This will be >= 0, or kNoDaystart if the <daystart> tag was not present.
     int daystart_elapsed_seconds;
@@ -78,4 +76,3 @@ class UpdateManifest {
 };
 
 #endif  // CHROME_COMMON_EXTENSIONS_UPDATE_MANIFEST_H_
-

@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_TABBED_PANE_H_
 #define VIEWS_CONTROLS_TABBED_PANE_H_
+#pragma once
 
 #include "views/view.h"
 
@@ -13,7 +14,6 @@ class NativeTabbedPaneWrapper;
 
 // The TabbedPane class is a view that shows tabs.  When the user clicks on a
 // tab, the associated view is displayed.
-// TODO (jcampan): implement GetPreferredSize().
 
 class TabbedPane : public View {
  public:
@@ -71,7 +71,12 @@ class TabbedPane : public View {
   virtual void Layout();
   virtual void Focus();
   virtual void PaintFocusBorder(gfx::Canvas* canvas);
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual gfx::Size GetPreferredSize();
+
+  NativeTabbedPaneWrapper* native_wrapper() const {
+    return native_tabbed_pane_;
+  }
 
  protected:
   // The object that actually implements the tabbed-pane.

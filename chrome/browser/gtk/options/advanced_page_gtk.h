@@ -4,13 +4,15 @@
 
 #ifndef CHROME_BROWSER_GTK_OPTIONS_ADVANCED_PAGE_GTK_H_
 #define CHROME_BROWSER_GTK_OPTIONS_ADVANCED_PAGE_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
 #include "app/gtk_signal.h"
 #include "chrome/browser/gtk/options/advanced_contents_gtk.h"
+#include "chrome/browser/gtk/options/managed_prefs_banner_gtk.h"
 #include "chrome/browser/options_page_base.h"
-#include "chrome/browser/pref_member.h"
+#include "chrome/browser/prefs/pref_member.h"
 
 class Profile;
 
@@ -37,6 +39,9 @@ class AdvancedPageGtk : public OptionsPageBase {
 
   // The widget containing the options for this page.
   GtkWidget* page_;
+
+  // Tracks managed preference warning banner state.
+  ManagedPrefsBannerGtk managed_prefs_banner_;
 
   DISALLOW_COPY_AND_ASSIGN(AdvancedPageGtk);
 };

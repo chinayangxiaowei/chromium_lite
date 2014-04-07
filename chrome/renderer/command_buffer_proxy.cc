@@ -4,10 +4,13 @@
 
 #include "base/logging.h"
 #include "base/process_util.h"
+#include "base/shared_memory.h"
+#include "base/task.h"
 #include "chrome/common/gpu_messages.h"
 #include "chrome/common/plugin_messages.h"
 #include "chrome/renderer/command_buffer_proxy.h"
 #include "chrome/renderer/plugin_channel_host.h"
+#include "gfx/size.h"
 #include "gpu/command_buffer/common/cmd_buffer_common.h"
 
 using gpu::Buffer;
@@ -15,7 +18,7 @@ using gpu::Buffer;
 CommandBufferProxy::CommandBufferProxy(
     IPC::Channel::Sender* channel,
     int route_id)
-    : size_(0),
+    : num_entries_(0),
       channel_(channel),
       route_id_(route_id) {
 }
@@ -34,6 +37,7 @@ CommandBufferProxy::~CommandBufferProxy() {
 void CommandBufferProxy::OnMessageReceived(const IPC::Message& message) {
   IPC_BEGIN_MESSAGE_MAP(CommandBufferProxy, message)
     IPC_MESSAGE_HANDLER(GpuCommandBufferMsg_UpdateState, OnUpdateState);
+    IPC_MESSAGE_HANDLER(GpuCommandBufferMsg_SwapBuffers, OnSwapBuffers);
     IPC_MESSAGE_HANDLER(GpuCommandBufferMsg_NotifyRepaint,
                         OnNotifyRepaint);
     IPC_MESSAGE_UNHANDLED_ERROR()
@@ -69,8 +73,8 @@ bool CommandBufferProxy::Initialize(int32 size) {
   if (Send(new GpuCommandBufferMsg_Initialize(route_id_, size, &handle)) &&
       base::SharedMemory::IsHandleValid(handle)) {
     ring_buffer_.reset(new base::SharedMemory(handle, false));
-    if (ring_buffer_->Map(size * sizeof(int32))) {
-      size_ = size;
+    if (ring_buffer_->Map(size)) {
+      num_entries_ = size / sizeof(gpu::CommandBufferEntry);
       return true;
     }
 
@@ -84,7 +88,7 @@ Buffer CommandBufferProxy::GetRingBuffer() {
   // Return locally cached ring buffer.
   Buffer buffer;
   buffer.ptr = ring_buffer_->memory();
-  buffer.size = size_ * sizeof(gpu::CommandBufferEntry);
+  buffer.size = num_entries_ * sizeof(gpu::CommandBufferEntry);
   buffer.shared_memory = ring_buffer_.get();
   return buffer;
 }
@@ -96,8 +100,8 @@ gpu::CommandBuffer::State CommandBufferProxy::GetState() {
 
 gpu::CommandBuffer::State CommandBufferProxy::Flush(int32 put_offset) {
   Send(new GpuCommandBufferMsg_Flush(route_id_,
-                                  put_offset,
-                                  &last_state_));
+                                     put_offset,
+                                     &last_state_));
   return last_state_;
 }
 
@@ -140,9 +144,9 @@ Buffer CommandBufferProxy::GetTransferBuffer(int32 id) {
   base::SharedMemoryHandle handle;
   uint32 size;
   if (!Send(new GpuCommandBufferMsg_GetTransferBuffer(route_id_,
-                                                   id,
-                                                   &handle,
-                                                   &size))) {
+                                                      id,
+                                                      &handle,
+                                                      &size))) {
     return Buffer();
   }
 
@@ -183,8 +187,35 @@ void CommandBufferProxy::SetParseError(
   NOTREACHED();
 }
 
+void CommandBufferProxy::OnSwapBuffers() {
+  if (swap_buffers_callback_.get())
+    swap_buffers_callback_->Run();
+}
+
+void CommandBufferProxy::SetSwapBuffersCallback(Callback0::Type* callback) {
+  swap_buffers_callback_.reset(callback);
+}
+
 void CommandBufferProxy::ResizeOffscreenFrameBuffer(const gfx::Size& size) {
-  Send(new GpuCommandBufferMsg_ResizeOffscreenFrameBuffer(route_id_, size));
+  IPC::Message* message =
+      new GpuCommandBufferMsg_ResizeOffscreenFrameBuffer(route_id_, size);
+  // We need to set the unblock flag on this message to guarantee the
+  // order in which it is processed in the GPU process. Ordinarily in
+  // certain situations, namely if a synchronous message is being
+  // processed, other synchronous messages may be processed before
+  // asynchronous messages. During some page reloads WebGL seems to
+  // send three messages (sync, async, sync) in rapid succession in
+  // that order, and the sync message (GpuCommandBufferMsg_Flush, on
+  // behalf of SwapBuffers) is sometimes processed before the async
+  // message (GpuCommandBufferMsg_ResizeOffscreenFrameBuffer). This
+  // causes the WebGL content to disappear because the back buffer is
+  // not correctly resized.
+  message->set_unblock(true);
+  Send(message);
+}
+
+void CommandBufferProxy::SetNotifyRepaintTask(Task* task) {
+  notify_repaint_task_.reset(task);
 }
 
 #if defined(OS_MACOSX)

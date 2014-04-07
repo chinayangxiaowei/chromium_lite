@@ -4,20 +4,25 @@
 
 #ifndef NET_PROXY_PROXY_LIST_H_
 #define NET_PROXY_PROXY_LIST_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
 #include "net/proxy/proxy_retry_info.h"
-#include "net/proxy/proxy_server.h"
 
 namespace net {
+
+class ProxyServer;
 
 // This class is used to hold a list of proxies returned by GetProxyForUrl or
 // manually configured. It handles proxy fallback if multiple servers are
 // specified.
 class ProxyList {
  public:
+  ProxyList();
+  ~ProxyList();
+
   // Initializes the proxy list to a string containing one or more proxy servers
   // delimited by a semicolon.
   void Set(const std::string& proxy_uri_list);
@@ -40,11 +45,12 @@ class ProxyList {
   // this if !IsEmpty().
   const ProxyServer& Get() const;
 
-  // Set the list by parsing the pac result |pac_string|.
+  // Sets the list by parsing the pac result |pac_string|.
   // Some examples for |pac_string|:
   //   "DIRECT"
   //   "PROXY foopy1"
   //   "PROXY foopy1; SOCKS4 foopy2:1188"
+  // Does a best-effort parse, and silently discards any errors.
   void SetFromPacString(const std::string& pac_string);
 
   // Returns a PAC-style semicolon-separated list of valid proxy servers.

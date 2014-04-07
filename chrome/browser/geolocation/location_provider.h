@@ -7,18 +7,19 @@
 // providers to obtain a position fix.
 //
 // This file declares a base class to be used by all location providers.
-// Primarily, this class declares interface methods to be implemented by derived
-// classes.
+// Primarily, this class declares interface methods to be implemented by
+// derived classes.
 
 #ifndef CHROME_BROWSER_GEOLOCATION_LOCATION_PROVIDER_H_
 #define CHROME_BROWSER_GEOLOCATION_LOCATION_PROVIDER_H_
+#pragma once
 
 #include <map>
 #include "base/non_thread_safe.h"
 #include "base/string16.h"
-#include "chrome/common/geoposition.h"
 
 class AccessTokenStore;
+struct Geoposition;
 class GURL;
 class URLRequestContextGetter;
 
@@ -34,13 +35,6 @@ class LocationProviderBase : public NonThreadSafe {
     // fatal error has occurred. Providers should call this for new listeners
     // as soon as a position is available.
     virtual void LocationUpdateAvailable(LocationProviderBase* provider) = 0;
-    // Used to inform listener that movement has been detected. If obtaining the
-    // position succeeds, this will be followed by a call to
-    // LocationUpdateAvailable. Some providers may not be able to detect
-    // movement before a new fix is obtained, so will never call this method.
-    // Note that this is not called in response to registration of a new
-    // listener.
-    virtual void MovementDetected(LocationProviderBase* provider) = 0;
 
    protected:
     virtual ~ListenerInterface() {}
@@ -61,8 +55,11 @@ class LocationProviderBase : public NonThreadSafe {
   void UnregisterListener(ListenerInterface* listener);
 
   // Interface methods
-  // Returns false if the provider failed to start.
-  virtual bool StartProvider() = 0;
+  // StartProvider maybe called multiple times, e.g. to alter the
+  // |high_accuracy| setting. Returns false if a fatal error was encountered
+  // which prevented the provider from starting.
+  virtual bool StartProvider(bool high_accuracy) = 0;
+  virtual void StopProvider() = 0;
   // Gets the current best position estimate.
   virtual void GetPosition(Geoposition* position) = 0;
   // Provides a hint to the provider that new location data is needed as soon
@@ -80,8 +77,6 @@ class LocationProviderBase : public NonThreadSafe {
   // Inform listeners that a new position or error is available, using
   // LocationUpdateAvailable.
   void UpdateListeners();
-  // Inform listeners that movement has been detected, using MovementDetected.
-  void InformListenersOfMovement();
 
  private:
   // The listeners registered to this provider. For each listener, we store a
@@ -90,13 +85,13 @@ class LocationProviderBase : public NonThreadSafe {
   ListenerMap listeners_;
 };
 
-// Factory functions for the various types of location provider to abstract over
-// the platform-dependent implementations.
-LocationProviderBase* NewGpsLocationProvider();
+// Factory functions for the various types of location provider to abstract
+// over the platform-dependent implementations.
 LocationProviderBase* NewNetworkLocationProvider(
     AccessTokenStore* access_token_store,
     URLRequestContextGetter* context,
     const GURL& url,
     const string16& access_token);
+LocationProviderBase* NewSystemLocationProvider();
 
 #endif  // CHROME_BROWSER_GEOLOCATION_LOCATION_PROVIDER_H_

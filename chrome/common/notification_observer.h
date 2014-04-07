@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_NOTIFICATION_OBSERVER_H_
 #define CHROME_COMMON_NOTIFICATION_OBSERVER_H_
+#pragma once
 
 class NotificationDetails;
 class NotificationSource;
@@ -13,6 +14,7 @@ class NotificationType;
 // notification is posted to the notification service, Observe is called.
 class NotificationObserver {
  public:
+  NotificationObserver();
   virtual ~NotificationObserver();
 
   virtual void Observe(NotificationType type,

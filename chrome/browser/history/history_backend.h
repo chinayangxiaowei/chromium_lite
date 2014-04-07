@@ -4,13 +4,14 @@
 
 #ifndef CHROME_BROWSER_HISTORY_HISTORY_BACKEND_H_
 #define CHROME_BROWSER_HISTORY_HISTORY_BACKEND_H_
+#pragma once
 
 #include <utility>
 
 #include "base/file_path.h"
+#include "base/gtest_prod_util.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/history/archived_database.h"
-#include "chrome/browser/history/download_types.h"
 #include "chrome/browser/history/expire_history_backend.h"
 #include "chrome/browser/history/history_database.h"
 #include "chrome/browser/history/history_marshaling.h"
@@ -18,10 +19,11 @@
 #include "chrome/browser/history/text_database_manager.h"
 #include "chrome/browser/history/thumbnail_database.h"
 #include "chrome/browser/history/visit_tracker.h"
+#include "chrome/browser/search_engines/template_url_id.h"
 #include "chrome/common/mru_cache.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 class BookmarkService;
+struct DownloadCreateInfo;
 class TestingProfile;
 struct ThumbnailScore;
 
@@ -76,6 +78,9 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
     // Invoked when the backend has finished loading the db.
     virtual void DBLoaded() = 0;
+
+    // Tell TopSites to start reading thumbnails from the ThumbnailsDB.
+    virtual void StartTopSitesMigration() = 0;
   };
 
   // Init must be called to complete object creation. This object can be
@@ -112,11 +117,11 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Navigation ----------------------------------------------------------------
 
   void AddPage(scoped_refptr<HistoryAddPageArgs> request);
-  virtual void SetPageTitle(const GURL& url, const std::wstring& title);
+  virtual void SetPageTitle(const GURL& url, const string16& title);
 
   // Indexing ------------------------------------------------------------------
 
-  void SetPageContents(const GURL& url, const std::wstring& contents);
+  void SetPageContents(const GURL& url, const string16& contents);
 
   // Querying ------------------------------------------------------------------
 
@@ -131,7 +136,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
                 const GURL& url,
                 bool want_visits);
   void QueryHistory(scoped_refptr<QueryHistoryRequest> request,
-                    const std::wstring& text_query,
+                    const string16& text_query,
                     const QueryOptions& options);
   void QueryRedirectsFrom(scoped_refptr<QueryRedirectsRequest> request,
                           const GURL& url);
@@ -141,9 +146,18 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   void GetVisitCountToHost(scoped_refptr<GetVisitCountToHostRequest> request,
                            const GURL& url);
 
+  // TODO(Nik): remove. Use QueryMostVisitedURLs instead.
   void QueryTopURLsAndRedirects(
       scoped_refptr<QueryTopURLsAndRedirectsRequest> request,
       int result_count);
+
+  // Request the |result_count| most visited URLs and the chain of
+  // redirects leading to each of these URLs. |days_back| is the
+  // number of days of history to use. Used by TopSites.
+  void QueryMostVisitedURLs(
+      scoped_refptr<QueryMostVisitedURLsRequest> request,
+      int result_count,
+      int days_back);
 
   // Computes the most recent URL(s) that the given canonical URL has
   // redirected to and returns true on success. There may be more than one
@@ -182,6 +196,8 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
       const GURL& page_url,
       scoped_refptr<RefCountedBytes>* data);
 
+  void MigrateThumbnailsDatabase();
+
   // Favicon -------------------------------------------------------------------
 
   void GetFavIcon(scoped_refptr<GetFavIconRequest> request,
@@ -201,16 +217,15 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Downloads -----------------------------------------------------------------
 
   void QueryDownloads(scoped_refptr<DownloadQueryRequest> request);
+  void CleanUpInProgressEntries();
   void UpdateDownload(int64 received_bytes, int32 state, int64 db_handle);
-  void UpdateDownloadPath(const std::wstring& path, int64 db_handle);
+  void UpdateDownloadPath(const FilePath& path, int64 db_handle);
   void CreateDownload(scoped_refptr<DownloadCreateRequest> request,
                       const DownloadCreateInfo& info);
   void RemoveDownload(int64 db_handle);
   void RemoveDownloadsBetween(const base::Time remove_begin,
                               const base::Time remove_end);
   void RemoveDownloads(const base::Time remove_end);
-  void SearchDownloads(scoped_refptr<DownloadSearchRequest>,
-                       const std::wstring& search_text);
 
   // Segment usage -------------------------------------------------------------
 
@@ -223,15 +238,15 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Keyword search terms ------------------------------------------------------
 
   void SetKeywordSearchTermsForURL(const GURL& url,
-                                   TemplateURL::IDType keyword_id,
-                                   const std::wstring& term);
+                                   TemplateURLID keyword_id,
+                                   const string16& term);
 
-  void DeleteAllSearchTermsForKeyword(TemplateURL::IDType keyword_id);
+  void DeleteAllSearchTermsForKeyword(TemplateURLID keyword_id);
 
   void GetMostRecentKeywordSearchTerms(
       scoped_refptr<GetMostRecentKeywordSearchTermsRequest> request,
-      TemplateURL::IDType keyword_id,
-      const std::wstring& prefix,
+      TemplateURLID keyword_id,
+      const string16& prefix,
       int max_count);
 
   // Generic operations --------------------------------------------------------
@@ -240,7 +255,16 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
   virtual bool GetAllTypedURLs(std::vector<history::URLRow>* urls);
 
-  virtual bool UpdateURL(const URLID id, const history::URLRow& url);
+  virtual bool GetVisitsForURL(URLID id, VisitVector* visits);
+
+  virtual bool UpdateURL(URLID id, const history::URLRow& url);
+
+  // While adding visits in batch, the source needs to be provided.
+  virtual bool AddVisits(const GURL& url,
+                         const std::vector<base::Time>& visits,
+                         VisitSource visit_source);
+
+  virtual bool RemoveVisits(const VisitVector& visits);
 
   virtual bool GetURL(const GURL& url, history::URLRow* url_row);
 
@@ -271,7 +295,9 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
   // Adds the given rows to the database if it doesn't exist. A visit will be
   // added for each given URL at the last visit time in the URLRow.
-  void AddPagesWithDetails(const std::vector<URLRow>& info);
+  // Each visit will have the visit_source type set.
+  void AddPagesWithDetails(const std::vector<URLRow>& info,
+                           VisitSource visit_source);
 
 #if defined(UNIT_TEST)
   HistoryDatabase* db() const { return db_.get(); }
@@ -286,14 +312,25 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   friend class base::RefCountedThreadSafe<HistoryBackend>;
   friend class CommitLaterTask;  // The commit task needs to call Commit().
   friend class HistoryTest;  // So the unit tests can poke our innards.
-  FRIEND_TEST(HistoryBackendTest, DeleteAll);
-  FRIEND_TEST(HistoryBackendTest, ImportedFaviconsTest);
-  FRIEND_TEST(HistoryBackendTest, URLsNoLongerBookmarked);
-  FRIEND_TEST(HistoryBackendTest, StripUsernamePasswordTest);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, DeleteAll);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, ImportedFaviconsTest);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, URLsNoLongerBookmarked);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, StripUsernamePasswordTest);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, DeleteThumbnailsDatabaseTest);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, AddPageVisitSource);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, AddPageArgsSource);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, AddVisitsSource);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, RemoveVisitsSource);
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, MigrationVisitSource);
   friend class ::TestingProfile;
 
   // Computes the name of the specified database on disk.
   FilePath GetThumbnailFileName() const;
+
+  // Returns the name of the Favicons database. This is the new name
+  // of the Thumbnails database.
+  // See ThumbnailDatabase::RenameAndDropThumbnails.
+  FilePath GetFaviconsFileName() const;
   FilePath GetArchivedFileName() const;
 
   class URLQuerier;
@@ -312,7 +349,8 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   std::pair<URLID, VisitID> AddPageVisit(const GURL& url,
                                          base::Time time,
                                          VisitID referring_visit,
-                                         PageTransition::Type transition);
+                                         PageTransition::Type transition,
+                                         VisitSource visit_source);
 
   // Returns a redirect chain in |redirects| for the VisitID
   // |cur_visit|. |cur_visit| is assumed to be valid. Assumes that
@@ -343,7 +381,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Both functions assume QueryHistory already checked the DB for validity.
   void QueryHistoryBasic(URLDatabase* url_db, VisitDatabase* visit_db,
                          const QueryOptions& options, QueryResults* result);
-  void QueryHistoryFTS(const std::wstring& text_query,
+  void QueryHistoryFTS(const string16& text_query,
                        const QueryOptions& options,
                        QueryResults* result);
 

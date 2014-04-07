@@ -4,6 +4,9 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_THEME_DATA_TYPE_CONTROLLER_H_
 #define CHROME_BROWSER_SYNC_GLUE_THEME_DATA_TYPE_CONTROLLER_H_
+#pragma once
+
+#include <string>
 
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
@@ -53,7 +56,9 @@ class ThemeDataTypeController : public DataTypeController {
   }
 
   // UnrecoverableErrorHandler interface.
-  virtual void OnUnrecoverableError();
+  virtual void OnUnrecoverableError(
+      const tracked_objects::Location& from_here,
+      const std::string& message);
 
  private:
   // Helper method to run the stashed start callback with a given result.

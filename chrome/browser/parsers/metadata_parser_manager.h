@@ -4,10 +4,10 @@
 
 #ifndef CHROME_BROWSER_PARSERS_METADATA_PARSER_MANAGER_H_
 #define CHROME_BROWSER_PARSERS_METADATA_PARSER_MANAGER_H_
-
-#include <vector>
+#pragma once
 
 #include "base/basictypes.h"
+#include "base/scoped_vector.h"
 
 class MetadataParserFactory;
 class FilePath;
@@ -19,7 +19,6 @@ class MetadataParserManager {
  public:
   // Creates a new MetadataParserManager.
   MetadataParserManager();
-  ~MetadataParserManager();
 
   // Gets the singleton
   static MetadataParserManager* Get();
@@ -32,7 +31,7 @@ class MetadataParserManager {
   MetadataParser* GetParserForFile(const FilePath& path);
 
  private:
-  std::vector<MetadataParserFactory*> factories_;
+  ScopedVector<MetadataParserFactory> factories_;
 
   DISALLOW_COPY_AND_ASSIGN(MetadataParserManager);
 };

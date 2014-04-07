@@ -4,11 +4,13 @@
 
 #ifndef CHROME_BROWSER_DEBUGGER_DEVTOOLS_REMOTE_H_
 #define CHROME_BROWSER_DEBUGGER_DEVTOOLS_REMOTE_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "base/ref_counted.h"
 
 class DevToolsRemoteMessage;
+class ListenSocket;
 
 // This interface should be implemented by a class that wants to handle
 // DevToolsRemoteMessages dispatched by some entity. It must extend
@@ -20,6 +22,7 @@ class DevToolsRemoteListener
   // This method is invoked on the UI thread whenever the debugger connection
   // has been lost.
   virtual void OnConnectionLost() = 0;
+  virtual void OnAcceptConnection(ListenSocket* connection) {}
 
  protected:
   friend class base::RefCountedThreadSafe<DevToolsRemoteListener>;

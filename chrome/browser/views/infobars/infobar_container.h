@@ -4,7 +4,9 @@
 
 #ifndef CHROME_BROWSER_VIEWS_INFOBARS_INFOBAR_CONTAINER_H_
 #define CHROME_BROWSER_VIEWS_INFOBARS_INFOBAR_CONTAINER_H_
+#pragma once
 
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "views/view.h"
 
@@ -44,7 +46,7 @@ class InfoBarContainer : public views::View,
   // Overridden from views::View:
   virtual gfx::Size GetPreferredSize();
   virtual void Layout();
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
  protected:
   virtual void ViewHierarchyChanged(bool is_add,
@@ -84,9 +86,6 @@ class InfoBarContainer : public views::View,
 
   // The TabContents for which we are currently showing InfoBars.
   TabContents* tab_contents_;
-
-  // Storage of the string needed for accessibility.
-  std::wstring accessible_name_;
 
   DISALLOW_COPY_AND_ASSIGN(InfoBarContainer);
 };

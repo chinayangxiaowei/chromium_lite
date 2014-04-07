@@ -1,4 +1,4 @@
-// Copyright (c) 2008-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -66,7 +66,9 @@ TEST_F(MacUtilTest, TestGrabWindowSnapshot) {
 
   scoped_ptr<std::vector<unsigned char> > png_representation(
       new std::vector<unsigned char>);
-  GrabWindowSnapshot(window, png_representation.get());
+  int width, height;
+  GrabWindowSnapshot(window, png_representation.get(),
+                     &width, &height);
 
   // Copy png back into NSData object so we can make sure we grabbed a png.
   scoped_nsobject<NSData> image_data(
@@ -161,6 +163,32 @@ TEST_F(MacUtilTest, TestGetValueFromDictionary) {
   EXPECT_FALSE(GetValueFromDictionary(dict, CFSTR("key"), CFNumberGetTypeID()));
   EXPECT_FALSE(GetValueFromDictionary(
                    dict, CFSTR("no-exist"), CFStringGetTypeID()));
+}
+
+TEST_F(MacUtilTest, CopyNSImageToCGImage) {
+  scoped_nsobject<NSImage> nsImage(
+      [[NSImage alloc] initWithSize:NSMakeSize(20, 20)]);
+  [nsImage lockFocus];
+  [[NSColor redColor] set];
+  NSRect rect = NSZeroRect;
+  rect.size = [nsImage size];
+  NSRectFill(rect);
+  [nsImage unlockFocus];
+
+  scoped_cftyperef<CGImageRef> cgImage(
+      mac_util::CopyNSImageToCGImage(nsImage.get()));
+  EXPECT_TRUE(cgImage.get());
+}
+
+TEST_F(MacUtilTest, NSObjectRetainRelease) {
+  scoped_nsobject<NSArray> array([[NSArray alloc] initWithObjects:@"foo", nil]);
+  EXPECT_EQ(1U, [array retainCount]);
+
+  mac_util::NSObjectRetain(array);
+  EXPECT_EQ(2U, [array retainCount]);
+
+  mac_util::NSObjectRelease(array);
+  EXPECT_EQ(1U, [array retainCount]);
 }
 
 }  // namespace

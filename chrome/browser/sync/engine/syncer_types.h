@@ -4,11 +4,13 @@
 
 #ifndef CHROME_BROWSER_SYNC_ENGINE_SYNCER_TYPES_H_
 #define CHROME_BROWSER_SYNC_ENGINE_SYNCER_TYPES_H_
+#pragma once
 
 #include <map>
 #include <vector>
 
-#include "chrome/browser/sync/util/event_sys.h"
+#include "base/observer_list.h"
+#include "chrome/browser/sync/util/channel.h"
 
 namespace syncable {
 class BaseTransaction;
@@ -69,74 +71,78 @@ enum VerifyCommitResult {
   VERIFY_OK,
 };
 
-struct SyncerEvent {
-  typedef SyncerEvent EventType;
-
+struct SyncEngineEvent {
   enum EventCause {
-    COMMITS_SUCCEEDED,  // Count is stored in successful_commit_count.
-
+    ////////////////////////////////////////////////////////////////
+    // SyncerCommand generated events.
     STATUS_CHANGED,
-
-    // Take care not to wait in shutdown handlers for the syncer to stop as it
-    // causes a race in the event system. Use SyncerShutdownEvent instead.
-    SHUTDOWN_USE_WITH_CARE,
-
-    // We're over our quota.
-    OVER_QUOTA,
-
-    // This event is how the syncer requests that it be synced.
-    REQUEST_SYNC_NUDGE,
 
     // We have reached the SYNCER_END state in the main sync loop.
     // Check the SyncerSession for information like whether we need to continue
     // syncing (SyncerSession::HasMoreToSync).
     SYNC_CYCLE_ENDED,
 
+    ////////////////////////////////////////////////////////////////
+    // SyncerThread generated events.
+
     // This event is sent when the thread is paused in response to a
     // pause request.
-    PAUSED,
+    SYNCER_THREAD_PAUSED,
 
     // This event is sent when the thread is resumed in response to a
     // resume request.
-    RESUMED,
+    SYNCER_THREAD_RESUMED,
+
+    // This event is sent when the thread is waiting for a connection
+    // to be established.
+    SYNCER_THREAD_WAITING_FOR_CONNECTION,
+
+    // This event is sent when a connection has been established and
+    // the thread continues.
+    SYNCER_THREAD_CONNECTED,
+
+    // Sent when the main syncer loop finishes.
+    SYNCER_THREAD_EXITING,
+
+    ////////////////////////////////////////////////////////////////
+    // Generated in response to specific protocol actions or events.
+
+    // New token in updated_token.
+    UPDATED_TOKEN,
+
+    // This is sent after the Syncer (and SyncerThread) have initiated self
+    // halt due to no longer being permitted to communicate with the server.
+    // The listener should sever the sync / browser connections and delete sync
+    // data (i.e. as if the user clicked 'Stop Syncing' in the browser.
+    STOP_SYNCING_PERMANENTLY,
+
+    // These events are sent to indicate when we know the clearing of
+    // server data have failed or succeeded.
+    CLEAR_SERVER_DATA_SUCCEEDED,
+    CLEAR_SERVER_DATA_FAILED,
   };
 
-  explicit SyncerEvent(EventCause cause) : what_happened(cause),
-                                           snapshot(NULL),
-                                           successful_commit_count(0),
-                                           nudge_delay_milliseconds(0) {}
-
-  static bool IsChannelShutdownEvent(const SyncerEvent& e) {
-    return SHUTDOWN_USE_WITH_CARE == e.what_happened;
-  }
-
-  // This is used to put SyncerEvents into sorted STL structures.
-  bool operator < (const SyncerEvent& r) const {
-    return this->what_happened < r.what_happened;
-  }
+  explicit SyncEngineEvent(EventCause cause) : what_happened(cause),
+                                               snapshot(NULL) {
+}
 
   EventCause what_happened;
 
   // The last session used for syncing.
   const sessions::SyncSessionSnapshot* snapshot;
 
-  int successful_commit_count;
-
-  // How many milliseconds later should the syncer kick in? For
-  // REQUEST_SYNC_NUDGE only.
-  int nudge_delay_milliseconds;
+  // Update-Client-Auth returns a new token for sync use.
+  std::string updated_token;
 };
 
-struct SyncerShutdownEvent {
-  typedef Syncer* EventType;
-  static bool IsChannelShutdownEvent(Syncer* syncer) {
-    return true;
-  }
+class SyncEngineEventListener {
+ public:
+  // TODO(tim): Consider splitting this up to multiple callbacks, rather than
+  // have to do Event e(type); OnSyncEngineEvent(e); at all callsites,
+  virtual void OnSyncEngineEvent(const SyncEngineEvent& event) = 0;
+ protected:
+  virtual ~SyncEngineEventListener() {}
 };
-
-typedef EventChannel<SyncerEvent, Lock> SyncerEventChannel;
-
-typedef EventChannel<SyncerShutdownEvent, Lock> ShutdownChannel;
 
 // This struct is passed between parts of the syncer during the processing of
 // one sync loop. It lives on the stack. We don't expose the number of

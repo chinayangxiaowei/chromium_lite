@@ -6,7 +6,7 @@
 
 #include "base/file_util.h"
 #include "base/md5.h"
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
 #include "gfx/codec/png_codec.h"
 #include "gfx/rect.h"
 #include "skia/ext/platform_device.h"
@@ -60,16 +60,15 @@ class DisableFontSmoothing {
 
 namespace printing {
 
-Image::Image(const std::wstring& filename)
+Image::Image(const FilePath& path)
     : row_length_(0),
       ignore_alpha_(true) {
   std::string data;
-  file_util::ReadFileToString(filename, &data);
-  std::wstring ext = file_util::GetFileExtensionFromPath(filename);
+  file_util::ReadFileToString(path, &data);
   bool success = false;
-  if (LowerCaseEqualsASCII(ext, "png")) {
+  if (path.MatchesExtension(FILE_PATH_LITERAL(".png"))) {
     success = LoadPng(data);
-  } else if (LowerCaseEqualsASCII(ext, "emf")) {
+  } else if (path.MatchesExtension(FILE_PATH_LITERAL(".emf"))) {
     success = LoadMetafile(data);
   } else {
     DCHECK(false);
@@ -94,10 +93,12 @@ Image::Image(const Image& image)
       ignore_alpha_(image.ignore_alpha_) {
 }
 
+Image::~Image() {}
+
 std::string Image::checksum() const {
   MD5Digest digest;
   MD5Sum(&data_[0], data_.size(), &digest);
-  return HexEncode(&digest, sizeof(digest));
+  return base::HexEncode(&digest, sizeof(digest));
 }
 
 bool Image::SaveToPng(const FilePath& filepath) const {
@@ -193,7 +194,7 @@ bool Image::LoadMetafile(const std::string& data) {
   DCHECK(!data.empty());
 #if defined(OS_WIN) || defined(OS_MACOSX)
   NativeMetafile metafile;
-  metafile.CreateFromData(data.data(), data.size());
+  metafile.Init(data.data(), data.size());
   return LoadMetafile(metafile);
 #else
   NOTIMPLEMENTED();
@@ -250,7 +251,8 @@ bool Image::LoadMetafile(const NativeMetafile& metafile) {
                               kCGImageAlphaPremultipliedLast));
     DCHECK(bitmap_context.get());
     metafile.RenderPage(page_number, bitmap_context,
-                        CGRectMake(0, 0, size_.width(), size_.height()));
+                        CGRectMake(0, 0, size_.width(), size_.height()),
+                        true, false, false, false);
   }
 #else
   NOTIMPLEMENTED();

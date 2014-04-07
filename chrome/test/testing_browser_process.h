@@ -9,6 +9,7 @@
 
 #ifndef CHROME_TEST_TESTING_BROWSER_PROCESS_H_
 #define CHROME_TEST_TESTING_BROWSER_PROCESS_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -18,6 +19,8 @@
 #include "base/string_util.h"
 #include "base/waitable_event.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/google/google_url_tracker.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/notification_service.h"
 
 class IOThread;
@@ -26,7 +29,9 @@ class TestingBrowserProcess : public BrowserProcess {
  public:
   TestingBrowserProcess()
       : shutdown_event_(new base::WaitableEvent(true, false)),
-        app_locale_("en") {
+        module_ref_count_(0),
+        app_locale_("en"),
+        pref_service_(NULL) {
   }
 
   virtual ~TestingBrowserProcess() {
@@ -61,16 +66,16 @@ class TestingBrowserProcess : public BrowserProcess {
     return NULL;
   }
 
+  virtual base::Thread* cache_thread() {
+    return NULL;
+  }
+
   virtual ProfileManager* profile_manager() {
     return NULL;
   }
 
   virtual PrefService* local_state() {
-    return NULL;
-  }
-
-  virtual WebAppInstallerService* web_app_installer_service() {
-    return NULL;
+    return pref_service_;
   }
 
   virtual IconManager* icon_manager() {
@@ -81,11 +86,15 @@ class TestingBrowserProcess : public BrowserProcess {
     return NULL;
   }
 
-  virtual DebuggerWrapper* debugger_wrapper() {
+  virtual DevToolsManager* devtools_manager() {
     return NULL;
   }
 
-  virtual DevToolsManager* devtools_manager() {
+  virtual SidebarManager* sidebar_manager() {
+    return NULL;
+  }
+
+  virtual TabCloseableStateWatcher* tab_closeable_state_watcher() {
     return NULL;
   }
 
@@ -101,12 +110,8 @@ class TestingBrowserProcess : public BrowserProcess {
     return NULL;
   }
 
-  virtual StatusTrayManager* status_tray_manager() {
-    return NULL;
-  }
-
   virtual GoogleURLTracker* google_url_tracker() {
-    return NULL;
+    return google_url_tracker_.get();
   }
 
   virtual IntranetRedirectDetector* intranet_redirect_detector() {
@@ -117,14 +122,15 @@ class TestingBrowserProcess : public BrowserProcess {
     return NULL;
   }
 
-  virtual void InitDebuggerWrapper(int port) {
+  virtual void InitDebuggerWrapper(int port, bool useHttp) {
   }
 
   virtual unsigned int AddRefModule() {
-    return 1;
+    return ++module_ref_count_;
   }
   virtual unsigned int ReleaseModule() {
-    return 1;
+    DCHECK(module_ref_count_ > 0);
+    return --module_ref_count_;
   }
 
   virtual bool IsShuttingDown() {
@@ -143,26 +149,41 @@ class TestingBrowserProcess : public BrowserProcess {
     app_locale_ = app_locale;
   }
 
+  virtual DownloadStatusUpdater* download_status_updater() {
+    return NULL;
+  }
+
   virtual base::WaitableEvent* shutdown_event() {
     return shutdown_event_.get();
   }
 
   virtual void CheckForInspectorFiles() {}
 
-#if defined(OS_WIN)
+#if (defined(OS_WIN) || defined(OS_LINUX)) && !defined(OS_CHROMEOS)
   virtual void StartAutoupdateTimer() {}
-#endif  // OS_WIN
+#endif
 
   virtual bool have_inspector_files() const { return true; }
 #if defined(IPC_MESSAGE_LOG_ENABLED)
   virtual void SetIPCLoggingEnabled(bool enable) {}
 #endif
 
+  void SetPrefService(PrefService* pref_service) {
+    pref_service_ = pref_service;
+  }
+  void SetGoogleURLTracker(GoogleURLTracker* google_url_tracker) {
+    google_url_tracker_.reset(google_url_tracker);
+  }
+
  private:
   NotificationService notification_service_;
   scoped_ptr<base::WaitableEvent> shutdown_event_;
+  unsigned int module_ref_count_;
   scoped_ptr<Clipboard> clipboard_;
   std::string app_locale_;
+
+  PrefService* pref_service_;
+  scoped_ptr<GoogleURLTracker> google_url_tracker_;
 
   DISALLOW_COPY_AND_ASSIGN(TestingBrowserProcess);
 };

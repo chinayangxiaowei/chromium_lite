@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_RENDER_WIDGET_HELPER_H_
 #define CHROME_BROWSER_RENDERER_HOST_RENDER_WIDGET_HELPER_H_
+#pragma once
 
 #include <map>
 
@@ -14,6 +15,7 @@
 #include "base/ref_counted.h"
 #include "base/lock.h"
 #include "base/waitable_event.h"
+#include "chrome/common/window_container_type.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebPopupType.h"
 
 namespace IPC {
@@ -121,11 +123,16 @@ class RenderWidgetHelper
 
   void CreateNewWindow(int opener_id,
                        bool user_gesture,
+                       WindowContainerType window_container_type,
+                       const string16& frame_name,
                        base::ProcessHandle render_process,
                        int* route_id);
   void CreateNewWidget(int opener_id,
                        WebKit::WebPopupType popup_type,
                        int* route_id);
+  void CreateNewFullscreenWidget(int opener_id,
+                                 WebKit::WebPopupType popup_type,
+                                 int* route_id);
 
 #if defined(OS_MACOSX)
   // Called on the IO thread to handle the allocation of a TransportDIB.  If
@@ -161,7 +168,9 @@ class RenderWidgetHelper
 
   // Called on the UI thread to finish creating a window.
   void OnCreateWindowOnUI(int opener_id,
-                          int route_id);
+                          int route_id,
+                          WindowContainerType window_container_type,
+                          string16 frame_name);
 
   // Called on the IO thread after a window was created on the UI thread.
   void OnCreateWindowOnIO(int route_id);
@@ -170,6 +179,11 @@ class RenderWidgetHelper
   void OnCreateWidgetOnUI(int opener_id,
                           int route_id,
                           WebKit::WebPopupType popup_type);
+
+  // Called on the UI thread to create a full screen widget.
+  void OnCreateFullscreenWidgetOnUI(int opener_id,
+                                    int route_id,
+                                    WebKit::WebPopupType popup_type);
 
   // Called on the IO thread to cancel resource requests for the render widget.
   void OnCancelResourceRequests(int render_widget_id);
@@ -188,7 +202,7 @@ class RenderWidgetHelper
 #endif
 
   // A map of live paint messages.  Must hold pending_paints_lock_ to access.
-  // The PaintMsgProxy objects are not owned by this map.  (See PaintMsgProxy
+  // The UpdateMsgProxy objects are not owned by this map.  (See UpdateMsgProxy
   // for details about how the lifetime of instances are managed.)
   UpdateMsgProxyMap pending_paints_;
   Lock pending_paints_lock_;

@@ -4,12 +4,13 @@
 
 #ifndef BASE_PROCESS_H_
 #define BASE_PROCESS_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "build/build_config.h"
 
 #include <sys/types.h>
-#ifdef OS_WIN
+#if defined(OS_WIN)
 #include <windows.h>
 #endif
 
@@ -28,7 +29,7 @@ const ProcessHandle kNullProcessHandle = NULL;
 typedef pid_t ProcessHandle;
 typedef pid_t ProcessId;
 const ProcessHandle kNullProcessHandle = 0;
-#endif
+#endif  // defined(OS_WIN)
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
 // saved_priority_ will be set to this to indicate that it's not holding

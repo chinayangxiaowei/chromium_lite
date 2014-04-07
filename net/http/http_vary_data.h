@@ -4,6 +4,7 @@
 
 #ifndef NET_HTTP_HTTP_VARY_DATA_H__
 #define NET_HTTP_HTTP_VARY_DATA_H__
+#pragma once
 
 #include "base/md5.h"
 
@@ -11,7 +12,7 @@ class Pickle;
 
 namespace net {
 
-class HttpRequestInfo;
+struct HttpRequestInfo;
 class HttpResponseHeaders;
 
 // Used to implement the HTTP/1.1 Vary header.  This class contains a MD5 hash

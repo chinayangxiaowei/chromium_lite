@@ -1,27 +1,29 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome_frame/test/net/fake_external_tab.h"
 
+#include <atlbase.h>
+#include <atlcom.h>
 #include <exdisp.h>
 
 #include "app/app_paths.h"
 #include "app/resource_bundle.h"
 #include "app/win_util.h"
-
 #include "base/command_line.h"
+#include "base/debug_util.h"
 #include "base/file_util.h"
 #include "base/file_version_info.h"
 #include "base/i18n/icu_util.h"
 #include "base/path_service.h"
-#include "base/scoped_bstr_win.h"
 #include "base/scoped_comptr_win.h"
-#include "base/scoped_variant_win.h"
-
-#include "chrome/browser/browser_prefs.h"
+#include "base/string_util.h"
+#include "base/stringprintf.h"
+#include "chrome/browser/automation/automation_provider_list.h"
 #include "chrome/browser/plugin_service.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/browser_prefs.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/process_singleton.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
@@ -32,11 +34,12 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "chrome_frame/utils.h"
 #include "chrome_frame/test/chrome_frame_test_utils.h"
-#include "chrome_frame/test/simulate_input.h"
-#include "chrome_frame/test/window_watchdog.h"
 #include "chrome_frame/test/net/test_automation_resource_message_filter.h"
+#include "chrome_frame/test/simulate_input.h"
+#include "chrome_frame/test/win_event_receiver.h"
+#include "chrome_frame/utils.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
 
@@ -103,7 +106,8 @@ class SupplyProxyCredentials : public WindowObserver {
     HWND password_;
   };
 
-  virtual void OnWindowDetected(HWND hwnd, const std::string& caption);
+  virtual void OnWindowOpen(HWND hwnd);
+  virtual void OnWindowClose(HWND hwnd);
   static BOOL CALLBACK EnumChildren(HWND hwnd, LPARAM param);
 
  protected:
@@ -117,12 +121,9 @@ SupplyProxyCredentials::SupplyProxyCredentials(const char* username,
     : username_(username), password_(password) {
 }
 
-void SupplyProxyCredentials::OnWindowDetected(HWND hwnd,
-                                              const std::string& caption) {
-  // IE's dialog caption (en-US).
-  if (caption.compare("Windows Security") != 0)
-    return;
+void SupplyProxyCredentials::OnWindowClose(HWND hwnd) { }
 
+void SupplyProxyCredentials::OnWindowOpen(HWND hwnd) {
   DialogProps props = {0};
   ::EnumChildWindows(hwnd, EnumChildren, reinterpret_cast<LPARAM>(&props));
   DCHECK(::IsWindow(props.username_));
@@ -200,7 +201,7 @@ void FakeExternalTab::Initialize() {
   DCHECK(res_mod);
   _AtlBaseModule.SetResourceInstance(res_mod);
 
-  ResourceBundle::InitSharedInstance(L"en-US");
+  ResourceBundle::InitSharedInstance("en-US");
 
   CommandLine* cmd = CommandLine::ForCurrentProcess();
   cmd->AppendSwitch(switches::kDisableWebResources);
@@ -217,14 +218,15 @@ void FakeExternalTab::Initialize() {
 
   RenderProcessHost::set_run_renderer_in_process(true);
 
-  Profile* profile = g_browser_process->profile_manager()->
-      GetDefaultProfile(FilePath(user_data()));
+  FilePath profile_path(ProfileManager::GetDefaultProfileDir(user_data()));
+  Profile* profile = g_browser_process->profile_manager()->GetProfile(
+      profile_path, false);
   PrefService* prefs = profile->GetPrefs();
   DCHECK(prefs != NULL);
-
   WebCacheManager::RegisterPrefs(prefs);
+
   PrefService* local_state = browser_process_->local_state();
-  local_state->RegisterStringPref(prefs::kApplicationLocale, L"");
+  local_state->RegisterStringPref(prefs::kApplicationLocale, "");
   local_state->RegisterBooleanPref(prefs::kMetricsReportingEnabled, false);
 
   browser::RegisterLocalState(local_state);
@@ -250,9 +252,9 @@ CFUrlRequestUnittestRunner::CFUrlRequestUnittestRunner(int argc, char** argv)
     : NetTestSuite(argc, argv),
       chrome_frame_html_("/chrome_frame", kChromeFrameHtml) {
   // Register the main thread by instantiating it, but don't call any methods.
-  main_thread_.reset(new ChromeThread(ChromeThread::UI,
-                                      MessageLoop::current()));
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  main_thread_.reset(new BrowserThread(BrowserThread::UI,
+                                       MessageLoop::current()));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   fake_chrome_.Initialize();
   pss_subclass_.reset(new ProcessSingletonSubclass(this));
   EXPECT_TRUE(pss_subclass_->Subclass(fake_chrome_.user_data()));
@@ -272,8 +274,8 @@ void CFUrlRequestUnittestRunner::StartChromeFrameInHostBrowser() {
 
   test_http_server_.reset(new test_server::SimpleWebServer(kTestServerPort));
   test_http_server_->AddResponse(&chrome_frame_html_);
-  std::wstring url(StringPrintf(L"http://localhost:%i/chrome_frame",
-                                kTestServerPort).c_str());
+  std::wstring url(base::StringPrintf(L"http://localhost:%i/chrome_frame",
+                                      kTestServerPort).c_str());
 
   // Launch IE.  This launches IE correctly on Vista too.
   ScopedHandle ie_process(chrome_frame_test::LaunchIE(url));
@@ -303,9 +305,11 @@ void CFUrlRequestUnittestRunner::Initialize() {
   // directly because it will attempt to initialize some things such as
   // ICU that have already been initialized for this process.
   InitializeLogging();
-  base::Time::UseHighResolutionTimer(true);
+  base::Time::EnableHighResolutionTimer(true);
 
-#if !defined(PURIFY) && defined(OS_WIN)
+  SuppressErrorDialogs();
+  DebugUtil::SuppressDialogs();
+#if !defined(PURIFY)
   logging::SetLogAssertHandler(UnitTestAssertHandler);
 #endif  // !defined(PURIFY)
 
@@ -417,6 +421,7 @@ void FilterDisabledTests() {
     // TODO(tommi): The tests currently fail though, so need to fix.
     "HTTPSRequestTest.HTTPSMismatchedTest",
     "HTTPSRequestTest.HTTPSExpiredTest",
+    "HTTPSRequestTest.ClientAuthTest",
 
     // Tests chrome's network stack's cache (might not apply to CF).
     "URLRequestTestHTTP.VaryHeader",
@@ -438,8 +443,8 @@ void FilterDisabledTests() {
     "URLRequestTest.CookiePolicy_ForceSession",
     "URLRequestTest.DoNotSendCookies",
     "URLRequestTest.DoNotSendCookies_ViaPolicy_Async",
-    "URLRequestTest.CancelTest_During_OnGetCookiesBlocked",
-    "URLRequestTest.CancelTest_During_OnSetCookieBlocked",
+    "URLRequestTest.CancelTest_During_OnGetCookies",
+    "URLRequestTest.CancelTest_During_OnSetCookie",
 
     // These tests are disabled as the rely on functionality provided by
     // Chrome's HTTP stack like the ability to set the proxy for a URL, etc.
@@ -457,12 +462,18 @@ void FilterDisabledTests() {
   ::testing::FLAGS_gtest_filter = filter;
 }
 
+// We need a module since some of the accessibility code that gets pulled
+// in here uses ATL.
+class ObligatoryModule: public CAtlExeModuleT<ObligatoryModule> {
+};
+
+ObligatoryModule g_obligatory_atl_module;
+
 int main(int argc, char** argv) {
   WindowWatchdog watchdog;
   // See url_request_unittest.cc for these credentials.
   SupplyProxyCredentials credentials("user", "secret");
-  // Check for a dialog class ("#32770")
-  watchdog.AddObserver(&credentials, "#32770");
+  watchdog.AddObserver(&credentials, "Windows Security");
   testing::InitGoogleTest(&argc, argv);
   FilterDisabledTests();
   PluginService::EnableChromePlugins(false);

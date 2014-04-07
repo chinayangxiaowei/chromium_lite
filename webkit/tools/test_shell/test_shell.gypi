@@ -31,25 +31,23 @@
         '<(DEPTH)/app/app.gyp:app_base',
         '<(DEPTH)/base/base.gyp:base',
         '<(DEPTH)/base/base.gyp:base_i18n',
+        '<(DEPTH)/gpu/gpu.gyp:gles2_c_lib',
         '<(DEPTH)/media/media.gyp:media',
         '<(DEPTH)/net/net.gyp:net',
         '<(DEPTH)/skia/skia.gyp:skia',
         '<(DEPTH)/testing/gmock.gyp:gmock',
         '<(DEPTH)/testing/gtest.gyp:gtest',
+        '<(DEPTH)/third_party/WebKit/WebKit/chromium/WebKit.gyp:inspector_resources',
         '<(DEPTH)/third_party/WebKit/WebKit/chromium/WebKit.gyp:webkit',
-        '<(DEPTH)/webkit/webkit.gyp:appcache',
-        '<(DEPTH)/webkit/webkit.gyp:database',
-        '<(DEPTH)/webkit/webkit.gyp:glue',
-        '<(DEPTH)/webkit/webkit.gyp:inspector_resources',
-        '<(DEPTH)/webkit/webkit.gyp:webkit_resources',
-        '<(DEPTH)/webkit/webkit.gyp:webkit_support',
-        'npapi_layout_test_plugin',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:appcache',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:blob',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:database',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:glue',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_resources',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_support',
       ],
       'msvs_guid': '77C32787-1B96-CB84-B905-7F170629F0AC',
       'sources': [
-        'mac/accelerated_surface_stub.cc',
-        'mac/DumpRenderTreePasteboard.h',
-        'mac/DumpRenderTreePasteboard.m',
         'mac/test_shell_webview.h',
         'mac/test_shell_webview.mm',
         'mac/test_webview_delegate.mm',
@@ -70,9 +68,13 @@
         'layout_test_controller.h',
         'mock_spellcheck.cc',
         'mock_spellcheck.h',
+        'notification_presenter.cc',
+        'notification_presenter.h',
         'plain_text_controller.cc',
         'plain_text_controller.h',
         'resource.h',
+        'test_geolocation_service.cc',
+        'test_geolocation_service.h',
         'test_navigation_controller.cc',
         'test_navigation_controller.h',
         'test_shell.cc',
@@ -93,9 +95,8 @@
         'test_shell_switches.cc',
         'test_shell_switches.h',
         'test_shell_win.cc',
+        'test_shell_webkit_init.cc',
         'test_shell_webkit_init.h',
-        'test_shell_webmimeregistry_impl.cc',
-        'test_shell_webmimeregistry_impl.h',
         'test_shell_webthemecontrol.h',
         'test_shell_webthemecontrol.cc',
         'test_shell_webthemeengine.h',
@@ -118,13 +119,13 @@
         '<(DEPTH)/base/base.gyp:base',
         '<(DEPTH)/net/net.gyp:net',
         '<(DEPTH)/third_party/WebKit/WebKit/chromium/WebKit.gyp:webkit',
-        '<(DEPTH)/webkit/webkit.gyp:glue',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:glue',
       ],
       'conditions': [
         # http://code.google.com/p/chromium/issues/detail?id=18337
         ['target_arch!="x64" and target_arch!="arm"', {
           'dependencies': [
-            'npapi_test_plugin',
+            'copy_npapi_test_plugin',
           ],
         }],
         ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
@@ -135,15 +136,6 @@
           ],
           # for:  test_shell_gtk.cc
           'cflags': ['-Wno-multichar'],
-        }],
-        ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
-          # See below TODO in the Windows branch.
-          'copies': [
-            {
-              'destination': '<(PRODUCT_DIR)/plugins',
-              'files': ['<(PRODUCT_DIR)/libnpapi_layout_test_plugin.so'],
-            },
-          ],
         }],
         ['OS=="win"', {
           'msvs_disabled_warnings': [ 4800 ],
@@ -158,21 +150,6 @@
           ],
           'dependencies': [
             '<(DEPTH)/breakpad/breakpad.gyp:breakpad_handler',
-            '<(DEPTH)/webkit/default_plugin/default_plugin.gyp:default_plugin',
-          ],
-          # TODO(bradnelson):
-          # This should really be done in the 'npapi_layout_test_plugin'
-          # target, but the current VS generator handles 'copies'
-          # settings as AdditionalDependencies, which means that
-          # when it's over there, it tries to do the copy *before*
-          # the file is built, instead of after.  We work around this
-          # by attaching the copy here, since it depends on that
-          # target.
-          'copies': [
-            {
-              'destination': '<(PRODUCT_DIR)/plugins',
-              'files': ['<(PRODUCT_DIR)/npapi_layout_test_plugin.dll'],
-            },
           ],
         }, {  # else: OS!=win
           'sources/': [
@@ -237,7 +214,9 @@
         'test_shell_common',
         '<(DEPTH)/net/net.gyp:net_test_support',
         '<(DEPTH)/skia/skia.gyp:skia',
+        '<(DEPTH)/third_party/mesa/mesa.gyp:osmesa',
         '<(DEPTH)/tools/imagediff/image_diff.gyp:image_diff',
+        '<(DEPTH)/webkit/support/webkit_support.gyp:copy_npapi_layout_test_plugin',
       ],
       'defines': [
         # Technically not a unit test but require functions available only to
@@ -250,7 +229,7 @@
       'mac_bundle_resources': [
         '../../data/test_shell/',
         'mac/English.lproj/InfoPlist.strings',
-        'mac/English.lproj/MainMenu.nib',
+        'mac/English.lproj/MainMenu.xib',
         'mac/Info.plist',
         'mac/test_shell.icns',
         'resources/AHEM____.TTF',
@@ -302,7 +281,7 @@
         ['OS=="mac"', {
           'product_name': 'TestShell',
           'dependencies': [
-            'layout_test_helper',
+            'layout_test_helper', 'copy_mesa',
           ],
           'variables': {
             'repack_path': '../../../tools/data_pack/repack.py',
@@ -331,12 +310,6 @@
             },
           ],
           'copies': [
-            {
-              'destination': '<(PRODUCT_DIR)/TestShell.app/Contents/PlugIns/',
-              'files': [
-                '<(PRODUCT_DIR)/TestNetscapePlugIn.plugin/',
-              ],
-            },
             # TODO(ajwong): This, and the parallel chromium stanza below
             # really should find a way to share file paths with
             # ffmpeg.gyp so they don't diverge. (BUG=23602)
@@ -346,12 +319,19 @@
                 '<(PRODUCT_DIR)/libffmpegsumo.dylib',
               ],
             },
+            {
+              # TODO(tony): We should have TestShell.app load plugins from
+              # <(PRODUCT_DIR)/plugins so we don't have this extra copy of
+              # the plugin.
+              'destination': '<(PRODUCT_DIR)/TestShell.app/Contents/PlugIns/',
+              'files': ['<(PRODUCT_DIR)/TestNetscapePlugIn.plugin/'],
+            },
           ],
         }, { # OS != "mac"
           'dependencies': [
             '<(DEPTH)/net/net.gyp:net_resources',
-            '<(DEPTH)/webkit/webkit.gyp:webkit_resources',
-            '<(DEPTH)/webkit/webkit.gyp:webkit_strings',
+            '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_resources',
+            '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_strings',
           ]
         }],
       ],
@@ -388,10 +368,16 @@
         '../../appcache/appcache_url_request_job_unittest.cc',
         '../../appcache/mock_appcache_service.h',
         '../../appcache/mock_appcache_storage_unittest.cc',
+        '../../blob/blob_storage_controller_unittest.cc',
+        '../../blob/blob_url_request_job_unittest.cc',
+        '../../blob/deletable_file_reference_unittest.cc',
         '../../database/databases_table_unittest.cc',
         '../../database/database_tracker_unittest.cc',
         '../../database/database_util_unittest.cc',
         '../../database/quota_table_unittest.cc',
+        '../../fileapi/file_system_operation_unittest.cc',
+        '../../fileapi/file_system_path_manager_unittest.cc',
+        '../../fileapi/file_system_quota_unittest.cc',
         '../../glue/bookmarklet_unittest.cc',
         '../../glue/context_menu_unittest.cc',
         '../../glue/cpp_bound_class_unittest.cc',
@@ -407,6 +393,7 @@
         '../../glue/mimetype_unittest.cc',
         '../../glue/mock_resource_loader_bridge.h',
         '../../glue/multipart_response_delegate_unittest.cc',
+        '../../glue/plugins/plugin_group_unittest.cc',
         '../../glue/plugins/plugin_lib_unittest.cc',
         '../../glue/plugins/webplugin_impl_unittest.cc',
         '../../glue/regular_expression_unittest.cc',
@@ -439,6 +426,15 @@
             '<(SHARED_INTERMEDIATE_DIR)/webkit',
           ],
           'sources': [ '<@(test_shell_windows_resource_files)' ],
+          'configurations': {
+            'Debug_Base': {
+              'msvs_settings': {
+                'VCLinkerTool': {
+                  'LinkIncremental': '<(msvs_large_module_debug_link_mode)',
+                },
+              },
+            },
+          },
         }],
         ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
           'dependencies': [
@@ -467,6 +463,7 @@
           ],
           'sources': [
             '../../../skia/ext/skia_utils_mac_unittest.mm',
+            '../../../skia/ext/bitmap_platform_device_mac_unittest.cc',
           ],
         }],
         ['OS=="win"', {
@@ -484,87 +481,6 @@
               ],
             }],
           ],
-        }],
-      ],
-    },
-    {
-      'target_name': 'npapi_layout_test_plugin',
-      'type': 'loadable_module',
-      'variables': {
-        'chromium_code': 1,
-      },
-      'mac_bundle': 1,
-      'msvs_guid': 'BE6D5659-A8D5-4890-A42C-090DD10EF62C',
-      'sources': [
-        '../npapi_layout_test_plugin/PluginObject.cpp',
-        '../npapi_layout_test_plugin/TestObject.cpp',
-        '../npapi_layout_test_plugin/main.cpp',
-        '../npapi_layout_test_plugin/npapi_layout_test_plugin.def',
-        '../npapi_layout_test_plugin/npapi_layout_test_plugin.rc',
-      ],
-      'include_dirs': [
-        '../../..',
-      ],
-      'dependencies': [
-        '<(DEPTH)/third_party/npapi/npapi.gyp:npapi',
-        '<(DEPTH)/third_party/WebKit/JavaScriptCore/JavaScriptCore.gyp/JavaScriptCore.gyp:wtf',
-      ],
-      'msvs_disabled_warnings': [ 4996 ],
-      'mac_bundle_resources': [
-        '../npapi_layout_test_plugin/Info.r',
-      ],
-      'xcode_settings': {
-        'INFOPLIST_FILE': '<(DEPTH)/webkit/tools/npapi_layout_test_plugin/Info.plist',
-      },
-      'conditions': [
-        ['OS!="win"', {
-          'sources!': [
-            '../npapi_layout_test_plugin/npapi_layout_test_plugin.def',
-            '../npapi_layout_test_plugin/npapi_layout_test_plugin.rc',
-          ],
-        # TODO(bradnelson):
-        # This copy should really live here, as a post-build step,
-        # but it's currently being implemented via
-        # AdditionalDependencies, which tries to do the copy before
-        # the file is built...
-        #
-        }, { # OS == "win"
-        #  # The old VS build would explicitly copy the .dll into the
-        #  # plugins subdirectory like this.  It might be possible to
-        #  # use the 'product_dir' setting to build directly into
-        #  # plugins/ (as is done on Linux), but we'd need to verify
-        #  # that nothing breaks first.
-        #  'copies': [
-        #    {
-        #      'destination': '<(PRODUCT_DIR)/plugins',
-        #      'files': ['<(PRODUCT_DIR)/npapi_layout_test_plugin.dll'],
-        #    },
-        #  ],
-          'variables': {
-            # This is not a relative pathname.  Avoid pathname relativization
-            # by sticking it in a variable that isn't recognized as one
-            # containing pathnames, and by using the >(late) form of variable
-            # expansion.
-            'winmm_lib': 'winmm.lib',
-          },
-          'link_settings': {
-            'libraries': [
-              '>(winmm_lib)',
-            ],
-          },
-        }],
-        ['OS=="mac"', {
-          'product_name': 'TestNetscapePlugIn',
-          'product_extension': 'plugin',
-          'link_settings': {
-            'libraries': [
-              '$(SDKROOT)/System/Library/Frameworks/Carbon.framework',
-            ],
-          },
-        }],
-        ['(OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris") and (target_arch=="x64" or target_arch=="arm")', {
-          # Shared libraries need -fPIC on x86-64
-          'cflags': ['-fPIC']
         }],
       ],
     },
@@ -685,6 +601,39 @@
           ],
         },
         {
+          'target_name': 'copy_npapi_test_plugin',
+          'type': 'none',
+          'dependencies': [
+            'npapi_test_plugin',
+          ],
+          'conditions': [
+            ['OS=="win"', {
+              'copies': [
+                {
+                  'destination': '<(PRODUCT_DIR)/plugins',
+                  'files': ['<(PRODUCT_DIR)/npapi_test_plugin.dll'],
+                },
+              ],
+            }],
+            ['OS=="mac"', {
+              'copies': [
+                {
+                  'destination': '<(PRODUCT_DIR)/plugins/',
+                  'files': ['<(PRODUCT_DIR)/npapi_test_plugin.plugin'],
+                },
+              ]
+            }],
+            ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
+              'copies': [
+                {
+                  'destination': '<(PRODUCT_DIR)/plugins',
+                  'files': ['<(PRODUCT_DIR)/libnpapi_test_plugin.so'],
+                },
+              ],
+            }],
+          ],
+        },
+        {
           'target_name': 'npapi_pepper_test_plugin',
           'type': 'loadable_module',
           'mac_bundle': 1,
@@ -702,6 +651,9 @@
             '../npapi_pepper_test_plugin/plugin.rc',
             '../npapi_pepper_test_plugin/test_factory.cc',
           ],
+          'include_dirs': [
+            '../../..',
+          ],
           'conditions': [
             ['OS!="win"', {
               # windows-specific resources
@@ -710,10 +662,46 @@
                 '../npapi_pepper_test_plugin/plugin.rc',
               ],
             }],
+            ['OS=="mac"', {
+              'product_extension': 'plugin',
+            }],
           ],
           'xcode_settings': {
             'INFOPLIST_FILE': '<(DEPTH)/webkit/tools/npapi_pepper_test_plugin/Info.plist',
           },
+        },
+        {
+          'target_name': 'copy_npapi_pepper_test_plugin',
+          'type': 'none',
+          'dependencies': [
+            'npapi_pepper_test_plugin',
+          ],
+          'conditions': [
+            ['OS=="win"', {
+              'copies': [
+                {
+                  'destination': '<(PRODUCT_DIR)/plugins',
+                  'files': ['<(PRODUCT_DIR)/npapi_pepper_test_plugin.dll'],
+                },
+              ],
+            }],
+            ['OS=="mac"', {
+              'copies': [
+                {
+                  'destination': '<(PRODUCT_DIR)/plugins/',
+                  'files': ['<(PRODUCT_DIR)/npapi_pepper_test_plugin.plugin/'],
+                },
+              ]
+            }],
+            ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
+              'copies': [
+                {
+                  'destination': '<(PRODUCT_DIR)/plugins',
+                  'files': ['<(PRODUCT_DIR)/libnpapi_pepper_test_plugin.so'],
+                },
+              ],
+            }],
+          ],
         },
       ],
     }],
@@ -732,7 +720,6 @@
               },
               'inputs': [
                 '<(input_path)',
-                'resources/linux-fontconfig-config',
               ],
               'outputs': [
                 '<(out_dir)/grit/test_shell_resources.h',
@@ -784,6 +771,15 @@
               '$(SDKROOT)/System/Library/Frameworks/AppKit.framework',
             ],
           },
+        },
+        {
+          'target_name': 'copy_mesa',
+          'type': 'none',
+          'dependencies': ['<(DEPTH)/third_party/mesa/mesa.gyp:osmesa'],
+          'copies': [{
+            'destination': '<(PRODUCT_DIR)/TestShell.app/Contents/MacOS/',
+            'files': ['<(PRODUCT_DIR)/osmesa.so'],
+          }],
         },
       ],
     }],

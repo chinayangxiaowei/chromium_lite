@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,6 +8,7 @@
 
 #ifndef CHROME_INSTALLER_UTIL_INSTALL_UTIL_H__
 #define CHROME_INSTALLER_UTIL_INSTALL_UTIL_H__
+#pragma once
 
 #include <tchar.h>
 #include <windows.h>
@@ -18,6 +19,7 @@
 #include "chrome/installer/util/version.h"
 
 class WorkItemList;
+class RegKey;
 
 // This is a utility class that provides common installation related
 // utility methods that can be used by installer and also unit tested
@@ -89,6 +91,8 @@ class InstallUtil {
   // dll_names: the array of strings containing dll_names
   // dll_names_count: the number of DLL names in dll_names
   // do_register: whether to register or unregister the DLLs
+  // user_level_registration: whether to use alternate DLL entry point names to
+  //     perform non-admin registration.
   // registration_list: the WorkItemList that this method populates
   //
   // Returns true if at least one DLL was successfully added to
@@ -97,10 +101,19 @@ class InstallUtil {
                                        const wchar_t** const dll_names,
                                        int dll_names_count,
                                        bool do_register,
+                                       bool user_level_registration,
                                        WorkItemList* registration_list);
 
+  // Deletes the registry key at path key_path under the key given by root_key.
+  static bool DeleteRegistryKey(RegKey& root_key, const std::wstring& key_path);
+
+  // Deletes the registry value named value_name at path key_path under the key
+  // given by reg_root.
+  static bool DeleteRegistryValue(HKEY reg_root, const std::wstring& key_path,
+                                  const std::wstring& value_name);
+
  private:
-  DISALLOW_EVIL_CONSTRUCTORS(InstallUtil);
+  DISALLOW_COPY_AND_ASSIGN(InstallUtil);
 };
 
 

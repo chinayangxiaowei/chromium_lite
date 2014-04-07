@@ -64,7 +64,9 @@ bool ChromeFrameAutomationProvider::IsValidMessage(uint32 type) {
     case AutomationMsg_RequestEnd::ID:
     case AutomationMsg_SaveAsAsync::ID:
     case AutomationMsg_RemoveBrowsingData::ID:
-    case AutomationMsg_OverrideEncoding::ID: {
+    case AutomationMsg_OverrideEncoding::ID:
+    case AutomationMsg_RunUnloadHandlers::ID:
+    case AutomationMsg_SetZoomLevel::ID: {
       is_valid_message = true;
       break;
     }

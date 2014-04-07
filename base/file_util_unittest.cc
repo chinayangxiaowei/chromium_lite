@@ -6,21 +6,22 @@
 
 #if defined(OS_WIN)
 #include <windows.h>
+#include <winioctl.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <tchar.h>
 #endif
 
 #include <fstream>
-#include <iostream>
 #include <set>
 
 #include "base/base_paths.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/logging.h"
 #include "base/path_service.h"
 #include "base/platform_thread.h"
+#include "base/scoped_handle.h"
+#include "base/scoped_temp_dir.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -30,6 +31,83 @@
 #define FPL(x) FILE_PATH_LITERAL(x)
 
 namespace {
+
+// To test that file_util::Normalize FilePath() deals with NTFS reparse points
+// correctly, we need functions to create and delete reparse points.
+#if defined(OS_WIN)
+typedef struct _REPARSE_DATA_BUFFER {
+  ULONG  ReparseTag;
+  USHORT  ReparseDataLength;
+  USHORT  Reserved;
+  union {
+    struct {
+      USHORT SubstituteNameOffset;
+      USHORT SubstituteNameLength;
+      USHORT PrintNameOffset;
+      USHORT PrintNameLength;
+      ULONG Flags;
+      WCHAR PathBuffer[1];
+    } SymbolicLinkReparseBuffer;
+    struct {
+      USHORT SubstituteNameOffset;
+      USHORT SubstituteNameLength;
+      USHORT PrintNameOffset;
+      USHORT PrintNameLength;
+      WCHAR PathBuffer[1];
+    } MountPointReparseBuffer;
+    struct {
+      UCHAR DataBuffer[1];
+    } GenericReparseBuffer;
+  };
+} REPARSE_DATA_BUFFER, *PREPARSE_DATA_BUFFER;
+
+// Sets a reparse point. |source| will now point to |target|. Returns true if
+// the call succeeds, false otherwise.
+bool SetReparsePoint(HANDLE source, const FilePath& target_path) {
+  std::wstring kPathPrefix = L"\\??\\";
+  std::wstring target_str;
+  // The juction will not work if the target path does not start with \??\ .
+  if (kPathPrefix != target_path.value().substr(0, kPathPrefix.size()))
+    target_str += kPathPrefix;
+  target_str += target_path.value();
+  const wchar_t* target = target_str.c_str();
+  USHORT size_target = static_cast<USHORT>(wcslen(target)) * sizeof(target[0]);
+  char buffer[2000] = {0};
+  DWORD returned;
+
+  REPARSE_DATA_BUFFER* data = reinterpret_cast<REPARSE_DATA_BUFFER*>(buffer);
+
+  data->ReparseTag = 0xa0000003;
+  memcpy(data->MountPointReparseBuffer.PathBuffer, target, size_target + 2);
+
+  data->MountPointReparseBuffer.SubstituteNameLength = size_target;
+  data->MountPointReparseBuffer.PrintNameOffset = size_target + 2;
+  data->ReparseDataLength = size_target + 4 + 8;
+
+  int data_size = data->ReparseDataLength + 8;
+
+  if (!DeviceIoControl(source, FSCTL_SET_REPARSE_POINT, &buffer, data_size,
+                       NULL, 0, &returned, NULL)) {
+    return false;
+  }
+  return true;
+}
+
+// Delete the reparse point referenced by |source|. Returns true if the call
+// succeeds, false otherwise.
+bool DeleteReparsePoint(HANDLE source) {
+  DWORD returned;
+  REPARSE_DATA_BUFFER data = {0};
+  data.ReparseTag = 0xa0000003;
+  if (!DeviceIoControl(source, FSCTL_DELETE_REPARSE_POINT, &data, 8, NULL, 0,
+                       &returned, NULL)) {
+    return false;
+  }
+  return true;
+}
+#endif
+
+const wchar_t bogus_content[] = L"I'm cannon fodder.";
 
 const file_util::FileEnumerator::FILE_TYPE FILES_AND_DIRECTORIES =
     static_cast<file_util::FileEnumerator::FILE_TYPE>(
@@ -42,23 +120,10 @@ class FileUtilTest : public PlatformTest {
  protected:
   virtual void SetUp() {
     PlatformTest::SetUp();
-    // Name a subdirectory of the temp directory.
-    ASSERT_TRUE(PathService::Get(base::DIR_TEMP, &test_dir_));
-    test_dir_ = test_dir_.Append(FILE_PATH_LITERAL("FileUtilTest"));
-
-    // Create a fresh, empty copy of this directory.
-    file_util::Delete(test_dir_, true);
-    file_util::CreateDirectory(test_dir_);
-  }
-  virtual void TearDown() {
-    PlatformTest::TearDown();
-    // Clean up test directory
-    ASSERT_TRUE(file_util::Delete(test_dir_, true));
-    ASSERT_FALSE(file_util::PathExists(test_dir_));
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
   }
 
-  // the path to temporary directory used to contain the test operations
-  FilePath test_dir_;
+  ScopedTempDir temp_dir_;
 };
 
 // Collects all the results from the given file enumerator, and provides an
@@ -161,66 +226,6 @@ TEST_F(FileUtilTest, AppendToPath) {
 }
 #endif  // defined(OS_WIN)
 
-
-static const struct InsertBeforeExtensionCase {
-  const FilePath::CharType* path;
-  const FilePath::CharType* suffix;
-  const FilePath::CharType* result;
-} kInsertBeforeExtension[] = {
-  {FPL(""), FPL(""), FPL("")},
-  {FPL(""), FPL("txt"), FPL("txt")},
-  {FPL("."), FPL("txt"), FPL("txt.")},
-  {FPL("."), FPL(""), FPL(".")},
-  {FPL("foo.dll"), FPL("txt"), FPL("footxt.dll")},
-  {FPL("foo.dll"), FPL(".txt"), FPL("foo.txt.dll")},
-  {FPL("foo"), FPL("txt"), FPL("footxt")},
-  {FPL("foo"), FPL(".txt"), FPL("foo.txt")},
-  {FPL("foo.baz.dll"), FPL("txt"), FPL("foo.baztxt.dll")},
-  {FPL("foo.baz.dll"), FPL(".txt"), FPL("foo.baz.txt.dll")},
-  {FPL("foo.dll"), FPL(""), FPL("foo.dll")},
-  {FPL("foo.dll"), FPL("."), FPL("foo..dll")},
-  {FPL("foo"), FPL(""), FPL("foo")},
-  {FPL("foo"), FPL("."), FPL("foo.")},
-  {FPL("foo.baz.dll"), FPL(""), FPL("foo.baz.dll")},
-  {FPL("foo.baz.dll"), FPL("."), FPL("foo.baz..dll")},
-#if defined(OS_WIN)
-  {FPL("\\"), FPL(""), FPL("\\")},
-  {FPL("\\"), FPL("txt"), FPL("\\txt")},
-  {FPL("\\."), FPL("txt"), FPL("\\txt.")},
-  {FPL("\\."), FPL(""), FPL("\\.")},
-  {FPL("C:\\bar\\foo.dll"), FPL("txt"), FPL("C:\\bar\\footxt.dll")},
-  {FPL("C:\\bar.baz\\foodll"), FPL("txt"), FPL("C:\\bar.baz\\foodlltxt")},
-  {FPL("C:\\bar.baz\\foo.dll"), FPL("txt"), FPL("C:\\bar.baz\\footxt.dll")},
-  {FPL("C:\\bar.baz\\foo.dll.exe"), FPL("txt"),
-   FPL("C:\\bar.baz\\foo.dlltxt.exe")},
-  {FPL("C:\\bar.baz\\foo"), FPL(""), FPL("C:\\bar.baz\\foo")},
-  {FPL("C:\\bar.baz\\foo.exe"), FPL(""), FPL("C:\\bar.baz\\foo.exe")},
-  {FPL("C:\\bar.baz\\foo.dll.exe"), FPL(""), FPL("C:\\bar.baz\\foo.dll.exe")},
-  {FPL("C:\\bar\\baz\\foo.exe"), FPL(" (1)"), FPL("C:\\bar\\baz\\foo (1).exe")},
-#elif defined(OS_POSIX)
-  {FPL("/"), FPL(""), FPL("/")},
-  {FPL("/"), FPL("txt"), FPL("/txt")},
-  {FPL("/."), FPL("txt"), FPL("/txt.")},
-  {FPL("/."), FPL(""), FPL("/.")},
-  {FPL("/bar/foo.dll"), FPL("txt"), FPL("/bar/footxt.dll")},
-  {FPL("/bar.baz/foodll"), FPL("txt"), FPL("/bar.baz/foodlltxt")},
-  {FPL("/bar.baz/foo.dll"), FPL("txt"), FPL("/bar.baz/footxt.dll")},
-  {FPL("/bar.baz/foo.dll.exe"), FPL("txt"), FPL("/bar.baz/foo.dlltxt.exe")},
-  {FPL("/bar.baz/foo"), FPL(""), FPL("/bar.baz/foo")},
-  {FPL("/bar.baz/foo.exe"), FPL(""), FPL("/bar.baz/foo.exe")},
-  {FPL("/bar.baz/foo.dll.exe"), FPL(""), FPL("/bar.baz/foo.dll.exe")},
-  {FPL("/bar/baz/foo.exe"), FPL(" (1)"), FPL("/bar/baz/foo (1).exe")},
-#endif
-};
-
-TEST_F(FileUtilTest, InsertBeforeExtensionTest) {
-  for (unsigned int i = 0; i < arraysize(kInsertBeforeExtension); ++i) {
-    FilePath path(kInsertBeforeExtension[i].path);
-    file_util::InsertBeforeExtension(&path, kInsertBeforeExtension[i].suffix);
-    EXPECT_EQ(kInsertBeforeExtension[i].result, path.value());
-  }
-}
-
 static const struct filename_case {
   const wchar_t* path;
   const wchar_t* filename;
@@ -246,6 +251,8 @@ static const struct filename_case {
 #endif
 };
 
+#if defined(OS_WIN)
+// This function is deprecated on non-Windows.
 TEST_F(FileUtilTest, GetFilenameFromPath) {
   for (unsigned int i = 0; i < arraysize(filename_cases); ++i) {
     const filename_case& value = filename_cases[i];
@@ -253,6 +260,7 @@ TEST_F(FileUtilTest, GetFilenameFromPath) {
     EXPECT_EQ(value.filename, result);
   }
 }
+#endif
 
 // Test finding the file type from a path name
 static const struct extension_case {
@@ -281,6 +289,8 @@ static const struct extension_case {
 #endif
 };
 
+#if defined(OS_WIN)
+// This function has been deprecated on non-Windows.
 TEST_F(FileUtilTest, GetFileExtensionFromPath) {
   for (unsigned int i = 0; i < arraysize(extension_cases); ++i) {
     const extension_case& ext = extension_cases[i];
@@ -288,6 +298,7 @@ TEST_F(FileUtilTest, GetFileExtensionFromPath) {
     EXPECT_EQ(ext.extension, fext);
   }
 }
+#endif
 
 // Test finding the directory component of a path
 static const struct dir_case {
@@ -327,9 +338,11 @@ TEST_F(FileUtilTest, GetDirectoryFromPath) {
 }
 #endif
 
-TEST_F(FileUtilTest, CountFilesCreatedAfter) {
+// Flaky, http://crbug.com/46246
+TEST_F(FileUtilTest, FLAKY_CountFilesCreatedAfter) {
   // Create old file (that we don't want to count)
-  FilePath old_file_name = test_dir_.Append(FILE_PATH_LITERAL("Old File.txt"));
+  FilePath old_file_name =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Old File.txt"));
   CreateTextFile(old_file_name, L"Just call me Mr. Creakybits");
 
   // Age to perfection
@@ -343,30 +356,31 @@ TEST_F(FileUtilTest, CountFilesCreatedAfter) {
 
   // Establish our cutoff time
   base::Time now(base::Time::NowFromSystemTime());
-  EXPECT_EQ(0, file_util::CountFilesCreatedAfter(test_dir_, now));
+  EXPECT_EQ(0, file_util::CountFilesCreatedAfter(temp_dir_.path(), now));
 
   // Create a new file (that we do want to count)
-  FilePath new_file_name = test_dir_.Append(FILE_PATH_LITERAL("New File.txt"));
+  FilePath new_file_name =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("New File.txt"));
   CreateTextFile(new_file_name, L"Waaaaaaaaaaaaaah.");
 
   // We should see only the new file.
-  EXPECT_EQ(1, file_util::CountFilesCreatedAfter(test_dir_, now));
+  EXPECT_EQ(1, file_util::CountFilesCreatedAfter(temp_dir_.path(), now));
 
   // Delete new file, we should see no files after cutoff now
   EXPECT_TRUE(file_util::Delete(new_file_name, false));
-  EXPECT_EQ(0, file_util::CountFilesCreatedAfter(test_dir_, now));
+  EXPECT_EQ(0, file_util::CountFilesCreatedAfter(temp_dir_.path(), now));
 }
 
 TEST_F(FileUtilTest, FileAndDirectorySize) {
   // Create three files of 20, 30 and 3 chars (utf8). ComputeDirectorySize
   // should return 53 bytes.
-  FilePath file_01 = test_dir_.Append(FPL("The file 01.txt"));
+  FilePath file_01 = temp_dir_.path().Append(FPL("The file 01.txt"));
   CreateTextFile(file_01, L"12345678901234567890");
   int64 size_f1 = 0;
   ASSERT_TRUE(file_util::GetFileSize(file_01, &size_f1));
   EXPECT_EQ(20ll, size_f1);
 
-  FilePath subdir_path = test_dir_.Append(FPL("Level2"));
+  FilePath subdir_path = temp_dir_.path().Append(FPL("Level2"));
   file_util::CreateDirectory(subdir_path);
 
   FilePath file_02 = subdir_path.Append(FPL("The file 02.txt"));
@@ -381,50 +395,395 @@ TEST_F(FileUtilTest, FileAndDirectorySize) {
   FilePath file_03 = subsubdir_path.Append(FPL("The file 03.txt"));
   CreateTextFile(file_03, L"123");
 
-  int64 computed_size = file_util::ComputeDirectorySize(test_dir_);
+  int64 computed_size = file_util::ComputeDirectorySize(temp_dir_.path());
   EXPECT_EQ(size_f1 + size_f2 + 3, computed_size);
+
+  computed_size =
+      file_util::ComputeFilesSize(temp_dir_.path(), FPL("The file*"));
+  EXPECT_EQ(size_f1, computed_size);
+
+  computed_size = file_util::ComputeFilesSize(temp_dir_.path(), FPL("bla*"));
+  EXPECT_EQ(0, computed_size);
 }
 
-// Tests that the Delete function works as expected, especially
-// the recursion flag.  Also coincidentally tests PathExists.
-TEST_F(FileUtilTest, Delete) {
-  // Create a file
-  FilePath file_name = test_dir_.Append(FILE_PATH_LITERAL("Test File.txt"));
-  CreateTextFile(file_name, L"I'm cannon fodder.");
+TEST_F(FileUtilTest, NormalizeFilePathBasic) {
+  // Create a directory under the test dir.  Because we create it,
+  // we know it is not a link.
+  FilePath file_a_path = temp_dir_.path().Append(FPL("file_a"));
+  FilePath dir_path = temp_dir_.path().Append(FPL("dir"));
+  FilePath file_b_path = dir_path.Append(FPL("file_b"));
+  file_util::CreateDirectory(dir_path);
 
+  FilePath normalized_file_a_path, normalized_file_b_path;
+  ASSERT_FALSE(file_util::PathExists(file_a_path));
+  ASSERT_FALSE(file_util::NormalizeFilePath(file_a_path,
+                                            &normalized_file_a_path))
+    << "NormalizeFilePath() should fail on nonexistent paths.";
+
+  CreateTextFile(file_a_path, bogus_content);
+  ASSERT_TRUE(file_util::PathExists(file_a_path));
+  ASSERT_TRUE(file_util::NormalizeFilePath(file_a_path,
+                                           &normalized_file_a_path));
+
+  CreateTextFile(file_b_path, bogus_content);
+  ASSERT_TRUE(file_util::PathExists(file_b_path));
+  ASSERT_TRUE(file_util::NormalizeFilePath(file_b_path,
+                                           &normalized_file_b_path));
+
+  // Beacuse this test created |dir_path|, we know it is not a link
+  // or junction.  So, the real path of the directory holding file a
+  // must be the parent of the path holding file b.
+  ASSERT_TRUE(normalized_file_a_path.DirName()
+      .IsParent(normalized_file_b_path.DirName()));
+}
+
+#if defined(OS_WIN)
+
+TEST_F(FileUtilTest, NormalizeFilePathReparsePoints) {
+  // Build the following directory structure:
+  //
+  // temp_dir
+  // |-> base_a
+  // |   |-> sub_a
+  // |       |-> file.txt
+  // |       |-> long_name___... (Very long name.)
+  // |           |-> sub_long
+  // |              |-> deep.txt
+  // |-> base_b
+  //     |-> to_sub_a (reparse point to temp_dir\base_a\sub_a)
+  //     |-> to_base_b (reparse point to temp_dir\base_b)
+  //     |-> to_sub_long (reparse point to temp_dir\sub_a\long_name_\sub_long)
+
+  FilePath base_a = temp_dir_.path().Append(FPL("base_a"));
+  ASSERT_TRUE(file_util::CreateDirectory(base_a));
+
+  FilePath sub_a = base_a.Append(FPL("sub_a"));
+  ASSERT_TRUE(file_util::CreateDirectory(sub_a));
+
+  FilePath file_txt = sub_a.Append(FPL("file.txt"));
+  CreateTextFile(file_txt, bogus_content);
+
+  // Want a directory whose name is long enough to make the path to the file
+  // inside just under MAX_PATH chars.  This will be used to test that when
+  // a junction expands to a path over MAX_PATH chars in length,
+  // NormalizeFilePath() fails without crashing.
+  FilePath sub_long_rel(FPL("sub_long"));
+  FilePath deep_txt(FPL("deep.txt"));
+
+  int target_length = MAX_PATH;
+  target_length -= (sub_a.value().length() + 1);  // +1 for the sepperator '\'.
+  target_length -= (sub_long_rel.Append(deep_txt).value().length() + 1);
+  // Without making the path a bit shorter, CreateDirectory() fails.
+  // the resulting path is still long enough to hit the failing case in
+  // NormalizePath().
+  const int kCreateDirLimit = 4;
+  target_length -= kCreateDirLimit;
+  FilePath::StringType long_name_str = FPL("long_name_");
+  long_name_str.resize(target_length, '_');
+
+  FilePath long_name = sub_a.Append(FilePath(long_name_str));
+  FilePath deep_file = long_name.Append(sub_long_rel).Append(deep_txt);
+  ASSERT_EQ(MAX_PATH - kCreateDirLimit, deep_file.value().length());
+
+  FilePath sub_long = deep_file.DirName();
+  ASSERT_TRUE(file_util::CreateDirectory(sub_long));
+  CreateTextFile(deep_file, bogus_content);
+
+  FilePath base_b = temp_dir_.path().Append(FPL("base_b"));
+  ASSERT_TRUE(file_util::CreateDirectory(base_b));
+
+  FilePath to_sub_a = base_b.Append(FPL("to_sub_a"));
+  ASSERT_TRUE(file_util::CreateDirectory(to_sub_a));
+  ScopedHandle reparse_to_sub_a(
+      ::CreateFile(to_sub_a.value().c_str(),
+                   FILE_ALL_ACCESS,
+                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                   NULL,
+                   OPEN_EXISTING,
+                   FILE_FLAG_BACKUP_SEMANTICS,  // Needed to open a directory.
+                   NULL));
+  ASSERT_TRUE(reparse_to_sub_a.IsValid());
+  ASSERT_TRUE(SetReparsePoint(reparse_to_sub_a, sub_a));
+
+  FilePath to_base_b = base_b.Append(FPL("to_base_b"));
+  ASSERT_TRUE(file_util::CreateDirectory(to_base_b));
+  ScopedHandle reparse_to_base_b(
+      ::CreateFile(to_base_b.value().c_str(),
+                   FILE_ALL_ACCESS,
+                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                   NULL,
+                   OPEN_EXISTING,
+                   FILE_FLAG_BACKUP_SEMANTICS,  // Needed to open a directory.
+                   NULL));
+  ASSERT_TRUE(reparse_to_base_b.IsValid());
+  ASSERT_TRUE(SetReparsePoint(reparse_to_base_b, base_b));
+
+  FilePath to_sub_long = base_b.Append(FPL("to_sub_long"));
+  ASSERT_TRUE(file_util::CreateDirectory(to_sub_long));
+  ScopedHandle reparse_to_sub_long(
+      ::CreateFile(to_sub_long.value().c_str(),
+                   FILE_ALL_ACCESS,
+                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                   NULL,
+                   OPEN_EXISTING,
+                   FILE_FLAG_BACKUP_SEMANTICS,  // Needed to open a directory.
+                   NULL));
+  ASSERT_TRUE(reparse_to_sub_long.IsValid());
+  ASSERT_TRUE(SetReparsePoint(reparse_to_sub_long, sub_long));
+
+  // Normalize a junction free path: base_a\sub_a\file.txt .
+  FilePath normalized_path;
+  ASSERT_TRUE(file_util::NormalizeFilePath(file_txt, &normalized_path));
+  ASSERT_STREQ(file_txt.value().c_str(), normalized_path.value().c_str());
+
+  // Check that the path base_b\to_sub_a\file.txt can be normalized to exclude
+  // the junction to_sub_a.
+  ASSERT_TRUE(file_util::NormalizeFilePath(to_sub_a.Append(FPL("file.txt")),
+                                           &normalized_path));
+  ASSERT_STREQ(file_txt.value().c_str(), normalized_path.value().c_str());
+
+  // Check that the path base_b\to_base_b\to_base_b\to_sub_a\file.txt can be
+  // normalized to exclude junctions to_base_b and to_sub_a .
+  ASSERT_TRUE(file_util::NormalizeFilePath(base_b.Append(FPL("to_base_b"))
+                                                 .Append(FPL("to_base_b"))
+                                                 .Append(FPL("to_sub_a"))
+                                                 .Append(FPL("file.txt")),
+                                           &normalized_path));
+  ASSERT_STREQ(file_txt.value().c_str(), normalized_path.value().c_str());
+
+  // A long enough path will cause NormalizeFilePath() to fail.  Make a long
+  // path using to_base_b many times, and check that paths long enough to fail
+  // do not cause a crash.
+  FilePath long_path = base_b;
+  const int kLengthLimit = MAX_PATH + 200;
+  while (long_path.value().length() <= kLengthLimit) {
+    long_path = long_path.Append(FPL("to_base_b"));
+  }
+  long_path = long_path.Append(FPL("to_sub_a"))
+                       .Append(FPL("file.txt"));
+
+  ASSERT_FALSE(file_util::NormalizeFilePath(long_path, &normalized_path));
+
+  // Normalizing the junction to deep.txt should fail, because the expanded
+  // path to deep.txt is longer than MAX_PATH.
+  ASSERT_FALSE(file_util::NormalizeFilePath(to_sub_long.Append(deep_txt),
+                                            &normalized_path));
+
+  // Delete the reparse points, and see that NormalizeFilePath() fails
+  // to traverse them.
+  ASSERT_TRUE(DeleteReparsePoint(reparse_to_sub_a));
+  ASSERT_TRUE(DeleteReparsePoint(reparse_to_base_b));
+  ASSERT_TRUE(DeleteReparsePoint(reparse_to_sub_long));
+
+  ASSERT_FALSE(file_util::NormalizeFilePath(to_sub_a.Append(FPL("file.txt")),
+                                            &normalized_path));
+}
+
+#endif  // defined(OS_WIN)
+
+// The following test of NormalizeFilePath() require that we create a symlink.
+// This can not be done on windows before vista.  On vista, creating a symlink
+// requires privilege "SeCreateSymbolicLinkPrivilege".
+// TODO(skerner): Investigate the possibility of giving base_unittests the
+// privileges required to create a symlink.
+#if defined(OS_POSIX)
+
+bool MakeSymlink(const FilePath& link_to, const FilePath& link_from) {
+  return (symlink(link_to.value().c_str(), link_from.value().c_str()) == 0);
+}
+
+TEST_F(FileUtilTest, NormalizeFilePathSymlinks) {
+  FilePath normalized_path;
+
+  // Link one file to another.
+  FilePath link_from = temp_dir_.path().Append(FPL("from_file"));
+  FilePath link_to = temp_dir_.path().Append(FPL("to_file"));
+  CreateTextFile(link_to, bogus_content);
+
+  ASSERT_TRUE(MakeSymlink(link_to, link_from))
+    << "Failed to create file symlink.";
+
+  // Check that NormalizeFilePath sees the link.
+  ASSERT_TRUE(file_util::NormalizeFilePath(link_from, &normalized_path));
+  ASSERT_TRUE(link_to != link_from);
+  ASSERT_EQ(link_to.BaseName().value(), normalized_path.BaseName().value());
+  ASSERT_EQ(link_to.BaseName().value(), normalized_path.BaseName().value());
+
+  // Link to a directory.
+  link_from = temp_dir_.path().Append(FPL("from_dir"));
+  link_to = temp_dir_.path().Append(FPL("to_dir"));
+  file_util::CreateDirectory(link_to);
+
+  ASSERT_TRUE(MakeSymlink(link_to, link_from))
+    << "Failed to create directory symlink.";
+
+  ASSERT_FALSE(file_util::NormalizeFilePath(link_from, &normalized_path))
+    << "Links to directories should return false.";
+
+  // Test that a loop in the links causes NormalizeFilePath() to return false.
+  link_from = temp_dir_.path().Append(FPL("link_a"));
+  link_to = temp_dir_.path().Append(FPL("link_b"));
+  ASSERT_TRUE(MakeSymlink(link_to, link_from))
+    << "Failed to create loop symlink a.";
+  ASSERT_TRUE(MakeSymlink(link_from, link_to))
+    << "Failed to create loop symlink b.";
+
+  // Infinite loop!
+  ASSERT_FALSE(file_util::NormalizeFilePath(link_from, &normalized_path));
+}
+#endif  // defined(OS_POSIX)
+
+TEST_F(FileUtilTest, DeleteNonExistent) {
+  FilePath non_existent = temp_dir_.path().AppendASCII("bogus_file_dne.foobar");
+  ASSERT_FALSE(file_util::PathExists(non_existent));
+
+  EXPECT_TRUE(file_util::Delete(non_existent, false));
+  ASSERT_FALSE(file_util::PathExists(non_existent));
+  EXPECT_TRUE(file_util::Delete(non_existent, true));
+  ASSERT_FALSE(file_util::PathExists(non_existent));
+}
+
+TEST_F(FileUtilTest, DeleteFile) {
+  // Create a file
+  FilePath file_name = temp_dir_.path().Append(FPL("Test DeleteFile 1.txt"));
+  CreateTextFile(file_name, bogus_content);
   ASSERT_TRUE(file_util::PathExists(file_name));
 
-  FilePath subdir_path = test_dir_.Append(FILE_PATH_LITERAL("Subdirectory"));
-  file_util::CreateDirectory(subdir_path);
+  // Make sure it's deleted
+  EXPECT_TRUE(file_util::Delete(file_name, false));
+  EXPECT_FALSE(file_util::PathExists(file_name));
 
+  // Test recursive case, create a new file
+  file_name = temp_dir_.path().Append(FPL("Test DeleteFile 2.txt"));
+  CreateTextFile(file_name, bogus_content);
+  ASSERT_TRUE(file_util::PathExists(file_name));
+
+  // Make sure it's deleted
+  EXPECT_TRUE(file_util::Delete(file_name, true));
+  EXPECT_FALSE(file_util::PathExists(file_name));
+}
+
+#if defined(OS_WIN)
+// Tests that the Delete function works for wild cards, especially
+// with the recursion flag.  Also coincidentally tests PathExists.
+// TODO(erikkay): see if anyone's actually using this feature of the API
+TEST_F(FileUtilTest, DeleteWildCard) {
+  // Create a file and a directory
+  FilePath file_name = temp_dir_.path().Append(FPL("Test DeleteWildCard.txt"));
+  CreateTextFile(file_name, bogus_content);
+  ASSERT_TRUE(file_util::PathExists(file_name));
+
+  FilePath subdir_path = temp_dir_.path().Append(FPL("DeleteWildCardDir"));
+  file_util::CreateDirectory(subdir_path);
   ASSERT_TRUE(file_util::PathExists(subdir_path));
 
-  FilePath directory_contents = test_dir_;
-#if defined(OS_WIN)
-  // TODO(erikkay): see if anyone's actually using this feature of the API
-  directory_contents = directory_contents.Append(FILE_PATH_LITERAL("*"));
+  // Create the wildcard path
+  FilePath directory_contents = temp_dir_.path();
+  directory_contents = directory_contents.Append(FPL("*"));
+
   // Delete non-recursively and check that only the file is deleted
-  ASSERT_TRUE(file_util::Delete(directory_contents, false));
+  EXPECT_TRUE(file_util::Delete(directory_contents, false));
   EXPECT_FALSE(file_util::PathExists(file_name));
   EXPECT_TRUE(file_util::PathExists(subdir_path));
-#endif
 
   // Delete recursively and make sure all contents are deleted
-  ASSERT_TRUE(file_util::Delete(directory_contents, true));
+  EXPECT_TRUE(file_util::Delete(directory_contents, true));
   EXPECT_FALSE(file_util::PathExists(file_name));
   EXPECT_FALSE(file_util::PathExists(subdir_path));
+}
+
+// TODO(erikkay): see if anyone's actually using this feature of the API
+TEST_F(FileUtilTest, DeleteNonExistantWildCard) {
+  // Create a file and a directory
+  FilePath subdir_path =
+      temp_dir_.path().Append(FPL("DeleteNonExistantWildCard"));
+  file_util::CreateDirectory(subdir_path);
+  ASSERT_TRUE(file_util::PathExists(subdir_path));
+
+  // Create the wildcard path
+  FilePath directory_contents = subdir_path;
+  directory_contents = directory_contents.Append(FPL("*"));
+
+  // Delete non-recursively and check nothing got deleted
+  EXPECT_TRUE(file_util::Delete(directory_contents, false));
+  EXPECT_TRUE(file_util::PathExists(subdir_path));
+
+  // Delete recursively and check nothing got deleted
+  EXPECT_TRUE(file_util::Delete(directory_contents, true));
+  EXPECT_TRUE(file_util::PathExists(subdir_path));
+}
+#endif
+
+// Tests non-recursive Delete() for a directory.
+TEST_F(FileUtilTest, DeleteDirNonRecursive) {
+  // Create a subdirectory and put a file and two directories inside.
+  FilePath test_subdir = temp_dir_.path().Append(FPL("DeleteDirNonRecursive"));
+  file_util::CreateDirectory(test_subdir);
+  ASSERT_TRUE(file_util::PathExists(test_subdir));
+
+  FilePath file_name = test_subdir.Append(FPL("Test DeleteDir.txt"));
+  CreateTextFile(file_name, bogus_content);
+  ASSERT_TRUE(file_util::PathExists(file_name));
+
+  FilePath subdir_path1 = test_subdir.Append(FPL("TestSubDir1"));
+  file_util::CreateDirectory(subdir_path1);
+  ASSERT_TRUE(file_util::PathExists(subdir_path1));
+
+  FilePath subdir_path2 = test_subdir.Append(FPL("TestSubDir2"));
+  file_util::CreateDirectory(subdir_path2);
+  ASSERT_TRUE(file_util::PathExists(subdir_path2));
+
+  // Delete non-recursively and check that the empty dir got deleted
+  EXPECT_TRUE(file_util::Delete(subdir_path2, false));
+  EXPECT_FALSE(file_util::PathExists(subdir_path2));
+
+  // Delete non-recursively and check that nothing got deleted
+  EXPECT_FALSE(file_util::Delete(test_subdir, false));
+  EXPECT_TRUE(file_util::PathExists(test_subdir));
+  EXPECT_TRUE(file_util::PathExists(file_name));
+  EXPECT_TRUE(file_util::PathExists(subdir_path1));
+}
+
+// Tests recursive Delete() for a directory.
+TEST_F(FileUtilTest, DeleteDirRecursive) {
+  // Create a subdirectory and put a file and two directories inside.
+  FilePath test_subdir = temp_dir_.path().Append(FPL("DeleteDirRecursive"));
+  file_util::CreateDirectory(test_subdir);
+  ASSERT_TRUE(file_util::PathExists(test_subdir));
+
+  FilePath file_name = test_subdir.Append(FPL("Test DeleteDirRecursive.txt"));
+  CreateTextFile(file_name, bogus_content);
+  ASSERT_TRUE(file_util::PathExists(file_name));
+
+  FilePath subdir_path1 = test_subdir.Append(FPL("TestSubDir1"));
+  file_util::CreateDirectory(subdir_path1);
+  ASSERT_TRUE(file_util::PathExists(subdir_path1));
+
+  FilePath subdir_path2 = test_subdir.Append(FPL("TestSubDir2"));
+  file_util::CreateDirectory(subdir_path2);
+  ASSERT_TRUE(file_util::PathExists(subdir_path2));
+
+  // Delete recursively and check that the empty dir got deleted
+  EXPECT_TRUE(file_util::Delete(subdir_path2, true));
+  EXPECT_FALSE(file_util::PathExists(subdir_path2));
+
+  // Delete recursively and check that everything got deleted
+  EXPECT_TRUE(file_util::Delete(test_subdir, true));
+  EXPECT_FALSE(file_util::PathExists(file_name));
+  EXPECT_FALSE(file_util::PathExists(subdir_path1));
+  EXPECT_FALSE(file_util::PathExists(test_subdir));
 }
 
 TEST_F(FileUtilTest, MoveFileNew) {
   // Create a file
   FilePath file_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Move_Test_File.txt"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Move_Test_File.txt"));
   CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
-  // The destination
-  FilePath file_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Move_Test_File_Destination.txt"));
+  // The destination.
+  FilePath file_name_to = temp_dir_.path().Append(
+      FILE_PATH_LITERAL("Move_Test_File_Destination.txt"));
   ASSERT_FALSE(file_util::PathExists(file_name_to));
 
   EXPECT_TRUE(file_util::Move(file_name_from, file_name_to));
@@ -437,13 +796,13 @@ TEST_F(FileUtilTest, MoveFileNew) {
 TEST_F(FileUtilTest, MoveFileExists) {
   // Create a file
   FilePath file_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Move_Test_File.txt"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Move_Test_File.txt"));
   CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
-  // The destination name
-  FilePath file_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Move_Test_File_Destination.txt"));
+  // The destination name.
+  FilePath file_name_to = temp_dir_.path().Append(
+      FILE_PATH_LITERAL("Move_Test_File_Destination.txt"));
   CreateTextFile(file_name_to, L"Old file content");
   ASSERT_TRUE(file_util::PathExists(file_name_to));
 
@@ -458,13 +817,13 @@ TEST_F(FileUtilTest, MoveFileExists) {
 TEST_F(FileUtilTest, MoveFileDirExists) {
   // Create a file
   FilePath file_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Move_Test_File.txt"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Move_Test_File.txt"));
   CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
   // The destination directory
   FilePath dir_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Destination"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Destination"));
   file_util::CreateDirectory(dir_name_to);
   ASSERT_TRUE(file_util::PathExists(dir_name_to));
 
@@ -475,7 +834,7 @@ TEST_F(FileUtilTest, MoveFileDirExists) {
 TEST_F(FileUtilTest, MoveNew) {
   // Create a directory
   FilePath dir_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Move_From_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Move_From_Subdir"));
   file_util::CreateDirectory(dir_name_from);
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
@@ -485,8 +844,9 @@ TEST_F(FileUtilTest, MoveNew) {
   CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
-  // Move the directory
-  FilePath dir_name_to = test_dir_.Append(FILE_PATH_LITERAL("Move_To_Subdir"));
+  // Move the directory.
+  FilePath dir_name_to =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Move_To_Subdir"));
   FilePath file_name_to =
       dir_name_to.Append(FILE_PATH_LITERAL("Move_Test_File.txt"));
 
@@ -504,7 +864,7 @@ TEST_F(FileUtilTest, MoveNew) {
 TEST_F(FileUtilTest, MoveExist) {
   // Create a directory
   FilePath dir_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Move_From_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Move_From_Subdir"));
   file_util::CreateDirectory(dir_name_from);
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
@@ -516,7 +876,7 @@ TEST_F(FileUtilTest, MoveExist) {
 
   // Move the directory
   FilePath dir_name_exists =
-      test_dir_.Append(FILE_PATH_LITERAL("Destination"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Destination"));
 
   FilePath dir_name_to =
       dir_name_exists.Append(FILE_PATH_LITERAL("Move_To_Subdir"));
@@ -539,7 +899,7 @@ TEST_F(FileUtilTest, MoveExist) {
 TEST_F(FileUtilTest, CopyDirectoryRecursivelyNew) {
   // Create a directory.
   FilePath dir_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
   file_util::CreateDirectory(dir_name_from);
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
@@ -563,7 +923,7 @@ TEST_F(FileUtilTest, CopyDirectoryRecursivelyNew) {
 
   // Copy the directory recursively.
   FilePath dir_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_To_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_To_Subdir"));
   FilePath file_name_to =
       dir_name_to.Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
   FilePath subdir_name_to =
@@ -589,7 +949,7 @@ TEST_F(FileUtilTest, CopyDirectoryRecursivelyNew) {
 TEST_F(FileUtilTest, CopyDirectoryRecursivelyExists) {
   // Create a directory.
   FilePath dir_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
   file_util::CreateDirectory(dir_name_from);
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
@@ -613,7 +973,7 @@ TEST_F(FileUtilTest, CopyDirectoryRecursivelyExists) {
 
   // Copy the directory recursively.
   FilePath dir_name_exists =
-      test_dir_.Append(FILE_PATH_LITERAL("Destination"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Destination"));
 
   FilePath dir_name_to =
       dir_name_exists.Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
@@ -644,7 +1004,7 @@ TEST_F(FileUtilTest, CopyDirectoryRecursivelyExists) {
 TEST_F(FileUtilTest, CopyDirectoryNew) {
   // Create a directory.
   FilePath dir_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
   file_util::CreateDirectory(dir_name_from);
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
@@ -668,7 +1028,7 @@ TEST_F(FileUtilTest, CopyDirectoryNew) {
 
   // Copy the directory not recursively.
   FilePath dir_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_To_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_To_Subdir"));
   FilePath file_name_to =
       dir_name_to.Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
   FilePath subdir_name_to =
@@ -691,7 +1051,7 @@ TEST_F(FileUtilTest, CopyDirectoryNew) {
 TEST_F(FileUtilTest, CopyDirectoryExists) {
   // Create a directory.
   FilePath dir_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
   file_util::CreateDirectory(dir_name_from);
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
@@ -715,7 +1075,7 @@ TEST_F(FileUtilTest, CopyDirectoryExists) {
 
   // Copy the directory not recursively.
   FilePath dir_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_To_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_To_Subdir"));
   FilePath file_name_to =
       dir_name_to.Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
   FilePath subdir_name_to =
@@ -740,13 +1100,13 @@ TEST_F(FileUtilTest, CopyDirectoryExists) {
 TEST_F(FileUtilTest, CopyFileWithCopyDirectoryRecursiveToNew) {
   // Create a file
   FilePath file_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
   CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
   // The destination name
-  FilePath file_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_Test_File_Destination.txt"));
+  FilePath file_name_to = temp_dir_.path().Append(
+      FILE_PATH_LITERAL("Copy_Test_File_Destination.txt"));
   ASSERT_FALSE(file_util::PathExists(file_name_to));
 
   EXPECT_TRUE(file_util::CopyDirectory(file_name_from, file_name_to, true));
@@ -758,13 +1118,13 @@ TEST_F(FileUtilTest, CopyFileWithCopyDirectoryRecursiveToNew) {
 TEST_F(FileUtilTest, CopyFileWithCopyDirectoryRecursiveToExisting) {
   // Create a file
   FilePath file_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
   CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
   // The destination name
-  FilePath file_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_Test_File_Destination.txt"));
+  FilePath file_name_to = temp_dir_.path().Append(
+      FILE_PATH_LITERAL("Copy_Test_File_Destination.txt"));
   CreateTextFile(file_name_to, L"Old file content");
   ASSERT_TRUE(file_util::PathExists(file_name_to));
 
@@ -778,13 +1138,13 @@ TEST_F(FileUtilTest, CopyFileWithCopyDirectoryRecursiveToExisting) {
 TEST_F(FileUtilTest, CopyFileWithCopyDirectoryRecursiveToExistingDirectory) {
   // Create a file
   FilePath file_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
   CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
   // The destination
   FilePath dir_name_to =
-      test_dir_.Append(FILE_PATH_LITERAL("Destination"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Destination"));
   file_util::CreateDirectory(dir_name_to);
   ASSERT_TRUE(file_util::PathExists(dir_name_to));
   FilePath file_name_to =
@@ -799,7 +1159,7 @@ TEST_F(FileUtilTest, CopyFileWithCopyDirectoryRecursiveToExistingDirectory) {
 TEST_F(FileUtilTest, CopyFile) {
   // Create a directory
   FilePath dir_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
   file_util::CreateDirectory(dir_name_from);
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
@@ -836,7 +1196,7 @@ TEST_F(FileUtilTest, CopyFile) {
 // TODO(erikkay): implement
 #if defined(OS_WIN)
 TEST_F(FileUtilTest, GetFileCreationLocalTime) {
-  FilePath file_name = test_dir_.Append(L"Test File.txt");
+  FilePath file_name = temp_dir_.path().Append(L"Test File.txt");
 
   SYSTEMTIME start_time;
   GetLocalTime(&start_time);
@@ -974,10 +1334,10 @@ TEST_F(ReadOnlyFileUtilTest, TextContentsEqual) {
 // We don't need equivalent functionality outside of Windows.
 #if defined(OS_WIN)
 TEST_F(FileUtilTest, ResolveShortcutTest) {
-  FilePath target_file = test_dir_.Append(L"Target.txt");
+  FilePath target_file = temp_dir_.path().Append(L"Target.txt");
   CreateTextFile(target_file, L"This is the target.");
 
-  FilePath link_file = test_dir_.Append(L"Link.lnk");
+  FilePath link_file = temp_dir_.path().Append(L"Link.lnk");
 
   HRESULT result;
   IShellLink *shell = NULL;
@@ -1018,10 +1378,10 @@ TEST_F(FileUtilTest, ResolveShortcutTest) {
 
 TEST_F(FileUtilTest, CreateShortcutTest) {
   const wchar_t file_contents[] = L"This is another target.";
-  FilePath target_file = test_dir_.Append(L"Target1.txt");
+  FilePath target_file = temp_dir_.path().Append(L"Target1.txt");
   CreateTextFile(target_file, file_contents);
 
-  FilePath link_file = test_dir_.Append(L"Link1.lnk");
+  FilePath link_file = temp_dir_.path().Append(L"Link1.lnk");
 
   CoInitialize(NULL);
   EXPECT_TRUE(file_util::CreateShortcutLink(target_file.value().c_str(),
@@ -1040,7 +1400,7 @@ TEST_F(FileUtilTest, CreateShortcutTest) {
 TEST_F(FileUtilTest, CopyAndDeleteDirectoryTest) {
   // Create a directory
   FilePath dir_name_from =
-      test_dir_.Append(FILE_PATH_LITERAL("CopyAndDelete_From_Subdir"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("CopyAndDelete_From_Subdir"));
   file_util::CreateDirectory(dir_name_from);
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
@@ -1051,7 +1411,7 @@ TEST_F(FileUtilTest, CopyAndDeleteDirectoryTest) {
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
   // Move the directory by using CopyAndDeleteDirectory
-  FilePath dir_name_to = test_dir_.Append(
+  FilePath dir_name_to = temp_dir_.path().Append(
       FILE_PATH_LITERAL("CopyAndDelete_To_Subdir"));
   FilePath file_name_to =
       dir_name_to.Append(FILE_PATH_LITERAL("CopyAndDelete_Test_File.txt"));
@@ -1141,6 +1501,17 @@ TEST_F(FileUtilTest, CreateNewTempDirectoryTest) {
   EXPECT_TRUE(file_util::Delete(temp_dir, false));
 }
 
+TEST_F(FileUtilTest, CreateNewTemporaryDirInDirTest) {
+  FilePath new_dir;
+  ASSERT_TRUE(file_util::CreateTemporaryDirInDir(
+                  temp_dir_.path(),
+                  FILE_PATH_LITERAL("CreateNewTemporaryDirInDirTest"),
+                  &new_dir));
+  EXPECT_TRUE(file_util::PathExists(new_dir));
+  EXPECT_TRUE(temp_dir_.path().IsParent(new_dir));
+  EXPECT_TRUE(file_util::Delete(new_dir, false));
+}
+
 TEST_F(FileUtilTest, GetShmemTempDirTest) {
   FilePath dir;
   EXPECT_TRUE(file_util::GetShmemTempDir(&dir));
@@ -1149,7 +1520,7 @@ TEST_F(FileUtilTest, GetShmemTempDirTest) {
 
 TEST_F(FileUtilTest, CreateDirectoryTest) {
   FilePath test_root =
-      test_dir_.Append(FILE_PATH_LITERAL("create_directory_test"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("create_directory_test"));
 #if defined(OS_WIN)
   FilePath test_path =
       test_root.Append(FILE_PATH_LITERAL("dir\\tree\\likely\\doesnt\\exist\\"));
@@ -1205,7 +1576,7 @@ TEST_F(FileUtilTest, CreateDirectoryTest) {
 TEST_F(FileUtilTest, DetectDirectoryTest) {
   // Check a directory
   FilePath test_root =
-      test_dir_.Append(FILE_PATH_LITERAL("detect_directory_test"));
+      temp_dir_.path().Append(FILE_PATH_LITERAL("detect_directory_test"));
   EXPECT_FALSE(file_util::PathExists(test_root));
   EXPECT_TRUE(file_util::CreateDirectory(test_root));
   EXPECT_TRUE(file_util::PathExists(test_root));
@@ -1223,69 +1594,25 @@ TEST_F(FileUtilTest, DetectDirectoryTest) {
   EXPECT_TRUE(file_util::Delete(test_root, true));
 }
 
-static const struct ReplaceExtensionCase {
-  std::wstring file_name;
-  FilePath::StringType extension;
-  std::wstring result;
-} kReplaceExtension[] = {
-  {L"", FILE_PATH_LITERAL(""), L""},
-  {L"", FILE_PATH_LITERAL("txt"), L".txt"},
-  {L".", FILE_PATH_LITERAL("txt"), L".txt"},
-  {L".", FILE_PATH_LITERAL(""), L""},
-  {L"foo.dll", FILE_PATH_LITERAL("txt"), L"foo.txt"},
-  {L"foo.dll", FILE_PATH_LITERAL(".txt"), L"foo.txt"},
-  {L"foo", FILE_PATH_LITERAL("txt"), L"foo.txt"},
-  {L"foo", FILE_PATH_LITERAL(".txt"), L"foo.txt"},
-  {L"foo.baz.dll", FILE_PATH_LITERAL("txt"), L"foo.baz.txt"},
-  {L"foo.baz.dll", FILE_PATH_LITERAL(".txt"), L"foo.baz.txt"},
-  {L"foo.dll", FILE_PATH_LITERAL(""), L"foo"},
-  {L"foo.dll", FILE_PATH_LITERAL("."), L"foo"},
-  {L"foo", FILE_PATH_LITERAL(""), L"foo"},
-  {L"foo", FILE_PATH_LITERAL("."), L"foo"},
-  {L"foo.baz.dll", FILE_PATH_LITERAL(""), L"foo.baz"},
-  {L"foo.baz.dll", FILE_PATH_LITERAL("."), L"foo.baz"},
-};
-
-TEST_F(FileUtilTest, ReplaceExtensionTest) {
-  for (unsigned int i = 0; i < arraysize(kReplaceExtension); ++i) {
-    FilePath path = FilePath::FromWStringHack(kReplaceExtension[i].file_name);
-    file_util::ReplaceExtension(&path, kReplaceExtension[i].extension);
-    EXPECT_EQ(kReplaceExtension[i].result, path.ToWStringHack());
-  }
-}
-
-// Make sure ReplaceExtension doesn't replace an extension that occurs as one of
-// the directory names of the path.
-TEST_F(FileUtilTest, ReplaceExtensionTestWithPathSeparators) {
-  FilePath path;
-  path = path.Append(FILE_PATH_LITERAL("foo.bar"));
-  path = path.Append(FILE_PATH_LITERAL("foo"));
-  // '/foo.bar/foo' with extension '.baz'
-  FilePath result_path = path;
-  file_util::ReplaceExtension(&result_path, FILE_PATH_LITERAL(".baz"));
-  EXPECT_EQ(path.value() + FILE_PATH_LITERAL(".baz"),
-            result_path.value());
-}
-
 TEST_F(FileUtilTest, FileEnumeratorTest) {
   // Test an empty directory.
-  file_util::FileEnumerator f0(test_dir_, true, FILES_AND_DIRECTORIES);
+  file_util::FileEnumerator f0(temp_dir_.path(), true, FILES_AND_DIRECTORIES);
   EXPECT_EQ(f0.Next().value(), FILE_PATH_LITERAL(""));
   EXPECT_EQ(f0.Next().value(), FILE_PATH_LITERAL(""));
 
   // Test an empty directory, non-recursively, including "..".
-  file_util::FileEnumerator f0_dotdot(test_dir_, false,
+  file_util::FileEnumerator f0_dotdot(temp_dir_.path(), false,
       static_cast<file_util::FileEnumerator::FILE_TYPE>(
           FILES_AND_DIRECTORIES | file_util::FileEnumerator::INCLUDE_DOT_DOT));
-  EXPECT_EQ(test_dir_.Append(FILE_PATH_LITERAL("..")).value(),
+  EXPECT_EQ(temp_dir_.path().Append(FILE_PATH_LITERAL("..")).value(),
             f0_dotdot.Next().value());
   EXPECT_EQ(FILE_PATH_LITERAL(""),
             f0_dotdot.Next().value());
 
   // create the directories
-  FilePath dir1 = test_dir_.Append(FILE_PATH_LITERAL("dir1"));
+  FilePath dir1 = temp_dir_.path().Append(FILE_PATH_LITERAL("dir1"));
   EXPECT_TRUE(file_util::CreateDirectory(dir1));
-  FilePath dir2 = test_dir_.Append(FILE_PATH_LITERAL("dir2"));
+  FilePath dir2 = temp_dir_.path().Append(FILE_PATH_LITERAL("dir2"));
   EXPECT_TRUE(file_util::CreateDirectory(dir2));
   FilePath dir2inner = dir2.Append(FILE_PATH_LITERAL("inner"));
   EXPECT_TRUE(file_util::CreateDirectory(dir2inner));
@@ -1295,16 +1622,16 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
   CreateTextFile(dir2file, L"");
   FilePath dir2innerfile = dir2inner.Append(FILE_PATH_LITERAL("innerfile.txt"));
   CreateTextFile(dir2innerfile, L"");
-  FilePath file1 = test_dir_.Append(FILE_PATH_LITERAL("file1.txt"));
+  FilePath file1 = temp_dir_.path().Append(FILE_PATH_LITERAL("file1.txt"));
   CreateTextFile(file1, L"");
   FilePath file2_rel =
       dir2.Append(FilePath::kParentDirectory)
           .Append(FILE_PATH_LITERAL("file2.txt"));
   CreateTextFile(file2_rel, L"");
-  FilePath file2_abs = test_dir_.Append(FILE_PATH_LITERAL("file2.txt"));
+  FilePath file2_abs = temp_dir_.path().Append(FILE_PATH_LITERAL("file2.txt"));
 
   // Only enumerate files.
-  file_util::FileEnumerator f1(test_dir_, true,
+  file_util::FileEnumerator f1(temp_dir_.path(), true,
                                file_util::FileEnumerator::FILES);
   FindResultCollector c1(f1);
   EXPECT_TRUE(c1.HasFile(file1));
@@ -1314,7 +1641,7 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
   EXPECT_EQ(c1.size(), 4);
 
   // Only enumerate directories.
-  file_util::FileEnumerator f2(test_dir_, true,
+  file_util::FileEnumerator f2(temp_dir_.path(), true,
                                file_util::FileEnumerator::DIRECTORIES);
   FindResultCollector c2(f2);
   EXPECT_TRUE(c2.HasFile(dir1));
@@ -1324,7 +1651,7 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
 
   // Only enumerate directories non-recursively.
   file_util::FileEnumerator f2_non_recursive(
-      test_dir_, false, file_util::FileEnumerator::DIRECTORIES);
+      temp_dir_.path(), false, file_util::FileEnumerator::DIRECTORIES);
   FindResultCollector c2_non_recursive(f2_non_recursive);
   EXPECT_TRUE(c2_non_recursive.HasFile(dir1));
   EXPECT_TRUE(c2_non_recursive.HasFile(dir2));
@@ -1332,18 +1659,19 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
 
   // Only enumerate directories, non-recursively, including "..".
   file_util::FileEnumerator f2_dotdot(
-      test_dir_, false,
+      temp_dir_.path(), false,
       static_cast<file_util::FileEnumerator::FILE_TYPE>(
           file_util::FileEnumerator::DIRECTORIES |
           file_util::FileEnumerator::INCLUDE_DOT_DOT));
   FindResultCollector c2_dotdot(f2_dotdot);
   EXPECT_TRUE(c2_dotdot.HasFile(dir1));
   EXPECT_TRUE(c2_dotdot.HasFile(dir2));
-  EXPECT_TRUE(c2_dotdot.HasFile(test_dir_.Append(FILE_PATH_LITERAL(".."))));
+  EXPECT_TRUE(c2_dotdot.HasFile(
+      temp_dir_.path().Append(FILE_PATH_LITERAL(".."))));
   EXPECT_EQ(c2_dotdot.size(), 3);
 
   // Enumerate files and directories.
-  file_util::FileEnumerator f3(test_dir_, true, FILES_AND_DIRECTORIES);
+  file_util::FileEnumerator f3(temp_dir_.path(), true, FILES_AND_DIRECTORIES);
   FindResultCollector c3(f3);
   EXPECT_TRUE(c3.HasFile(dir1));
   EXPECT_TRUE(c3.HasFile(dir2));
@@ -1355,7 +1683,7 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
   EXPECT_EQ(c3.size(), 7);
 
   // Non-recursive operation.
-  file_util::FileEnumerator f4(test_dir_, false, FILES_AND_DIRECTORIES);
+  file_util::FileEnumerator f4(temp_dir_.path(), false, FILES_AND_DIRECTORIES);
   FindResultCollector c4(f4);
   EXPECT_TRUE(c4.HasFile(dir2));
   EXPECT_TRUE(c4.HasFile(dir2));
@@ -1364,7 +1692,7 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
   EXPECT_EQ(c4.size(), 4);
 
   // Enumerate with a pattern.
-  file_util::FileEnumerator f5(test_dir_, true, FILES_AND_DIRECTORIES,
+  file_util::FileEnumerator f5(temp_dir_.path(), true, FILES_AND_DIRECTORIES,
       FILE_PATH_LITERAL("dir*"));
   FindResultCollector c5(f5);
   EXPECT_TRUE(c5.HasFile(dir1));
@@ -1376,13 +1704,14 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
 
   // Make sure the destructor closes the find handle while in the middle of a
   // query to allow TearDown to delete the directory.
-  file_util::FileEnumerator f6(test_dir_, true, FILES_AND_DIRECTORIES);
+  file_util::FileEnumerator f6(temp_dir_.path(), true, FILES_AND_DIRECTORIES);
   EXPECT_FALSE(f6.Next().value().empty());  // Should have found something
                                             // (we don't care what).
 }
 
 TEST_F(FileUtilTest, Contains) {
-  FilePath data_dir = test_dir_.Append(FILE_PATH_LITERAL("FilePathTest"));
+  FilePath data_dir =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("FilePathTest"));
 
   // Create a fresh, empty copy of this directory.
   if (file_util::PathExists(data_dir)) {
@@ -1424,8 +1753,9 @@ TEST_F(FileUtilTest, Contains) {
 #endif
 }
 
-TEST_F(FileUtilTest, LastModified) {
-  FilePath data_dir = test_dir_.Append(FILE_PATH_LITERAL("FilePathTest"));
+TEST_F(FileUtilTest, TouchFile) {
+  FilePath data_dir =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("FilePathTest"));
 
   // Create a fresh, empty copy of this directory.
   if (file_util::PathExists(data_dir)) {
@@ -1437,15 +1767,41 @@ TEST_F(FileUtilTest, LastModified) {
   std::string data("hello");
   ASSERT_TRUE(file_util::WriteFile(foobar, data.c_str(), data.length()));
 
+  base::Time access_time;
+  // This timestamp is divisible by one day (in local timezone),
+  // to make it work on FAT too.
+  ASSERT_TRUE(base::Time::FromString(L"Wed, 16 Nov 1994, 00:00:00",
+                                     &access_time));
+
   base::Time modification_time;
   // Note that this timestamp is divisible by two (seconds) - FAT stores
   // modification times with 2s resolution.
   ASSERT_TRUE(base::Time::FromString(L"Tue, 15 Nov 1994, 12:45:26 GMT",
               &modification_time));
-  ASSERT_TRUE(file_util::SetLastModifiedTime(foobar, modification_time));
-  file_util::FileInfo file_info;
+
+  ASSERT_TRUE(file_util::TouchFile(foobar, access_time, modification_time));
+  base::PlatformFileInfo file_info;
   ASSERT_TRUE(file_util::GetFileInfo(foobar, &file_info));
-  ASSERT_TRUE(file_info.last_modified == modification_time);
+  EXPECT_EQ(file_info.last_accessed.ToInternalValue(),
+            access_time.ToInternalValue());
+  EXPECT_EQ(file_info.last_modified.ToInternalValue(),
+            modification_time.ToInternalValue());
+}
+
+TEST_F(FileUtilTest, IsDirectoryEmpty) {
+  FilePath empty_dir = temp_dir_.path().Append(FILE_PATH_LITERAL("EmptyDir"));
+
+  ASSERT_FALSE(file_util::PathExists(empty_dir));
+
+  ASSERT_TRUE(file_util::CreateDirectory(empty_dir));
+
+  EXPECT_TRUE(file_util::IsDirectoryEmpty(empty_dir));
+
+  FilePath foo(empty_dir.Append(FILE_PATH_LITERAL("foo.txt")));
+  std::string bar("baz");
+  ASSERT_TRUE(file_util::WriteFile(foo, bar.c_str(), bar.length()));
+
+  EXPECT_FALSE(file_util::IsDirectoryEmpty(empty_dir));
 }
 
 }  // namespace

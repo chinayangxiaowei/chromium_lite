@@ -1,12 +1,12 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 
 #ifndef CHROME_COMMON_SECURITY_FILTER_PEER_H__
 #define CHROME_COMMON_SECURITY_FILTER_PEER_H__
+#pragma once
 
-#include "chrome/common/filter_policy.h"
 #include "webkit/glue/resource_loader_bridge.h"
 
 // The SecurityFilterPeer is a proxy to a
@@ -19,14 +19,6 @@
 class SecurityFilterPeer : public webkit_glue::ResourceLoaderBridge::Peer {
  public:
   virtual ~SecurityFilterPeer();
-
-  static SecurityFilterPeer* CreateSecurityFilterPeer(
-      webkit_glue::ResourceLoaderBridge* resource_loader_bridge,
-      webkit_glue::ResourceLoaderBridge::Peer* peer,
-      ResourceType::Type resource_type,
-      const std::string& mime_type,
-      FilterPolicy::Type filter_policy,
-      int os_error);
 
   static SecurityFilterPeer* CreateSecurityFilterPeerForDeniedRequest(
       ResourceType::Type resource_type,
@@ -41,15 +33,17 @@ class SecurityFilterPeer : public webkit_glue::ResourceLoaderBridge::Peer {
   virtual void OnUploadProgress(uint64 position, uint64 size);
   virtual bool OnReceivedRedirect(
       const GURL& new_url,
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info,
+      const webkit_glue::ResourceResponseInfo& info,
       bool* has_new_first_party_for_cookies,
       GURL* new_first_party_for_cookies);
   virtual void OnReceivedResponse(
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info,
+      const webkit_glue::ResourceResponseInfo& info,
       bool content_filtered);
+  virtual void OnDownloadedData(int len) {}
   virtual void OnReceivedData(const char* data, int len);
   virtual void OnCompletedRequest(const URLRequestStatus& status,
-                                  const std::string& security_info);
+                                  const std::string& security_info,
+                                  const base::Time& completion_time);
   virtual GURL GetURLForDebugging() const;
 
  protected:
@@ -74,11 +68,12 @@ class BufferedPeer : public SecurityFilterPeer {
 
   // ResourceLoaderBridge::Peer Implementation.
   virtual void OnReceivedResponse(
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info,
+      const webkit_glue::ResourceResponseInfo& info,
       bool content_filtered);
   virtual void OnReceivedData(const char* data, int len);
   virtual void OnCompletedRequest(const URLRequestStatus& status,
-                                  const std::string& security_info);
+                                  const std::string& security_info,
+                                  const base::Time& completion_time);
 
  protected:
   // Invoked when the entire request has been processed before the data is sent
@@ -87,7 +82,7 @@ class BufferedPeer : public SecurityFilterPeer {
   // original peer, if it returns false, an error is sent instead.
   virtual bool DataReady() = 0;
 
-  webkit_glue::ResourceLoaderBridge::ResponseInfo response_info_;
+  webkit_glue::ResourceResponseInfo response_info_;
   std::string data_;
 
  private:
@@ -114,33 +109,19 @@ class ReplaceContentPeer : public SecurityFilterPeer {
 
   // ResourceLoaderBridge::Peer Implementation.
   virtual void OnReceivedResponse(
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info,
+      const webkit_glue::ResourceResponseInfo& info,
       bool content_filtered);
   void OnReceivedData(const char* data, int len);
   void OnCompletedRequest(const URLRequestStatus& status,
-                          const std::string& security_info);
+                          const std::string& security_info,
+                          const base::Time& completion_time);
 
  private:
-  webkit_glue::ResourceLoaderBridge::ResponseInfo response_info_;
+  webkit_glue::ResourceResponseInfo response_info_;
   std::string mime_type_;
   std::string data_;
 
   DISALLOW_COPY_AND_ASSIGN(ReplaceContentPeer);
-};
-
-// This class filters insecure image by replacing them with a transparent and
-// stamped image.
-class ImageFilterPeer : public BufferedPeer {
- public:
-  ImageFilterPeer(webkit_glue::ResourceLoaderBridge* resource_loader_bridge,
-                  webkit_glue::ResourceLoaderBridge::Peer* peer);
-  virtual ~ImageFilterPeer();
-
- protected:
-  virtual bool DataReady();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ImageFilterPeer);
 };
 
 #endif  // CHROME_COMMON_SECURITY_FILTER_PEER_H__

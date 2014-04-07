@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,39 @@
 #include "base/i18n/rtl.h"
 #include "base/json/json_writer.h"
 #include "base/stl_util-inl.h"
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/browser_theme_provider.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_contents_view.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/common/bindings_policy.h"
+#include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
+
+namespace {
+
+std::wstring GetJavascript(const std::wstring& function_name,
+                           const std::vector<const Value*>& arg_list) {
+  std::wstring parameters;
+  std::string json;
+  for (size_t i = 0; i < arg_list.size(); ++i) {
+    if (i > 0)
+      parameters += L",";
+
+    base::JSONWriter::Write(arg_list[i], false, &json);
+    parameters += UTF8ToWide(json);
+  }
+  return function_name + L"(" + parameters + L");";
+}
+
+}  // namespace
 
 DOMUI::DOMUI(TabContents* contents)
     : hide_favicon_(false),
       force_bookmark_bar_visible_(false),
-      force_extension_shelf_visible_(false),
       focus_location_bar_by_default_(false),
       should_hide_url_(false),
       link_transition_type_(PageTransition::LINK),
@@ -36,19 +55,15 @@ DOMUI::~DOMUI() {
 
 // DOMUI, public: -------------------------------------------------------------
 
-void DOMUI::ProcessDOMUIMessage(const std::string& message,
-                                const Value* content,
-                                const GURL& source_url,
-                                int request_id,
-                                bool has_callback) {
+void DOMUI::ProcessDOMUIMessage(const ViewHostMsg_DomMessage_Params& params) {
   // Look up the callback for this message.
   MessageCallbackMap::const_iterator callback =
-      message_callbacks_.find(message);
+      message_callbacks_.find(params.name);
   if (callback == message_callbacks_.end())
     return;
 
   // Forward this message and content on.
-  callback->second->Run(content);
+  callback->second->Run(&params.arguments);
 }
 
 void DOMUI::CallJavascriptFunction(const std::wstring& function_name) {
@@ -58,27 +73,52 @@ void DOMUI::CallJavascriptFunction(const std::wstring& function_name) {
 
 void DOMUI::CallJavascriptFunction(const std::wstring& function_name,
                                    const Value& arg) {
-  std::string json;
-  base::JSONWriter::Write(&arg, false, &json);
-  std::wstring javascript = function_name + L"(" + UTF8ToWide(json) + L");";
-
-  ExecuteJavascript(javascript);
+  std::vector<const Value*> args;
+  args.push_back(&arg);
+  ExecuteJavascript(GetJavascript(function_name, args));
 }
 
 void DOMUI::CallJavascriptFunction(
     const std::wstring& function_name,
     const Value& arg1, const Value& arg2) {
-  std::string json;
-  base::JSONWriter::Write(&arg1, false, &json);
-  std::wstring javascript = function_name + L"(" + UTF8ToWide(json);
-  base::JSONWriter::Write(&arg2, false, &json);
-  javascript += L"," + UTF8ToWide(json) + L");";
+  std::vector<const Value*> args;
+  args.push_back(&arg1);
+  args.push_back(&arg2);
+  ExecuteJavascript(GetJavascript(function_name, args));
+}
 
-  ExecuteJavascript(javascript);
+void DOMUI::CallJavascriptFunction(
+    const std::wstring& function_name,
+    const Value& arg1, const Value& arg2, const Value& arg3) {
+  std::vector<const Value*> args;
+  args.push_back(&arg1);
+  args.push_back(&arg2);
+  args.push_back(&arg3);
+  ExecuteJavascript(GetJavascript(function_name, args));
+}
+
+void DOMUI::CallJavascriptFunction(
+    const std::wstring& function_name,
+    const Value& arg1,
+    const Value& arg2,
+    const Value& arg3,
+    const Value& arg4) {
+  std::vector<const Value*> args;
+  args.push_back(&arg1);
+  args.push_back(&arg2);
+  args.push_back(&arg3);
+  args.push_back(&arg4);
+  ExecuteJavascript(GetJavascript(function_name, args));
+}
+
+void DOMUI::CallJavascriptFunction(
+    const std::wstring& function_name,
+    const std::vector<const Value*>& args) {
+  ExecuteJavascript(GetJavascript(function_name, args));
 }
 
 ThemeProvider* DOMUI::GetThemeProvider() const {
-  return tab_contents_->profile()->GetThemeProvider();
+  return GetProfile()->GetThemeProvider();
 }
 
 void DOMUI::RegisterMessageCallback(const std::string &message,
@@ -86,7 +126,8 @@ void DOMUI::RegisterMessageCallback(const std::string &message,
   message_callbacks_.insert(std::make_pair(message, callback));
 }
 
-Profile* DOMUI::GetProfile() {
+Profile* DOMUI::GetProfile() const {
+  DCHECK(tab_contents());
   return tab_contents()->profile();
 }
 
@@ -96,11 +137,15 @@ void DOMUI::AddMessageHandler(DOMMessageHandler* handler) {
   handlers_.push_back(handler);
 }
 
+RenderViewHost* DOMUI::GetRenderViewHost() const {
+  DCHECK(tab_contents());
+  return tab_contents()->render_view_host();
+}
+
 // DOMUI, private: ------------------------------------------------------------
 
 void DOMUI::ExecuteJavascript(const std::wstring& javascript) {
-  tab_contents()->render_view_host()->ExecuteJavascriptInWebFrame(
-      std::wstring(), javascript);
+  GetRenderViewHost()->ExecuteJavascriptInWebFrame(std::wstring(), javascript);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -115,22 +160,21 @@ DOMMessageHandler* DOMMessageHandler::Attach(DOMUI* dom_ui) {
 // DOMMessageHandler, protected: ----------------------------------------------
 
 void DOMMessageHandler::SetURLAndTitle(DictionaryValue* dictionary,
-                                       std::wstring title,
+                                       string16 title,
                                        const GURL& gurl) {
-  std::wstring wstring_url = UTF8ToWide(gurl.spec());
-  dictionary->SetString(L"url", wstring_url);
+  dictionary->SetString("url", gurl.spec());
 
   bool using_url_as_the_title = false;
   if (title.empty()) {
     using_url_as_the_title = true;
-    title = wstring_url;
+    title = UTF8ToUTF16(gurl.spec());
   }
 
   // Since the title can contain BiDi text, we need to mark the text as either
   // RTL or LTR, depending on the characters in the string. If we use the URL
   // as the title, we mark the title as LTR since URLs are always treated as
   // left to right strings.
-  std::wstring title_to_set(title);
+  string16 title_to_set(title);
   if (base::i18n::IsRTL()) {
     if (using_url_as_the_title) {
       base::i18n::WrapStringWithLTRFormatting(&title_to_set);
@@ -140,43 +184,23 @@ void DOMMessageHandler::SetURLAndTitle(DictionaryValue* dictionary,
       DCHECK(success ? (title != title_to_set) : (title == title_to_set));
     }
   }
-  dictionary->SetString(L"title", title_to_set);
+  dictionary->SetString("title", title_to_set);
 }
 
-bool DOMMessageHandler::ExtractIntegerValue(const Value* value, int* out_int) {
-  if (value && value->GetType() == Value::TYPE_LIST) {
-    const ListValue* list_value = static_cast<const ListValue*>(value);
-    Value* list_member;
-
-    // Get id.
-    if (list_value->Get(0, &list_member) &&
-        list_member->GetType() == Value::TYPE_STRING) {
-      const StringValue* string_value =
-          static_cast<const StringValue*>(list_member);
-      std::wstring wstring_value;
-      string_value->GetAsString(&wstring_value);
-      *out_int = StringToInt(WideToUTF16Hack(wstring_value));
-      return true;
-    }
-  }
-
+bool DOMMessageHandler::ExtractIntegerValue(const ListValue* value,
+                                            int* out_int) {
+  std::string string_value;
+  if (value->GetString(0, &string_value))
+    return base::StringToInt(string_value, out_int);
+  NOTREACHED();
   return false;
 }
 
-std::wstring DOMMessageHandler::ExtractStringValue(const Value* value) {
-  if (value && value->GetType() == Value::TYPE_LIST) {
-    const ListValue* list_value = static_cast<const ListValue*>(value);
-    Value* list_member;
-
-    // Get id.
-    if (list_value->Get(0, &list_member) &&
-        list_member->GetType() == Value::TYPE_STRING) {
-      const StringValue* string_value =
-          static_cast<const StringValue*>(list_member);
-      std::wstring wstring_value;
-      string_value->GetAsString(&wstring_value);
-      return wstring_value;
-    }
-  }
+// TODO(viettrungluu): convert to string16 (or UTF-8 std::string?).
+std::wstring DOMMessageHandler::ExtractStringValue(const ListValue* value) {
+  string16 string16_value;
+  if (value->GetString(0, &string16_value))
+    return UTF16ToWideHack(string16_value);
+  NOTREACHED();
   return std::wstring();
 }

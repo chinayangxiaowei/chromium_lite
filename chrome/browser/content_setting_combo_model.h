@@ -4,27 +4,28 @@
 
 #ifndef CHROME_BROWSER_CONTENT_SETTING_COMBO_MODEL_H_
 #define CHROME_BROWSER_CONTENT_SETTING_COMBO_MODEL_H_
+#pragma once
 
 #include "app/combobox_model.h"
 
 #include "base/basictypes.h"
+#include "base/string16.h"
 #include "chrome/common/content_settings.h"
 
 class ContentSettingComboModel : public ComboboxModel {
  public:
-  explicit ContentSettingComboModel(bool show_ask);
+  explicit ContentSettingComboModel(ContentSettingsType content_type);
   virtual ~ContentSettingComboModel();
 
   virtual int GetItemCount();
-
-  virtual std::wstring GetItemAt(int index);
+  virtual string16 GetItemAt(int index);
 
   ContentSetting SettingForIndex(int index);
 
   int IndexForSetting(ContentSetting);
 
  private:
-  const bool show_ask_;
+  const ContentSettingsType content_type_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentSettingComboModel);
 };

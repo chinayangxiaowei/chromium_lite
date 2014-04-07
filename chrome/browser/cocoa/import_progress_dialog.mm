@@ -4,6 +4,7 @@
 
 #import "chrome/browser/cocoa/import_progress_dialog.h"
 
+#include "app/l10n_util.h"
 #include "app/l10n_util_mac.h"
 #include "base/logging.h"
 #include "base/mac_util.h"
@@ -54,7 +55,7 @@ NSString* keyForImportItem(importer::ImportItem item) {
 - (id)initWithImporterHost:(ImporterHost*)host
                browserName:(string16)browserName
                   observer:(ImportObserver*)observer
-              itemsEnabled:(int16)items; {
+              itemsEnabled:(int16)items {
   NSString* nib_path =
       [mac_util::MainAppBundle() pathForResource:@"ImportProgressDialog"
                                           ofType:@"nib"];
@@ -112,7 +113,6 @@ NSString* keyForImportItem(importer::ImportItem item) {
   [super dealloc];
 }
 
-
 - (IBAction)showWindow:(id)sender {
   NSWindow* win = [self window];
   [win center];
@@ -126,13 +126,12 @@ NSString* keyForImportItem(importer::ImportItem item) {
 }
 
 - (IBAction)cancel:(id)sender {
-  [self closeDialog];
-  if (importing_) {
-    importer_host_->Cancel();
-  } else {
-    [self release];
-  }
+  // The ImporterHost will notify import_host_observer_bridge_ that import has
+  // ended, which will trigger the ImportEnded method, in which this object is
+  // released.
+  importer_host_->Cancel();
 }
+
 - (void)ImportItemStarted:(importer::ImportItem)item {
   [self setValue:progress_text_ forKey:keyForImportItem(item)];
 }
@@ -141,12 +140,7 @@ NSString* keyForImportItem(importer::ImportItem item) {
   [self setValue:done_text_ forKey:keyForImportItem(item)];
 }
 
-- (void)ImportStarted {
-  importing_ = YES;
-}
-
 - (void)ImportEnded {
-  importing_ = NO;
   importer_host_->SetObserver(NULL);
   if (observer_)
     observer_->ImportComplete();
@@ -183,7 +177,6 @@ void StartImportingWithUI(gfx::NativeWindow parent_window,
   coordinator->StartImportSettings(source_profile, target_profile, items,
                                    new ProfileWriter(target_profile),
                                    first_run);
-
 
   // Display the window while spinning a message loop.
   // For details on why we need a modal message loop see http://crbug.com/19169

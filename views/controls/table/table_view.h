@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_TABLE_TABLE_VIEW_H_
 #define VIEWS_CONTROLS_TABLE_TABLE_VIEW_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -15,8 +16,8 @@ typedef struct tagNMLVCUSTOMDRAW NMLVCUSTOMDRAW;
 #include <map>
 #include <vector>
 
+#include "app/keyboard_codes.h"
 #include "app/table_model_observer.h"
-#include "base/keyboard_codes.h"
 #include "third_party/skia/include/core/SkColor.h"
 #if defined(OS_WIN)
 // TODO(port): remove the ifdef when native_control.h is ported.
@@ -157,7 +158,7 @@ class TableView : public NativeControl,
                        const gfx::Rect& current);
 
   // Returns the number of rows in the TableView.
-  int RowCount();
+  int RowCount() const;
 
   // Returns the number of selected rows.
   int SelectedRowCount();
@@ -227,14 +228,10 @@ class TableView : public NativeControl,
   bool is_sorted() const { return !sort_descriptors_.empty(); }
 
   // Maps from the index in terms of the model to that of the view.
-  int model_to_view(int model_index) const {
-    return model_to_view_.get() ? model_to_view_[model_index] : model_index;
-  }
+  int ModelToView(int model_index) const;
 
   // Maps from the index in terms of the view to that of the model.
-  int view_to_model(int view_index) const {
-    return view_to_model_.get() ? view_to_model_[view_index] : view_index;
-  }
+  int ViewToModel(int view_index) const;
 
   // Sets the text to display on top of the table. This is useful if the table
   // is empty and you want to inform the user why.
@@ -260,7 +257,7 @@ class TableView : public NativeControl,
   virtual void OnMiddleClick();
 
   // Overridden from NativeControl. Notifies the observer.
-  virtual bool OnKeyDown(base::KeyboardCode virtual_keycode);
+  virtual bool OnKeyDown(app::KeyboardCode virtual_keycode);
 
   // Invoked to customize the colors or font at a particular cell. If you
   // change the colors or font, return true. This is only invoked if
@@ -375,10 +372,6 @@ class TableView : public NativeControl,
   // range start - [start + length] are updated from the model.
   void UpdateListViewCache0(int start, int length, bool add);
 
-  // Notification from the ListView that the checked state of the item has
-  // changed.
-  void OnCheckedStateChanged(int model_row, bool is_checked);
-
   // Returns the index of the selected item before |view_index|, or -1 if
   // |view_index| is the first selected item.
   //
@@ -409,11 +402,18 @@ class TableView : public NativeControl,
   // Updates content_offset_ from the position of the header.
   void UpdateContentOffset();
 
+  // Reloads the groups from the model if there is one and it has groups.
+  void UpdateGroups();
+
   // Returns the bounds of the alt text.
   gfx::Rect GetAltTextBounds();
 
   // Returns the font used for alt text.
   gfx::Font GetAltTextFont();
+
+  // Overriden in order to update the column sizes, which can only be sized
+  // accurately when the native control is available.
+  virtual void VisibilityChanged(View* starting_from, bool is_visible);
 
   TableModel* model_;
   TableTypes table_type_;
@@ -440,16 +440,15 @@ class TableView : public NativeControl,
   // Reflects the value passed to SetCustomColorsEnabled.
   bool custom_colors_enabled_;
 
-  // Whether or not the columns have been sized in the ListView. This is
-  // set to true the first time Layout() is invoked and we have a valid size.
-  bool sized_columns_;
-
   // Whether or not columns should automatically be resized to fill the
   // the available width when the list view is resized.
   bool autosize_columns_;
 
   // Whether or not the user can resize columns.
   bool resizable_columns_;
+
+  // Whether the column sizes have been determined.
+  bool column_sizes_valid_;
 
   // NOTE: While this has the name View in it, it's not a view. Rather it's
   // a wrapper around the List-View window.

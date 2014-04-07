@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,6 +33,12 @@ void AppModalDialogQueue::ActivateModalDialog() {
   if (active_dialog_)
     active_dialog_->ActivateModalDialog();
 }
+
+AppModalDialogQueue::AppModalDialogQueue()
+    : active_dialog_(NULL), showing_modal_dialog_(false) {
+}
+
+AppModalDialogQueue::~AppModalDialogQueue() {}
 
 void AppModalDialogQueue::ShowModalDialog(AppModalDialog* dialog) {
   // Be sure and set the active_dialog_ field first, otherwise if

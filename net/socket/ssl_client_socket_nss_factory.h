@@ -4,6 +4,7 @@
 
 #ifndef NET_SOCKET_SSL_CLIENT_SOCKET_NSS_FACTORY_H_
 #define NET_SOCKET_SSL_CLIENT_SOCKET_NSS_FACTORY_H_
+#pragma once
 
 #include "net/socket/client_socket_factory.h"
 
@@ -11,7 +12,7 @@ namespace net {
 
 // Creates SSLClientSocketNSS objects.
 SSLClientSocket* SSLClientSocketNSSFactory(
-    ClientSocket* transport_socket,
+    ClientSocketHandle* transport_socket,
     const std::string& hostname,
     const SSLConfig& ssl_config);
 

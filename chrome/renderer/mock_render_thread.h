@@ -4,14 +4,18 @@
 
 #ifndef CHROME_RENDERER_MOCK_RENDER_THREAD_H_
 #define CHROME_RENDERER_MOCK_RENDER_THREAD_H_
+#pragma once
 
 #include <string>
-#include <vector>
 
 #include "chrome/common/ipc_test_sink.h"
 #include "chrome/renderer/mock_printer.h"
 #include "chrome/renderer/render_thread.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebPopupType.h"
+
+namespace IPC {
+class MessageReplyDeserializer;
+}
 
 struct ViewMsg_Print_Params;
 struct ViewMsg_PrintPages_Params;
@@ -49,6 +53,9 @@ class MockRenderThread : public RenderThreadBase {
   virtual void WidgetHidden() { }
   virtual void WidgetRestored() { }
 
+  virtual bool IsExtensionProcess() const { return is_extension_process_; }
+  virtual bool IsIncognitoProcess() const { return false; }
+  void SetExtensionProcess(bool value) { is_extension_process_ = value; }
 
   //////////////////////////////////////////////////////////////////////////
   // The following functions are called by the test itself.
@@ -98,6 +105,12 @@ class MockRenderThread : public RenderThreadBase {
                               base::SharedMemoryHandle* handle);
 #endif
 
+#if defined(OS_LINUX)
+  void OnAllocateTempFileForPrinting(base::FileDescriptor* renderer_fd,
+                                     int* browser_fd);
+  void OnTempFileForPrintingWritten(int browser_fd);
+#endif
+
   // The RenderView expects default print settings.
   void OnGetDefaultPrintSettings(ViewMsg_Print_Params* setting);
 
@@ -125,6 +138,8 @@ class MockRenderThread : public RenderThreadBase {
 
   // A mock printer device used for printing tests.
   scoped_ptr<MockPrinter> printer_;
+
+  bool is_extension_process_;
 };
 
 #endif  // CHROME_RENDERER_MOCK_RENDER_THREAD_H_

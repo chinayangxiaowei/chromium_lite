@@ -4,12 +4,12 @@
 
 #include "views/controls/menu/native_menu_win.h"
 
+#include "app/keyboard_codes.h"
 #include "app/l10n_util.h"
 #include "app/l10n_util_win.h"
-#include "base/keyboard_codes.h"
 #include "base/logging.h"
 #include "base/stl_util-inl.h"
-#include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/font.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "views/accelerator.h"
@@ -151,7 +151,7 @@ class NativeMenuWin::MenuHostWindow {
       if (data->label.find(L'\t') != std::wstring::npos)
         measure_item_struct->itemWidth += font.GetStringWidth(L" ");
       measure_item_struct->itemHeight =
-          font.height() + kItemBottomMargin + kItemTopMargin;
+          font.GetHeight() + kItemBottomMargin + kItemTopMargin;
     } else {
       // Measure separator size.
       measure_item_struct->itemHeight = GetSystemMetrics(SM_CYMENU) / 2;
@@ -196,8 +196,9 @@ class NativeMenuWin::MenuHostWindow {
       if (!underline_mnemonics)
         format |= DT_HIDEPREFIX;
       gfx::Font font;
-      HGDIOBJ old_font = static_cast<HFONT>(SelectObject(dc, font.hfont()));
-      int fontsize = font.FontSize();
+      HGDIOBJ old_font =
+          static_cast<HFONT>(SelectObject(dc, font.GetNativeFont()));
+      int fontsize = font.GetFontSize();
 
       // If an accelerator is specified (with a tab delimiting the rest of the
       // label from the accelerator), we have to justify the fist part on the
@@ -223,7 +224,7 @@ class NativeMenuWin::MenuHostWindow {
       // by the label.
       SkBitmap icon;
       if (data->native_menu_win->model_->GetIconAt(data->model_index, &icon)) {
-        gfx::Canvas canvas(icon.width(), icon.height(), false);
+        gfx::CanvasSkia canvas(icon.width(), icon.height(), false);
         canvas.drawColor(SK_ColorBLACK, SkXfermode::kClear_Mode);
         canvas.DrawBitmapInt(icon, 0, 0);
         canvas.getTopPlatformDevice().drawToHDC(dc,
@@ -408,6 +409,10 @@ void NativeMenuWin::RemoveMenuListener(MenuListener* listener) {
   }
 }
 
+void NativeMenuWin::SetMinimumWidth(int width) {
+  NOTIMPLEMENTED();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // NativeMenuWin, private:
 
@@ -541,8 +546,7 @@ void NativeMenuWin::SetMenuItemLabel(int menu_index,
   MENUITEMINFO mii = {0};
   mii.cbSize = sizeof(mii);
   UpdateMenuItemInfoForString(&mii, model_index, label);
-  if (!owner_draw_)
-    SetMenuItemInfo(menu_, menu_index, MF_BYPOSITION, &mii);
+  SetMenuItemInfo(menu_, menu_index, MF_BYPOSITION, &mii);
 }
 
 void NativeMenuWin::UpdateMenuItemInfoForString(
@@ -553,7 +557,7 @@ void NativeMenuWin::UpdateMenuItemInfoForString(
   menus::MenuModel::ItemType type = model_->GetTypeAt(model_index);
   if (type != menus::MenuModel::TYPE_SUBMENU) {
     // Add accelerator details to the label if provided.
-    views::Accelerator accelerator(base::VKEY_UNKNOWN, false, false, false);
+    views::Accelerator accelerator(app::VKEY_UNKNOWN, false, false, false);
     if (model_->GetAcceleratorAt(model_index, &accelerator)) {
       formatted += L"\t";
       formatted += accelerator.GetShortcutText();
@@ -564,13 +568,10 @@ void NativeMenuWin::UpdateMenuItemInfoForString(
   // version around.
   items_[model_index]->label = formatted;
 
-  // Windows only requires a pointer to the label string if it's going to be
-  // doing the drawing.
-  if (!owner_draw_) {
-    mii->fMask |= MIIM_STRING;
-    mii->dwTypeData =
-        const_cast<wchar_t*>(items_.at(model_index)->label.c_str());
-  }
+  // Give Windows a pointer to the label string.
+  mii->fMask |= MIIM_STRING;
+  mii->dwTypeData =
+      const_cast<wchar_t*>(items_.at(model_index)->label.c_str());
 }
 
 UINT NativeMenuWin::GetAlignmentFlags(int alignment) const {

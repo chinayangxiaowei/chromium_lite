@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VIEWS_CONTROLS_TABBED_PANE_NATIVE_TABBED_PANE_WRAPPER_H_
 #define VIEWS_CONTROLS_TABBED_PANE_NATIVE_TABBED_PANE_WRAPPER_H_
+#pragma once
 
 namespace views {
 
@@ -55,6 +56,9 @@ class NativeTabbedPaneWrapper {
 
   // Sets the focus to the tabbed pane native view.
   virtual void SetFocus() = 0;
+
+  // Gets the preferred size of the tabbed pane.
+  virtual gfx::Size GetPreferredSize() = 0;
 
   // Returns a handle to the underlying native view for testing.
   virtual gfx::NativeView GetTestingHandle() const = 0;

@@ -8,6 +8,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_BOOKMARK_MENU_COCOA_CONTROLLER_H_
 #define CHROME_BROWSER_COCOA_BOOKMARK_MENU_COCOA_CONTROLLER_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -22,7 +23,7 @@ class BookmarkMenuBridge;
 }
 
 // The Bookmarks menu
-@property (readonly) NSMenu* menu;
+@property (nonatomic, readonly) NSMenu* menu;
 
 // Return an autoreleased string to be used as a menu title for the
 // given bookmark node.

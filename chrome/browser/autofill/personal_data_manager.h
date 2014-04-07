@@ -4,10 +4,13 @@
 
 #ifndef CHROME_BROWSER_AUTOFILL_PERSONAL_DATA_MANAGER_H_
 #define CHROME_BROWSER_AUTOFILL_PERSONAL_DATA_MANAGER_H_
+#pragma once
 
 #include <set>
 #include <vector>
 
+#include "base/observer_list.h"
+#include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "base/scoped_vector.h"
 #include "base/string16.h"
@@ -24,8 +27,10 @@ class Profile;
 // Handles loading and saving AutoFill profile information to the web database.
 // This class also stores the profiles loaded from the database for use during
 // AutoFill.
-class PersonalDataManager : public WebDataServiceConsumer,
-                            public AutoFillDialogObserver {
+class PersonalDataManager
+    : public WebDataServiceConsumer,
+      public AutoFillDialogObserver,
+      public base::RefCountedThreadSafe<PersonalDataManager> {
  public:
   // An interface the PersonalDataManager uses to notify its clients (observers)
   // when it has finished loading personal data from the web database.  Register
@@ -33,13 +38,16 @@ class PersonalDataManager : public WebDataServiceConsumer,
   class Observer {
    public:
     // Notifies the observer that the PersonalDataManager has finished loading.
+    // TODO: OnPersonalDataLoaded should be nuked in favor of only
+    // OnPersonalDataChanged.
     virtual void OnPersonalDataLoaded() = 0;
+
+    // Notifies the observer that the PersonalDataManager changed in some way.
+    virtual void OnPersonalDataChanged() {}
 
    protected:
     virtual ~Observer() {}
   };
-
-  virtual ~PersonalDataManager();
 
   // WebDataServiceConsumer implementation:
   virtual void OnWebDataServiceRequestDone(WebDataService::Handle h,
@@ -50,22 +58,28 @@ class PersonalDataManager : public WebDataServiceConsumer,
                                      std::vector<CreditCard>* credit_cards);
 
   // Sets the listener to be notified of PersonalDataManager events.
-  void SetObserver(PersonalDataManager::Observer* observer);
+  virtual void SetObserver(PersonalDataManager::Observer* observer);
 
   // Removes |observer| as the observer of this PersonalDataManager.
-  void RemoveObserver(PersonalDataManager::Observer* observer);
+  virtual void RemoveObserver(PersonalDataManager::Observer* observer);
 
-  // If AutoFill is able to determine the field types of a significant number
-  // of field types that contain information in the FormStructures and the user
-  // has not previously been prompted, the user will be asked if he would like
-  // to import the data. If the user selects yes, a profile will be created
-  // with all of the information from recognized fields.
+  // If AutoFill is able to determine the field types of a significant number of
+  // field types that contain information in the FormStructures a profile will
+  // be created with all of the information from recognized fields. Returns
+  // whether a profile was created.
   bool ImportFormData(const std::vector<FormStructure*>& form_structures,
                       AutoFillManager* autofill_manager);
 
-  // Saves |imported_profile_| and |imported_credit_card_| to the WebDB if they
-  // exist.
-  void SaveImportedFormData();
+  // Gets |imported_profile_| and |imported_credit_card_| and returns their
+  // values in |profile| and |credit_card| parameters respectively.  One or
+  // both may return NULL.  The objects returned are owned by the
+  // PersonalDataManager, so should be considered weak references by caller.
+  // TODO(dhollowa) Now that we aren't immediately saving the imported form
+  // data, we should store the profile and CC in the AFM instead of the PDM.
+  void GetImportedFormData(AutoFillProfile** profile, CreditCard** credit_card);
+
+  // Saves a credit card value detected in |ImportedFormData|.
+  void SaveImportedCreditCard();
 
   // Sets |web_profiles_| to the contents of |profiles| and updates the web
   // database by adding, updating and removing profiles.  Sets the unique ID of
@@ -73,7 +87,7 @@ class PersonalDataManager : public WebDataServiceConsumer,
   //
   // The relationship between this and Refresh is subtle.
   // A call to SetProfile could include out-of-date data that may conflict
-  // if we didn't refresh-to-latest before an autofill window was opened for
+  // if we didn't refresh-to-latest before an AutoFill window was opened for
   // editing. SetProfile is implemented to make a "best effort" to apply the
   // changes, but in extremely rare edge cases it is possible not all of the
   // updates in |profiles| make it to the DB.  This is why SetProfiles will
@@ -85,6 +99,24 @@ class PersonalDataManager : public WebDataServiceConsumer,
   // database by adding, updating and removing credit cards.  Sets the unique
   // ID of newly-added profiles.
   void SetCreditCards(std::vector<CreditCard>* credit_cards);
+
+  // Adds |profile| to the web database.
+  void AddProfile(const AutoFillProfile& profile);
+
+  // Updates |profile| which already exists in the web database.
+  void UpdateProfile(const AutoFillProfile& profile);
+
+  // Removes the profile represented by |unique_id|.
+  void RemoveProfile(int unique_id);
+
+  // Adds |credit_card| to the web database.
+  void AddCreditCard(const CreditCard& credit_card);
+
+  // Updates |credit_card| which already exists in the web database.
+  void UpdateCreditCard(const CreditCard& credit_card);
+
+  // Removes the credit card represented by |unique_id|.
+  void RemoveCreditCard(int unique_id);
 
   // Gets the possible field types for the given text, determined by matching
   // the text with all known personal information and returning matching types.
@@ -102,16 +134,10 @@ class PersonalDataManager : public WebDataServiceConsumer,
   // card information, respectively.  |profiles()| returns both web and
   // auxiliary profiles.  |web_profiles()| returns only web profiles.
   const std::vector<AutoFillProfile*>& profiles();
-  const std::vector<AutoFillProfile*>& web_profiles();
-  const std::vector<CreditCard*>& credit_cards() { return credit_cards_.get(); }
-
-  // Returns the index of the default profile within the vector returned by
-  // |web_profiles()|, or -1 if there are no profiles.
-  int DefaultProfile() const;
-
-  // Returns the index of the default credit card within the vector returned by
-  // |credit_cards()|, or -1 if there are no credit cards.
-  int DefaultCreditCard() const;
+  virtual const std::vector<AutoFillProfile*>& web_profiles();
+  virtual const std::vector<CreditCard*>& credit_cards() {
+    return credit_cards_.get();
+  }
 
   // Creates a profile labeled |label|, with it's own locally unique ID.
   // This must be called on the DB thread with the expectation that the
@@ -143,23 +169,24 @@ class PersonalDataManager : public WebDataServiceConsumer,
   void Init(Profile* profile);
 
  protected:
-  // Make sure that only Profile and the PersonalDataManager tests can create an
-  // instance of PersonalDataManager.
-  friend class ProfileImpl;
+  // Make sure that only Profile and certain tests can create an instance of
+  // PersonalDataManager.
+  friend class base::RefCountedThreadSafe<PersonalDataManager>;
   friend class PersonalDataManagerTest;
+  friend class ProfileImpl;
+  friend class ProfileSyncServiceAutofillTest;
 
   PersonalDataManager();
+  ~PersonalDataManager();
 
   // Returns the profile of the tab contents.
   Profile* profile();
 
-  // Initializes the object if needed.  This should be called at the beginning
-  // of all the public functions to make sure that the object has been properly
-  // initialized before use.
-  void InitializeIfNeeded();
-
-  // This will create and reserve a new unique ID for a profile.
-  int CreateNextUniqueID(std::set<int>* unique_ids);
+  // This will create and reserve a new unique ID for the id pool |id_set|.
+  // The |id_set| is typically |unique_profile_ids_| or
+  // |unique_creditcard_ids_|.  The global pool |unique_ids_| is used to ensure
+  // uniqueness of ids across all pools.  The new (next) unique id is returned.
+  int CreateNextUniqueIDFor(std::set<int>* id_set);
 
   // Loads the saved profiles from the web database.
   virtual void LoadProfiles();
@@ -184,18 +211,32 @@ class PersonalDataManager : public WebDataServiceConsumer,
   // query handle.
   void CancelPendingQuery(WebDataService::Handle* handle);
 
+  // Ensures that all profile labels are unique by appending an increasing digit
+  // to the end of non-unique labels.
+  // TODO(jhawkins): Create a new interface for labeled entities and turn these
+  // two methods into one.
+  void SetUniqueCreditCardLabels(std::vector<CreditCard>* credit_cards);
+
+  // Saves |imported_profile_| to the WebDB if it exists.
+  void SaveImportedProfile();
+
   // The profile hosting this PersonalDataManager.
   Profile* profile_;
-
-  // True if PersonalDataManager is initialized.
-  bool is_initialized_;
 
   // True if personal data has been loaded from the web database.
   bool is_data_loaded_;
 
+  // The set of already created unique IDs, shared by both profiles and credit
+  // cards, since IDs must be unique among the two groups.
+  std::set<int> unique_ids_;
+
   // The set of already created unique profile IDs, used to create a new unique
   // profile ID.
   std::set<int> unique_profile_ids_;
+
+  // The set of already created unique profile IDs for auxiliary profiles, used
+  // to create a new unique auxiliary profile ID.
+  std::set<int> unique_auxiliary_profile_ids_;
 
   // The set of already created unique credit card IDs, used to create a new
   // unique credit card ID.
@@ -234,8 +275,8 @@ class PersonalDataManager : public WebDataServiceConsumer,
   WebDataService::Handle pending_profiles_query_;
   WebDataService::Handle pending_creditcards_query_;
 
-  // The observers.  This can be empty.
-  std::vector<PersonalDataManager::Observer*> observers_;
+  // The observers.
+  ObserverList<Observer> observers_;
 
   DISALLOW_COPY_AND_ASSIGN(PersonalDataManager);
 };

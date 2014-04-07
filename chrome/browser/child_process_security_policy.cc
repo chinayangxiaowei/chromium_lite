@@ -6,12 +6,19 @@
 
 #include "base/file_path.h"
 #include "base/logging.h"
+#include "base/platform_file.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "chrome/common/bindings_policy.h"
 #include "chrome/common/url_constants.h"
 #include "googleurl/src/gurl.h"
 #include "net/url_request/url_request.h"
+
+static const int kReadFilePermissions =
+    base::PLATFORM_FILE_OPEN |
+    base::PLATFORM_FILE_READ |
+    base::PLATFORM_FILE_EXCLUSIVE_READ |
+    base::PLATFORM_FILE_ASYNC;
 
 // The SecurityState class is used to maintain per-renderer security state
 // information.
@@ -34,9 +41,14 @@ class ChildProcessSecurityPolicy::SecurityState {
     scheme_policy_[scheme] = false;
   }
 
-  // Grant permission to upload the specified file to the web.
-  void GrantUploadFile(const FilePath& file) {
-    uploadable_files_.insert(file);
+  // Grant certain permissions to a file.
+  void GrantPermissionsForFile(const FilePath& file, int permissions) {
+    file_permissions_[file.StripTrailingSeparators()] |= permissions;
+  }
+
+  // Revokes all permissions granted to a file.
+  void RevokeAllPermissionsForFile(const FilePath& file) {
+    file_permissions_.erase(file.StripTrailingSeparators());
   }
 
   void GrantBindings(int bindings) {
@@ -62,10 +74,18 @@ class ChildProcessSecurityPolicy::SecurityState {
     return judgment->second;
   }
 
-  // Determine whether permission has been granted to upload file.
-  // Files that have not been granted default to being denied.
-  bool CanUploadFile(const FilePath& file) {
-    return uploadable_files_.find(file) != uploadable_files_.end();
+  // Determine if the certain permissions have been granted to a file.
+  bool HasPermissionsForFile(const FilePath& file, int permissions) {
+    FilePath current_path = file.StripTrailingSeparators();
+    FilePath last_path;
+    while (current_path != last_path) {
+      if (file_permissions_.find(current_path) != file_permissions_.end())
+        return (file_permissions_[current_path] & permissions) == permissions;
+      last_path = current_path;
+      current_path = current_path.DirName();
+    }
+
+    return false;
   }
 
   bool has_dom_ui_bindings() const {
@@ -82,7 +102,7 @@ class ChildProcessSecurityPolicy::SecurityState {
 
  private:
   typedef std::map<std::string, bool> SchemeMap;
-  typedef std::set<FilePath> FileSet;
+  typedef std::map<FilePath, int> FileMap;  // bit-set of PlatformFileFlags
 
   // Maps URL schemes to whether permission has been granted or revoked:
   //   |true| means the scheme has been granted.
@@ -92,7 +112,7 @@ class ChildProcessSecurityPolicy::SecurityState {
   SchemeMap scheme_policy_;
 
   // The set of files the renderer is permited to upload to the web.
-  FileSet uploadable_files_;
+  FileMap file_permissions_;
 
   int enabled_bindings_;
 
@@ -109,12 +129,12 @@ ChildProcessSecurityPolicy::ChildProcessSecurityPolicy() {
   RegisterWebSafeScheme(chrome::kDataScheme);
   RegisterWebSafeScheme("feed");
   RegisterWebSafeScheme(chrome::kExtensionScheme);
+  RegisterWebSafeScheme(chrome::kBlobScheme);
 
   // We know about the following psuedo schemes and treat them specially.
   RegisterPseudoScheme(chrome::kAboutScheme);
   RegisterPseudoScheme(chrome::kJavaScriptScheme);
   RegisterPseudoScheme(chrome::kViewSourceScheme);
-  RegisterPseudoScheme(chrome::kPrintScheme);
 }
 
 ChildProcessSecurityPolicy::~ChildProcessSecurityPolicy() {
@@ -190,11 +210,10 @@ void ChildProcessSecurityPolicy::GrantRequestURL(
     return;  // The scheme has already been white-listed for every renderer.
 
   if (IsPseudoScheme(url.scheme())) {
-    // The view-source and print schemes are a special case of a pseudo URL that
-    // eventually results in requesting its embedded URL.
-    if (url.SchemeIs(chrome::kViewSourceScheme) ||
-        url.SchemeIs(chrome::kPrintScheme)) {
-      // URLs with the view-source and print schemes typically look like:
+    // The view-source scheme is a special case of a pseudo-URL that eventually
+    // results in requesting its embedded URL.
+    if (url.SchemeIs(chrome::kViewSourceScheme)) {
+      // URLs with the view-source scheme typically look like:
       //   view-source:http://www.google.com/a
       // In order to request these URLs, the renderer needs to be able to
       // request the embedded URL.
@@ -216,15 +235,31 @@ void ChildProcessSecurityPolicy::GrantRequestURL(
   }
 }
 
-void ChildProcessSecurityPolicy::GrantUploadFile(int renderer_id,
-                                             const FilePath& file) {
+void ChildProcessSecurityPolicy::GrantReadFile(int renderer_id,
+                                               const FilePath& file) {
+  GrantPermissionsForFile(renderer_id, file, kReadFilePermissions);
+}
+
+void ChildProcessSecurityPolicy::GrantPermissionsForFile(
+    int renderer_id, const FilePath& file, int permissions) {
   AutoLock lock(lock_);
 
   SecurityStateMap::iterator state = security_state_.find(renderer_id);
   if (state == security_state_.end())
     return;
 
-  state->second->GrantUploadFile(file);
+  state->second->GrantPermissionsForFile(file, permissions);
+}
+
+void ChildProcessSecurityPolicy::RevokeAllPermissionsForFile(
+    int renderer_id, const FilePath& file) {
+  AutoLock lock(lock_);
+
+  SecurityStateMap::iterator state = security_state_.find(renderer_id);
+  if (state == security_state_.end())
+    return;
+
+  state->second->RevokeAllPermissionsForFile(file);
 }
 
 void ChildProcessSecurityPolicy::GrantScheme(int renderer_id,
@@ -255,9 +290,6 @@ void ChildProcessSecurityPolicy::GrantDOMUIBindings(int renderer_id) {
 
   // DOM UI bindings need the ability to request chrome: URLs.
   state->second->GrantScheme(chrome::kChromeUIScheme);
-
-  // DOM UI bindings need the ability to request print: URLs.
-  state->second->GrantScheme(chrome::kPrintScheme);
 
   // DOM UI pages can contain links to file:// URLs.
   state->second->GrantScheme(chrome::kFileScheme);
@@ -304,14 +336,12 @@ bool ChildProcessSecurityPolicy::CanRequestURL(
   if (IsPseudoScheme(url.scheme())) {
     // There are a number of special cases for pseudo schemes.
 
-    if (url.SchemeIs(chrome::kViewSourceScheme) ||
-        url.SchemeIs(chrome::kPrintScheme)) {
-      // View-source and print URL's are allowed if the renderer is permitted
-      // to request the embedded URL. Careful to avoid pointless recursion.
+    if (url.SchemeIs(chrome::kViewSourceScheme)) {
+      // A view-source URL is allowed if the renderer is permitted to request
+      // the embedded URL. Careful to avoid pointless recursion.
       GURL child_url(url.path());
-      if (child_url.SchemeIs(chrome::kPrintScheme) ||
-          (child_url.SchemeIs(chrome::kViewSourceScheme) &&
-           url.SchemeIs(chrome::kViewSourceScheme)))
+      if (child_url.SchemeIs(chrome::kViewSourceScheme) &&
+          url.SchemeIs(chrome::kViewSourceScheme))
           return false;
 
       return CanRequestURL(renderer_id, child_url);
@@ -342,15 +372,20 @@ bool ChildProcessSecurityPolicy::CanRequestURL(
   }
 }
 
-bool ChildProcessSecurityPolicy::CanUploadFile(int renderer_id,
-                                               const FilePath& file) {
+bool ChildProcessSecurityPolicy::CanReadFile(int renderer_id,
+                                             const FilePath& file) {
+  return HasPermissionsForFile(renderer_id, file, kReadFilePermissions);
+}
+
+bool ChildProcessSecurityPolicy::HasPermissionsForFile(
+    int renderer_id, const FilePath& file, int permissions) {
   AutoLock lock(lock_);
 
   SecurityStateMap::iterator state = security_state_.find(renderer_id);
   if (state == security_state_.end())
     return false;
 
-  return state->second->CanUploadFile(file);
+  return state->second->HasPermissionsForFile(file, permissions);
 }
 
 bool ChildProcessSecurityPolicy::HasDOMUIBindings(int renderer_id) {

@@ -1,6 +1,6 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved. Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "views/controls/native_control_gtk.h"
 
@@ -66,6 +66,8 @@ void NativeControlGtk::VisibilityChanged(View* starting_from, bool is_visible) {
 void NativeControlGtk::Focus() {
   DCHECK(native_view());
   gtk_widget_grab_focus(native_view());
+
+  GetParent()->NotifyAccessibilityEvent(AccessibilityTypes::EVENT_FOCUS);
 }
 
 void NativeControlGtk::NativeControlCreated(GtkWidget* native_control) {
@@ -80,9 +82,9 @@ void NativeControlGtk::NativeControlCreated(GtkWidget* native_control) {
 }
 
 // static
-void NativeControlGtk::CallFocusIn(GtkWidget* widget,
-                                   GdkEventFocus* event,
-                                   NativeControlGtk* control) {
+gboolean NativeControlGtk::CallFocusIn(GtkWidget* widget,
+                                       GdkEventFocus* event,
+                                       NativeControlGtk* control) {
   FocusManager* focus_manager =
       FocusManager::GetFocusManagerForNativeView(widget);
   if (!focus_manager) {
@@ -90,9 +92,10 @@ void NativeControlGtk::CallFocusIn(GtkWidget* widget,
     // options page is only based on views.
     // NOTREACHED();
     NOTIMPLEMENTED();
-    return;
+    return false;
   }
   focus_manager->SetFocusedView(control->focus_view());
+  return false;
 }
 
 }  // namespace views

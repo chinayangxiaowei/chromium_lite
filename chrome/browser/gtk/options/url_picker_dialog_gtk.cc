@@ -14,7 +14,7 @@
 #include "chrome/browser/gtk/options/url_picker_dialog_gtk.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/possible_url_model.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/pref_names.h"
 #include "gfx/gtk_util.h"
@@ -23,6 +23,7 @@
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "net/base/net_util.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 namespace {
 
@@ -117,7 +118,7 @@ UrlPickerDialogGtk::UrlPickerDialogGtk(UrlPickerCallback* callback,
   gtk_tree_selection_set_mode(history_selection_,
                               GTK_SELECTION_SINGLE);
   g_signal_connect(history_selection_, "changed",
-                   G_CALLBACK(OnHistorySelectionChanged), this);
+                   G_CALLBACK(OnHistorySelectionChangedThunk), this);
 
   // History list columns.
   GtkTreeViewColumn* column = gtk_tree_view_column_new();
@@ -166,7 +167,10 @@ UrlPickerDialogGtk::UrlPickerDialogGtk(UrlPickerCallback* callback,
       &width, NULL);
   gtk_tree_view_column_set_fixed_width(column, width);
 
-  gtk_widget_show_all(dialog_);
+  gtk_util::ShowDialogWithLocalizedSize(dialog_,
+      IDS_URLPICKER_DIALOG_WIDTH_CHARS,
+      IDS_URLPICKER_DIALOG_HEIGHT_LINES,
+      false);
 
   g_signal_connect(dialog_, "response", G_CALLBACK(OnResponseThunk), this);
   g_signal_connect(dialog_, "destroy", G_CALLBACK(OnWindowDestroyThunk), this);
@@ -177,9 +181,8 @@ UrlPickerDialogGtk::~UrlPickerDialogGtk() {
 }
 
 void UrlPickerDialogGtk::AddURL() {
-  GURL url(URLFixerUpper::FixupURL(
-      gtk_entry_get_text(GTK_ENTRY(url_entry_)), ""));
-  callback_->Run(url);
+  callback_->Run(URLFixerUpper::FixupURL(
+      gtk_entry_get_text(GTK_ENTRY(url_entry_)), std::string()));
 }
 
 void UrlPickerDialogGtk::EnableControls() {
@@ -193,13 +196,14 @@ std::string UrlPickerDialogGtk::GetURLForPath(GtkTreePath* path) const {
     NOTREACHED();
     return std::string();
   }
-  std::wstring languages =
+  std::string languages =
       profile_->GetPrefs()->GetString(prefs::kAcceptLanguages);
-  // Because the url_field_ is user-editable, we set the URL with
-  // username:password and escaped path and query.
-  std::wstring formatted = net::FormatUrl(url_table_model_->GetURL(row),
-      languages, false, UnescapeRule::NONE, NULL, NULL, NULL);
-  return WideToUTF8(formatted);
+  // Because this gets parsed by FixupURL(), it's safe to omit the scheme or
+  // trailing slash, and unescape most characters, but we need to not drop any
+  // username/password, or unescape anything that changes the meaning.
+  return UTF16ToUTF8(net::FormatUrl(url_table_model_->GetURL(row),
+      languages, net::kFormatUrlOmitAll & ~net::kFormatUrlOmitUsernamePassword,
+      UnescapeRule::SPACES, NULL, NULL, NULL));
 }
 
 void UrlPickerDialogGtk::SetColumnValues(int row, GtkTreeIter* iter) {
@@ -241,26 +245,24 @@ void UrlPickerDialogGtk::OnUrlEntryChanged(GtkWidget* editable) {
   EnableControls();
 }
 
-// static
 void UrlPickerDialogGtk::OnHistorySelectionChanged(
-    GtkTreeSelection *selection, UrlPickerDialogGtk* window) {
+    GtkTreeSelection* selection) {
   GtkTreeIter iter;
   if (!gtk_tree_selection_get_selected(selection, NULL, &iter)) {
     // The user has unselected the history element, nothing to do.
     return;
   }
   GtkTreePath* path = gtk_tree_model_get_path(
-      GTK_TREE_MODEL(window->history_list_sort_), &iter);
-  gtk_entry_set_text(GTK_ENTRY(window->url_entry_),
-                     window->GetURLForPath(path).c_str());
+      GTK_TREE_MODEL(history_list_sort_), &iter);
+  gtk_entry_set_text(GTK_ENTRY(url_entry_),
+                     GetURLForPath(path).c_str());
   gtk_tree_path_free(path);
 }
 
 void UrlPickerDialogGtk::OnHistoryRowActivated(GtkWidget* tree_view,
                                                GtkTreePath* path,
                                                GtkTreeViewColumn* column) {
-  GURL url(URLFixerUpper::FixupURL(GetURLForPath(path), ""));
-  callback_->Run(url);
+  callback_->Run(URLFixerUpper::FixupURL(GetURLForPath(path), std::string()));
   gtk_widget_destroy(dialog_);
 }
 

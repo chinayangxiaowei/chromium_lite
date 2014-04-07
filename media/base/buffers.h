@@ -27,7 +27,7 @@
 #ifndef MEDIA_BASE_BUFFERS_H_
 #define MEDIA_BASE_BUFFERS_H_
 
-#include "base/logging.h"
+#include "base/basictypes.h"
 #include "base/ref_counted.h"
 #include "base/time.h"
 
@@ -76,10 +76,8 @@ class StreamSample : public base::RefCountedThreadSafe<StreamSample> {
 
  protected:
   friend class base::RefCountedThreadSafe<StreamSample>;
-  StreamSample()
-      : discontinuous_(false) {
-  }
-  virtual ~StreamSample() {}
+  StreamSample();
+  virtual ~StreamSample();
 
   base::TimeDelta timestamp_;
   base::TimeDelta duration_;

@@ -5,8 +5,10 @@
 #include <list>
 
 #include "base/string_util.h"
+#include "base/test/test_timeouts.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/autofill/autofill_download.h"
-#include "chrome/browser/net/test_url_fetcher_factory.h"
+#include "chrome/common/net/test_url_fetcher_factory.h"
 #include "chrome/test/testing_profile.h"
 #include "net/url_request/url_request_status.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -17,7 +19,7 @@ using webkit_glue::FormData;
 using WebKit::WebInputElement;
 
 // This tests AutoFillDownloadManager. AutoFillDownloadTestHelper implements
-// AutoFillDownloadManager::Observer and creates instance of
+// AutoFillDownloadManager::Observer and creates an instance of
 // AutoFillDownloadManager. Then it records responses to different initiated
 // requests, which are verified later. To mock network requests
 // TestURLFetcherFactory is used, which creates URLFetchers that do not
@@ -38,14 +40,8 @@ class AutoFillDownloadTestHelper : public AutoFillDownloadManager::Observer {
 
   // AutoFillDownloadManager::Observer overridables:
   virtual void OnLoadedAutoFillHeuristics(
-      const std::vector<std::string>& form_signatures,
       const std::string& heuristic_xml) {
     ResponseData response;
-    for (size_t i = 0; i < form_signatures.size(); ++i) {
-      if (i)
-        response.signature += ",";
-      response.signature += form_signatures[i];
-    }
     response.response = heuristic_xml;
     response.type_of_response = QUERY_SUCCESSFULL;
     responses_.push_back(response);
@@ -53,7 +49,6 @@ class AutoFillDownloadTestHelper : public AutoFillDownloadManager::Observer {
 
   virtual void OnUploadedAutoFillHeuristics(const std::string& form_signature) {
     ResponseData response;
-    response.signature = form_signature;
     response.type_of_response = UPLOAD_SUCCESSFULL;
     responses_.push_back(response);
   }
@@ -105,23 +100,38 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
   form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("username"),
                                                ASCIIToUTF16("username"),
                                                string16(),
-                                               ASCIIToUTF16("text")));
+                                               ASCIIToUTF16("text"),
+                                               0));
+  form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("First Name"),
+                                               ASCIIToUTF16("firstname"),
+                                               string16(),
+                                               ASCIIToUTF16("text"),
+                                               0));
+  form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("Last Name"),
+                                               ASCIIToUTF16("lastname"),
+                                               string16(),
+                                               ASCIIToUTF16("text"),
+                                               0));
   form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("email"),
                                                ASCIIToUTF16("email"),
                                                string16(),
-                                               ASCIIToUTF16("text")));
+                                               ASCIIToUTF16("text"),
+                                               0));
   form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("email2"),
                                                ASCIIToUTF16("email2"),
                                                string16(),
-                                               ASCIIToUTF16("text")));
+                                               ASCIIToUTF16("text"),
+                                               0));
   form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("password"),
                                                ASCIIToUTF16("password"),
                                                string16(),
-                                               ASCIIToUTF16("password")));
+                                               ASCIIToUTF16("password"),
+                                               0));
   form.fields.push_back(webkit_glue::FormField(string16(),
                                                ASCIIToUTF16("Submit"),
                                                string16(),
-                                               ASCIIToUTF16("submit")));
+                                               ASCIIToUTF16("submit"),
+                                               0));
 
   FormStructure *form_structure = new FormStructure(form);
   ScopedVector<FormStructure> form_structures;
@@ -131,19 +141,23 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
   form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("address"),
                                                ASCIIToUTF16("address"),
                                                string16(),
-                                               ASCIIToUTF16("text")));
+                                               ASCIIToUTF16("text"),
+                                               0));
   form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("address2"),
                                                ASCIIToUTF16("address2"),
                                                string16(),
-                                               ASCIIToUTF16("text")));
+                                               ASCIIToUTF16("text"),
+                                               0));
   form.fields.push_back(webkit_glue::FormField(ASCIIToUTF16("city"),
-                                               ASCIIToUTF16("address2"),
+                                               ASCIIToUTF16("city"),
                                                string16(),
-                                               ASCIIToUTF16("text")));
+                                               ASCIIToUTF16("text"),
+                                               0));
   form.fields.push_back(webkit_glue::FormField(string16(),
                                                ASCIIToUTF16("Submit"),
                                                string16(),
-                                               ASCIIToUTF16("submit")));
+                                               ASCIIToUTF16("submit"),
+                                               0));
   form_structure = new FormStructure(form);
   form_structures.push_back(form_structure);
 
@@ -162,6 +176,8 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
   const char *responses[] = {
     "<autofillqueryresponse>"
       "<field autofilltype=\"0\" />"
+      "<field autofilltype=\"3\" />"
+      "<field autofilltype=\"5\" />"
       "<field autofilltype=\"9\" />"
       "<field autofilltype=\"0\" />"
       "<field autofilltype=\"30\" />"
@@ -198,10 +214,9 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
   EXPECT_EQ(AutoFillDownloadTestHelper::UPLOAD_SUCCESSFULL,
             helper.responses_.front().type_of_response);
   EXPECT_EQ(0, helper.responses_.front().error);
-  EXPECT_EQ(form_structures[0]->FormSignature(),
-            helper.responses_.front().signature);
+  EXPECT_EQ(std::string(), helper.responses_.front().signature);
   // Expected response on non-query request is an empty string.
-  EXPECT_EQ(std::string(""), helper.responses_.front().response);
+  EXPECT_EQ(std::string(), helper.responses_.front().response);
   helper.responses_.pop_front();
 
   EXPECT_EQ(AutoFillDownloadTestHelper::REQUEST_UPLOAD_FAILED,
@@ -210,16 +225,13 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
   EXPECT_EQ(form_structures[1]->FormSignature(),
             helper.responses_.front().signature);
   // Expected response on non-query request is an empty string.
-  EXPECT_EQ(std::string(""), helper.responses_.front().response);
+  EXPECT_EQ(std::string(), helper.responses_.front().response);
   helper.responses_.pop_front();
 
   EXPECT_EQ(helper.responses_.front().type_of_response,
             AutoFillDownloadTestHelper::QUERY_SUCCESSFULL);
   EXPECT_EQ(0, helper.responses_.front().error);
-  std::string signature(form_structures[0]->FormSignature());
-  signature.append(",");
-  signature.append(form_structures[1]->FormSignature());
-  EXPECT_EQ(signature, helper.responses_.front().signature);
+  EXPECT_EQ(std::string(), helper.responses_.front().signature);
   EXPECT_EQ(responses[0], helper.responses_.front().response);
   helper.responses_.pop_front();
 
@@ -234,15 +246,12 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
   fetcher = factory.GetFetcherByID(3);
   EXPECT_EQ(NULL, fetcher);
 
-  // Verify DOS attack back-offs.
-  const int kBackOffTimeout = 10000;
-
   // Request with id 3.
   EXPECT_TRUE(helper.download_manager.StartQueryRequest(form_structures));
   fetcher = factory.GetFetcherByID(3);
   ASSERT_TRUE(fetcher);
   fetcher->set_backoff_delay(
-      base::TimeDelta::FromMilliseconds(kBackOffTimeout));
+      base::TimeDelta::FromMilliseconds(TestTimeouts::action_max_timeout_ms()));
   fetcher->delegate()->OnURLFetchComplete(fetcher, GURL(), URLRequestStatus(),
                                           500, ResponseCookies(),
                                           std::string(responses[0]));
@@ -250,7 +259,7 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
             helper.responses_.front().type_of_response);
   EXPECT_EQ(500, helper.responses_.front().error);
   // Expected response on non-query request is an empty string.
-  EXPECT_EQ(std::string(""), helper.responses_.front().response);
+  EXPECT_EQ(std::string(), helper.responses_.front().response);
   helper.responses_.pop_front();
 
   // Query requests should be ignored for the next 10 seconds.
@@ -266,7 +275,7 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
   fetcher = factory.GetFetcherByID(4);
   ASSERT_TRUE(fetcher);
   fetcher->set_backoff_delay(
-      base::TimeDelta::FromMilliseconds(kBackOffTimeout));
+      base::TimeDelta::FromMilliseconds(TestTimeouts::action_max_timeout_ms()));
   fetcher->delegate()->OnURLFetchComplete(fetcher, GURL(), URLRequestStatus(),
                                           503, ResponseCookies(),
                                           std::string(responses[2]));
@@ -286,4 +295,3 @@ TEST(AutoFillDownloadTest, QueryAndUploadTest) {
 }
 
 }  // namespace
-

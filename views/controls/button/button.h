@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_BUTTON_BUTTON_H_
 #define VIEWS_CONTROLS_BUTTON_BUTTON_H_
+#pragma once
 
 #include "views/view.h"
 
@@ -17,6 +18,9 @@ class Event;
 class ButtonListener {
  public:
   virtual void ButtonPressed(Button* sender, const views::Event& event) = 0;
+
+ protected:
+  virtual ~ButtonListener() {}
 };
 
 // A View representing a button. Depending on the specific type, the button
@@ -36,8 +40,8 @@ class Button : public View {
 
   // Overridden from View:
   virtual bool GetTooltipText(const gfx::Point& p, std::wstring* tooltip);
-  virtual bool GetAccessibleKeyboardShortcut(std::wstring* shortcut);
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual std::wstring GetAccessibleKeyboardShortcut();
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
  protected:
   // Construct the Button with a Listener. The listener can be NULL. This can be
@@ -57,7 +61,6 @@ class Button : public View {
 
   // Accessibility data.
   std::wstring accessible_shortcut_;
-  std::wstring accessible_name_;
 
   // The id tag associated with this button. Used to disambiguate buttons in
   // the ButtonListener implementation.

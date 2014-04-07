@@ -4,6 +4,7 @@
 
 #ifndef BASE_CRYPTO_SCOPED_CAPI_TYPES_H_
 #define BASE_CRYPTO_SCOPED_CAPI_TYPES_H_
+#pragma once
 
 #include <windows.h>
 #include <wincrypt.h>
@@ -64,7 +65,7 @@ class ScopedCAPIHandle {
   CAPIHandle get() const { return handle_; }
 
   CAPIHandle* receive() {
-    CHECK_EQ(NULL, handle_);
+    CHECK(handle_ == NULL);
     return &handle_;
   }
 

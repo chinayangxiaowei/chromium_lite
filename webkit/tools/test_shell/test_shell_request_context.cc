@@ -16,7 +16,9 @@
 #include "net/proxy/proxy_config_service.h"
 #include "net/proxy/proxy_config_service_fixed.h"
 #include "net/proxy/proxy_service.h"
+#include "webkit/blob/blob_storage_controller.h"
 #include "webkit/glue/webkit_glue.h"
+#include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 
 TestShellRequestContext::TestShellRequestContext() {
   Init(FilePath(), net::HttpCache::NORMAL, false);
@@ -54,29 +56,34 @@ void TestShellRequestContext::Init(
 #else
   // Use the system proxy settings.
   scoped_ptr<net::ProxyConfigService> proxy_config_service(
-      net::ProxyService::CreateSystemProxyConfigService(NULL, NULL));
+      net::ProxyService::CreateSystemProxyConfigService(
+          MessageLoop::current(), NULL));
 #endif
-  host_resolver_ = net::CreateSystemHostResolver(NULL);
+  host_resolver_ =
+      net::CreateSystemHostResolver(net::HostResolver::kDefaultParallelism,
+                                    NULL);
   proxy_service_ = net::ProxyService::Create(proxy_config_service.release(),
-                                             false, NULL, NULL, NULL, NULL);
+                                             false, 0, NULL, NULL, NULL);
   ssl_config_service_ = net::SSLConfigService::CreateSystemSSLConfigService();
 
-  http_auth_handler_factory_ = net::HttpAuthHandlerFactory::CreateDefault();
+  http_auth_handler_factory_ = net::HttpAuthHandlerFactory::CreateDefault(
+      host_resolver_);
 
-  net::HttpCache *cache;
-  if (cache_path.empty()) {
-    cache = new net::HttpCache(NULL, host_resolver_, proxy_service_,
-                               ssl_config_service_, http_auth_handler_factory_,
-                               0);
-  } else {
-    cache = new net::HttpCache(NULL, host_resolver_, proxy_service_,
-                               ssl_config_service_, http_auth_handler_factory_,
-                               cache_path, 0);
-  }
+  net::HttpCache::DefaultBackend* backend = new net::HttpCache::DefaultBackend(
+      cache_path.empty() ? net::MEMORY_CACHE : net::DISK_CACHE,
+      cache_path, 0, SimpleResourceLoaderBridge::GetCacheThread());
+
+  net::HttpCache* cache =
+      new net::HttpCache(host_resolver_, NULL, proxy_service_,
+                         ssl_config_service_, http_auth_handler_factory_, NULL,
+                         NULL, backend);
+
   cache->set_mode(cache_mode);
   http_transaction_factory_ = cache;
 
   ftp_transaction_factory_ = new net::FtpNetworkLayer(host_resolver_);
+
+  blob_storage_controller_.reset(new webkit_blob::BlobStorageController());
 }
 
 TestShellRequestContext::~TestShellRequestContext() {
@@ -84,6 +91,7 @@ TestShellRequestContext::~TestShellRequestContext() {
   delete http_transaction_factory_;
   delete http_auth_handler_factory_;
   delete static_cast<net::StaticCookiePolicy*>(cookie_policy_);
+  delete host_resolver_;
 }
 
 const std::string& TestShellRequestContext::GetUserAgent(

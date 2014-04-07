@@ -4,15 +4,34 @@
 
 #ifndef NET_SOCKET_SSL_CLIENT_SOCKET_H_
 #define NET_SOCKET_SSL_CLIENT_SOCKET_H_
+#pragma once
 
 #include <string>
 
+#include "net/base/completion_callback.h"
+#include "net/base/load_flags.h"
+#include "net/base/net_errors.h"
 #include "net/socket/client_socket.h"
 
 namespace net {
 
 class SSLCertRequestInfo;
 class SSLInfo;
+class SSLNonSensitiveHostInfo;
+struct RRResponse;
+
+// DNSSECProvider is an interface to an object that can return DNSSEC data.
+class DNSSECProvider {
+ public:
+  // GetDNSSECRecords will either:
+  //   1) set |*out| to NULL and return OK.
+  //   2) set |*out| to a pointer, which is owned by this object, and return OK.
+  //   3) return IO_PENDING and call |callback| on the current MessageLoop at
+  //      some point in the future. Once the callback has been made, this
+  //      function will return OK if called again.
+  virtual int GetDNSSECRecords(RRResponse** out,
+                               CompletionCallback* callback) = 0;
+};
 
 // A client socket that uses SSL as the transport layer.
 //
@@ -22,6 +41,8 @@ class SSLInfo;
 //
 class SSLClientSocket : public ClientSocket {
  public:
+  SSLClientSocket() : was_npn_negotiated_(false), was_spdy_negotiated_(false) {
+  }
   // Next Protocol Negotiation (NPN) allows a TLS client and server to come to
   // an agreement about the application level protocol to speak over a
   // connection.
@@ -39,7 +60,8 @@ class SSLClientSocket : public ClientSocket {
   enum NextProto {
     kProtoUnknown = 0,
     kProtoHTTP11 = 1,
-    kProtoSPDY = 2,
+    kProtoSPDY1 = 2,
+    kProtoSPDY2 = 3,
   };
 
   // Gets the SSL connection information of the socket.
@@ -60,14 +82,57 @@ class SSLClientSocket : public ClientSocket {
   virtual NextProtoStatus GetNextProto(std::string* proto) = 0;
 
   static NextProto NextProtoFromString(const std::string& proto_string) {
-    if (proto_string == "http1.1") {
+    if (proto_string == "http1.1" || proto_string == "http/1.1") {
       return kProtoHTTP11;
-    } else if (proto_string == "spdy") {
-      return kProtoSPDY;
+    } else if (proto_string == "spdy/1") {
+      return kProtoSPDY1;
+    } else if (proto_string == "spdy/2") {
+      return kProtoSPDY2;
     } else {
       return kProtoUnknown;
     }
   }
+
+  static bool IgnoreCertError(int error, int load_flags) {
+    if (error == OK || load_flags & LOAD_IGNORE_ALL_CERT_ERRORS)
+      return true;
+
+    if (error == ERR_CERT_COMMON_NAME_INVALID &&
+        (load_flags & LOAD_IGNORE_CERT_COMMON_NAME_INVALID))
+      return true;
+    if(error == ERR_CERT_DATE_INVALID &&
+            (load_flags & LOAD_IGNORE_CERT_DATE_INVALID))
+      return true;
+    if(error == ERR_CERT_AUTHORITY_INVALID &&
+            (load_flags & LOAD_IGNORE_CERT_AUTHORITY_INVALID))
+      return true;
+
+    return false;
+  }
+
+  virtual bool was_npn_negotiated() const {
+    return was_npn_negotiated_;
+  }
+
+  virtual bool set_was_npn_negotiated(bool negotiated) {
+    return was_npn_negotiated_ = negotiated;
+  }
+
+  virtual void UseDNSSEC(DNSSECProvider*) { }
+
+  virtual bool was_spdy_negotiated() const {
+    return was_spdy_negotiated_;
+  }
+
+  virtual bool set_was_spdy_negotiated(bool negotiated) {
+    return was_spdy_negotiated_ = negotiated;
+  }
+
+ private:
+  // True if NPN was responded to, independent of selecting SPDY or HTTP.
+  bool was_npn_negotiated_;
+  // True if NPN successfully negotiated SPDY.
+  bool was_spdy_negotiated_;
 };
 
 }  // namespace net

@@ -7,7 +7,10 @@
 #include "base/file_path.h"
 #include "base/registry.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "base/version.h"
+
+namespace {
 
 // The Registry hive where to look for external extensions.
 const HKEY kRegRoot = HKEY_LOCAL_MACHINE;
@@ -20,6 +23,16 @@ const wchar_t kRegistryExtensionPath[] = L"path";
 
 // Registry value of that key that defines the current version of the .crx file.
 const wchar_t kRegistryExtensionVersion[] = L"version";
+
+bool OpenKeyById(const std::string& id, RegKey *key) {
+  std::wstring key_path = ASCIIToWide(kRegistryExtensions);
+  key_path.append(L"\\");
+  key_path.append(ASCIIToWide(id));
+
+  return key->Open(kRegRoot, key_path.c_str(), KEY_READ);
+}
+
+}  // namespace
 
 ExternalRegistryExtensionProvider::ExternalRegistryExtensionProvider() {
 }
@@ -36,7 +49,7 @@ void ExternalRegistryExtensionProvider::VisitRegisteredExtension(
     std::wstring key_path = ASCIIToWide(kRegistryExtensions);
     key_path.append(L"\\");
     key_path.append(iterator.Name());
-    if (key.Open(kRegRoot, key_path.c_str())) {
+    if (key.Open(kRegRoot, key_path.c_str(), KEY_READ)) {
       std::wstring extension_path;
       if (key.ReadValue(kRegistryExtensionPath, &extension_path)) {
         std::wstring extension_version;
@@ -50,40 +63,53 @@ void ExternalRegistryExtensionProvider::VisitRegisteredExtension(
 
           scoped_ptr<Version> version;
           version.reset(Version::GetVersionFromString(extension_version));
+          if (!version.get()) {
+            LOG(ERROR) << "Invalid version value " << extension_version
+                       << " for key " << key_path;
+            ++iterator;
+            continue;
+          }
+
           FilePath path = FilePath::FromWStringHack(extension_path);
-          visitor->OnExternalExtensionFound(id, version.get(), path,
-                                            Extension::EXTERNAL_REGISTRY);
+          visitor->OnExternalExtensionFileFound(id, version.get(), path,
+                                                Extension::EXTERNAL_REGISTRY);
         } else {
           // TODO(erikkay): find a way to get this into about:extensions
-          LOG(WARNING) << "Missing value " << kRegistryExtensionVersion <<
-                          " for key " << key_path;
+          LOG(ERROR) << "Missing value " << kRegistryExtensionVersion
+                     << " for key " << key_path;
         }
       } else {
         // TODO(erikkay): find a way to get this into about:extensions
-        LOG(WARNING) << "Missing value " << kRegistryExtensionPath <<
-                        " for key " << key_path;
+        LOG(ERROR) << "Missing value " << kRegistryExtensionPath
+                   << " for key " << key_path;
       }
     }
     ++iterator;
   }
 }
 
-Version* ExternalRegistryExtensionProvider::RegisteredVersion(
-    const std::string& id,
-    Extension::Location* location) const  {
+bool ExternalRegistryExtensionProvider::HasExtension(
+    const std::string& id) const {
   RegKey key;
-  std::wstring key_path = ASCIIToWide(kRegistryExtensions);
-  key_path.append(L"\\");
-  key_path.append(ASCIIToWide(id));
+  return OpenKeyById(id, &key);
+}
 
-  if (!key.Open(kRegRoot, key_path.c_str()))
-    return NULL;
+bool ExternalRegistryExtensionProvider::GetExtensionDetails(
+    const std::string& id,
+    Extension::Location* location,
+    scoped_ptr<Version>* version) const  {
+  RegKey key;
+  if (!OpenKeyById(id, &key))
+    return false;
 
   std::wstring extension_version;
   if (!key.ReadValue(kRegistryExtensionVersion, &extension_version))
-    return NULL;
+    return false;
+
+  if (version)
+    version->reset(Version::GetVersionFromString(extension_version));
 
   if (location)
     *location = Extension::EXTERNAL_REGISTRY;
-  return Version::GetVersionFromString(extension_version);
+  return true;
 }

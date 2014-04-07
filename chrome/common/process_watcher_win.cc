@@ -4,7 +4,8 @@
 
 #include "chrome/common/process_watcher.h"
 
-#include "base/env_var.h"
+#include "base/scoped_ptr.h"
+#include "base/environment.h"
 #include "base/message_loop.h"
 #include "base/object_watcher.h"
 #include "chrome/common/env_vars.h"
@@ -48,8 +49,8 @@ class TimerExpiredTask : public Task, public base::ObjectWatcher::Delegate {
 
  private:
   void KillProcess() {
-    scoped_ptr<base::EnvVarGetter> env(base::EnvVarGetter::Create());
-    if (env->HasEnv(env_vars::kHeadless)) {
+    scoped_ptr<base::Environment> env(base::Environment::Create());
+    if (env->HasVar(env_vars::kHeadless)) {
      // If running the distributed tests, give the renderer a little time
      // to figure out that the channel is shutdown and unwind.
      if (WaitForSingleObject(process_, kWaitInterval) == WAIT_OBJECT_0) {
@@ -62,7 +63,7 @@ class TimerExpiredTask : public Task, public base::ObjectWatcher::Delegate {
     // terminates.  We just care that it eventually terminates, and that's what
     // TerminateProcess should do for us. Don't check for the result code since
     // it fails quite often. This should be investigated eventually.
-    TerminateProcess(process_, ResultCodes::HUNG);
+    base::KillProcess(process_, ResultCodes::HUNG, false);
 
     // Now, just cleanup as if the process exited normally.
     OnObjectSignaled(process_);

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -188,6 +188,18 @@
   OP(GetUniformLocationBucket)                                 /* 433 */ \
   OP(GetAttribLocationBucket)                                  /* 434 */ \
   OP(ShaderSourceBucket)                                       /* 435 */ \
+  OP(ShaderBinary)                                             /* 436 */ \
+  OP(ReleaseShaderCompiler)                                    /* 437 */ \
+  OP(GetMaxValueInBuffer)                                      /* 438 */ \
+  OP(GenSharedIds)                                             /* 439 */ \
+  OP(DeleteSharedIds)                                          /* 440 */ \
+  OP(RegisterSharedIds)                                        /* 441 */ \
+  OP(CommandBufferEnable)                                      /* 442 */ \
+  OP(CompressedTexImage2DBucket)                               /* 443 */ \
+  OP(CompressedTexSubImage2DBucket)                            /* 444 */ \
+  OP(RenderbufferStorageMultisampleEXT)                        /* 445 */ \
+  OP(BlitFramebufferEXT)                                       /* 446 */ \
+  OP(CopyTextureToParentTexture)                               /* 447 */ \
 
 enum CommandId {
   kStartPoint = cmd::kLastCommonId,  // All GLES2 commands start after this.

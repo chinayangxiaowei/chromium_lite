@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_IMPORTER_IMPORTER_LIST_H_
 #define CHROME_BROWSER_IMPORTER_IMPORTER_LIST_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -38,7 +39,8 @@ class ImporterList {
   const importer::ProfileInfo& GetSourceProfileInfoAt(int index) const;
 
   // Returns the ProfileInfo with the given browser type.
-  const importer::ProfileInfo& GetSourceProfileInfoForBrowserType(int browser_type) const;
+  const importer::ProfileInfo& GetSourceProfileInfoForBrowserType(
+      int browser_type) const;
 
   // Helper methods for detecting available profiles.
 #if defined(OS_WIN)

@@ -1,11 +1,12 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/browser_theme_provider.h"
-#include "chrome/browser/chrome_thread.h"
+#include "base/ref_counted_memory.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/dom_ui/dom_ui_theme_source.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/testing_profile.h"
 #include "grit/theme_resources.h"
@@ -34,7 +35,7 @@ class MockThemeSource : public DOMUIThemeSource {
 
 class DOMUISourcesTest : public testing::Test {
  public:
-  DOMUISourcesTest() : ui_thread_(ChromeThread::UI, MessageLoop::current()) {}
+  DOMUISourcesTest() : ui_thread_(BrowserThread::UI, MessageLoop::current()) {}
 
   TestingProfile* profile() const { return profile_.get(); }
   MockThemeSource* theme_source() const { return theme_source_.get(); }
@@ -51,7 +52,7 @@ class DOMUISourcesTest : public testing::Test {
   }
 
   MessageLoop loop_;
-  ChromeThread ui_thread_;
+  BrowserThread ui_thread_;
 
   scoped_ptr<TestingProfile> profile_;
   scoped_refptr<MockThemeSource> theme_source_;
@@ -66,18 +67,18 @@ TEST_F(DOMUISourcesTest, ThemeSourceMimeTypes) {
 TEST_F(DOMUISourcesTest, ThemeSourceImages) {
   // We used to PNGEncode the images ourselves, but encoder differences
   // invalidated that. We now just check that the image exists.
-  theme_source()->StartDataRequest("theme_frame_incognito", true, 1);
+  theme_source()->StartDataRequest("IDR_THEME_FRAME_INCOGNITO", true, 1);
   size_t min = 0;
   EXPECT_EQ(theme_source()->result_request_id_, 1);
   EXPECT_GT(theme_source()->result_data_size_, min);
 
-  theme_source()->StartDataRequest("theme_toolbar", true, 2);
+  theme_source()->StartDataRequest("IDR_THEME_TOOLBAR", true, 2);
   EXPECT_EQ(theme_source()->result_request_id_, 2);
   EXPECT_GT(theme_source()->result_data_size_, min);
 }
 
 TEST_F(DOMUISourcesTest, ThemeSourceCSS) {
-  ChromeThread io_thread(ChromeThread::IO, MessageLoop::current());
+  BrowserThread io_thread(BrowserThread::IO, MessageLoop::current());
   // Generating the test data for the NTP CSS would just involve copying the
   // method, or being super brittle and hard-coding the result (requiring
   // an update to the unittest every time the CSS template changes), so we

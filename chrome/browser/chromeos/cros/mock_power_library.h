@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_CROS_MOCK_POWER_LIBRARY_H_
 #define CHROME_BROWSER_CHROMEOS_CROS_MOCK_POWER_LIBRARY_H_
+#pragma once
 
 #include "chrome/browser/chromeos/cros/power_library.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -23,6 +24,10 @@ class MockPowerLibrary : public PowerLibrary {
   MOCK_CONST_METHOD0(battery_is_present, bool(void));
   MOCK_CONST_METHOD0(battery_time_to_empty, base::TimeDelta(void));
   MOCK_CONST_METHOD0(battery_time_to_full, base::TimeDelta(void));
+
+  MOCK_METHOD1(EnableScreenLock, void(bool));
+  MOCK_METHOD0(RequestRestart, void(void));
+  MOCK_METHOD0(RequestShutdown, void(void));
 };
 
 }  // namespace chromeos

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/user_metrics.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/notification_service.h"
 #include "views/widget/widget.h"
 
@@ -35,3 +35,8 @@ void OptionsPageView::ViewHierarchyChanged(bool is_add,
     NotifyPrefChanged(NULL);
   }
 }
+
+AccessibilityTypes::Role OptionsPageView::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_PAGETAB;
+}
+

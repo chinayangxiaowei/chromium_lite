@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_TABLE_TABLE_VIEW2_H_
 #define VIEWS_CONTROLS_TABLE_TABLE_VIEW2_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -61,6 +62,7 @@ class TableView2 : public View, public TableModelObserver {
   // comments next to the corresponding members in TableView2 for details
   // (ex. SINGLE_SELECTION -> single_selection_).
   enum Options {
+    NONE              = 0,
     SINGLE_SELECTION  = 1 << 0,
     RESIZABLE_COLUMNS = 1 << 1,
     AUTOSIZE_COLUMNS  = 1 << 2,
@@ -82,11 +84,7 @@ class TableView2 : public View, public TableModelObserver {
   // Note that setting both resizable_columns and autosize_columns to false is
   // probably not a good idea, as there is no way for the user to increase a
   // column's size in that case.
-  TableView2(TableModel* model, const std::vector<TableColumn>& columns,
-             TableTypes table_type, bool single_selection,
-             bool resizable_columns, bool autosize_columns);
   // |options| is a bitmask of options. See comments at Options.
-  // TODO(satorux): Convert everyone over to this variant.
   TableView2(TableModel* model, const std::vector<TableColumn>& columns,
              TableTypes table_type, int options);
   virtual ~TableView2();

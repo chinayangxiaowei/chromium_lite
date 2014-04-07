@@ -4,6 +4,7 @@
 
 #ifndef NET_BASE_MOCK_HOST_RESOLVER_H_
 #define NET_BASE_MOCK_HOST_RESOLVER_H_
+#pragma once
 
 #include <list>
 
@@ -15,9 +16,9 @@ namespace net {
 
 class RuleBasedHostResolverProc;
 
-// In most cases, it is important that unit tests avoid making actual DNS
-// queries since the resulting tests can be flaky, especially if the network is
-// unreliable for some reason.  To simplify writing tests that avoid making
+// In most cases, it is important that unit tests avoid relying on making actual
+// DNS queries since the resulting tests can be flaky, especially if the network
+// is unreliable for some reason.  To simplify writing tests that avoid making
 // actual DNS queries, pass a MockHostResolver as the HostResolver dependency.
 // The socket addresses returned can be configured using the
 // RuleBasedHostResolverProc:
@@ -38,6 +39,8 @@ class RuleBasedHostResolverProc;
 // Base class shared by MockHostResolver and MockCachingHostResolver.
 class MockHostResolverBase : public HostResolver {
  public:
+  virtual ~MockHostResolverBase();
+
   // HostResolver methods:
   virtual int Resolve(const RequestInfo& info,
                       AddressList* addresses,
@@ -58,21 +61,28 @@ class MockHostResolverBase : public HostResolver {
   // Resets the mock.
   void Reset(HostResolverProc* interceptor);
 
+  void SetPoolConstraints(HostResolverImpl::JobPoolIndex pool_index,
+                          size_t max_outstanding_jobs,
+                          size_t max_pending_requests) {
+    impl_->SetPoolConstraints(
+        pool_index, max_outstanding_jobs, max_pending_requests);
+  }
+
  protected:
   MockHostResolverBase(bool use_caching);
-  virtual ~MockHostResolverBase() {}
 
-  scoped_refptr<HostResolverImpl> impl_;
+  scoped_ptr<HostResolverImpl> impl_;
   scoped_refptr<RuleBasedHostResolverProc> rules_;
   bool synchronous_mode_;
   bool use_caching_;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(MockHostResolverBase);
 };
 
 class MockHostResolver : public MockHostResolverBase {
  public:
   MockHostResolver() : MockHostResolverBase(false /*use_caching*/) {}
-
- private:
   virtual ~MockHostResolver() {}
 };
 
@@ -84,8 +94,6 @@ class MockHostResolver : public MockHostResolverBase {
 class MockCachingHostResolver : public MockHostResolverBase {
  public:
   MockCachingHostResolver() : MockHostResolverBase(true /*use_caching*/) {}
-
- private:
   ~MockCachingHostResolver() {}
 };
 
@@ -107,12 +115,14 @@ class RuleBasedHostResolverProc : public HostResolverProc {
                                AddressFamily address_family,
                                const std::string& replacement);
 
-  // Same as AddRule(), but the replacement is expected to be an IPV6 literal.
-  // You should use this in place of AddRule(), since the system's host resolver
-  // may not support IPv6 literals on all systems. Whereas this variant
-  // constructs the socket address directly so it will always work.
-  void AddIPv6Rule(const std::string& host_pattern,
-                   const std::string& ipv6_literal);
+  // Same as AddRule(), but the replacement is expected to be an IPv4 or IPv6
+  // literal. This can be used in place of AddRule() to bypass the system's
+  // host resolver (the address list will be constructed manually).
+  // If |canonical-name| is non-empty, it is copied to the resulting AddressList
+  // but does not impact DNS resolution.
+  void AddIPLiteralRule(const std::string& host_pattern,
+                        const std::string& ip_literal,
+                        const std::string& canonical_name);
 
   void AddRuleWithLatency(const std::string& host_pattern,
                           const std::string& replacement,
@@ -129,7 +139,8 @@ class RuleBasedHostResolverProc : public HostResolverProc {
   virtual int Resolve(const std::string& host,
                       AddressFamily address_family,
                       HostResolverFlags host_resolver_flags,
-                      AddressList* addrlist);
+                      AddressList* addrlist,
+                      int* os_error);
 
  private:
   ~RuleBasedHostResolverProc();
@@ -143,25 +154,19 @@ class RuleBasedHostResolverProc : public HostResolverProc {
 // Using WaitingHostResolverProc you can simulate very long lookups.
 class WaitingHostResolverProc : public HostResolverProc {
  public:
-  explicit WaitingHostResolverProc(HostResolverProc* previous)
-      : HostResolverProc(previous), event_(false, false) {}
+  explicit WaitingHostResolverProc(HostResolverProc* previous);
 
-  void Signal() {
-    event_.Signal();
-  }
+  void Signal();
 
   // HostResolverProc methods:
   virtual int Resolve(const std::string& host,
                       AddressFamily address_family,
                       HostResolverFlags host_resolver_flags,
-                      AddressList* addrlist) {
-    event_.Wait();
-    return ResolveUsingPrevious(host, address_family, host_resolver_flags,
-                                addrlist);
-  }
+                      AddressList* addrlist,
+                      int* os_error);
 
  private:
-  ~WaitingHostResolverProc() {}
+  virtual ~WaitingHostResolverProc();
 
   base::WaitableEvent event_;
 };
@@ -177,7 +182,7 @@ class WaitingHostResolverProc : public HostResolverProc {
 // MockHostResolver.
 class ScopedDefaultHostResolverProc {
  public:
-  ScopedDefaultHostResolverProc() {}
+  ScopedDefaultHostResolverProc();
   explicit ScopedDefaultHostResolverProc(HostResolverProc* proc);
 
   ~ScopedDefaultHostResolverProc();

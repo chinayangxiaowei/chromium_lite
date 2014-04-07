@@ -5,7 +5,8 @@
 #include "chrome/browser/web_applications/web_app.h"
 
 #if defined(OS_WIN)
-#include <ShellAPI.h>
+#include <shellapi.h>
+#include <shlobj.h>
 #endif  // defined(OS_WIN)
 
 #include <algorithm>
@@ -33,7 +34,7 @@
 #include "webkit/glue/dom_operations.h"
 
 #if defined(OS_LINUX)
-#include "base/env_var.h"
+#include "base/environment.h"
 #endif  // defined(OS_LINUX)
 
 #if defined(OS_WIN)
@@ -43,6 +44,7 @@
 
 namespace {
 
+#if defined(OS_WIN)
 const FilePath::CharType kIconChecksumFileExt[] = FILE_PATH_LITERAL(".ico.md5");
 
 // Returns true if |ch| is in visible ASCII range and not one of
@@ -81,12 +83,9 @@ FilePath GetSanitizedFileName(const string16& name) {
     file_name += c;
   }
 
-#if defined(OS_WIN)
   return FilePath(file_name);
-#elif defined(OS_POSIX)
-  return FilePath(UTF16ToUTF8(file_name));
-#endif
 }
+#endif  // defined(OS_WIN)
 
 // Returns relative directory of given web app url.
 FilePath GetWebAppDir(const GURL& url) {
@@ -112,13 +111,16 @@ FilePath GetWebAppDataDirectory(const FilePath& root_dir,
   return root_dir.Append(GetWebAppDir(url));
 }
 
+#if defined(TOOLKIT_VIEWS)
 // Predicator for sorting images from largest to smallest.
 bool IconPrecedes(
     const webkit_glue::WebApplicationInfo::IconInfo& left,
     const webkit_glue::WebApplicationInfo::IconInfo& right) {
   return left.width < right.width;
 }
+#endif
 
+#if defined(OS_WIN)
 // Calculates image checksum using MD5.
 void GetImageCheckSum(const SkBitmap& image, MD5Digest* digest) {
   DCHECK(digest);
@@ -127,10 +129,9 @@ void GetImageCheckSum(const SkBitmap& image, MD5Digest* digest) {
   MD5Sum(image.getPixels(), image.getSize(), digest);
 }
 
-#if defined(OS_WIN)
 // Saves |image| as an |icon_file| with the checksum.
 bool SaveIconWithCheckSum(const FilePath& icon_file, const SkBitmap& image) {
-  if (!IconUtil::CreateIconFileFromSkBitmap(image, icon_file.value()))
+  if (!IconUtil::CreateIconFileFromSkBitmap(image, icon_file))
     return false;
 
   MD5Digest digest;
@@ -258,13 +259,13 @@ void CreateShortcutTask::Run() {
 }
 
 bool CreateShortcutTask::CreateShortcut() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
 #if defined(OS_LINUX)
-  scoped_ptr<base::EnvVarGetter> env_getter(base::EnvVarGetter::Create());
+  scoped_ptr<base::Environment> env(base::Environment::Create());
 
   std::string shortcut_template;
-  if (!ShellIntegration::GetDesktopShortcutTemplate(env_getter.get(),
+  if (!ShellIntegration::GetDesktopShortcutTemplate(env.get(),
                                                     &shortcut_template)) {
     return false;
   }
@@ -355,14 +356,14 @@ bool CreateShortcutTask::CreateShortcut() {
     return false;
   }
 
-  std::wstring chrome_exe;
+  FilePath chrome_exe;
   if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
     NOTREACHED();
     return false;
   }
 
   // Working directory.
-  std::wstring chrome_folder = file_util::GetDirectoryFromPath(chrome_exe);
+  FilePath chrome_folder = chrome_exe.DirName();
 
   std::string switches =
      ShellIntegration::GetCommandLineArgumentsCommon(shortcut_info_.url,
@@ -375,7 +376,7 @@ bool CreateShortcutTask::CreateShortcut() {
 
   // Generates app id from web app url and profile path.
   std::wstring app_id = ShellIntegration::GetAppId(
-      web_app::GenerateApplicationNameFromURL(shortcut_info_.url).c_str(),
+      UTF8ToWide(web_app::GenerateApplicationNameFromURL(shortcut_info_.url)),
       profile_path_);
 
   FilePath shortcut_to_pin;
@@ -393,9 +394,9 @@ bool CreateShortcutTask::CreateShortcut() {
       download_util::AppendNumberToPath(&shortcut_file, unique_number);
     }
 
-    success &= file_util::CreateShortcutLink(chrome_exe.c_str(),
+    success &= file_util::CreateShortcutLink(chrome_exe.value().c_str(),
         shortcut_file.value().c_str(),
-        chrome_folder.c_str(),
+        chrome_folder.value().c_str(),
         wide_switchs.c_str(),
         shortcut_info_.description.c_str(),
         icon_file.value().c_str(),
@@ -515,7 +516,7 @@ void UpdateShortcutWorker::Observe(NotificationType type,
 void UpdateShortcutWorker::DownloadIcon() {
   // FetchIcon must run on UI thread because it relies on TabContents
   // to download the icon.
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   if (tab_contents_ == NULL) {
     DeleteMe();  // We are done if underlying TabContents is gone.
@@ -556,7 +557,7 @@ void UpdateShortcutWorker::OnIconDownloaded(int download_id,
 }
 
 void UpdateShortcutWorker::CheckExistingShortcuts() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   // Locations to check to shortcut_paths.
   struct {
@@ -604,13 +605,13 @@ void UpdateShortcutWorker::CheckExistingShortcuts() {
 }
 
 void UpdateShortcutWorker::UpdateShortcuts() {
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(this,
       &UpdateShortcutWorker::UpdateShortcutsOnFileThread));
 }
 
 void UpdateShortcutWorker::UpdateShortcutsOnFileThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   FilePath web_app_path = GetWebAppDataDirectory(
       web_app::GetDataDir(profile_path_), shortcut_info_.url);
@@ -632,7 +633,7 @@ void UpdateShortcutWorker::UpdateShortcutsOnFileThread() {
   if (!shortcut_files_.empty()) {
     // Generates app id from web app url and profile path.
     std::wstring app_id = ShellIntegration::GetAppId(
-        web_app::GenerateApplicationNameFromURL(shortcut_info_.url).c_str(),
+        UTF8ToWide(web_app::GenerateApplicationNameFromURL(shortcut_info_.url)),
         profile_path_);
 
     // Sanitize description
@@ -659,16 +660,16 @@ void UpdateShortcutWorker::OnShortcutsUpdated(bool) {
 }
 
 void UpdateShortcutWorker::DeleteMe() {
-  if (ChromeThread::CurrentlyOn(ChromeThread::UI)) {
+  if (BrowserThread::CurrentlyOn(BrowserThread::UI)) {
     DeleteMeOnUIThread();
   } else {
-    ChromeThread::PostTask(ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &UpdateShortcutWorker::DeleteMeOnUIThread));
   }
 }
 
 void UpdateShortcutWorker::DeleteMeOnUIThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   delete this;
 }
 #endif  // defined(OS_WIN)
@@ -678,28 +679,24 @@ void UpdateShortcutWorker::DeleteMeOnUIThread() {
 #if defined(OS_WIN)
 // Allows UpdateShortcutWorker without adding refcounting. UpdateShortcutWorker
 // manages its own life time and will delete itself when it's done.
-template <>
-struct RunnableMethodTraits<UpdateShortcutWorker> {
-  void RetainCallee(UpdateShortcutWorker* worker) {}
-  void ReleaseCallee(UpdateShortcutWorker* worker) {}
-};
+DISABLE_RUNNABLE_METHOD_REFCOUNT(UpdateShortcutWorker);
 #endif  // defined(OS_WIN)
 
 namespace web_app {
 
-std::wstring GenerateApplicationNameFromURL(const GURL& url) {
+std::string GenerateApplicationNameFromURL(const GURL& url) {
   std::string t;
   t.append(url.host());
   t.append("_");
   t.append(url.path());
-  return UTF8ToWide(t);
+  return t;
 }
 
 void CreateShortcut(
     const FilePath& data_dir,
     const ShellIntegration::ShortcutInfo& shortcut_info,
     CreateShortcutCallback* callback) {
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
       new CreateShortcutTask(data_dir, shortcut_info, callback));
 }
 
@@ -709,6 +706,7 @@ bool IsValidUrl(const GURL& url) {
       chrome::kFtpScheme,
       chrome::kHttpScheme,
       chrome::kHttpsScheme,
+      chrome::kExtensionScheme,
   };
 
   for (size_t i = 0; i < arraysize(kValidUrlSchemes); ++i) {
@@ -723,6 +721,7 @@ FilePath GetDataDir(const FilePath& profile_path) {
   return profile_path.Append(chrome::kWebAppDirname);
 }
 
+#if defined(TOOLKIT_VIEWS)
 void GetIconsInfo(const webkit_glue::WebApplicationInfo& app_info,
                   IconInfoList* icons) {
   DCHECK(icons);
@@ -737,6 +736,7 @@ void GetIconsInfo(const webkit_glue::WebApplicationInfo& app_info,
 
   std::sort(icons->begin(), icons->end(), &IconPrecedes);
 }
+#endif
 
 void GetShortcutInfoForTab(TabContents* tab_contents,
                            ShellIntegration::ShortcutInfo* info) {

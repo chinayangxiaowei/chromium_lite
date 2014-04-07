@@ -12,7 +12,6 @@
       'target_name': 'media',
       'type': '<(library)',
       'dependencies': [
-        'omx_wrapper',
         '../base/base.gyp:base',
         '../third_party/ffmpeg/ffmpeg.gyp:ffmpeg',
       ],
@@ -21,19 +20,39 @@
       ],
       'msvs_guid': '6AE76406-B03B-11DD-94B1-80B556D89593',
       'sources': [
-        'audio/audio_output.h',
+        'audio/audio_buffers_state.cc',
+        'audio/audio_buffers_state.h',
+        'audio/audio_io.h',
+        'audio/audio_input_controller.cc',
+        'audio/audio_input_controller.h',
+        'audio/audio_manager.cc',
+        'audio/audio_manager.h',
+        'audio/audio_manager_base.cc',
+        'audio/audio_manager_base.h',
+        'audio/audio_output_controller.cc',
+        'audio/audio_output_controller.h',
+        'audio/audio_parameters.cc',
+        'audio/audio_parameters.h',
         'audio/audio_util.cc',
         'audio/audio_util.h',
+        'audio/fake_audio_input_stream.cc',
+        'audio/fake_audio_input_stream.h',
         'audio/fake_audio_output_stream.cc',
         'audio/fake_audio_output_stream.h',
         'audio/linux/audio_manager_linux.cc',
         'audio/linux/audio_manager_linux.h',
+        'audio/linux/alsa_input.cc',
+        'audio/linux/alsa_input.h',
         'audio/linux/alsa_output.cc',
         'audio/linux/alsa_output.h',
+        'audio/linux/alsa_util.cc',
+        'audio/linux/alsa_util.h',
         'audio/linux/alsa_wrapper.cc',
         'audio/linux/alsa_wrapper.h',
         'audio/openbsd/audio_manager_openbsd.cc',
         'audio/openbsd/audio_manager_openbsd.h',
+        'audio/mac/audio_input_mac.cc',
+        'audio/mac/audio_input_mac.h',
         'audio/mac/audio_manager_mac.cc',
         'audio/mac/audio_manager_mac.h',
         'audio/mac/audio_output_mac.cc',
@@ -41,11 +60,11 @@
         'audio/simple_sources.cc',
         'audio/simple_sources.h',
         'audio/win/audio_manager_win.h',
-        'audio/win/audio_output_win.cc',
+        'audio/win/audio_manager_win.cc',
+        'audio/win/wavein_input_win.cc',
+        'audio/win/wavein_input_win.h',
         'audio/win/waveout_output_win.cc',
         'audio/win/waveout_output_win.h',
-        'base/buffer_queue.cc',
-        'base/buffer_queue.h',
         'base/buffers.cc',
         'base/buffers.h',
         'base/callback.h',
@@ -56,8 +75,10 @@
         'base/data_buffer.h',
         'base/djb2.cc',
         'base/djb2.h',
+        'base/factory.cc',
         'base/factory.h',
         'base/filter_host.h',
+        'base/filters.cc',
         'base/filters.h',
         'base/media.h',
         'base/media_format.cc',
@@ -109,23 +130,19 @@
         'filters/ffmpeg_glue.h',
         'filters/ffmpeg_interfaces.cc',
         'filters/ffmpeg_interfaces.h',
-        'filters/ffmpeg_video_decode_engine.cc',
-        'filters/ffmpeg_video_decode_engine.h',
         'filters/ffmpeg_video_decoder.cc',
         'filters/ffmpeg_video_decoder.h',
         'filters/file_data_source.cc',
         'filters/file_data_source.h',
         'filters/null_audio_renderer.cc',
         'filters/null_audio_renderer.h',
-        'filters/omx_video_decode_engine.cc',
-        'filters/omx_video_decode_engine.h',
-        'filters/omx_video_decoder.cc',
-        'filters/omx_video_decoder.h',
-        'filters/video_decoder_impl.cc',
-        'filters/video_decoder_impl.h',
-        'filters/video_decode_engine.h',
         'filters/video_renderer_base.cc',
         'filters/video_renderer_base.h',
+        'video/ffmpeg_video_allocator.cc',
+        'video/ffmpeg_video_allocator.h',
+        'video/ffmpeg_video_decode_engine.cc',
+        'video/ffmpeg_video_decode_engine.h',
+        'video/video_decode_engine.h',
       ],
       'direct_dependent_settings': {
         'include_dirs': [
@@ -133,6 +150,12 @@
         ],
       },
       'conditions': [
+        ['OS=="win"', {
+          'sources': [
+            'video/mft_h264_decode_engine.cc',
+            'video/mft_h264_decode_engine.h',
+          ],
+        }],
         ['OS=="linux" or OS=="freebsd"', {
           'link_settings': {
             'libraries': [
@@ -155,6 +178,15 @@
             'audio/openbsd/audio_manager_openbsd.h',
           ],
         }],
+        ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
+          'sources': [
+            'filters/omx_video_decoder.cc',
+            'filters/omx_video_decoder.h',
+          ],
+          'dependencies': [
+            'omx_wrapper',
+          ]
+        }],
         ['OS=="mac"', {
           'link_settings': {
             'libraries': [
@@ -166,6 +198,40 @@
       ],
     },
     {
+      'target_name': 'ffmpeg_unittests',
+      'type': 'executable',
+      'dependencies': [
+        'media',
+        '../base/base.gyp:base',
+        '../base/base.gyp:base_i18n',
+        '../base/base.gyp:test_support_base',
+        '../base/base.gyp:test_support_perf',
+        '../testing/gtest.gyp:gtest',
+        '../third_party/ffmpeg/ffmpeg.gyp:ffmpeg',
+      ],
+      'sources': [
+        'ffmpeg/ffmpeg_unittest.cc',
+      ],
+      'conditions': [
+        ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
+          'dependencies': [
+            # Needed for the following #include chain:
+            #   base/run_all_unittests.cc
+            #   ../base/test_suite.h
+            #   gtk/gtk.h
+            '../build/linux/system.gyp:gtk',
+          ],
+          'conditions': [
+            ['linux_use_tcmalloc==1', {
+              'dependencies': [
+                '../base/allocator/allocator.gyp:allocator',
+              ],
+            }],
+          ],
+        }],
+      ],
+    },
+    {
       'target_name': 'media_unittests',
       'type': 'executable',
       'msvs_guid': 'C8C6183C-B03C-11DD-B471-DFD256D89593',
@@ -173,6 +239,7 @@
         'media',
         '../base/base.gyp:base',
         '../base/base.gyp:base_i18n',
+        '../base/base.gyp:test_support_base',
         '../testing/gmock.gyp:gmock',
         '../testing/gtest.gyp:gtest',
         '../third_party/ffmpeg/ffmpeg.gyp:ffmpeg',
@@ -182,12 +249,15 @@
         '../third_party/openmax/omx_stub.cc',
       ],
       'sources': [
+        'audio/audio_input_controller_unittest.cc',
+        'audio/audio_input_unittest.cc',
+        'audio/audio_output_controller_unittest.cc',
         'audio/audio_util_unittest.cc',
+        'audio/fake_audio_input_stream_unittest.cc',
         'audio/linux/alsa_output_unittest.cc',
         'audio/mac/audio_output_mac_unittest.cc',
         'audio/simple_sources_unittest.cc',
         'audio/win/audio_output_win_unittest.cc',
-        'base/buffer_queue_unittest.cc',
         'base/clock_impl_unittest.cc',
         'base/data_buffer_unittest.cc',
         'base/djb2_unittest.cc',
@@ -210,14 +280,12 @@
         'filters/decoder_base_unittest.cc',
         'filters/ffmpeg_demuxer_unittest.cc',
         'filters/ffmpeg_glue_unittest.cc',
-        'filters/ffmpeg_video_decode_engine_unittest.cc',
+        'filters/ffmpeg_video_decoder_unittest.cc',
         'filters/file_data_source_unittest.cc',
-        'filters/video_decoder_impl_unittest.cc',
         'filters/video_renderer_base_unittest.cc',
         'omx/mock_omx.cc',
         'omx/mock_omx.h',
-        'omx/omx_codec_unittest.cc',
-        'omx/omx_input_buffer_unittest.cc',
+        'video/ffmpeg_video_decode_engine_unittest.cc',
       ],
       'conditions': [
         ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
@@ -228,6 +296,9 @@
             #   gtk/gtk.h
             '../build/linux/system.gyp:gtk',
           ],
+          'sources': [
+            'omx/omx_codec_unittest.cc',
+          ],
           'conditions': [
             ['linux_use_tcmalloc==1', {
               'dependencies': [
@@ -236,6 +307,18 @@
             }],
           ],
         }],
+      ],
+    },
+    {
+      'target_name': 'media_test_support',
+      'type': '<(library)',
+      'dependencies': [
+        'media',
+        '../base/base.gyp:base',
+      ],
+      'sources': [
+        'audio/test_audio_input_controller_factory.cc',
+        'audio/test_audio_input_controller_factory.h',
       ],
     },
     {
@@ -249,6 +332,18 @@
       ],
       'sources': [
         'tools/media_bench/media_bench.cc',
+      ],
+    },
+    {
+      'target_name': 'scaler_bench',
+      'type': 'executable',
+      'dependencies': [
+        'media',
+        '../base/base.gyp:base',
+        '../skia/skia.gyp:skia',
+      ],
+      'sources': [
+        'tools/scaler_bench/scaler_bench.cc',
       ],
     },
     {
@@ -278,66 +373,6 @@
       'type': 'executable',
       'sources': [
         'tools/qt_faststart/qt_faststart.c'
-      ],
-    },
-    {
-      'target_name': 'omx_test',
-      'type': 'executable',
-      'dependencies': [
-        'media',
-        '../third_party/ffmpeg/ffmpeg.gyp:ffmpeg',
-        '../third_party/openmax/openmax.gyp:il',
-      ],
-      'sources': [
-        'tools/omx_test/color_space_util.cc',
-        'tools/omx_test/color_space_util.h',
-        'tools/omx_test/file_reader_util.cc',
-        'tools/omx_test/file_reader_util.h',
-        'tools/omx_test/file_sink.cc',
-        'tools/omx_test/file_sink.h',
-        'tools/omx_test/omx_test.cc',
-      ],
-    },
-    {
-      'target_name': 'omx_unittests',
-      'type': 'executable',
-      'dependencies': [
-        'media',
-        'omx_wrapper',
-        '../base/base.gyp:base',
-        '../base/base.gyp:base_i18n',
-        '../testing/gtest.gyp:gtest',
-      ],
-      'conditions': [
-        ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
-          'dependencies': [
-            '../build/linux/system.gyp:gtk',
-          ],
-        }],
-      ],
-      'sources': [
-        'omx/omx_unittest.cc',
-        'omx/run_all_unittests.cc',
-      ],
-    },
-    {
-      'target_name': 'omx_wrapper',
-      'type': '<(library)',
-      'dependencies': [
-        '../base/base.gyp:base',
-        '../third_party/openmax/openmax.gyp:il',
-      ],
-      'sources': [
-        'omx/omx_codec.cc',
-        'omx/omx_codec.h',
-        'omx/omx_configurator.cc',
-        'omx/omx_configurator.h',
-        'omx/omx_input_buffer.cc',
-        'omx/omx_input_buffer.h',
-      ],
-      'hard_dependency': 1,
-      'export_dependent_settings': [
-        '../third_party/openmax/openmax.gyp:il',
       ],
     },
   ],
@@ -377,10 +412,111 @@
             '_CRT_SECURE_NO_WARNINGS=1',
           ],
         },
+        {
+          'target_name': 'mfplayer',
+          'type': 'executable',
+          'dependencies': [
+          ],
+          'include_dirs': [
+            '..',
+          ],
+          'sources': [
+            'tools/mfplayer/mfplayer.h',
+            'tools/mfplayer/mfplayer.cc',    
+            'tools/mfplayer/mf_playback_main.cc',
+          ],
+          'msvs_settings': {
+            'VCLinkerTool': {
+              'SubSystem': '1',         # Set /SUBSYSTEM:CONSOLE
+            },
+          },
+        },
+        {
+          'target_name': 'mfdecoder',
+          'type': 'executable',
+          'dependencies': [
+            'media',
+            '../base/base.gyp:base',
+          ],
+          'include_dirs': [
+            '..',
+          ],
+          'sources': [
+            'tools/mfdecoder/main.cc',
+            'tools/mfdecoder/mfdecoder.h',    
+            'tools/mfdecoder/mfdecoder.cc',
+          ],
+          'msvs_settings': {
+            'VCLinkerTool': {
+              'SubSystem': '1',         # Set /SUBSYSTEM:CONSOLE
+            },
+          },
+        },
       ],
     }],
     ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
       'targets': [
+        {
+          'target_name': 'omx_test',
+          'type': 'executable',
+          'dependencies': [
+            'media',
+            '../third_party/ffmpeg/ffmpeg.gyp:ffmpeg',
+            '../third_party/openmax/openmax.gyp:il',
+          ],
+          'sources': [
+            'tools/omx_test/color_space_util.cc',
+            'tools/omx_test/color_space_util.h',
+            'tools/omx_test/file_reader_util.cc',
+            'tools/omx_test/file_reader_util.h',
+            'tools/omx_test/file_sink.cc',
+            'tools/omx_test/file_sink.h',
+            'tools/omx_test/omx_test.cc',
+          ],
+        },
+        {
+          'target_name': 'omx_unittests',
+          'type': 'executable',
+          'dependencies': [
+            'media',
+            'omx_wrapper',
+            '../base/base.gyp:base',
+            '../base/base.gyp:base_i18n',
+            '../base/base.gyp:test_support_base',
+            '../testing/gtest.gyp:gtest',
+          ],
+          'conditions': [
+            ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris"', {
+              'dependencies': [
+                '../build/linux/system.gyp:gtk',
+              ],
+            }],
+          ],
+          'sources': [
+            'omx/omx_unittest.cc',
+            'omx/run_all_unittests.cc',
+          ],
+        },
+        {
+          'target_name': 'omx_wrapper',
+          'type': '<(library)',
+          'dependencies': [
+            '../base/base.gyp:base',
+            '../third_party/openmax/openmax.gyp:il',
+            # TODO(wjia): remove ffmpeg
+            '../third_party/ffmpeg/ffmpeg.gyp:ffmpeg',
+          ],
+          'sources': [
+            'omx/omx_configurator.cc',
+            'omx/omx_configurator.h',
+            'video/omx_video_decode_engine.cc',
+            'video/omx_video_decode_engine.cc',
+          ],
+          'hard_dependency': 1,
+          'export_dependent_settings': [
+            '../third_party/openmax/openmax.gyp:il',
+          ],
+        },
         {
           'target_name': 'player_x11',
           'type': 'executable',
@@ -424,7 +560,7 @@
             }],
             ['player_x11_renderer == "gl"', {
               'dependencies': [
-                '../gpu/gpu.gyp:gl_libs',
+                '../app/app.gyp:app_base',
               ],
               'sources': [
                 'tools/player_x11/gl_video_renderer.cc',

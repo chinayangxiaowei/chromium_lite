@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_INSTALLER_UTIL_GOOGLE_UPDATE_SETTINGS_H_
 #define CHROME_INSTALLER_UTIL_GOOGLE_UPDATE_SETTINGS_H_
+#pragma once
 
 #include <string>
 
@@ -82,6 +83,47 @@ class GoogleUpdateSettings {
   // the channel (dev, beta, stable). Returns true if this operation succeeded,
   // on success, channel contains one of "", "unknown", "dev" or "beta".
   static bool GetChromeChannel(bool system_install, std::wstring* channel);
+
+  static void UpdateDiffInstallStatus(bool system_install,
+                                      bool incremental_install,
+                                      int install_return_code,
+                                      const std::wstring& product_guid);
+
+  // This method generates the new value for Google Update "ap" key for Chrome
+  // based on whether we are doing incremental install (or not) and whether
+  // the install succeeded.
+  // - If install worked, remove the magic string (if present).
+  // - If incremental installer failed, append a magic string (if
+  //   not present already).
+  // - If full installer failed, still remove this magic
+  //   string (if it is present already).
+  //
+  // diff_install: tells whether this is incremental install or not.
+  // install_return_code: if 0, means installation was successful.
+  // value: current value of Google Update "ap" key.
+  static std::wstring GetNewGoogleUpdateApKey(bool diff_install,
+                                              int install_return_code,
+                                              const std::wstring& value);
+
+  // For system-level installs, we need to be able to communicate the results
+  // of the Toast Experiments back to Google Update. The problem is just that
+  // the experiment is run in the context of the user, which doesn't have
+  // write access to the HKLM key that Google Update expects the results in.
+  // However, when we are about to switch contexts from system to user, we can
+  // duplicate the handle to the registry key and pass it (through handle
+  // inheritance) to the newly created child process that is launched as the
+  // user, allowing the child process to write to the key, with the
+  // WriteGoogleUpdateSystemClientKey function below.
+  static int DuplicateGoogleUpdateSystemClientKey();
+
+  // Takes a |handle| to a registry key and writes |value| string into the
+  // specified |key|. See DuplicateGoogleUpdateSystemClientKey for details.
+  static bool WriteGoogleUpdateSystemClientKey(int handle,
+                                               const std::wstring& key,
+                                               const std::wstring& value);
+
+  // True if a build is strictly organic, according to its brand code.
+  static bool IsOrganic(const std::wstring& brand);
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(GoogleUpdateSettings);

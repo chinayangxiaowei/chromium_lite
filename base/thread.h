@@ -4,10 +4,12 @@
 
 #ifndef BASE_THREAD_H_
 #define BASE_THREAD_H_
+#pragma once
 
 #include <string>
 
 #include "base/message_loop.h"
+#include "base/message_loop_proxy.h"
 #include "base/platform_thread.h"
 
 namespace base {
@@ -104,6 +106,16 @@ class Thread : PlatformThread::Delegate {
   //
   MessageLoop* message_loop() const { return message_loop_; }
 
+  // Returns a MessageLoopProxy for this thread.  Use the MessageLoopProxy's
+  // PostTask methods to execute code on the thread.  This only returns
+  // non-NULL after a successful call to Start. After Stop has been called,
+  // this will return NULL. Callers can hold on to this even after the thread
+  // is gone.
+  // TODO(sanjeevr): Look into merging MessageLoop and MessageLoopProxy.
+  scoped_refptr<MessageLoopProxy> message_loop_proxy() {
+    return message_loop_proxy_;
+  }
+
   // Set the name of this thread (for display in debugger too).
   const std::string &thread_name() { return name_; }
 
@@ -143,9 +155,10 @@ class Thread : PlatformThread::Delegate {
   // PlatformThread::Delegate methods:
   virtual void ThreadMain();
 
-  // We piggy-back on the startup_data_ member to know if we successfully
-  // started the thread.  This way we know that we need to call Join.
-  bool thread_was_started() const { return startup_data_ != NULL; }
+  bool thread_was_started() const { return started_; }
+
+  // Whether we successfully started the thread.
+  bool started_;
 
   // If true, we're in the middle of stopping, and shouldn't access
   // |message_loop_|. It may non-NULL and invalid.
@@ -161,6 +174,10 @@ class Thread : PlatformThread::Delegate {
   // The thread's message loop.  Valid only while the thread is alive.  Set
   // by the created thread.
   MessageLoop* message_loop_;
+
+  // A MessageLoopProxy implementation that targets this thread. This can
+  // outlive the thread.
+  scoped_refptr<MessageLoopProxy> message_loop_proxy_;
 
   // Our thread's ID.
   PlatformThreadId thread_id_;

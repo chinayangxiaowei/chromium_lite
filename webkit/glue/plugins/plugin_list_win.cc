@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,8 @@
 #include "base/path_service.h"
 #include "base/registry.h"
 #include "base/scoped_ptr.h"
+#include "base/string_number_conversions.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "webkit/glue/plugins/plugin_constants_win.h"
 #include "webkit/glue/plugins/plugin_lib.h"
@@ -36,6 +38,8 @@ const TCHAR kRegistryJava[] =
 const TCHAR kRegistryBrowserJavaVersion[] = _T("BrowserJavaVersion");
 const TCHAR kRegistryCurrentJavaVersion[] = _T("CurrentVersion");
 const TCHAR kRegistryJavaHome[] = _T("JavaHome");
+const TCHAR kJavaDeploy1[] = _T("npdeploytk.dll");
+const TCHAR kJavaDeploy2[] = _T("npdeployjava1.dll");
 
 // The application path where we expect to find plugins.
 void GetAppDirectory(std::set<FilePath>* plugin_dirs) {
@@ -63,7 +67,7 @@ bool GetInstalledPath(const TCHAR* app, FilePath* out) {
   reg_path.append(L"\\");
   reg_path.append(app);
 
-  RegKey key(HKEY_LOCAL_MACHINE, reg_path.c_str());
+  RegKey key(HKEY_LOCAL_MACHINE, reg_path.c_str(), KEY_READ);
   std::wstring path;
   if (key.ReadValue(kRegistryPath, &path)) {
     *out = FilePath(path);
@@ -84,7 +88,7 @@ void GetPluginsInRegistryDirectory(
     std::wstring reg_path = registry_folder;
     reg_path.append(L"\\");
     reg_path.append(iter.Name());
-    RegKey key(root_key, reg_path.c_str());
+    RegKey key(root_key, reg_path.c_str(), KEY_READ);
 
     std::wstring path;
     if (key.ReadValue(kRegistryPath, &path))
@@ -281,17 +285,40 @@ void PluginList::LoadPluginsFromRegistry(
   }
 }
 
+// Returns true if the given plugins share at least one mime type.  This is used
+// to differentiate newer versions of a plugin vs two plugins which happen to
+// have the same filename.
+bool HaveSharedMimeType(const WebPluginInfo& plugin1,
+                        const WebPluginInfo& plugin2) {
+  for (size_t i = 0; i < plugin1.mime_types.size(); ++i) {
+    for (size_t j = 0; j < plugin2.mime_types.size(); ++j) {
+      if (plugin1.mime_types[i].mime_type == plugin2.mime_types[j].mime_type)
+        return true;
+    }
+  }
+
+  return false;
+}
+
 // Compares Windows style version strings (i.e. 1,2,3,4).  Returns true if b's
 // version is newer than a's, or false if it's equal or older.
 bool IsNewerVersion(const std::wstring& a, const std::wstring& b) {
   std::vector<std::wstring> a_ver, b_ver;
   SplitString(a, ',', &a_ver);
   SplitString(b, ',', &b_ver);
+  if (a_ver.size() == 1 && b_ver.size() == 1) {
+    a_ver.clear();
+    b_ver.clear();
+    SplitString(a, '.', &a_ver);
+    SplitString(b, '.', &b_ver);
+  }
   if (a_ver.size() != b_ver.size())
     return false;
   for (size_t i = 0; i < a_ver.size(); i++) {
-    int cur_a = StringToInt(a_ver[i]);
-    int cur_b = StringToInt(b_ver[i]);
+    int cur_a, cur_b;
+    base::StringToInt(a_ver[i], &cur_a);
+    base::StringToInt(b_ver[i], &cur_b);
+
     if (cur_a > cur_b)
       return false;
     if (cur_a < cur_b)
@@ -305,9 +332,18 @@ bool PluginList::ShouldLoadPlugin(const WebPluginInfo& info,
   // Version check
 
   for (size_t i = 0; i < plugins->size(); ++i) {
-    if ((*plugins)[i].path.BaseName() == info.path.BaseName() &&
-        !IsNewerVersion((*plugins)[i].version, info.version)) {
-      return false;  // We already have a loaded plugin whose version is newer.
+    std::wstring plugin1 =
+        StringToLowerASCII((*plugins)[i].path.BaseName().ToWStringHack());
+    std::wstring plugin2 =
+        StringToLowerASCII(info.path.BaseName().ToWStringHack());
+    if ((plugin1 == plugin2 && HaveSharedMimeType((*plugins)[i], info)) ||
+        (plugin1 == kJavaDeploy1 && plugin2 == kJavaDeploy2) ||
+        (plugin1 == kJavaDeploy2 && plugin2 == kJavaDeploy1)) {
+      if (!IsNewerVersion((*plugins)[i].version, info.version))
+        return false;  // We have loaded a plugin whose version is newer.
+
+      plugins->erase(plugins->begin() + i);
+      break;
     }
   }
 
@@ -338,9 +374,9 @@ bool PluginList::ShouldLoadPlugin(const WebPluginInfo& info,
     SplitString(info.version, '.', &ver);
     int major, minor, update;
     if (ver.size() == 4 &&
-        StringToInt(ver[0], &major) &&
-        StringToInt(ver[1], &minor) &&
-        StringToInt(ver[2], &update)) {
+        base::StringToInt(ver[0], &major) &&
+        base::StringToInt(ver[1], &minor) &&
+        base::StringToInt(ver[2], &update)) {
       if (major == 6 && minor == 0 && update < 120)
         return false;  // Java SE6 Update 11 or older.
     }

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,8 @@
 
 #include "app/l10n_util_win.h"
 #include "base/i18n/rtl.h"
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
+//#include "base/string_util.h"
 #include "base/win_util.h"
 
 #include "grit/app_locale_settings.h"
@@ -33,6 +34,24 @@ void AdjustLogFont(const std::wstring& font_family,
     memcpy(logfont->lfFaceName, font_family.data(), name_len * sizeof(WORD));
     logfont->lfFaceName[name_len] = 0;
   }
+}
+
+bool IsFontPresent(const wchar_t* font_name) {
+  HFONT hfont = CreateFont(12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                           font_name);
+  if (hfont == NULL)
+    return false;
+  HDC dc = GetDC(0);
+  HGDIOBJ oldFont = static_cast<HFONT>(SelectObject(dc, hfont));
+  WCHAR actual_font_name[LF_FACESIZE];
+  DWORD size_ret = GetTextFace(dc, LF_FACESIZE, actual_font_name);
+  actual_font_name[LF_FACESIZE - 1] = 0;
+  SelectObject(dc, oldFont);
+  DeleteObject(hfont);
+  ReleaseDC(0, dc);
+  // We don't have to worry about East Asian fonts with locale-dependent
+  // names here.
+  return wcscmp(font_name, actual_font_name) == 0;
 }
 
 }  // namespace
@@ -63,9 +82,12 @@ void HWNDSetRTLLayout(HWND hwnd) {
 }
 
 bool IsLocaleSupportedByOS(const std::string& locale) {
-  // Block Amharic on Windows XP.
-  return win_util::GetWinVersion() >= win_util::WINVERSION_VISTA ||
-      !LowerCaseEqualsASCII(locale, "am");
+  // Block Amharic on Windows XP unless 'Abyssinica SIL' font is present.
+  // On Win XP, no Ethiopic/Amahric font is availabel out of box. We hard-coded
+  // 'Abyssinica SIL' in the resource bundle to use in the UI. Check
+  // for its presence to determine whether or not to support Amharic UI on XP.
+  return (win_util::GetWinVersion() >= win_util::WINVERSION_VISTA ||
+      !LowerCaseEqualsASCII(locale, "am") || IsFontPresent(L"Abyssinica SIL"));
 }
 
 bool NeedOverrideDefaultUIFont(std::wstring* override_font_family,
@@ -86,7 +108,11 @@ bool NeedOverrideDefaultUIFont(std::wstring* override_font_family,
   }
 
   std::wstring ui_font_family = GetString(ui_font_family_id);
-  int scaler100 = StringToInt(l10n_util::GetString(ui_font_size_scaler_id));
+  int scaler100;
+  if (!base::StringToInt(l10n_util::GetString(ui_font_size_scaler_id),
+                         &scaler100))
+    return false;
+
   // We use the OS default in two cases:
   // 1) The resource bundle has 'default' and '100' for font family and
   //    font scaler.

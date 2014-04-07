@@ -35,6 +35,7 @@ Checkbox::~Checkbox() {
 
 void Checkbox::SetMultiLine(bool multiline) {
   label_->SetMultiLine(multiline);
+  PreferredSizeChanged();
 }
 
 void Checkbox::SetChecked(bool checked) {
@@ -72,6 +73,19 @@ gfx::Size Checkbox::GetPreferredSize() {
   return prefsize;
 }
 
+int Checkbox::GetHeightForWidth(int w) {
+  if (!native_wrapper_)
+    return 0;
+
+  gfx::Size prefsize = native_wrapper_->GetView()->GetPreferredSize();
+  if (native_wrapper_->UsesNativeLabel())
+    return prefsize.height();
+
+  int width = prefsize.width() + kCheckboxLabelSpacing +
+              kLabelFocusPaddingHorizontal * 2;
+  return label_->GetHeightForWidth(std::max(prefsize.height(), w - width));
+}
+
 void Checkbox::Layout() {
   if (!native_wrapper_)
     return;
@@ -89,7 +103,7 @@ void Checkbox::Layout() {
         label_x, 0, std::max(0, width() - label_x -
             kLabelFocusPaddingHorizontal),
         height());
-    int first_line_height = label_->font().height();
+    int first_line_height = label_->font().GetHeight();
     native_wrapper_->GetView()->SetBounds(
         0, ((first_line_height - checkmark_prefsize.height()) / 2),
         checkmark_prefsize.width(), checkmark_prefsize.height());
@@ -153,18 +167,12 @@ void Checkbox::WillLoseFocus() {
   label_->set_paint_as_focused(false);
 }
 
-bool Checkbox::GetAccessibleRole(AccessibilityTypes::Role* role) {
-  DCHECK(role);
-
-  *role = AccessibilityTypes::ROLE_CHECKBUTTON;
-  return true;
+AccessibilityTypes::Role Checkbox::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_CHECKBUTTON;
 }
 
-bool Checkbox::GetAccessibleState(AccessibilityTypes::State* state) {
-  DCHECK(state);
- 
-  *state = checked() ? AccessibilityTypes::STATE_CHECKED : 0;
-  return true;
+AccessibilityTypes::State Checkbox::GetAccessibleState() {
+  return checked() ? AccessibilityTypes::STATE_CHECKED : 0;
 }
 
 std::string Checkbox::GetClassName() const {

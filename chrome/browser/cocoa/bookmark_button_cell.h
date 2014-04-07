@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_BOOKMARK_BUTTON_CELL_H_
 #define CHROME_BROWSER_COCOA_BOOKMARK_BUTTON_CELL_H_
+#pragma once
 
 #import "base/cocoa_protocols_mac.h"
 #import "chrome/browser/cocoa/gradient_button_cell.h"
@@ -29,9 +30,9 @@ class BookmarkNode;
   scoped_nsobject<NSImage> arrowImage_;
 }
 
-@property (readwrite, assign) const BookmarkNode* bookmarkNode;
-@property (readwrite, assign) int startingChildIndex;
-@property (readwrite, assign) BOOL drawFolderArrow;
+@property (nonatomic, readwrite, assign) const BookmarkNode* bookmarkNode;
+@property (nonatomic, readwrite, assign) int startingChildIndex;
+@property (nonatomic, readwrite, assign) BOOL drawFolderArrow;
 
 // Create a button cell which draws with a theme.
 + (id)buttonCellForNode:(const BookmarkNode*)node

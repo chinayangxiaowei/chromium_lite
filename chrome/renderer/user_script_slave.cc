@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,16 +14,21 @@
 #include "base/string_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/url_constants.h"
 #include "chrome/renderer/extension_groups.h"
+#include "chrome/renderer/extensions/extension_renderer_info.h"
 #include "chrome/renderer/render_thread.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebVector.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebView.h"
 
 #include "grit/renderer_resources.h"
 
 using WebKit::WebFrame;
 using WebKit::WebString;
+using WebKit::WebVector;
+using WebKit::WebView;
 
 // These two strings are injected before and after the Greasemonkey API and
 // user script to wrap it in an anonymous scope.
@@ -62,7 +67,8 @@ UserScriptSlave::UserScriptSlave()
                 IDR_GREASEMONKEY_API_JS);
 }
 
-void UserScriptSlave::GetActiveExtensions(std::set<std::string>* extension_ids) {
+void UserScriptSlave::GetActiveExtensions(
+    std::set<std::string>* extension_ids) {
   for (size_t i = 0; i < scripts_.size(); ++i) {
     DCHECK(!scripts_[i]->extension_id().empty());
     extension_ids->insert(scripts_[i]->extension_id());
@@ -72,7 +78,7 @@ void UserScriptSlave::GetActiveExtensions(std::set<std::string>* extension_ids) 
 bool UserScriptSlave::UpdateScripts(base::SharedMemoryHandle shared_memory) {
   scripts_.clear();
 
-  bool only_inject_incognito = RenderThread::current()->is_incognito_process();
+  bool only_inject_incognito = RenderThread::current()->IsIncognitoProcess();
 
   // Create the shared memory object (read only).
   shared_memory_.reset(new base::SharedMemory(shared_memory, true));
@@ -129,6 +135,42 @@ bool UserScriptSlave::UpdateScripts(base::SharedMemoryHandle shared_memory) {
     }
   }
 
+  // Push user styles down into WebCore
+  WebView::removeAllUserContent();
+  for (size_t i = 0; i < scripts_.size(); ++i) {
+    UserScript* script = scripts_[i];
+    if (script->css_scripts().empty())
+      continue;
+
+    WebVector<WebString> patterns;
+    std::vector<WebString> temp_patterns;
+    for (size_t k = 0; k < script->url_patterns().size(); ++k) {
+      std::vector<URLPattern> explicit_patterns =
+          script->url_patterns()[k].ConvertToExplicitSchemes();
+      for (size_t m = 0; m < explicit_patterns.size(); ++m) {
+        // Only include file schemes if the user has opted into that.
+        if (!explicit_patterns[m].MatchesScheme(chrome::kFileScheme) ||
+            script->allow_file_access()) {
+          temp_patterns.push_back(WebString::fromUTF8(
+              explicit_patterns[m].GetAsString()));
+        }
+      }
+    }
+    patterns.assign(temp_patterns);
+
+    for (size_t j = 0; j < script->css_scripts().size(); ++j) {
+      const UserScript::File& file = scripts_[i]->css_scripts()[j];
+      std::string content = file.GetContent().as_string();
+
+       WebView::addUserStyleSheet(
+          WebString::fromUTF8(content),
+          patterns,
+           script->match_all_frames() ?
+              WebView::UserContentInjectInAllFrames :
+              WebView::UserContentInjectInTopFrameOnly);
+    }
+  }
+
   return true;
 }
 
@@ -136,23 +178,17 @@ bool UserScriptSlave::UpdateScripts(base::SharedMemoryHandle shared_memory) {
 void UserScriptSlave::InsertInitExtensionCode(
     std::vector<WebScriptSource>* sources, const std::string& extension_id) {
   DCHECK(sources);
-  bool incognito = RenderThread::current()->is_incognito_process();
+  bool incognito = RenderThread::current()->IsIncognitoProcess();
   sources->insert(sources->begin(), WebScriptSource(WebString::fromUTF8(
       StringPrintf(kInitExtension, extension_id.c_str(),
                    incognito ? "true" : "false"))));
 }
 
-bool UserScriptSlave::InjectScripts(WebFrame* frame,
+void UserScriptSlave::InjectScripts(WebFrame* frame,
                                     UserScript::RunLocation location) {
   GURL frame_url = GURL(frame->url());
-  // Don't bother if this is not a URL we inject script into.
-  if (!URLPattern::IsValidScheme(frame_url.scheme()))
-    return true;
-
-  // Don't inject user scripts into the gallery itself.  This prevents
-  // a user script from removing the "report abuse" link, for example.
-  if (frame_url.host() == GURL(extension_urls::kGalleryBrowsePrefix).host())
-    return true;
+  if (frame_url.is_empty())
+    return;
 
   PerfTimer timer;
   int num_css = 0;
@@ -165,20 +201,31 @@ bool UserScriptSlave::InjectScripts(WebFrame* frame,
     if (frame->parent() && !script->match_all_frames())
       continue;  // Only match subframes if the script declared it wanted to.
 
-    if (!script->MatchesUrl(frame->url()))
-      continue;  // This frame doesn't match the script url pattern, skip it.
+    ExtensionRendererInfo* extension =
+        ExtensionRendererInfo::GetByID(script->extension_id());
 
-    // CSS files are always injected on document start before js scripts.
-    if (location == UserScript::DOCUMENT_START) {
-      num_css += script->css_scripts().size();
-      for (size_t j = 0; j < script->css_scripts().size(); ++j) {
-        PerfTimer insert_timer;
-        UserScript::File& file = script->css_scripts()[j];
-        frame->insertStyleText(
-            WebString::fromUTF8(file.GetContent().as_string()), WebString());
-        UMA_HISTOGRAM_TIMES("Extensions.InjectCssTime", insert_timer.Elapsed());
-      }
+    // Since extension info is sent separately from user script info, they can
+    // be out of sync. We just ignore this situation.
+    if (!extension)
+      continue;
+
+    if (!Extension::CanExecuteScriptOnPage(
+            frame_url,
+            extension->allowed_to_execute_script_everywhere(),
+            NULL,
+            script,
+            NULL)) {
+      continue;
     }
+
+    if (frame_url.SchemeIsFile() && !script->allow_file_access())
+      continue;  // This script isn't allowed to run on file URLs.
+
+    // We rely on WebCore for CSS injection, but it's still useful to know how
+    // many css files there are.
+    if (location == UserScript::DOCUMENT_START)
+      num_css += script->css_scripts().size();
+
     if (script->run_location() == location) {
       num_scripts += script->js_scripts().size();
       for (size_t j = 0; j < script->js_scripts().size(); ++j) {
@@ -238,8 +285,4 @@ bool UserScriptSlave::InjectScripts(WebFrame* frame,
   } else {
     NOTREACHED();
   }
-
-  LOG(INFO) << "Injected " << num_scripts << " scripts and " << num_css <<
-      " css files into " << frame->url().spec().data();
-  return true;
 }

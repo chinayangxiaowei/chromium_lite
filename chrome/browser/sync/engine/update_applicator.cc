@@ -17,11 +17,13 @@ using std::vector;
 namespace browser_sync {
 
 UpdateApplicator::UpdateApplicator(ConflictResolver* resolver,
+                                   Cryptographer* cryptographer,
                                    const UpdateIterator& begin,
                                    const UpdateIterator& end,
                                    const ModelSafeRoutingInfo& routes,
                                    ModelSafeGroup group_filter)
     : resolver_(resolver),
+      cryptographer_(cryptographer),
       begin_(begin),
       end_(end),
       pointer_(begin),
@@ -29,9 +31,12 @@ UpdateApplicator::UpdateApplicator(ConflictResolver* resolver,
       progress_(false),
       routing_info_(routes) {
     size_t item_count = end - begin;
-    LOG(INFO) << "UpdateApplicator created for " << item_count << " items.";
+    VLOG(1) << "UpdateApplicator created for " << item_count << " items.";
     successful_ids_.reserve(item_count);
   }
+
+UpdateApplicator::~UpdateApplicator() {
+}
 
 // Returns true if there's more to do.
 bool UpdateApplicator::AttemptOneApplication(
@@ -58,8 +63,8 @@ bool UpdateApplicator::AttemptOneApplication(
   }
 
   syncable::MutableEntry entry(trans, syncable::GET_BY_HANDLE, *pointer_);
-  UpdateAttemptResponse updateResponse =
-      SyncerUtil::AttemptToUpdateEntry(trans, &entry, resolver_);
+  UpdateAttemptResponse updateResponse = SyncerUtil::AttemptToUpdateEntry(
+      trans, &entry, resolver_, cryptographer_);
   switch (updateResponse) {
     case SUCCESS:
       Advance();
@@ -74,8 +79,8 @@ bool UpdateApplicator::AttemptOneApplication(
       NOTREACHED();
       break;
   }
-  LOG(INFO) << "Apply Status for " << entry.Get(syncable::META_HANDLE)
-            << " is " << updateResponse;
+  VLOG(1) << "Apply Status for " << entry.Get(syncable::META_HANDLE)
+          << " is " << updateResponse;
 
   return true;
 }

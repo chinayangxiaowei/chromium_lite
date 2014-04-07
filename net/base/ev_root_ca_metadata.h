@@ -4,6 +4,7 @@
 
 #ifndef NET_BASE_EV_ROOT_CA_METADATA_H_
 #define NET_BASE_EV_ROOT_CA_METADATA_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -35,7 +36,7 @@ class EVRootCAMetadata {
 
   // If the root CA cert has an EV policy OID, returns true and stores the
   // policy OID in *policy_oid.  Otherwise, returns false.
-  bool GetPolicyOID(const X509Certificate::Fingerprint& fingerprint,
+  bool GetPolicyOID(const SHA1Fingerprint& fingerprint,
                     PolicyOID* policy_oid) const;
 
   const PolicyOID* GetPolicyOIDs() const { return &policy_oids_[0]; }
@@ -43,12 +44,12 @@ class EVRootCAMetadata {
 
  private:
   EVRootCAMetadata();
-  ~EVRootCAMetadata() { }
+  ~EVRootCAMetadata();
 
   friend struct DefaultSingletonTraits<EVRootCAMetadata>;
 
-  typedef std::map<X509Certificate::Fingerprint, PolicyOID,
-                   X509Certificate::FingerprintLessThan> PolicyOidMap;
+  typedef std::map<SHA1Fingerprint, PolicyOID,
+                   SHA1FingerprintLessThan> PolicyOidMap;
 
   // Maps an EV root CA cert's SHA-1 fingerprint to its EV policy OID.
   PolicyOidMap ev_policy_;

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -27,6 +27,7 @@
 
 #ifndef CHROME_BROWSER_SAFE_BROWSING_SAFE_BROWSING_BLOCKING_PAGE_H_
 #define CHROME_BROWSER_SAFE_BROWSING_SAFE_BROWSING_BLOCKING_PAGE_H_
+#pragma once
 
 #include <map>
 #include <vector>
@@ -37,7 +38,6 @@
 
 class DictionaryValue;
 class MessageLoop;
-class NavigationController;
 class SafeBrowsingBlockingPageFactory;
 class TabContents;
 
@@ -77,6 +77,12 @@ class SafeBrowsingBlockingPage : public InterstitialPage {
                            const UnsafeResourceList& unsafe_resources);
 
  private:
+  enum BlockingPageEvent {
+    SHOW,
+    PROCEED,
+    DONT_PROCEED,
+  };
+
   // Fills the passed dictionary with the strings passed to JS Template when
   // creating the HTML.
   void PopulateMultipleThreatStringDictionary(DictionaryValue* strings);
@@ -92,6 +98,9 @@ class SafeBrowsingBlockingPage : public InterstitialPage {
                                 const std::wstring& description2,
                                 const std::wstring& description3);
 
+  // Records a user action for this interstitial, using the form
+  // SBInterstitial[Phishing|Malware|Multiple][Show|Proceed|DontProceed].
+  void RecordUserAction(BlockingPageEvent event);
 
   // A list of SafeBrowsingService::UnsafeResource for a tab that the user
   // should be warned about.  They are queued when displaying more than one
@@ -136,7 +145,7 @@ class SafeBrowsingBlockingPage : public InterstitialPage {
 // Factory for creating SafeBrowsingBlockingPage.  Useful for tests.
 class SafeBrowsingBlockingPageFactory {
  public:
-  ~SafeBrowsingBlockingPageFactory() { }
+  virtual ~SafeBrowsingBlockingPageFactory() { }
 
   virtual SafeBrowsingBlockingPage* CreateSafeBrowsingPage(
       SafeBrowsingService* service,

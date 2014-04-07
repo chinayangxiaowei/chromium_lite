@@ -4,14 +4,18 @@
 
 #ifndef CHROME_BROWSER_IN_PROCESS_WEBKIT_WEBKIT_CONTEXT_H_
 #define CHROME_BROWSER_IN_PROCESS_WEBKIT_WEBKIT_CONTEXT_H_
+#pragma once
+
+#include <vector>
 
 #include "base/file_path.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "base/time.h"
 #include "chrome/browser/in_process_webkit/dom_storage_context.h"
+#include "chrome/browser/in_process_webkit/indexed_db_context.h"
 
-class WebKitThread;
+class Profile;
 
 // There's one WebKitContext per profile.  Various DispatcherHost classes
 // have a pointer to the Context to store shared state.  Unfortunately, this
@@ -22,12 +26,17 @@ class WebKitThread;
 // threads.
 class WebKitContext : public base::RefCountedThreadSafe<WebKitContext> {
  public:
-  WebKitContext(const FilePath& data_path, bool is_incognito);
+  explicit WebKitContext(Profile* profile);
 
   const FilePath& data_path() const { return data_path_; }
   bool is_incognito() const { return is_incognito_; }
+
   DOMStorageContext* dom_storage_context() {
     return dom_storage_context_.get();
+  }
+
+  IndexedDBContext* indexed_db_context() {
+    return indexed_db_context_.get();
   }
 
 #ifdef UNIT_TEST
@@ -44,10 +53,11 @@ class WebKitContext : public base::RefCountedThreadSafe<WebKitContext> {
   // Tell all children (where applicable) to delete any objects that were
   // last modified on or after the following time.
   void DeleteDataModifiedSince(const base::Time& cutoff,
-                               const char* url_scheme_to_be_skipped);
+                               const char* url_scheme_to_be_skipped,
+                               const std::vector<string16>& protected_origins);
 
-  // Delete the session storage namespace associated with this id.  Called from
-  // the UI thread.
+  // Delete the session storage namespace associated with this id.  Can be
+  // called from any thread.
   void DeleteSessionStorageNamespace(int64 session_storage_namespace_id);
 
  private:
@@ -59,6 +69,8 @@ class WebKitContext : public base::RefCountedThreadSafe<WebKitContext> {
   const bool is_incognito_;
 
   scoped_ptr<DOMStorageContext> dom_storage_context_;
+
+  scoped_ptr<IndexedDBContext> indexed_db_context_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(WebKitContext);
 };

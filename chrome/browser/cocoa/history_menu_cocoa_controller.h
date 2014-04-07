@@ -8,6 +8,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_HISTORY_MENU_COCOA_CONTROLLER_H_
 #define CHROME_BROWSER_COCOA_HISTORY_MENU_COCOA_CONTROLLER_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 #import "chrome/browser/cocoa/history_menu_bridge.h"
@@ -25,7 +26,6 @@
 @end  // HistoryMenuCocoaController
 
 @interface HistoryMenuCocoaController (ExposedForUnitTests)
-- (const HistoryMenuBridge::HistoryItem*)itemForTag:(NSInteger)tag;
 - (void)openURLForItem:(const HistoryMenuBridge::HistoryItem*)node;
 @end  // HistoryMenuCocoaController (ExposedForUnitTests)
 

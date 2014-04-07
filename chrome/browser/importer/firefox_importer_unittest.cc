@@ -7,6 +7,7 @@
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
+#include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/importer/firefox2_importer.h"
 #include "chrome/browser/importer/firefox_importer_unittest_utils.h"
@@ -92,7 +93,7 @@ TEST(FirefoxImporterTest, Firefox2BookmarkParse) {
       charset, &folder_name, &is_toolbar_folder);
   EXPECT_TRUE(result);
   EXPECT_EQ(L"< > & \" ' \\ /", folder_name);
-  EXPECT_EQ(false, is_toolbar_folder);
+  EXPECT_FALSE(is_toolbar_folder);
 
   // Empty name and toolbar folder attribute.
   result = Firefox2Importer::ParseFolderNameFromLine(
@@ -100,7 +101,7 @@ TEST(FirefoxImporterTest, Firefox2BookmarkParse) {
       charset, &folder_name, &is_toolbar_folder);
   EXPECT_TRUE(result);
   EXPECT_EQ(L"", folder_name);
-  EXPECT_EQ(true, is_toolbar_folder);
+  EXPECT_TRUE(is_toolbar_folder);
 
   // Unicode characters in title and shortcut.
   std::wstring title;

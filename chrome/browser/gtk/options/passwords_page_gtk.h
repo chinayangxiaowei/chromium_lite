@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_GTK_OPTIONS_PASSWORDS_PAGE_GTK_H_
 #define CHROME_BROWSER_GTK_OPTIONS_PASSWORDS_PAGE_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
@@ -11,16 +12,16 @@
 
 #include "app/gtk_signal.h"
 #include "chrome/browser/password_manager/password_store.h"
+#include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/profile.h"
+#include "chrome/common/notification_observer.h"
 
-class PasswordsPageGtk {
+class PasswordsPageGtk : public NotificationObserver {
  public:
   explicit PasswordsPageGtk(Profile* profile);
-  ~PasswordsPageGtk();
+  virtual ~PasswordsPageGtk();
 
-  GtkWidget* get_page_widget() const {
-    return page_;
-  }
+  GtkWidget* get_page_widget() const { return page_; }
 
  private:
   // Initialize the password tree widget, setting the member variables.
@@ -29,19 +30,29 @@ class PasswordsPageGtk {
   // The password store associated with the currently active profile.
   PasswordStore* GetPasswordStore();
 
-  // Sets the password list contents to the given data.
+  // Sets the password list contents to the given data. We take ownership of
+  // the PasswordForms in the vector.
   void SetPasswordList(const std::vector<webkit_glue::PasswordForm*>& result);
+
+  // Helper that hides the password.
+  void HidePassword();
+
+  // NotificationObserver implementation.
+  void Observe(NotificationType type,
+               const NotificationSource& source,
+               const NotificationDetails& details);
+
+  // Handles changes to the observed preferences and updates the UI.
+  void OnPrefChanged(const std::string& pref_name);
 
   CHROMEGTK_CALLBACK_0(PasswordsPageGtk, void, OnRemoveButtonClicked);
   CHROMEGTK_CALLBACK_0(PasswordsPageGtk, void, OnRemoveAllButtonClicked);
   CHROMEGTK_CALLBACK_1(PasswordsPageGtk, void, OnRemoveAllConfirmResponse, int);
   CHROMEGTK_CALLBACK_0(PasswordsPageGtk, void, OnShowPasswordButtonClicked);
+  CHROMEGTK_CALLBACK_0(PasswordsPageGtk, void, OnShowPasswordButtonRealized);
 
-  static void OnPasswordSelectionChangedThunk(GtkTreeSelection* selection,
-                                              PasswordsPageGtk* page) {
-    page->OnPasswordSelectionChanged(selection);
-  }
-  void OnPasswordSelectionChanged(GtkTreeSelection* selection);
+  CHROMEG_CALLBACK_0(PasswordsPageGtk, void, OnPasswordSelectionChanged,
+                     GtkTreeSelection*);
 
   // Sorting functions.
   static gint CompareSite(GtkTreeModel* model,
@@ -93,7 +104,8 @@ class PasswordsPageGtk {
   GtkWidget* page_;
 
   Profile* profile_;
-  std::vector<webkit_glue::PasswordForm> password_list_;
+  BooleanPrefMember allow_show_passwords_;
+  std::vector<webkit_glue::PasswordForm*> password_list_;
 
   DISALLOW_COPY_AND_ASSIGN(PasswordsPageGtk);
 };

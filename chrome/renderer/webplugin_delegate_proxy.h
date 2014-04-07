@@ -4,22 +4,20 @@
 
 #ifndef CHROME_RENDERER_WEBPLUGIN_DELEGATE_PROXY_H_
 #define CHROME_RENDERER_WEBPLUGIN_DELEGATE_PROXY_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
 #include "app/surface/transport_dib.h"
-#include "base/file_path.h"
 #include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
 #include "base/weak_ptr.h"
-#include "chrome/renderer/plugin_channel_host.h"
 #include "gfx/native_widget_types.h"
 #include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
-#include "gpu/command_buffer/common/command_buffer.h"
+#include "ipc/ipc_channel.h"
 #include "ipc/ipc_message.h"
-#include "skia/ext/platform_canvas.h"
-#include "webkit/glue/plugins/webplugin.h"
 #include "webkit/glue/plugins/webplugininfo.h"
 #include "webkit/glue/plugins/webplugin_delegate.h"
 
@@ -32,6 +30,7 @@ class CommandBufferProxy;
 struct NPObject;
 class NPObjectStub;
 struct NPVariant_Param;
+class PluginChannelHost;
 struct PluginHostMsg_URLRequest_Params;
 class RenderView;
 class SkBitmap;
@@ -39,6 +38,14 @@ class SkBitmap;
 namespace base {
 class SharedMemory;
 class WaitableEvent;
+}
+
+namespace skia {
+class PlatformCanvas;
+}
+
+namespace webkit_glue {
+class WebPlugin;
 }
 
 // An implementation of WebPluginDelegate that proxies all calls to
@@ -66,17 +73,23 @@ class WebPluginDelegateProxy
   virtual NPObject* GetPluginScriptableObject();
   virtual void DidFinishLoadWithReason(const GURL& url, NPReason reason,
                                        int notify_id);
-  virtual void SetFocus();
+  virtual void SetFocus(bool focused);
   virtual bool HandleInputEvent(const WebKit::WebInputEvent& event,
                                 WebKit::WebCursorInfo* cursor);
   virtual int GetProcessId();
 
+  // Informs the plugin that its containing content view has gained or lost
+  // first responder status.
+  virtual void SetContentAreaFocus(bool has_focus);
 #if defined(OS_MACOSX)
+  // Informs the plugin that its enclosing window has gained or lost focus.
   virtual void SetWindowFocus(bool window_has_focus);
-  // Inform the plugin that its container (window/tab) has changed visibility.
+  // Informs the plugin that its container (window/tab) has changed visibility.
   virtual void SetContainerVisibility(bool is_visible);
-  // Inform the plugin that its enclosing window's frame has changed.
+  // Informs the plugin that its enclosing window's frame has changed.
   virtual void WindowFrameChanged(gfx::Rect window_frame, gfx::Rect view_frame);
+  // Informs the plugin that text is avaiable from plugin IME.
+  virtual void ImeCompositionConfirmed(const string16& text, int plugin_id);
 #endif
 
   // IPC::Channel::Listener implementation:
@@ -149,7 +162,8 @@ class WebPluginDelegateProxy
   void OnDeferResourceLoading(unsigned long resource_id, bool defer);
 
 #if defined(OS_MACOSX)
-  void OnBindFakePluginWindowHandle();
+  void OnSetImeEnabled(bool enabled);
+  void OnBindFakePluginWindowHandle(bool opaque);
   void OnUpdateGeometry_ACK(int ack_key);
   void OnAcceleratedSurfaceSetIOSurface(gfx::PluginWindowHandle window,
                                         int32 width,
@@ -179,9 +193,16 @@ class WebPluginDelegateProxy
   // Clears the shared memory section and canvases used for windowless plugins.
   void ResetWindowlessBitmaps();
 
+#if !defined(OS_WIN)
+  // Creates a process-local memory section and canvas. PlatformCanvas on
+  // Windows only works with a DIB, not arbitrary memory.
+  bool CreateLocalBitmap(std::vector<uint8>* memory,
+                         scoped_ptr<skia::PlatformCanvas>* canvas);
+#endif
+
   // Creates a shared memory section and canvas.
-  bool CreateBitmap(scoped_ptr<TransportDIB>* memory,
-                    scoped_ptr<skia::PlatformCanvas>* canvas);
+  bool CreateSharedBitmap(scoped_ptr<TransportDIB>* memory,
+                          scoped_ptr<skia::PlatformCanvas>* canvas);
 
   // Called for cleanup during plugin destruction. Normally right before the
   // plugin window gets destroyed, or when the plugin has crashed (at which
@@ -194,21 +215,9 @@ class WebPluginDelegateProxy
   // of plug-in content. The browser generates the handle which is then set on
   // the plug-in. Returns true if it successfully sets the window handle on the
   // plug-in.
-  bool BindFakePluginWindowHandle();
+  bool BindFakePluginWindowHandle(bool opaque);
 
-  // The Mac TransportDIB implementation uses base::SharedMemory, which
-  // cannot be disposed of if an in-flight UpdateGeometry message refers to
-  // the shared memory file descriptor.  The old_transport_dibs_ map holds
-  // old TransportDIBs waiting to die.  It's keyed by the |ack_key| values
-  // used in UpdateGeometry messages.  When an UpdateGeometry_ACK message
-  // arrives, the associated RelatedTransportDIBs can be released.
-  struct RelatedTransportDIBs {
-    linked_ptr<TransportDIB> backing_store;
-    linked_ptr<TransportDIB> transport_store;
-    linked_ptr<TransportDIB> background_store;
-  };
-
-  typedef base::hash_map<int, RelatedTransportDIBs> OldTransportDIBMap;
+  typedef base::hash_map<int, linked_ptr<TransportDIB> > OldTransportDIBMap;
 
   OldTransportDIBMap old_transport_dibs_;
 #endif  // OS_MACOSX
@@ -248,7 +257,11 @@ class WebPluginDelegateProxy
   // store when we get an invalidate from it.  The background bitmap is used
   // for transparent plugins, as they need the backgroud data during painting.
   bool transparent_;
+#if defined(OS_WIN)
   scoped_ptr<TransportDIB> backing_store_;
+#else
+  std::vector<uint8> backing_store_;
+#endif
   scoped_ptr<skia::PlatformCanvas> backing_store_canvas_;
   scoped_ptr<TransportDIB> transport_store_;
   scoped_ptr<skia::PlatformCanvas> transport_store_canvas_;

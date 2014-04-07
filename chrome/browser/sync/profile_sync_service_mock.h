@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_PROFILE_SYNC_SERVICE_MOCK_H_
 #define CHROME_BROWSER_SYNC_PROFILE_SYNC_SERVICE_MOCK_H_
+#pragma once
 
 #include <string>
 #include "base/string16.h"
@@ -16,10 +17,9 @@
 
 class ProfileSyncServiceMock : public ProfileSyncService {
  public:
-  ProfileSyncServiceMock() : ProfileSyncService(NULL, NULL, false) {}
+  ProfileSyncServiceMock() {}
   virtual ~ProfileSyncServiceMock() {}
 
-  MOCK_METHOD0(EnableForUser, void());
   MOCK_METHOD0(DisableForUser, void());
   MOCK_METHOD0(OnBackendInitialized, void());
   MOCK_METHOD0(OnSyncCycleCompleted, void());
@@ -28,10 +28,11 @@ class ProfileSyncServiceMock : public ProfileSyncService {
                void(const std::string& username,
                     const std::string& password,
                     const std::string& captcha));
-  MOCK_METHOD0(OnUserAcceptedMergeAndSync, void());
   MOCK_METHOD0(OnUserCancelledDialog, void());
   MOCK_CONST_METHOD0(GetAuthenticatedUsername, string16());
-  MOCK_METHOD0(OnUnrecoverableError, void());
+  MOCK_METHOD2(OnUnrecoverableError,
+               void(const tracked_objects::Location& location,
+               const std::string& message));
   MOCK_METHOD2(ActivateDataType,
                void(browser_sync::DataTypeController* data_type_controller,
                     browser_sync::ChangeProcessor* change_processor));
@@ -50,6 +51,11 @@ class ProfileSyncServiceMock : public ProfileSyncService {
                      void(syncable::ModelTypeSet* preferred_types));
   MOCK_CONST_METHOD1(GetRegisteredDataTypes,
                      void(syncable::ModelTypeSet* registered_types));
+
+  MOCK_METHOD0(QueryDetailedSyncStatus,
+               browser_sync::SyncBackendHost::Status());
+  MOCK_CONST_METHOD0(GetLastSyncedTimeString, string16());
+  MOCK_CONST_METHOD0(unrecoverable_error_detected, bool());
 };
 
 #endif  // CHROME_BROWSER_SYNC_PROFILE_SYNC_SERVICE_MOCK_H_

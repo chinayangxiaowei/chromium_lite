@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 
 #include "base/file_path.h"
 #include "base/logging.h"
+#include "base/native_library.h"
 #include "base/path_service.h"
+#include "base/scoped_ptr.h"
 
 // Enable timing code by turning on TESTING macro.
 //#define TESTING 1
@@ -16,15 +18,6 @@
 #ifdef TESTING
 #include "base/string_util.h"
 #include "base/time.h"
-
-namespace {
-// Fetch current time as milliseconds.
-// Return as double for high duration and precision.
-// TODO(fbarchard): integrate into base/time.h
-static inline double GetTime() {
-  return base::TimeTicks::HighResNow().ToInternalValue() * (1.0 / 1000.0);
-}
-}
 #endif
 
 namespace media {
@@ -55,6 +48,12 @@ FilePath::CharType* GetDLLName(FFmpegDLLKeys dll_key) {
 
 }  // namespace
 
+// Address of vpx_codec_vp8_cx_algo.
+static void* vp8_cx_algo_address = NULL;
+
+// Address of vpx_codec_vp8_dx_algo.
+static void* vp8_dx_algo_address = NULL;
+
 // Attempts to initialize the media library (loading DLLs, DSOs, etc.).
 // Returns true if everything was successfully initialized, false otherwise.
 bool InitializeMediaLibrary(const FilePath& base_path) {
@@ -64,22 +63,38 @@ bool InitializeMediaLibrary(const FilePath& base_path) {
     media::FILE_LIBAVUTIL
   };
   HMODULE libs[arraysize(path_keys)] = {NULL};
+
   for (size_t i = 0; i < arraysize(path_keys); ++i) {
     FilePath path = base_path.Append(GetDLLName(path_keys[i]));
 #ifdef TESTING
-    double dll_loadtime_start = GetTime();
+    base::TimeTicks dll_loadtime_start = base::TimeTicks::HighResNow();
 #endif
+
+    // Use alternate DLL search path so we don't load dependencies from the
+    // system path.  Refer to http://crbug.com/35857
     const wchar_t* cpath = path.value().c_str();
-    libs[i] = LoadLibrary(cpath);
+    libs[i] = LoadLibraryEx(cpath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!libs[i])
       break;
 #ifdef TESTING
-    double dll_loadtime_end = GetTime();
+    base::TimeTicks dll_loadtime_end = base::TimeTicks::HighResNow();
     std::wstring outputbuf = StringPrintf(L"DLL loadtime %5.2f ms, %ls\n",
-        dll_loadtime_end - dll_loadtime_start,
+        (dll_loadtime_end - dll_loadtime_start).InMillisecondsF(),
         cpath);
     OutputDebugStringW(outputbuf.c_str());
 #endif
+  }
+
+  // TODO(hclam): This is temporary to obtain address of
+  // vpx_codec_vp8_cx_algo. This should be removed once libvpx has a
+  // getter method for it.
+  base::NativeLibrary avcodec_lib =
+      base::LoadNativeLibrary(FilePath(GetDLLName(media::FILE_LIBAVCODEC)));
+  if (avcodec_lib) {
+    vp8_cx_algo_address = base::GetFunctionPointerFromNativeLibrary(
+        avcodec_lib, "vpx_codec_vp8_cx_algo");
+    vp8_dx_algo_address = base::GetFunctionPointerFromNativeLibrary(
+        avcodec_lib, "vpx_codec_vp8_dx_algo");
   }
 
   // Check that we loaded all libraries successfully.  We only need to check the
@@ -99,6 +114,14 @@ bool InitializeMediaLibrary(const FilePath& base_path) {
 bool InitializeOpenMaxLibrary(const FilePath& module_dir) {
   NOTIMPLEMENTED() << "OpenMAX is not used in Windows.";
   return false;
+}
+
+void* GetVp8CxAlgoAddress() {
+  return vp8_cx_algo_address;
+}
+
+void* GetVp8DxAlgoAddress() {
+  return vp8_dx_algo_address;
 }
 
 }  // namespace media

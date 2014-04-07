@@ -6,7 +6,6 @@
 
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
-#include "app/theme_provider.h"
 #if defined(OS_WIN)
 #include "app/win_util.h"
 #include "base/win_util.h"
@@ -17,6 +16,7 @@
 #include "grit/app_resources.h"
 #include "grit/app_strings.h"
 #include "views/window/client_view.h"
+#include "views/window/window_shape.h"
 #if defined(OS_LINUX)
 #include "views/window/hit_test.h"
 #endif
@@ -69,6 +69,7 @@ CustomFrameView::CustomFrameView(Window* frame)
       ALLOW_THIS_IN_INITIALIZER_LIST(minimize_button_(new ImageButton(this))),
       window_icon_(NULL),
       should_show_minmax_buttons_(false),
+      should_show_client_edge_(false),
       frame_(frame) {
   InitClass();
 
@@ -111,6 +112,7 @@ CustomFrameView::CustomFrameView(Window* frame)
 
   views::WindowDelegate* d = frame_->GetDelegate();
   should_show_minmax_buttons_ = d->CanMaximize();
+  should_show_client_edge_ = d->ShouldShowClientEdge();
 
   if (d->ShouldShowWindowIcon()) {
     window_icon_ = new ImageButton(this);
@@ -185,27 +187,10 @@ int CustomFrameView::NonClientHitTest(const gfx::Point& point) {
 void CustomFrameView::GetWindowMask(const gfx::Size& size,
                                     gfx::Path* window_mask) {
   DCHECK(window_mask);
-
   if (frame_->IsMaximized())
     return;
 
-  // Redefine the window visible region for the new size.
-  window_mask->moveTo(0, 3);
-  window_mask->lineTo(1, 2);
-  window_mask->lineTo(1, 1);
-  window_mask->lineTo(2, 1);
-  window_mask->lineTo(3, 0);
-
-  window_mask->lineTo(SkIntToScalar(size.width() - 3), 0);
-  window_mask->lineTo(SkIntToScalar(size.width() - 2), 1);
-  window_mask->lineTo(SkIntToScalar(size.width() - 1), 1);
-  window_mask->lineTo(SkIntToScalar(size.width() - 1), 2);
-  window_mask->lineTo(SkIntToScalar(size.width()), 3);
-
-  window_mask->lineTo(SkIntToScalar(size.width()),
-                      SkIntToScalar(size.height()));
-  window_mask->lineTo(0, SkIntToScalar(size.height()));
-  window_mask->close();
+  views::GetDefaultWindowMask(size, window_mask);
 }
 
 void CustomFrameView::EnableClose(bool enable) {
@@ -228,7 +213,7 @@ void CustomFrameView::Paint(gfx::Canvas* canvas) {
   else
     PaintRestoredFrameBorder(canvas);
   PaintTitleBar(canvas);
-  if (!frame_->IsMaximized())
+  if (ShouldShowClientEdge())
     PaintRestoredClientEdge(canvas);
 }
 
@@ -269,7 +254,7 @@ int CustomFrameView::FrameBorderThickness() const {
 int CustomFrameView::NonClientBorderThickness() const {
   // In maximized mode, we don't show a client edge.
   return FrameBorderThickness() +
-      (frame_->IsMaximized() ? 0 : kClientEdgeThickness);
+      (ShouldShowClientEdge() ? kClientEdgeThickness : 0);
 }
 
 int CustomFrameView::NonClientTopBorderHeight() const {
@@ -286,7 +271,7 @@ int CustomFrameView::CaptionButtonY() const {
 
 int CustomFrameView::TitlebarBottomThickness() const {
   return kTitlebarTopAndBottomEdgeThickness +
-      (frame_->IsMaximized() ? 0 : kClientEdgeThickness);
+      (ShouldShowClientEdge() ? kClientEdgeThickness : 0);
 }
 
 int CustomFrameView::IconSize() const {
@@ -295,8 +280,12 @@ int CustomFrameView::IconSize() const {
   // size are increased.
   return GetSystemMetrics(SM_CYSMICON);
 #else
-  return std::max(title_font_->height(), kIconMinimumSize);
+  return std::max(title_font_->GetHeight(), kIconMinimumSize);
 #endif
+}
+
+bool CustomFrameView::ShouldShowClientEdge() const {
+  return should_show_client_edge_ && !frame_->IsMaximized();
 }
 
 gfx::Rect CustomFrameView::IconBounds() const {
@@ -406,7 +395,8 @@ void CustomFrameView::PaintMaximizedFrameBorder(gfx::Canvas* canvas) {
   // The bottom of the titlebar actually comes from the top of the Client Edge
   // graphic, with the actual client edge clipped off the bottom.
   SkBitmap* titlebar_bottom = rb.GetBitmapNamed(IDR_APP_TOP_CENTER);
-  int edge_height = titlebar_bottom->height() - kClientEdgeThickness;
+  int edge_height = titlebar_bottom->height() -
+                    ShouldShowClientEdge() ? kClientEdgeThickness : 0;
   canvas->TileImageInt(*titlebar_bottom, 0,
       frame_->GetClientView()->y() - edge_height, width(), edge_height);
 }
@@ -551,7 +541,7 @@ void CustomFrameView::LayoutTitleBar() {
   // Size the title.
   int title_x = d->ShouldShowWindowIcon() ?
       icon_bounds.right() + kIconTitleSpacing : icon_bounds.x();
-  int title_height = title_font_->height();
+  int title_height = title_font_->GetHeight();
   // We bias the title position so that when the difference between the icon and
   // title heights is odd, the extra pixel of the title is above the vertical
   // midline rather than below.  This compensates for how the icon is already

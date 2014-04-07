@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_URL_REQUEST_URL_REQUEST_FILE_DIR_JOB_H__
 #define NET_URL_REQUEST_URL_REQUEST_FILE_DIR_JOB_H__
+#pragma once
 
 #include <string>
 
@@ -25,10 +26,10 @@ class URLRequestFileDirJob
   virtual bool ReadRawData(net::IOBuffer* buf, int buf_size, int *bytes_read);
   virtual bool GetMimeType(std::string* mime_type) const;
   virtual bool GetCharset(std::string* charset);
-  virtual bool IsRedirectResponse(GURL* location, int* http_status_code);
 
   // DirectoryLister::DirectoryListerDelegate methods:
-  virtual void OnListFile(const file_util::FileEnumerator::FindInfo& data);
+  virtual void OnListFile(
+      const net::DirectoryLister::DirectoryListerData& data);
   virtual void OnListDone(int error);
 
   bool list_complete() const { return list_complete_; }
@@ -63,7 +64,7 @@ class URLRequestFileDirJob
   scoped_refptr<net::IOBuffer> read_buffer_;
   int read_buffer_length_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(URLRequestFileDirJob);
+  DISALLOW_COPY_AND_ASSIGN(URLRequestFileDirJob);
 };
 
 #endif  // NET_URL_REQUEST_URL_REQUEST_FILE_DIR_JOB_H__

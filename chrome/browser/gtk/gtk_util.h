@@ -4,19 +4,25 @@
 
 #ifndef CHROME_BROWSER_GTK_GTK_UTIL_H_
 #define CHROME_BROWSER_GTK_GTK_UTIL_H_
+#pragma once
 
 #include <gtk/gtk.h>
 #include <string>
 #include <vector>
 
 #include "app/x11_util.h"
+#include "base/string16.h"
 #include "gfx/point.h"
 #include "gfx/rect.h"
 #include "webkit/glue/window_open_disposition.h"
 
+typedef struct _cairo cairo_t;
 typedef struct _GtkWidget GtkWidget;
 
+class BrowserWindow;
 class GtkThemeProvider;
+class GURL;
+class Profile;
 struct RendererPreferences;  // from common/renderer_preferences.h
 
 namespace event_utils {
@@ -51,6 +57,9 @@ const int kContentAreaSpacing = 18;
 // Horizontal Spacing between controls in a form.
 const int kFormControlSpacing = 10;
 
+// Height for the infobar drop shadow.
+const int kInfoBarDropShadowHeight = 6;
+
 // Create a table of labeled controls, using proper spacing and alignment.
 // Arguments should be pairs of const char*, GtkWidget*, concluding with a
 // NULL.  The first argument is a vector in which to place all labels
@@ -77,7 +86,6 @@ GtkWidget* LeftAlignMisc(GtkWidget* misc);
 
 // Create a left-aligned label with the given text in bold.
 GtkWidget* CreateBoldLabel(const std::string& text);
-
 
 // As above, but a convenience method for configuring dialog size.
 // |width_id| and |height_id| are resource IDs for the size.  If either of these
@@ -108,6 +116,10 @@ void RemoveAllChildren(GtkWidget* container);
 // Force the font size of the widget to |size_pixels|.
 void ForceFontSizePixels(GtkWidget* widget, double size_pixels);
 
+// Undoes the effects of a previous ForceFontSizePixels() call. Safe to call
+// even if ForceFontSizePixels() was never called.
+void UndoForceFontSize(GtkWidget* widget);
+
 // Gets the position of a gtk widget in screen coordinates.
 gfx::Point GetWidgetScreenPosition(GtkWidget* widget);
 
@@ -130,10 +142,6 @@ void InitRCStyles();
 // (e.g. buttons). Returns the vbox that widget was packed in.
 GtkWidget* CenterWidgetInHBox(GtkWidget* hbox, GtkWidget* widget,
                               bool pack_at_end, int padding);
-
-// Change windows accelerator style to GTK style. (GTK uses _ for
-// accelerators.  Windows uses & with && as an escape for &.)
-std::string ConvertAcceleratorsFromWindowsStyle(const std::string& label);
 
 // Returns true if the screen is composited, false otherwise.
 bool IsScreenComposited();
@@ -259,6 +267,87 @@ bool GrabAllInput(GtkWidget* widget);
 // Returns a rectangle that represents the widget's bounds. The rectangle it
 // returns is the same as widget->allocation, but anchored at (0, 0).
 gfx::Rect WidgetBounds(GtkWidget* widget);
+
+// Update the timestamp for the given window. This is usually the time of the
+// last user event, but on rare occasions we wish to update it despite not
+// receiving a user event.
+void SetWMLastUserActionTime(GtkWindow* window);
+
+// The current system time, using the format expected by the X server, but not
+// retrieved from the X server. NOTE: You should almost never need to use this
+// function, instead using the timestamp from the latest GDK event.
+guint32 XTimeNow();
+
+// Uses the autocomplete controller for |profile| to convert the contents of the
+// PRIMARY selection to a parsed URL. Returns true and sets |url| on success,
+// otherwise returns false.
+bool URLFromPrimarySelection(Profile* profile, GURL* url);
+
+// Set the colormap of the given window to rgba to allow transparency.
+bool AddWindowAlphaChannel(GtkWidget* window);
+
+// Get the default colors for a text entry.  Parameters may be NULL.
+void GetTextColors(GdkColor* normal_base,
+                   GdkColor* selected_base,
+                   GdkColor* normal_text,
+                   GdkColor* selected_text);
+
+// Wrappers to show a GtkDialog. On Linux, it merely calls gtk_widget_show_all.
+// On ChromeOs, it calls ShowNativeDialog which hosts the its vbox
+// in a view based Window.
+void ShowDialog(GtkWidget* dialog);
+void ShowDialogWithLocalizedSize(GtkWidget* dialog,
+                                 int width_id,
+                                 int height_id,
+                                 bool resizeable);
+void ShowModalDialogWithMinLocalizedWidth(GtkWidget* dialog,
+                                          int width_id);
+
+// Wrapper to present a window. On Linux, it just calls gtk_window_present or
+// gtk_window_present_with_time for non-zero timestamp. For ChromeOS, it first
+// finds the host window of the dialog contents and then present it.
+void PresentWindow(GtkWidget* window, int timestamp);
+
+// Get real window for given dialog. On ChromeOS, this gives the native dialog
+// host window. On Linux, it merely returns the passed in dialog.
+GtkWindow* GetDialogWindow(GtkWidget* dialog);
+
+// Gets dialog window bounds.
+gfx::Rect GetDialogBounds(GtkWidget* dialog);
+
+// Returns the stock menu item label for the "preferences" item - returns an
+// empty string if no stock item found.
+string16 GetStockPreferencesMenuLabel();
+
+// Checks whether a widget is actually visible, i.e. whether it and all its
+// ancestors up to its toplevel are visible.
+bool IsWidgetAncestryVisible(GtkWidget* widget);
+
+// Sets the GTK font from the given font name (ex. "Arial Black, 10").
+void SetGtkFont(const std::string& font_name);
+
+// Sets the given label's size request to |pixel_width|. This will cause the
+// label to wrap if it needs to. The reason for this function is that some
+// versions of GTK mis-align labels that have a size request and line wrapping,
+// and this function hides the complexity of the workaround.
+void SetLabelWidth(GtkWidget* label, int pixel_width);
+
+// Make the |label| shrinkable within a GthChromeShrinkableHBox
+// It calculates the real size request of a label and set its ellipsize mode to
+// PANGO_ELLIPSIZE_END.
+// It must be done when the label is mapped (become visible on the screen),
+// to make sure the pango can get correct font information for the calculation.
+void InitLabelSizeRequestAndEllipsizeMode(GtkWidget* label);
+
+// Code to draw the drop shadow below an infobar (at the top of the render
+// view).
+void DrawTopDropShadowForRenderView(cairo_t* cr, const gfx::Point& origin,
+                                    const gfx::Rect& paint_rect);
+
+// Performs Cut/Copy/Paste operation on the |window|.
+void DoCut(BrowserWindow* window);
+void DoCopy(BrowserWindow* window);
+void DoPaste(BrowserWindow* window);
 
 }  // namespace gtk_util
 

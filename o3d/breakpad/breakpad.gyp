@@ -7,8 +7,9 @@
     'chromium_code': 1,
   },
   'includes': [
+    '../build/branding.gypi',
     '../build/common.gypi',
-    '../plugin/branding.gypi',
+    '../build/version.gypi',
   ],
   'target_defaults': {
     'include_dirs': [
@@ -17,6 +18,7 @@
       '../../breakpad/src',
     ],
     'defines': [
+      'O3D_PLUGIN_VERSION="<(plugin_version)"',
       'O3D_PLUGIN_INSTALLDIR_CSIDL=<(plugin_installdir_csidl)',
       'O3D_PLUGIN_VENDOR_DIRECTORY="<(plugin_vendor_directory)"',
       'O3D_PLUGIN_PRODUCT_DIRECTORY="<(plugin_product_directory)"',
@@ -64,6 +66,25 @@
               'win/crash_sender_win32.cc',
               '../../<(breakpaddir)/client/windows/sender/crash_report_sender.cc',
             ],
+          },
+        ],
+      },
+    ],
+    ['OS=="linux"',
+      {
+        'targets': [
+          {
+            'target_name': 'o3dBreakpad',
+            'type': 'static_library',
+            'sources': [
+              'linux/breakpad.cc',
+              'linux/breakpad.h',
+            ],
+            'direct_dependent_settings': {
+              'include_dirs': [
+                '../../breakpad/src',
+              ],
+            },
           },
         ],
       },

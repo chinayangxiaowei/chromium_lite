@@ -1,17 +1,30 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/automation/automation_provider.h"
 
-#include "base/keyboard_codes.h"
+#include "app/keyboard_codes.h"
+#include "base/json/json_reader.h"
+#include "base/trace_event.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/automation/automation_browser_tracker.h"
+#include "chrome/browser/automation/automation_extension_function.h"
+#include "chrome/browser/automation/automation_tab_tracker.h"
+#include "chrome/browser/automation/automation_window_tracker.h"
+#include "chrome/browser/automation/extension_automation_constants.h"
+#include "chrome/browser/automation/extension_port_container.h"
 #include "chrome/browser/automation/ui_controls.h"
 #include "chrome/browser/browser_window.h"
-#include "chrome/browser/external_tab_container.h"
+#include "chrome/browser/extensions/extension_message_service.h"
+#include "chrome/browser/external_tab_container_win.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/views/bookmark_bar_view.h"
+#include "chrome/common/page_zoom.h"
 #include "chrome/test/automation/automation_messages.h"
+#include "views/focus/accelerator_handler.h"
 #include "views/widget/root_view.h"
 #include "views/widget/widget_win.h"
 #include "views/window/window.h"
@@ -59,22 +72,6 @@ BOOL CALLBACK EnumThreadWndProc(HWND hwnd, LPARAM l_param) {
     return FALSE;
   }
   return TRUE;
-}
-
-void AutomationProvider::GetActiveWindow(int* handle) {
-  HWND window = GetForegroundWindow();
-
-  // Let's make sure this window belongs to our process.
-  if (EnumThreadWindows(::GetCurrentThreadId(),
-                        EnumThreadWndProc,
-                        reinterpret_cast<LPARAM>(window))) {
-    // We enumerated all the windows and did not find the foreground window,
-    // it is not our window, ignore it.
-    *handle = 0;
-    return;
-  }
-
-  *handle = window_tracker_->Add(window);
 }
 
 // This task enqueues a mouse event on the event loop, so that the view
@@ -125,14 +122,6 @@ class MouseEventTask : public Task {
 
   DISALLOW_COPY_AND_ASSIGN(MouseEventTask);
 };
-
-void AutomationProvider::ScheduleMouseEvent(views::View* view,
-                                            views::Event::EventType type,
-                                            const gfx::Point& point,
-                                            int flags) {
-  MessageLoop::current()->PostTask(FROM_HERE,
-      new MouseEventTask(view, type, point, flags));
-}
 
 // This task sends a WindowDragResponse message with the appropriate
 // routing ID to the automation proxy.  This is implemented as a task so that
@@ -211,14 +200,23 @@ void AutomationProvider::WindowSimulateDrag(int handle,
     MoveMouse(end);
 
     if (press_escape_en_route) {
-      // Press Escape.
-      ui_controls::SendKeyPress(window, base::VKEY_ESCAPE,
-                               ((flags & views::Event::EF_CONTROL_DOWN)
-                                == views::Event::EF_CONTROL_DOWN),
-                               ((flags & views::Event::EF_SHIFT_DOWN) ==
-                                views::Event::EF_SHIFT_DOWN),
-                               ((flags & views::Event::EF_ALT_DOWN) ==
-                                views::Event::EF_ALT_DOWN));
+      // Press Escape, making sure we wait until chrome processes the escape.
+      // TODO(phajdan.jr): make this use ui_test_utils::SendKeyPressSync.
+      ui_controls::SendKeyPressNotifyWhenDone(
+          window, app::VKEY_ESCAPE,
+          ((flags & views::Event::EF_CONTROL_DOWN) ==
+           views::Event::EF_CONTROL_DOWN),
+          ((flags & views::Event::EF_SHIFT_DOWN) ==
+           views::Event::EF_SHIFT_DOWN),
+          ((flags & views::Event::EF_ALT_DOWN) == views::Event::EF_ALT_DOWN),
+          false,
+          new MessageLoop::QuitTask());
+      MessageLoopForUI* loop = MessageLoopForUI::current();
+      bool did_allow_task_nesting = loop->NestableTasksAllowed();
+      loop->SetNestableTasksAllowed(true);
+      views::AcceleratorHandler handler;
+      loop->Run(&handler);
+      loop->SetNestableTasksAllowed(did_allow_task_nesting);
     }
     SendMessage(top_level_hwnd, up_message, wparam_flags,
                 MAKELPARAM(end.x, end.y));
@@ -228,60 +226,6 @@ void AutomationProvider::WindowSimulateDrag(int handle,
   } else {
     AutomationMsg_WindowDrag::WriteReplyParams(reply_message, false);
     Send(reply_message);
-  }
-}
-
-void AutomationProvider::GetWindowBounds(int handle, gfx::Rect* bounds,
-                                         bool* success) {
-  *success = false;
-  HWND hwnd = window_tracker_->GetResource(handle);
-  if (hwnd) {
-    *success = true;
-    WINDOWPLACEMENT window_placement;
-    GetWindowPlacement(hwnd, &window_placement);
-    *bounds = window_placement.rcNormalPosition;
-  }
-}
-
-void AutomationProvider::SetWindowBounds(int handle, const gfx::Rect& bounds,
-                                         bool* success) {
-  *success = false;
-  if (window_tracker_->ContainsHandle(handle)) {
-    HWND hwnd = window_tracker_->GetResource(handle);
-    if (::MoveWindow(hwnd, bounds.x(), bounds.y(), bounds.width(),
-                     bounds.height(), true)) {
-      *success = true;
-    }
-  }
-}
-
-void AutomationProvider::SetWindowVisible(int handle, bool visible,
-                                          bool* result) {
-  if (window_tracker_->ContainsHandle(handle)) {
-    HWND hwnd = window_tracker_->GetResource(handle);
-    ::ShowWindow(hwnd, visible ? SW_SHOW : SW_HIDE);
-    *result = true;
-  } else {
-    *result = false;
-  }
-}
-
-void AutomationProvider::ActivateWindow(int handle) {
-  if (window_tracker_->ContainsHandle(handle)) {
-    ::SetActiveWindow(window_tracker_->GetResource(handle));
-  }
-}
-
-void AutomationProvider::IsWindowMaximized(int handle, bool* is_maximized,
-                                           bool* success) {
-  *success = false;
-
-  HWND hwnd = window_tracker_->GetResource(handle);
-  if (hwnd) {
-    *success = true;
-    WINDOWPLACEMENT window_placement;
-    GetWindowPlacement(hwnd, &window_placement);
-    *is_maximized = (window_placement.showCmd == SW_MAXIMIZE);
   }
 }
 
@@ -298,6 +242,8 @@ void AutomationProvider::CreateExternalTab(
     const IPC::ExternalTabSettings& settings,
     gfx::NativeWindow* tab_container_window, gfx::NativeWindow* tab_window,
     int* tab_handle) {
+  TRACE_EVENT_BEGIN("AutomationProvider::CreateExternalTab", 0, "");
+
   *tab_handle = 0;
   *tab_container_window = NULL;
   *tab_window = NULL;
@@ -312,7 +258,8 @@ void AutomationProvider::CreateExternalTab(
   external_tab_container->Init(profile, settings.parent, settings.dimensions,
       settings.style, settings.load_requests_via_automation,
       settings.handle_top_level_requests, NULL, settings.initial_url,
-      settings.referrer, settings.infobars_enabled);
+      settings.referrer, settings.infobars_enabled,
+      settings.route_all_top_level_navigations);
 
   if (AddExternalTab(external_tab_container)) {
     TabContents* tab_contents = external_tab_container->tab_contents();
@@ -322,6 +269,8 @@ void AutomationProvider::CreateExternalTab(
   } else {
     external_tab_container->Uninitialize();
   }
+
+  TRACE_EVENT_END("AutomationProvider::CreateExternalTab", 0, "");
 }
 
 bool AutomationProvider::AddExternalTab(ExternalTabContainer* external_tab) {
@@ -426,9 +375,12 @@ void AutomationProvider::OnForwardContextMenuCommandToChrome(int tab_handle,
 void AutomationProvider::ConnectExternalTab(
     uint64 cookie,
     bool allow,
+    gfx::NativeWindow parent_window,
     gfx::NativeWindow* tab_container_window,
     gfx::NativeWindow* tab_window,
     int* tab_handle) {
+  TRACE_EVENT_BEGIN("AutomationProvider::ConnectExternalTab", 0, "");
+
   *tab_handle = 0;
   *tab_container_window = NULL;
   *tab_window = NULL;
@@ -442,7 +394,8 @@ void AutomationProvider::ConnectExternalTab(
 
   if (allow && AddExternalTab(external_tab_container)) {
     external_tab_container->Reinitialize(this,
-                                         automation_resource_message_filter_);
+                                         automation_resource_message_filter_,
+                                         parent_window);
     TabContents* tab_contents = external_tab_container->tab_contents();
     *tab_handle = external_tab_container->tab_handle();
     *tab_container_window = external_tab_container->GetNativeView();
@@ -450,16 +403,8 @@ void AutomationProvider::ConnectExternalTab(
   } else {
     external_tab_container->Uninitialize();
   }
-}
 
-void AutomationProvider::TerminateSession(int handle, bool* success) {
-  *success = false;
-
-  if (browser_tracker_->ContainsHandle(handle)) {
-    Browser* browser = browser_tracker_->GetResource(handle);
-    HWND window = browser->window()->GetNativeHandle();
-    *success = (::PostMessageW(window, WM_ENDSESSION, 0, 0) == TRUE);
-  }
+  TRACE_EVENT_END("AutomationProvider::ConnectExternalTab", 0, "");
 }
 
 void AutomationProvider::SetEnableExtensionAutomation(
@@ -487,10 +432,115 @@ void AutomationProvider::OnBrowserMoved(int tab_handle) {
   }
 }
 
-void AutomationProvider::GetWindowTitle(int handle, string16* text) {
-  gfx::NativeWindow window = window_tracker_->GetResource(handle);
-  std::wstring result;
-  int length = ::GetWindowTextLength(window) + 1;
-  ::GetWindowText(window, WriteInto(&result, length), length);
-  text->assign(WideToUTF16(result));
+void AutomationProvider::OnMessageFromExternalHost(int handle,
+                                                   const std::string& message,
+                                                   const std::string& origin,
+                                                   const std::string& target) {
+  RenderViewHost* view_host = GetViewForTab(handle);
+  if (!view_host)
+    return;
+
+  if (AutomationExtensionFunction::InterceptMessageFromExternalHost(
+          view_host, message, origin, target)) {
+    // Message was diverted.
+    return;
+  }
+
+  if (ExtensionPortContainer::InterceptMessageFromExternalHost(
+          message, origin, target, this, view_host, handle)) {
+    // Message was diverted.
+    return;
+  }
+
+  if (InterceptBrowserEventMessageFromExternalHost(message, origin, target)) {
+    // Message was diverted.
+    return;
+  }
+
+  view_host->ForwardMessageFromExternalHost(message, origin, target);
+}
+
+bool AutomationProvider::InterceptBrowserEventMessageFromExternalHost(
+      const std::string& message, const std::string& origin,
+      const std::string& target) {
+  if (target !=
+      extension_automation_constants::kAutomationBrowserEventRequestTarget)
+    return false;
+
+  if (origin != extension_automation_constants::kAutomationOrigin) {
+    LOG(WARNING) << "Wrong origin on automation browser event " << origin;
+    return false;
+  }
+
+  // The message is a JSON-encoded array with two elements, both strings. The
+  // first is the name of the event to dispatch.  The second is a JSON-encoding
+  // of the arguments specific to that event.
+  scoped_ptr<Value> message_value(base::JSONReader::Read(message, false));
+  if (!message_value.get() || !message_value->IsType(Value::TYPE_LIST)) {
+    LOG(WARNING) << "Invalid browser event specified through automation";
+    return false;
+  }
+
+  const ListValue* args = static_cast<const ListValue*>(message_value.get());
+
+  std::string event_name;
+  if (!args->GetString(0, &event_name)) {
+    LOG(WARNING) << "No browser event name specified through automation";
+    return false;
+  }
+
+  std::string json_args;
+  if (!args->GetString(1, &json_args)) {
+    LOG(WARNING) << "No browser event args specified through automation";
+    return false;
+  }
+
+  if (profile()->GetExtensionMessageService()) {
+    profile()->GetExtensionMessageService()->DispatchEventToRenderers(
+        event_name, json_args, profile(), GURL());
+  }
+
+  return true;
+}
+
+void AutomationProvider::NavigateInExternalTab(
+    int handle, const GURL& url, const GURL& referrer,
+    AutomationMsg_NavigationResponseValues* status) {
+  *status = AUTOMATION_MSG_NAVIGATION_ERROR;
+
+  if (tab_tracker_->ContainsHandle(handle)) {
+    NavigationController* tab = tab_tracker_->GetResource(handle);
+    tab->LoadURL(url, referrer, PageTransition::TYPED);
+    *status = AUTOMATION_MSG_NAVIGATION_SUCCESS;
+  }
+}
+
+void AutomationProvider::NavigateExternalTabAtIndex(
+    int handle, int navigation_index,
+    AutomationMsg_NavigationResponseValues* status) {
+  *status = AUTOMATION_MSG_NAVIGATION_ERROR;
+
+  if (tab_tracker_->ContainsHandle(handle)) {
+    NavigationController* tab = tab_tracker_->GetResource(handle);
+    tab->GoToIndex(navigation_index);
+    *status = AUTOMATION_MSG_NAVIGATION_SUCCESS;
+  }
+}
+
+void AutomationProvider::OnRunUnloadHandlers(
+    int handle, IPC::Message* reply_message) {
+  ExternalTabContainer* external_tab = GetExternalTabForHandle(handle);
+  if (external_tab) {
+    external_tab->RunUnloadHandlers(reply_message);
+  }
+}
+
+void AutomationProvider::OnSetZoomLevel(int handle, int zoom_level) {
+  if (tab_tracker_->ContainsHandle(handle)) {
+    NavigationController* tab = tab_tracker_->GetResource(handle);
+    if (tab->tab_contents() && tab->tab_contents()->render_view_host()) {
+      tab->tab_contents()->render_view_host()->Zoom(
+          static_cast<PageZoom::Function>(zoom_level));
+    }
+  }
 }

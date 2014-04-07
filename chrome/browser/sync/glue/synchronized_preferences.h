@@ -7,13 +7,14 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_SYNCHRONIZED_PREFERENCES_H_
 #define CHROME_BROWSER_SYNC_GLUE_SYNCHRONIZED_PREFERENCES_H_
+#pragma once
 
 #include "chrome/browser/translate/translate_prefs.h"
 #include "chrome/common/pref_names.h"
 
 namespace browser_sync {
 
-static const wchar_t* kSynchronizedPreferences[] = {
+static const char* kSynchronizedPreferences[] = {
   // Options dialog: Basics tab.
   prefs::kRestoreOnStartup,
   prefs::kURLsToRestoreOnStartup,
@@ -28,7 +29,6 @@ static const wchar_t* kSynchronizedPreferences[] = {
   // Options dialog: Personal Stuff tab.
   prefs::kPasswordManagerEnabled,
   prefs::kAutoFillEnabled,
-  prefs::kAutoFillInfoBarShown,
   prefs::kUseCustomChromeFrame,
 
   // Options dialog: Under the hood -> Content Settings -> Cookies.
@@ -46,6 +46,9 @@ static const wchar_t* kSynchronizedPreferences[] = {
   prefs::kGeolocationContentSettings,
   prefs::kGeolocationDefaultContentSetting,
 
+  // Options dialog: under the hood -> Content Settings -> Notifications.
+  prefs::kDesktopNotificationDefaultContentSetting,
+
   // Options dialog: Under the hood -> Clear browsing data.
   //  All working but no live update.
   prefs::kDeleteBrowsingHistory,
@@ -62,7 +65,11 @@ static const wchar_t* kSynchronizedPreferences[] = {
   // Options dialog: Under the hood -> Change font and language settings.
   //   Serif, San Serif, Fixed font settings not synced.
   prefs::kDefaultCharset,
+  // There is no dialog to modify the kAcceptLanguages list on OSX, so
+  // don't sync it.
+#if !defined(OS_MACOSX)
   prefs::kAcceptLanguages,
+#endif
   prefs::kEnableSpellCheck,
   // Spell checker language not synced.
   prefs::kApplicationLocale,
@@ -81,23 +88,105 @@ static const wchar_t* kSynchronizedPreferences[] = {
   prefs::kExtensionsUIDeveloperMode,  // no live update
 
   // Document menu -> Zoom.
-  prefs::kPerHostZoomLevels,
+  //   prefs::kPerHostZoomLevels creates bad UX when synced, see
+  //   http://crbug.com/47359.
 
   // Document menu -> Encoding -> Auto Detect.
   prefs::kWebKitUsesUniversalDetector,
 
   // Autofill dialog.
+#if defined(OS_MACOSX)
   prefs::kAutoFillAuxiliaryProfilesEnabled,
-  prefs::kAutoFillDefaultProfile,
+#endif
 
   // Translate preferences.
   TranslatePrefs::kPrefTranslateLanguageBlacklist,
   TranslatePrefs::kPrefTranslateSiteBlacklist,
   TranslatePrefs::kPrefTranslateWhitelists,
+  TranslatePrefs::kPrefTranslateDeniedCount,
+  TranslatePrefs::kPrefTranslateAcceptedCount,
 
   // Desktop notification permissions.
   prefs::kDesktopNotificationAllowedOrigins,
   prefs::kDesktopNotificationDeniedOrigins,
+
+  // Cookie prompt dialog.
+  prefs::kCookiePromptExpanded,
+
+#if defined(OS_CHROMEOS)
+  // IME prefs
+  prefs::kLanguageChewingAddPhraseDirection,
+  prefs::kLanguageChewingAutoShiftCur,
+  prefs::kLanguageChewingCandPerPage,
+  prefs::kLanguageChewingEasySymbolInput,
+  prefs::kLanguageChewingEscCleanAllBuf,
+  prefs::kLanguageChewingForceLowercaseEnglish,
+  prefs::kLanguageChewingHsuSelKeyType,
+  prefs::kLanguageChewingKeyboardType,
+  prefs::kLanguageChewingMaxChiSymbolLen,
+  prefs::kLanguageChewingPhraseChoiceRearward,
+  prefs::kLanguageChewingPlainZhuyin,
+  prefs::kLanguageChewingSelKeys,
+  prefs::kLanguageChewingSpaceAsSelection,
+  prefs::kLanguageHangulKeyboard,
+  prefs::kLanguageMozcHistoryLearningLevel,
+  prefs::kLanguageMozcIncognitoMode,
+  prefs::kLanguageMozcNumpadCharacterForm,
+  prefs::kLanguageMozcPreeditMethod,
+  prefs::kLanguageMozcPunctuationMethod,
+  prefs::kLanguageMozcSessionKeymap,
+  prefs::kLanguageMozcShiftKeyModeSwitch,
+  prefs::kLanguageMozcSpaceCharacterForm,
+  prefs::kLanguageMozcSuggestionsSize,
+  prefs::kLanguageMozcSymbolMethod,
+  prefs::kLanguageMozcUseAutoImeTurnOff,
+  prefs::kLanguageMozcUseDateConversion,
+  prefs::kLanguageMozcUseDictionarySuggest,
+  prefs::kLanguageMozcUseHistorySuggest,
+  prefs::kLanguageMozcUseNumberConversion,
+  prefs::kLanguageMozcUseSingleKanjiConversion,
+  prefs::kLanguageMozcUseSymbolConversion,
+  prefs::kLanguagePinyinAutoCommit,
+  prefs::kLanguagePinyinCommaPeriodPage,
+  prefs::kLanguagePinyinCorrectPinyin,
+  prefs::kLanguagePinyinDoublePinyin,
+  prefs::kLanguagePinyinDoublePinyinSchema,
+  prefs::kLanguagePinyinFuzzyPinyin,
+  prefs::kLanguagePinyinInitChinese,
+  prefs::kLanguagePinyinInitFull,
+  prefs::kLanguagePinyinInitFullPunct,
+  prefs::kLanguagePinyinInitSimplifiedChinese,
+  prefs::kLanguagePinyinMinusEqualPage,
+  prefs::kLanguagePinyinShiftSelectCandidate,
+  prefs::kLanguagePinyinTradCandidate,
+  prefs::kLanguagePreferredLanguages,
+  prefs::kLanguagePreloadEngines,
+
+  // We don't sync the following IME prefs since they are not user-configurable
+  // (yet):
+  //   prefs::kLanguageHangulHanjaKeys,
+  //   prefs::kLanguageHotkeyNextEngineInMenu,
+  //   prefs::kLanguageHotkeyPreviousEngine,
+  //   prefs::kLanguageMozcSelectionShortcut,
+  //   prefs::kLanguagePinyinLookupTablePageSize,
+  //
+  // We don't sync prefs::kLanguageCurrentInputMethod and PreviousInputMethod.
+
+  // Keyboard prefs
+  prefs::kLanguageXkbRemapAltKeyTo,
+  prefs::kLanguageXkbRemapControlKeyTo,
+  prefs::kLanguageXkbRemapSearchKeyTo,
+
+  // We don't sync the following keyboard prefs since they are not user-
+  // configurable:
+  //   prefs::kLanguageXkbAutoRepeatDelay,
+  //   prefs::kLanguageXkbAutoRepeatEnabled,
+  //   prefs::kLanguageXkbAutoRepeatInterval,
+
+  // Whether to show mobile plan notifications.
+  //   Settings -> Internet -> Mobile plan details
+  prefs::kShowPlanNotifications,
+#endif
 };
 
 }  // namespace browser_sync

@@ -1,84 +1,129 @@
 <html i18n-values="dir:textdirection;">
-  <head>
-<style type="text/css"><!--
+<head>
+<style type="text/css">
   body,td,div,p,a,font,span {font-family: arial,sans-serif;}
-  body { background-color:#ffffff }
+  body {
+    background-color:#ffffff;
+    -webkit-user-select: none;
+  }
   A:link {color:#0000cc; }
   A:visited { color:#551a8b; }
   A:active { color:#ff0000; }
   .form-noindent {background-color: #ffffff; border: #C3D9FF 1px solid}
---></style>
-    <style type="text/css"><!--
-      .body { margin-left: 3em;
-              margin-right: 5em;
-              font-family: arial,sans-serif; }
-      .endaligned {
-        text-align: right;
-      }
-      html[dir='rtl'] .endaligned {
-        text-align: left;
-      }
-      #gaia_account_text { font-weight: bold; }
-      div.errorbox-good {}
-      div.errorbox-bad {}
-      div.errormsg { color: red; font-size: smaller;
-                     font-family: arial,sans-serif;
-                     display: none;}
-      font.errormsg { color: red; font-size: smaller;
-                      font-family: arial,sans-serif;}
-      div.errormsgspacer { min-height: 1em;}
-      font.errormsgspacer { font-size: smaller;
-                            font-family: arial,sans-serif;}
+  .body { margin-left: 3em;
+    margin-right: 5em;
+    font-family: arial,sans-serif; }
+  .endaligned {
+    text-align: right;
+  }
+  html[dir='rtl'] .endaligned {
+    text-align: left;
+  }
+  #gaia_account_text { font-weight: bold; }
+  #email_readonly { font-size: 10pt;
+                    font-weight: bold;
+                    display: none; }
+  div.errorbox-good {}
+  div.errorbox-bad {}
+  div.errormsg { color: red; font-size: smaller;
+    font-family: arial,sans-serif;
+    display: none;}
+  font.errormsg { color: red; font-size: smaller;
+    font-family: arial,sans-serif;}
+  div.errormsgspacer { min-height: 1em;}
+  font.errormsgspacer { font-size: smaller;
+    font-family: arial,sans-serif;}
 
-      hr {
-        border: 0;
-        background-color:#DDDDDD;
-        height: 1px;
-        width: 100%;
-        text-align: left;
-        margin: 5px;
-      }
-      #gaia_loginform {
-        margin-bottom: 0;
-      }
+  hr {
+    border: 0;
+    background-color:#DDDDDD;
+    height: 1px;
+    width: 100%;
+    text-align: left;
+    margin: 5px;
+  }
+  #gaia_loginform {
+    margin-bottom: 0;
+  }
 
-    #captcha_wrapper {
-      background-size: 200px 70px;
-      background: no-repeat;
-      background-position: center;
-      background-color: #e8eefa;
-      display: block;
-    }
-    .captcha_image {
-      display: block;
-      width: 200px;
-      height: 70px;
-    }
-    .toppageverticalspace {
-      height: 15px;
-    }
-    .bottompaddedcell {
-      padding-bottom: 3px;
-    }
-    .noverticalpadding {
-      padding-top: 0;
-      padding-bottom: 0;
-    }
-    .cancelspacenocaptcha {
-      height: 22px;
-    }
-    .cancelspaceforcaptcha {
-      height: 5px;
-    }
-    #top_blurb {
-      text-align: justify;
-    }
-    -->
-  </style>
-  </head>
-  <body bgcolor="#ffffff" vlink="#666666"
-        i18n-values=".style.fontFamily:fontfamily;.style.fontSize:fontsize"
-        style="margin-bottom: 6px; margin-top: 6px;" onload="initForm();">
+  #captcha_wrapper {
+    background-size: 200px 70px;
+    background: no-repeat;
+    background-position: center;
+    background-color: #e8eefa;
+    display: block;
+  }
+  .captcha_image {
+    display: block;
+    width: 200px;
+    height: 70px;
+  }
+  #throb {
+    background-image: url("../../../../app/resources/throbber.png");
+    width: 16px;
+    height: 16px;
+    background-position: 0px;
+    margin: 0px 10px 0px 10px;
+  }
+  .toppageverticalspace {
+    height: 15px;
+  }
+  .bottompaddedcell {
+    padding-bottom: 3px;
+  }
+  .noverticalpadding {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .cancelspacenocaptcha {
+    height: 22px;
+  }
+  .cancelspaceforcaptcha {
+    height: 5px;
+  }
+  #top_blurb {
+    font-size: 11pt;
+    line-height: 1.5em;
+  }
+  input[type='button'],
+  input[type='submit'] {
+    min-width: 87px;
+    min-height: 26px;
+  }
+  #top_blurb_error {
+    display: block;
+    margin-bottom: 10px;
+    margin-right: auto;
+    margin-left: auto;
+    width: 70%;
+    text-align: center;
+    padding: 4px 10px;
+    background-color: #eeb939;
+    -webkit-border-radius: 4px;
+    font-weight: bold;
+    font-size: 11pt;
+  }
+  #content_table {
+   padding: 2px;
+  }
+  .access_code_row {
+    display: none;
+  }
+  .access_code_row > td {
+    text-align: center;
+    padding-bottom: 1px;
+  }
+  #access_code_label_row > td {
+    padding-top: 6px;
+  }
+  .centeredtext {
+    text-align: center;
+  }
+</style>
+</head>
+<body bgcolor="#ffffff" vlink="#666666"
+      i18n-values=".style.fontFamily:fontfamily;.style.fontSize:fontsize"
+      style="margin-bottom: 6px; margin-top: 6px;" onload="initGaiaLoginForm();">
   <table width="100%" height="100%" align="center" cellpadding="1" cellspacing="1">
   <tr>
   <td valign="top"> <!-- LOGIN BOX -->
@@ -126,7 +171,8 @@
     function advanceThrobber() {
       var throbber = document.getElementById('throb');
       throbber.style.backgroundPositionX =
-      ((parseInt(throbber.style.backgroundPositionX) - 16) % 576) + 'px';
+          ((parseInt(getComputedStyle(throbber).backgroundPositionX) - 16) %
+          576) + 'px';
     }
 
     function showGaiaLogin(args) {
@@ -135,9 +181,24 @@
       var f = document.getElementById("gaia_loginform");
       if (f) {
         f.Email.value = args.user;
+        if (!args.editable_user) {
+          f.Email.style.display = 'none';
+          var span = document.getElementById('email_readonly');
+          span.appendChild(document.createTextNode(f.Email.value));
+          span.style.display = 'inline';
+          setElementDisplay("createaccountdiv", "none");
+        }
+
+        f.AccessCode.disabled = true;
       }
       if (1 == args.error) {
-        setElementDisplay("errormsg_1_Password", 'table-row');
+        var access_code = document.getElementById('AccessCode');
+        if (access_code.value && access_code.value != "") {
+          setElementDisplay("errormsg_0_AccessCode", 'block');
+          showAccessCodeRequired();
+        } else {
+          setElementDisplay("errormsg_1_Password", 'table-row');
+        }
         setBlurbError();
       }
       if (3 == args.error) {
@@ -147,12 +208,11 @@
       if (4 == args.error) {
         showCaptcha(args);
       }
+      if (8 == args.error) {
+        showAccessCodeRequired();
+      }
       document.getElementById("signIn").disabled = false;
       document.getElementById("signIn").value = templateData['signin'];
-      if (args.showCustomize) {
-        document.getElementById("customize").disabled = false;
-        document.getElementById("customize").style.visibility = "visible";
-      }
       gaia_setFocus();
     }
 
@@ -163,7 +223,6 @@
       setElementDisplay("top_blurb", "none");
       setElementDisplay("top_blurb_error", "none");
       setElementDisplay("createaccountdiv", "none");
-      setElementDisplay("topspacer", "none");
       var gaiaTable = document.getElementById('gaia_table');
       gaiaTable.cellPadding = 0;
       gaiaTable.cellSpacing = 1;
@@ -180,13 +239,20 @@
           url(args.captchaUrl);
     }
 
-    function CloseDialog() {
-      chrome.send("ClickCustomizeCancel", [""]);
-      chrome.send("DialogClose", [""]);
+    function showAccessCodeRequired() {
+      setElementDisplay("password_row", "none");
+      setElementDisplay("email_row", "none");
+      document.getElementById("createaccountcell").style.visibility =
+          "hidden";
+
+      setElementDisplay("access_code_label_row", "table-row");
+      setElementDisplay("access_code_input_row", "table-row");
+      setElementDisplay("access_code_help_row", "table-row");
+      document.getElementById('AccessCode').disabled = false;
     }
 
-    function showCustomize() {
-      chrome.send("ShowCustomize", [""]);
+    function CloseDialog() {
+      chrome.send("DialogClose", [""]);
     }
 
     function showGaiaSuccessAndClose() {
@@ -198,7 +264,8 @@
       document.getElementById("signIn").value = templateData['settingup'];
     }
 
-    function initForm() {
+    // Called once, when this html/js is loaded.
+    function initGaiaLoginForm() {
       var acct_text = document.getElementById("gaia_account_text");
       var translated_text = acct_text.textContent;
       var posGoogle = translated_text.indexOf('Google');
@@ -220,22 +287,21 @@
 
     function sendCredentialsAndClose() {
 
-      chrome.send("ClickCustomizeOk", [""]);
       if (!setErrorVisibility())
         return false;
 
       document.getElementById('Email').disabled = true;
       document.getElementById('Passwd').disabled = true;
       document.getElementById('CaptchaValue').disabled = true;
-      if (document.getElementById('customize')) {
-        document.getElementById('customize').disabled = true;
-      }
+      document.getElementById('AccessCode').disabled = true;
+
       var throbber = document.getElementById('throbber_container');
       throbber.style.display = "inline";
       var f = document.getElementById("gaia_loginform");
       var result = JSON.stringify({"user" : f.Email.value,
                                    "pass" : f.Passwd.value,
-                                   "captcha" : f.CaptchaValue.value});
+                                   "captcha" : f.CaptchaValue.value,
+                                   "access_code" : f.AccessCode.value});
       document.getElementById("signIn").disabled = true;
       chrome.send("SubmitAuth", [result]);
     }
@@ -245,12 +311,15 @@
       if (d)
         d.style.display = display;
     }
+    
+    function hideBlurb() {
+      setElementDisplay('top_blurb', 'none');
+    }
 
     function setBlurbError() {
       if (g_is_captcha_challenge_active)
         return;  // No blurb in captcha challenge mode.
-      document.getElementById("top_blurb").style.display = "none";
-      document.getElementById("top_blurb_error").style.display = "block";
+      document.getElementById("top_blurb_error").style.visibility = "visible";
       document.getElementById('Email').disabled = false;
       document.getElementById('Passwd').disabled = false;
     }
@@ -260,6 +329,7 @@
       setElementDisplay("errormsg_0_Password", 'none');
       setElementDisplay("errormsg_1_Password", 'none');
       setElementDisplay("errormsg_0_Connection", 'none');
+      setElementDisplay("errormsg_0_AccessCode", 'none');
     }
 
     function setErrorVisibility() {
@@ -275,33 +345,35 @@
         setBlurbError();
         return false;
       }
+      if (!f.AccessCode.disabled && (null == f.AccessCode.value ||
+          "" == f.AccessCode.value)) {
+        setElementDisplay("errormsg_0_Password", 'table-row');
+        return false;
+      }
       return true;
     }
   </script>
-<style type="text/css"><!--
-  div.errormsg { color: red; font-size: smaller; font-family:arial,sans-serif; }
-  font.errormsg { color: red; font-size: smaller; font-family:arial,sans-serif;}
---></style>
-<style type="text/css"><!--
-.gaia.le.lbl { font-family: Arial, Helvetica, sans-serif; font-size: smaller; }
-.gaia.le.fpwd { font-family: Arial, Helvetica, sans-serif; font-size: 70%; }
-.gaia.le.chusr { font-family: Arial, Helvetica, sans-serif; font-size: 70%; }
-.gaia.le.val { font-family: Arial, Helvetica, sans-serif; font-size: smaller; }
-.gaia.le.button { font-family: Arial, Helvetica, sans-serif; }
-.gaia.le.rem { font-family: Arial, Helvetica, sans-serif; font-size: smaller; }
-.gaia.captchahtml.desc { font-family: arial, sans-serif; font-size: smaller; }
-.gaia.captchahtml.cmt { font-family: arial, sans-serif; font-size: smaller;
-                        font-style: italic; }
---></style>
-<div id="top_blurb">
-  <p><font size="-1"><span i18n-content="introduction"></span></font></p>
-</div>
-<div id="top_blurb_error" style="display:none">
-  <p><font size="-1">
-    <span i18n-content="settingupsync"></span><br/><br/>
-    <b><span i18n-content="errorsigningin"></span></b>
-  </font></p>
-</div>
+  <style type="text/css">
+    div.errormsg { color: red; font-size: smaller; font-family:arial,sans-serif; }
+    font.errormsg { color: red; font-size: smaller; font-family:arial,sans-serif;}
+  </style>
+  <style type="text/css">
+    .gaia.le.lbl { font-family: Arial, Helvetica, sans-serif; font-size: smaller; }
+    .gaia.le.fpwd { font-family: Arial, Helvetica, sans-serif; font-size: 70%; }
+    .gaia.le.chusr { font-family: Arial, Helvetica, sans-serif; font-size: 70%; }
+    .gaia.le.val { font-family: Arial, Helvetica, sans-serif; font-size: smaller; }
+    .gaia.le.button { font-family: Arial, Helvetica, sans-serif; }
+    .gaia.le.rem { font-family: Arial, Helvetica, sans-serif; font-size: smaller; }
+    .gaia.captchahtml.desc { font-family: arial, sans-serif; font-size: smaller; }
+    .gaia.captchahtml.cmt { font-family: arial, sans-serif; font-size: smaller;
+                            font-style: italic; }
+  </style>
+  <div id="top_blurb">
+    <span i18n-content="introduction"></span>
+  </div>
+  <div id="top_blurb_error" style="visibility:hidden">
+      <span i18n-content="errorsigningin"></span>
+  </div>
 <form id="gaia_loginform" onsubmit="sendCredentialsAndClose(); return false;">
 <div id="gaia_loginbox">
 <table id="content_table" class="form-noindent" cellspacing="0" cellpadding="5"
@@ -312,9 +384,6 @@
       <div>
         <table id="gaia_table" align="center" border="0" cellpadding="1"
                cellspacing="0">
-          <tr>
-            <td id="topspacer" class="toppageverticalspace" colspan="2"></td>
-          </tr>
           <tr>
             <td colspan="2" align="center">
               <table>
@@ -331,7 +400,7 @@
               </table>
             </td>
           </tr>
-          <script type="text/javascript"><!--
+          <script type="text/javascript">
             function onPreCreateAccount() {
               return true;
             }
@@ -342,11 +411,11 @@
                 return true;
               }
             }
-          --></script>
+          </script>
           <tr>
             <td colspan="2" align="center"> </td>
           </tr>
-          <tr>
+          <tr id="email_row">
             <td nowrap="nowrap">
               <div class="endaligned">
                 <span class="gaia le lbl" i18n-content="emaillabel">
@@ -356,8 +425,18 @@
             <td>
               <input type="text" name="Email"  id="Email" size="18"
                      value="" class='gaia le val' />
+              <span id="email_readonly"></span>
             </td>
           </tr>
+          <tr id="access_code_label_row" class="access_code_row">
+            <td colspan="2">
+                <span class="gaia le lbl" i18n-content="enteraccesscode"></span>
+            </td>
+          </tr>
+          <tr id="access_code_help_row" class="access_code_row">
+            <td colspan="2" class="gaia le fpwd">
+              <a i18n-values="href:getaccesscodeurl" i18n-content="getaccesscodehelp" target="_blank"></a>
+            </td>
           <tr>
             <td></td>
             <td>
@@ -370,13 +449,19 @@
             <td></td>
             <td></td>
           </tr>
-          <tr>
+          <tr id="password_row">
             <td class="endaligned">
               <span class="gaia le lbl" i18n-content="passwordlabel">
               </span>
             </td>
             <td>
               <input type="password" name="Passwd" id="Passwd" size="18"
+                     class="gaia le val"/>
+            </td>
+          </tr>
+          <tr id="access_code_input_row" class="access_code_row">
+            <td colspan="2">
+              <input type="password" name="AccessCode" id="AccessCode" size="18"
                      class="gaia le val"/>
             </td>
           </tr>
@@ -390,6 +475,9 @@
                 </div>
                 <div class="errormsg" id="errormsg_1_Password">
                   <span i18n-content="invalidcredentials"></span>[<a i18n-values="href:invalidpasswordhelpurl" target="_blank">?</a>]
+                </div>
+                <div class="errormsg centeredtext" id="errormsg_0_AccessCode"
+                     i18n-content="invalidaccesscode">
                 </div>
               </div>
             </td>
@@ -444,16 +532,16 @@
                 <tr>
                   <td>
                     <div id="throbber_container" style="display:none;">
-                      <div id="throb" style="background-image:url(throbber.png);
-                           width:16px; height:16px; background-position:0px;
-                           margin:0px 10px 0px 10px">
+                      <div id="throb">
                       </div>
                     </div>
                   </td>
                   <td class="noverticalpadding">
-                    <input id="signIn" type="button" class="gaia le button"
-                           name="signIn" i18n-values="value:signin"
-                           onclick="sendCredentialsAndClose();" />
+                    <input id="signIn" type="submit" class="gaia le button"
+                           name="signIn" i18n-values="value:signin"/>
+                    <input type="button" name="cancel" i18n-values="value:cancel"
+                           onclick="CloseDialog();" >
+
                   </td>
                 </tr>
               </table>
@@ -488,15 +576,6 @@
 </tr>
 <tr>
   <td class="cancelspacenocaptcha" id="cancelspacer" colspan="2">
-  </td>
-</tr>
-<tr>
-  <td class="endaligned noverticalpadding" colspan="2" style="vertical-align: bottom">
-  <input id="customize" type="button" name="customize"
-         i18n-values="value:customize" onclick="showCustomize();" 
-         style="visibility:hidden" disabled="disabled">
-  <input type="button" name="cancel" i18n-values="value:cancel"
-         onclick="CloseDialog();" style="width:85">
   </td>
 </tr>
 </table>

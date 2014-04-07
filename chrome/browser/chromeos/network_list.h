@@ -4,9 +4,12 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_NETWORK_LIST_H_
 #define CHROME_BROWSER_CHROMEOS_NETWORK_LIST_H_
+#pragma once
 
+#include <string>
 #include <vector>
 
+#include "base/string16.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
 
 namespace chromeos {
@@ -28,9 +31,13 @@ class NetworkList  {
         : network_type(NETWORK_EMPTY),
           connected(false) {}
     NetworkItem(NetworkType network_type,
+                const string16& label)
+        : network_type(network_type),
+          label(label) {}
+    NetworkItem(NetworkType network_type,
                 string16 label,
-                WifiNetwork wifi_network,
-                CellularNetwork cellular_network)
+                WifiNetwork* wifi_network,
+                CellularNetwork* cellular_network)
         : network_type(network_type),
           label(label),
           wifi_network(wifi_network),
@@ -39,8 +46,8 @@ class NetworkList  {
 
     NetworkType network_type;
     string16 label;      // string representation of the network (shown in UI).
-    WifiNetwork wifi_network;
-    CellularNetwork cellular_network;
+    WifiNetwork* wifi_network;
+    CellularNetwork* cellular_network;
     bool connected;
   };
 
@@ -52,11 +59,11 @@ class NetworkList  {
     return networks_.empty();
   }
 
-  // Returns currently connected network if there is one.
-  const NetworkList::NetworkItem* ConnectedNetwork() const;
+  // Returns true, if specified network is currently connected.
+  bool IsNetworkConnected(NetworkType type, const string16& id) const;
 
-  // Returns currently connecting network if there is one.
-  const NetworkList::NetworkItem* ConnectingNetwork() const;
+  // Returns true, if specified network is currently connected.
+  bool IsNetworkConnecting(NetworkType type, const string16& id) const;
 
   // Returns network by it's type and ssid (Wifi) or id (Cellular).
   // If network is not available NULL is returned.
@@ -76,25 +83,34 @@ class NetworkList  {
   NetworkList::NetworkItem* GetNetworkAt(int index);
 
   // Callback from NetworkLibrary.
-  void NetworkChanged(chromeos::NetworkLibrary* network_lib);
+  void OnNetworkManagerChanged(chromeos::NetworkLibrary* network_lib);
 
  private:
   typedef std::vector<NetworkItem> NetworkItemVector;
+  typedef std::vector<size_t> NetworkIndexVector;
 
-  // Set connected/connecting network indices.
-  // index - network index being processed
-  void SetNetworksIndices(int index, bool connected, bool connecting);
+  // Returns true if the specified network is in the list.
+  bool IsInNetworkList(const NetworkIndexVector& list,
+                       NetworkType type,
+                       const string16& id) const;
 
-  // Cached list of all available networks.
+  // Returns true if network is of the same type and id.
+  bool IsSameNetwork(const NetworkList::NetworkItem* network,
+                     NetworkType type,
+                     const std::string& id) const;
+
+  // Adds network index to the corresponding connected/connecting network list.
+  // |index| - network index being processed
+  void AddNetworkIndexToList(size_t index, bool connected, bool connecting);
+
+  // Cached list of all available networks with their connection states.
   NetworkItemVector networks_;
 
-  // Index of currently connected network or -1 if there's none.
-  // If several networks are connected than single one is selected by priority:
-  // Ethernet > WiFi > Cellular.
-  int connected_network_index_;
+  // Connected networks indexes.
+  NetworkIndexVector connected_networks_;
 
-  // Index of currently connecting network or -1 if there's none.
-  int connecting_network_index_;
+  // Connecting networks indexes.
+  NetworkIndexVector connecting_networks_;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkList);
 };

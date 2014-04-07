@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_SQLITE_COMPILED_STATEMENT_H_
 #define CHROME_COMMON_SQLITE_COMPILED_STATEMENT_H_
+#pragma once
 
 #include <map>
 #include <string>
@@ -20,11 +21,9 @@ class SQLStatement;
 class SqliteStatementCache {
  public:
   // You must call set_db before anything else if you use this constructor.
-  SqliteStatementCache() : db_(NULL) {
-  }
+  SqliteStatementCache();
 
-  explicit SqliteStatementCache(sqlite3* db) : db_(db) {
-  }
+  explicit SqliteStatementCache(sqlite3* db);
 
   // This object must be deleted before the sqlite connection it is associated
   // with. Otherwise, sqlite seems to keep the file open because there are open

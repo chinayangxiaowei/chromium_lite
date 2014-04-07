@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #import "chrome/browser/bookmarks/bookmark_model.h"
 #import "chrome/browser/cocoa/bookmark_menu.h"
 #import "chrome/browser/cocoa/bookmark_button.h"
+#import "chrome/browser/cocoa/image_utils.h"
 #include "grit/generated_resources.h"
 
 
@@ -47,7 +48,7 @@
     [self setBookmarkNode:node];
 
     if (node) {
-      NSString* title = base::SysWideToNSString(node->GetTitle());
+      NSString* title = base::SysUTF16ToNSString(node->GetTitle());
       [self setBookmarkCellText:title image:cellImage];
       [self setMenu:contextMenu];
     } else {
@@ -98,6 +99,8 @@
 
 - (NSSize)cellSizeForBounds:(NSRect)aRect {
   NSSize size = [super cellSizeForBounds:aRect];
+  // Cocoa seems to slightly underestimate how much space we need, so we
+  // compensate here to avoid a clipped rendering.
   size.width += 2;
   size.height += 4;
   return size;
@@ -109,11 +112,17 @@
                                            withString:@" "];
   title = [title stringByReplacingOccurrencesOfString:@"\r"
                                            withString:@" "];
-  [self setImagePosition:NSImageLeft];
+  // If there is no title, squeeze things tight by displaying only the image; by
+  // default, Cocoa leaves extra space in an attempt to display an empty title.
+  if ([title length]) {
+    [self setImagePosition:NSImageLeft];
+    [self setTitle:title];
+  } else {
+    [self setImagePosition:NSImageOnly];
+  }
+
   if (image)
     [self setImage:image];
-  if (title)
-    [self setTitle:title];
 }
 
 - (void)setBookmarkNode:(const BookmarkNode*)node {
@@ -169,6 +178,8 @@
 // To implement "hover open a bookmark button to open the folder"
 // which feels like menus, we override NSButtonCell's mouseEntered:
 // and mouseExited:, then and pass them along to our owning control.
+// Note: as verified in a debugger, mouseEntered: does NOT increase
+// the retainCount of the cell or its owning control.
 - (void)mouseEntered:(NSEvent*)event {
   [super mouseEntered:event];
   [[self controlView] mouseEntered:event];
@@ -176,8 +187,8 @@
 
 // See comment above mouseEntered:, above.
 - (void)mouseExited:(NSEvent*)event {
-  [super mouseExited:event];
   [[self controlView] mouseExited:event];
+  [super mouseExited:event];
 }
 
 - (void)setDrawFolderArrow:(BOOL)draw {
@@ -215,11 +226,11 @@
                                    NSWidth(cellFrame) - NSWidth(imageRect),
                                    (NSHeight(cellFrame) / 2.0) -
                                    (NSHeight(imageRect) / 2.0));
-    [arrowImage_ setFlipped:[controlView isFlipped]];
     [arrowImage_ drawInRect:drawRect
                     fromRect:imageRect
                    operation:NSCompositeSourceOver
-                    fraction:[self isEnabled] ? 1.0 : 0.5];
+                    fraction:[self isEnabled] ? 1.0 : 0.5
+                neverFlipped:YES];
   }
 }
 

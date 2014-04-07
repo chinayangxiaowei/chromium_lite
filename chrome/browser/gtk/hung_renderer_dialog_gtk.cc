@@ -9,6 +9,7 @@
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/process_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
@@ -68,7 +69,7 @@ HungRendererDialogGtk::HungRendererDialogGtk()
 
 void HungRendererDialogGtk::Init() {
   dialog_ = GTK_DIALOG(gtk_dialog_new_with_buttons(
-      l10n_util::GetStringUTF8(IDS_PRODUCT_NAME).c_str(),
+      l10n_util::GetStringUTF8(IDS_BROWSER_HANGMONITOR_RENDERER_TITLE).c_str(),
       NULL,  // No parent because tabs can span multiple windows.
       GTK_DIALOG_NO_SEPARATOR,
       l10n_util::GetStringUTF8(IDS_BROWSER_HANGMONITOR_RENDERER_END).c_str(),
@@ -168,7 +169,7 @@ void HungRendererDialogGtk::ShowForTabContents(TabContents* hung_contents) {
         g_object_unref(pixbuf);
     }
   }
-  gtk_widget_show_all(GTK_WIDGET(dialog_));
+  gtk_util::ShowDialog(GTK_WIDGET(dialog_));
 }
 
 void HungRendererDialogGtk::EndForTabContents(TabContents* contents) {
@@ -188,8 +189,10 @@ void HungRendererDialogGtk::OnDialogResponse(gint response_id) {
   switch (response_id) {
     case kKillPagesButtonResponse:
       // Kill the process.
-      base::KillProcess(contents_->GetRenderProcessHost()->GetHandle(),
-                        ResultCodes::HUNG, false);
+      if (contents_ && contents_->GetRenderProcessHost()) {
+        base::KillProcess(contents_->GetRenderProcessHost()->GetHandle(),
+                          ResultCodes::HUNG, false);
+      }
       break;
 
     case GTK_RESPONSE_OK:

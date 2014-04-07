@@ -11,6 +11,7 @@
 
 #ifndef GFX_RECT_H_
 #define GFX_RECT_H_
+#pragma once
 
 #include <iosfwd>
 
@@ -25,6 +26,8 @@ typedef struct _GdkRectangle GdkRectangle;
 
 namespace gfx {
 
+class Insets;
+
 class Rect {
  public:
   Rect();
@@ -37,6 +40,7 @@ class Rect {
 #elif defined(USE_X11)
   explicit Rect(const GdkRectangle& r);
 #endif
+  explicit Rect(const gfx::Size& size);
   Rect(const gfx::Point& origin, const gfx::Size& size);
 
   ~Rect() {}
@@ -56,10 +60,10 @@ class Rect {
   void set_y(int y) { origin_.set_y(y); }
 
   int width() const { return size_.width(); }
-  void set_width(int width);
+  void set_width(int width) { size_.set_width(width); }
 
   int height() const { return size_.height(); }
-  void set_height(int height);
+  void set_height(int height) { size_.set_height(height); }
 
   const gfx::Point& origin() const { return origin_; }
   void set_origin(const gfx::Point& origin) { origin_ = origin; }
@@ -76,6 +80,9 @@ class Rect {
   void Inset(int horizontal, int vertical) {
     Inset(horizontal, vertical, horizontal, vertical);
   }
+
+  // Shrink the rectangle by the given insets.
+  void Inset(const gfx::Insets& insets);
 
   // Shrink the rectangle by the specified amount on each side.
   void Inset(int left, int top, int right, int bottom);
@@ -94,6 +101,14 @@ class Rect {
   bool operator!=(const Rect& other) const {
     return !(*this == other);
   }
+
+  // A rect is less than another rect if its origin is less than
+  // the other rect's origin. If the origins are equal, then the
+  // shortest rect is less than the other. If the origin and the
+  // height are equal, then the narrowest rect is less than.
+  // This comparison is required to use Rects in sets, or sorted
+  // vectors.
+  bool operator<(const Rect& other) const;
 
 #if defined(OS_WIN)
   // Construct an equivalent Win32 RECT object.
@@ -158,8 +173,8 @@ class Rect {
   gfx::Size size_;
 };
 
-}  // namespace gfx
-
 std::ostream& operator<<(std::ostream& out, const gfx::Rect& r);
+
+}  // namespace gfx
 
 #endif  // GFX_RECT_H_

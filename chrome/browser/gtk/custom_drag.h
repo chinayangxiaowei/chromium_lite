@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_GTK_CUSTOM_DRAG_H_
 #define CHROME_BROWSER_GTK_CUSTOM_DRAG_H_
+#pragma once
 
 #include <gtk/gtk.h>
 #include <vector>
@@ -39,7 +40,10 @@ class CustomDrag {
                                       target_type, time);
   }
 
+  // Can't use a OwnedWidgetGtk because the initialization of GtkInvisible
+  // sinks the reference.
   GtkWidget* drag_widget_;
+
   GdkPixbuf* pixbuf_;
 
   DISALLOW_COPY_AND_ASSIGN(CustomDrag);
@@ -50,7 +54,8 @@ class DownloadItemDrag : public CustomDrag {
  public:
   // Sets |widget| as a source for drags pertaining to |item|. No
   // DownloadItemDrag object is created.
-  static void SetSource(GtkWidget* widget, DownloadItem* item);
+  // It is safe to call this multiple times with different values of |icon|.
+  static void SetSource(GtkWidget* widget, DownloadItem* item, SkBitmap* icon);
 
   // Creates a new DownloadItemDrag, the lifetime of which is tied to the
   // system drag.

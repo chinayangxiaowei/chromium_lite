@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_VIEW_IDS_H_
 #define CHROME_BROWSER_CHROMEOS_VIEW_IDS_H_
+#pragma once
 
 #include "chrome/browser/view_ids.h"
 
@@ -11,12 +12,7 @@
 enum ChromeOSViewIds {
   // Start with the offset that is big enough to avoid possible
   // collison.
-  VIEW_ID_APP_MENU_BUTTON = VIEW_ID_PREDEFINED_COUNT + 10000,
-  VIEW_ID_COMPACT_NAV_BAR,
-  VIEW_ID_STATUS_AREA,
-  VIEW_ID_SPACER,
-  VIEW_ID_OTR_AVATAR,
+  VIEW_ID_STATUS_AREA = VIEW_ID_PREDEFINED_COUNT + 10000,
 };
 
 #endif  // CHROME_BROWSER_CHROMEOS_VIEW_IDS_H_
-

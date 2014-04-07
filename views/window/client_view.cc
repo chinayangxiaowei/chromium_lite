@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -50,7 +50,9 @@ void ClientView::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
   if (is_add && child == this) {
     DCHECK(GetWidget());
     DCHECK(contents_view_); // |contents_view_| must be valid now!
-    AddChildView(contents_view_);
+    // Insert |contents_view_| at index 0 so it is first in the focus chain.
+    // (the OK/Cancel buttons are inserted before contents_view_)
+    AddChildView(0, contents_view_);
   }
 }
 
@@ -59,6 +61,10 @@ void ClientView::DidChangeBounds(const gfx::Rect& previous,
   // Overridden to do nothing. The NonClientView manually calls Layout on the
   // ClientView when it is itself laid out, see comment in
   // NonClientView::Layout.
+}
+
+AccessibilityTypes::Role ClientView::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_CLIENT;
 }
 
 }  // namespace views

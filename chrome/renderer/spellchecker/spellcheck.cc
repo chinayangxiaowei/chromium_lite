@@ -7,6 +7,7 @@
 #include "base/file_util.h"
 #include "base/histogram.h"
 #include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/spellcheck_common.h"
 #include "chrome/renderer/render_thread.h"
@@ -113,7 +114,7 @@ string16 SpellCheck::GetAutoCorrectionWord(const string16& word, int tag) {
   const char16* word_char = word.c_str();
   for (int i = 0; i <= SpellCheckCommon::kMaxAutoCorrectWordSize; i++) {
     if (i >= word_length)
-      misspelled_word[i] = NULL;
+      misspelled_word[i] = 0;
     else
       misspelled_word[i] = word_char[i];
   }

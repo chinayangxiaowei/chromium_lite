@@ -9,6 +9,7 @@
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/browser/views/window.h"
 #include "grit/generated_resources.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
@@ -139,9 +140,10 @@ InstallDialogContent2::InstallDialogContent2(
     right_column_width_ = kNoPermissionsRightColumnWidth;
   } else {
     right_column_width_ = kPermissionBoxWidth;
-
-    will_have_access_to_ = new views::Label(
-        l10n_util::GetString(IDS_EXTENSION_PROMPT2_WILL_HAVE_ACCESS_TO));
+    int label = extension->is_app() ?
+                IDS_EXTENSION_PROMPT2_APP_WILL_HAVE_ACCESS_TO :
+                IDS_EXTENSION_PROMPT2_WILL_HAVE_ACCESS_TO;
+    will_have_access_to_ = new views::Label(l10n_util::GetString(label));
     will_have_access_to_->SetMultiLine(true);
     will_have_access_to_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
     AddChildView(will_have_access_to_);
@@ -182,7 +184,7 @@ int InstallDialogContent2::GetDefaultDialogButton() const {
 }
 
 bool InstallDialogContent2::Accept() {
-  delegate_->InstallUIProceed(false);  // create shortcut
+  delegate_->InstallUIProceed();
   return true;
 }
 
@@ -292,7 +294,14 @@ void InstallDialogContent2::Layout() {
 void ExtensionInstallUI::ShowExtensionInstallUIPrompt2Impl(
     Profile* profile, Delegate* delegate, Extension* extension, SkBitmap* icon,
     const std::vector<string16>& permissions) {
+#if defined(OS_CHROMEOS)
+  // Use a normal browser window as parent on ChromeOS.
+  Browser* browser = BrowserList::FindBrowserWithType(profile,
+                                                      Browser::TYPE_NORMAL,
+                                                      true);
+#else
   Browser* browser = BrowserList::GetLastActiveWithProfile(profile);
+#endif
   if (!browser) {
     delegate->InstallUIAbort();
     return;
@@ -304,7 +313,7 @@ void ExtensionInstallUI::ShowExtensionInstallUIPrompt2Impl(
     return;
   }
 
-  views::Window::CreateChromeWindow(window->GetNativeHandle(), gfx::Rect(),
+  browser::CreateViewsWindow(window->GetNativeHandle(), gfx::Rect(),
       new InstallDialogContent2(delegate, extension, icon, permissions))
           ->Show();
 }

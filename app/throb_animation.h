@@ -4,6 +4,7 @@
 
 #ifndef APP_THROB_ANIMATION_H_
 #define APP_THROB_ANIMATION_H_
+#pragma once
 
 #include "app/slide_animation.h"
 
@@ -20,7 +21,7 @@ class ThrobAnimation : public SlideAnimation {
   virtual ~ThrobAnimation() {}
 
   // Starts throbbing. cycles_til_stop gives the number of cycles to do before
-  // stopping.
+  // stopping. A negative value means "throb indefinitely".
   void StartThrobbing(int cycles_til_stop);
 
   // Sets the duration of the slide animation when throbbing.

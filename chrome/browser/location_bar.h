@@ -10,10 +10,12 @@
 
 #ifndef CHROME_BROWSER_LOCATION_BAR_H_
 #define CHROME_BROWSER_LOCATION_BAR_H_
+#pragma once
 
 #include <string>
 
-#include "chrome/browser/first_run.h"
+#include "base/string16.h"
+#include "chrome/browser/first_run/first_run.h"
 #include "chrome/common/page_transition_types.h"
 #include "webkit/glue/window_open_disposition.h"
 
@@ -26,6 +28,10 @@ class LocationBar {
  public:
   // Shows the first run information bubble anchored to the location bar.
   virtual void ShowFirstRunBubble(FirstRun::BubbleType bubble_type) = 0;
+
+  // Sets the suggested text to show in the omnibox. This is shown in addition
+  // to the current text of the omnibox.
+  virtual void SetSuggestedText(const string16& text) = 0;
 
   // Returns the string of text entered in the location bar.
   virtual std::wstring GetInputString() const = 0;
@@ -40,9 +46,6 @@ class LocationBar {
 
   // Accepts the current string of text entered in the location bar.
   virtual void AcceptInput() = 0;
-
-  // Accepts the current input, overriding the disposition.
-  virtual void AcceptInputWithDisposition(WindowOpenDisposition) = 0;
 
   // Focuses the location bar.  Optionally also selects its contents.
   virtual void FocusLocation(bool select_all) = 0;
@@ -69,6 +72,7 @@ class LocationBar {
   virtual void Revert() = 0;
 
   // Returns a pointer to the text entry view.
+  virtual const AutocompleteEditView* location_entry() const = 0;
   virtual AutocompleteEditView* location_entry() = 0;
 
   // Returns a pointer to the testing interface.

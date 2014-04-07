@@ -7,7 +7,6 @@
 #include <map>
 #include <string>
 
-#include "app/resource_bundle.h"
 #include "base/basictypes.h"
 #include "base/singleton.h"
 #include "base/values.h"
@@ -299,12 +298,14 @@ v8::Extension* RendererExtensionBindings::Get() {
 void RendererExtensionBindings::Invoke(const std::string& function_name,
                                        const ListValue& args,
                                        RenderView* renderview,
-                                       bool requires_incognito_access) {
+                                       bool cross_incognito,
+                                       const GURL& event_url) {
   v8::HandleScope handle_scope;
   std::vector< v8::Handle<v8::Value> > argv = ListValueToV8(args);
   EventBindings::CallFunction(function_name,
                               argv.size(),
                               &argv[0],
                               renderview,
-                              requires_incognito_access);
+                              cross_incognito,
+                              event_url);
 }

@@ -5,6 +5,7 @@
 #include "chrome/renderer/renderer_main_platform_delegate.h"
 
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "base/scoped_ptr.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
@@ -48,7 +49,7 @@ void EnableThemeSupportForRenderer(bool no_sandbox) {
     if (!current || !::SetProcessWindowStation(current)) {
       // We failed to switch back to the secure window station. This might
       // confuse the renderer enough that we should kill it now.
-      CHECK(false) << "Failed to restore alternate window station";
+      LOG(FATAL) << "Failed to restore alternate window station";
     }
 
     if (!::CloseWindowStation(winsta0)) {
@@ -102,7 +103,7 @@ bool RendererMainPlatformDelegate::InitSandboxTests(bool no_sandbox) {
 
   if (target_services && !no_sandbox) {
       std::wstring test_dll_name =
-          command_line.GetSwitchValue(switches::kTestSandbox);
+          command_line.GetSwitchValueNative(switches::kTestSandbox);
     if (!test_dll_name.empty()) {
       sandbox_test_module_ = LoadLibrary(test_dll_name.c_str());
       DCHECK(sandbox_test_module_);

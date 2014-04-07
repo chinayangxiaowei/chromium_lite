@@ -1,14 +1,15 @@
-// Copyright (c) 2007-2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NET_BASE_X509_TYPES_H_
-#define NET_BASE_X509_TYPES_H_
+#ifndef NET_BASE_X509_CERT_TYPES_H_
+#define NET_BASE_X509_CERT_TYPES_H_
+#pragma once
 
 #include <string.h>
 
-#include <iostream>
-#include <map>
+#include <functional>
+#include <iosfwd>
 #include <set>
 #include <string>
 #include <vector>
@@ -41,16 +42,19 @@ struct SHA1Fingerprint {
   unsigned char data[20];
 };
 
-class SHA1FingerprintLessThan
-    : public std::binary_function<SHA1Fingerprint, SHA1Fingerprint, bool> {
+class SHA1FingerprintLessThan {
  public:
-  bool operator() (const SHA1Fingerprint& lhs, const SHA1Fingerprint& rhs) const;
+  bool operator() (const SHA1Fingerprint& lhs,
+                   const SHA1Fingerprint& rhs) const {
+    return memcmp(lhs.data, rhs.data, sizeof(lhs.data)) < 0;
+  }
 };
 
 // CertPrincipal represents the issuer or subject field of an X.509 certificate.
 struct CertPrincipal {
-  CertPrincipal() { }
-  explicit CertPrincipal(const std::string& name) : common_name(name) { }
+  CertPrincipal();
+  explicit CertPrincipal(const std::string& name);
+  ~CertPrincipal();
 
   // Parses a BER-format DistinguishedName.
   bool ParseDistinguishedName(const void* ber_name_data, size_t length);
@@ -63,6 +67,10 @@ struct CertPrincipal {
   // Returns true if all attributes of the two objects match,
   // where "match" is defined in RFC 5280 sec. 7.1.
   bool Matches(const CertPrincipal& against) const;
+
+  // Returns a name that can be used to represent the issuer.  It tries in this
+  // order: CN, O and OU and returns the first non-empty one found.
+  std::string GetDisplayName() const;
 
   // The different attributes for a principal.  They may be "".
   // Note that some of them can have several values.
@@ -97,6 +105,9 @@ class CertPolicy {
     DENIED,
   };
 
+  CertPolicy();
+  ~CertPolicy();
+
   // Returns the judgment this policy makes about this certificate.
   Judgment Check(X509Certificate* cert) const;
 
@@ -130,4 +141,4 @@ inline bool CSSMOIDEqual(const CSSM_OID* oid1, const CSSM_OID* oid2) {
 
 }  // namespace net
 
-#endif  // NET_BASE_X509_TYPES_H_
+#endif  // NET_BASE_X509_CERT_TYPES_H_

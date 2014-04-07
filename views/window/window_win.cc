@@ -7,16 +7,16 @@
 #include <dwmapi.h>
 #include <shellapi.h>
 
-#include "app/l10n_util.h"
-#include "app/resource_bundle.h"
+#include "app/keyboard_code_conversion_win.h"
 #include "app/theme_provider.h"
 #include "app/win_util.h"
 #include "base/i18n/rtl.h"
 #include "base/win_util.h"
-#include "gfx/canvas_paint.h"
+#include "gfx/canvas_skia_paint.h"
 #include "gfx/font.h"
 #include "gfx/icon_util.h"
 #include "gfx/path.h"
+#include "views/accessibility/view_accessibility.h"
 #include "views/widget/root_view.h"
 #include "views/window/client_view.h"
 #include "views/window/custom_frame_view.h"
@@ -240,8 +240,15 @@ void WindowWin::Show() {
 void WindowWin::Activate() {
   if (IsMinimized())
     ::ShowWindow(GetNativeView(), SW_RESTORE);
-  ::SetWindowPos(GetNativeView(), HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
+  ::SetWindowPos(GetNativeView(), HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOSIZE | SWP_NOMOVE);
   SetForegroundWindow(GetNativeView());
+}
+
+void WindowWin::Deactivate() {
+  HWND hwnd = ::GetNextWindow(GetNativeView(), GW_HWNDNEXT);
+  if (hwnd)
+    ::SetForegroundWindow(hwnd);
 }
 
 void WindowWin::Close() {
@@ -404,11 +411,18 @@ void WindowWin::UpdateWindowTitle() {
 
   // Update the native frame's text. We do this regardless of whether or not
   // the native frame is being used, since this also updates the taskbar, etc.
-  std::wstring window_title = window_delegate_->GetWindowTitle();
+  std::wstring window_title;
+  if (IsAccessibleWidget())
+    window_title = window_delegate_->GetAccessibleWindowTitle();
+  else
+    window_title = window_delegate_->GetWindowTitle();
   std::wstring localized_text;
   if (base::i18n::AdjustStringForLocaleDirection(window_title, &localized_text))
     window_title.assign(localized_text);
   SetWindowText(GetNativeView(), window_title.c_str());
+
+  // Also update the accessibility name.
+  UpdateAccessibleName(window_title);
 }
 
 void WindowWin::UpdateWindowIcon() {
@@ -509,7 +523,8 @@ WindowWin::WindowWin(WindowDelegate* window_delegate)
   is_window_ = true;
   InitClass();
   DCHECK(window_delegate_);
-  window_delegate_->window_.reset(this);
+  DCHECK(!window_delegate_->window_);
+  window_delegate_->window_ = this;
   // Initialize these values to 0 so that subclasses can override the default
   // behavior before calling Init.
   set_window_style(0);
@@ -540,6 +555,8 @@ void WindowWin::Init(HWND parent, const gfx::Rect& bounds) {
   WidgetWin::SetContentsView(non_client_view_);
 
   UpdateWindowTitle();
+  UpdateAccessibleRole();
+  UpdateAccessibleState();
 
   SetInitialBounds(bounds);
 
@@ -930,12 +947,13 @@ void WindowWin::OnNCPaint(HRGN rgn) {
 
   root_view->SchedulePaint(gfx::Rect(dirty_region), false);
 
-  // gfx::CanvasPaints destructor does the actual painting. As such, wrap the
-  // following in a block to force paint to occur so that we can release the dc.
+  // gfx::CanvasSkiaPaint's destructor does the actual painting. As such, wrap
+  // the following in a block to force paint to occur so that we can release
+  // the dc.
   {
-    gfx::CanvasPaint canvas(dc, opaque(), dirty_region.left, dirty_region.top,
-                            dirty_region.Width(), dirty_region.Height());
-
+    gfx::CanvasSkiaPaint canvas(dc, opaque(), dirty_region.left,
+                                dirty_region.top, dirty_region.Width(),
+                                dirty_region.Height());
     root_view->ProcessPaint(&canvas);
   }
 
@@ -1107,8 +1125,12 @@ void WindowWin::OnSysCommand(UINT notification_code, CPoint click) {
   // Handle SC_KEYMENU, which means that the user has pressed the ALT
   // key and released it, so we should focus the menu bar.
   if ((notification_code & sc_mask) == SC_KEYMENU && click.x == 0) {
-    Accelerator accelerator(win_util::WinToKeyboardCode(VK_MENU),
-                            false, false, false);
+    // Retrieve the status of shift and control keys to prevent consuming
+    // shift+alt keys, which are used by Windows to change input languages.
+    Accelerator accelerator(app::KeyboardCodeForWindowsKeyCode(VK_MENU),
+                            !!(GetKeyState(VK_SHIFT) & 0x8000),
+                            !!(GetKeyState(VK_CONTROL) & 0x8000),
+                            false);
     GetFocusManager()->ProcessAccelerator(accelerator);
     return;
   }
@@ -1388,6 +1410,50 @@ void WindowWin::ResetWindowRegion(bool force) {
   }
 
   DeleteObject(current_rgn);
+}
+
+void WindowWin::UpdateAccessibleName(std::wstring& accessible_name) {
+  ScopedComPtr<IAccPropServices> pAccPropServices;
+  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
+      IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
+  if (SUCCEEDED(hr)) {
+    VARIANT var;
+    var.vt = VT_BSTR;
+    var.bstrVal = SysAllocString(accessible_name.c_str());
+    hr = pAccPropServices->SetHwndProp(GetNativeView(), OBJID_CLIENT,
+        CHILDID_SELF, PROPID_ACC_NAME, var);
+  }
+}
+
+void WindowWin::UpdateAccessibleRole() {
+  ScopedComPtr<IAccPropServices> pAccPropServices;
+  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
+    IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
+  if (SUCCEEDED(hr)) {
+    VARIANT var;
+    AccessibilityTypes::Role role = window_delegate_->accessible_role();
+    if (role) {
+      var.vt = VT_I4;
+      var.lVal = ViewAccessibility::MSAARole(role);
+      hr = pAccPropServices->SetHwndProp(GetNativeView(), OBJID_CLIENT,
+        CHILDID_SELF, PROPID_ACC_ROLE, var);
+    }
+  }
+}
+
+void WindowWin::UpdateAccessibleState() {
+  ScopedComPtr<IAccPropServices> pAccPropServices;
+  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
+    IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
+  if (SUCCEEDED(hr)) {
+    VARIANT var;
+    AccessibilityTypes::State state = window_delegate_->accessible_state();
+    if (state) {
+      var.lVal = ViewAccessibility::MSAAState(state);
+      hr = pAccPropServices->SetHwndProp(GetNativeView(), OBJID_CLIENT,
+        CHILDID_SELF, PROPID_ACC_STATE, var);
+    }
+  }
 }
 
 void WindowWin::ProcessNCMousePress(const CPoint& point, int flags) {

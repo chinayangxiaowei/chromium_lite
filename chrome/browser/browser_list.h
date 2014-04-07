@@ -1,21 +1,23 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_BROWSER_LIST_H_
 #define CHROME_BROWSER_BROWSER_LIST_H_
+#pragma once
 
 #include <vector>
 
+#include "base/observer_list.h"
 #include "chrome/browser/browser.h"
 
 // Stores a list of all Browser objects.
 class BrowserList {
  public:
-  typedef std::vector<Browser*> list_type;
-  typedef list_type::iterator iterator;
-  typedef list_type::const_iterator const_iterator;
-  typedef list_type::const_reverse_iterator const_reverse_iterator;
+  typedef std::vector<Browser*> BrowserVector;
+  typedef BrowserVector::iterator iterator;
+  typedef BrowserVector::const_iterator const_iterator;
+  typedef BrowserVector::const_reverse_iterator const_reverse_iterator;
 
   // It is not allowed to change the global window list (add or remove any
   // browser windows while handling observer callbacks.
@@ -71,6 +73,14 @@ class BrowserList {
   static Browser* FindBrowserWithType(Profile* p, Browser::Type t,
                                       bool match_incognito);
 
+  // Find an existing browser window that can provide the specified type (this
+  // uses Browser::CanSupportsWindowFeature, not
+  // Browser::SupportsWindowFeature). This searches in the order of last
+  // activation. Only browsers that have been active can be returned. Returns
+  // NULL if no such browser currently exists.
+  static Browser* FindBrowserWithFeature(Profile* p,
+                                         Browser::WindowFeature feature);
+
   // Find an existing browser window with the provided profile. Searches in the
   // order of last activation. Only browsers that have been active can be
   // returned. Returns NULL if no such browser currently exists.
@@ -86,17 +96,16 @@ class BrowserList {
   // 2. An update exe is present in the install folder.
   static bool CanRestartForUpdate();
 
-  // Closes all browsers. If use_post is true the windows are closed by way of
-  // posting a WM_CLOSE message, otherwise the windows are closed directly. In
-  // almost all cases you'll want to use true, the one exception is ending
-  // the session. use_post should only be false when invoked from end session.
-  static void CloseAllBrowsers(bool use_post);
-
   // Closes all browsers and exits.  This is equivalent to
   // CloseAllBrowsers(true) on platforms where the application exits when no
   // more windows are remaining.  On other platforms (the Mac), this will
   // additionally exit the application.
   static void CloseAllBrowsersAndExit();
+
+  // Closes all browsers. If the session is ending the windows are closed
+  // directly. Otherwise the windows are closed by way of posting a WM_CLOSE
+  // message.
+  static void CloseAllBrowsers();
 
   // Begins shutdown of the application when the Windows session is ending.
   static void WindowsSessionEnding();
@@ -104,20 +113,24 @@ class BrowserList {
   // Returns true if there is at least one Browser with the specified profile.
   static bool HasBrowserWithProfile(Profile* profile);
 
-  // Returns true if browser is in persistent mode and false otherwise.
-  static bool IsInPersistentMode();
+  // Tells the BrowserList to keep the application alive after the last Browser
+  // closes. This is implemented as a count, so callers should pair their calls
+  // to StartKeepAlive() with matching calls to EndKeepAlive() when they no
+  // longer need to keep the application running.
+  static void StartKeepAlive();
 
-  static const_iterator begin() {
-    return browsers_.begin();
-  }
+  // Stops keeping the application alive after the last Browser is closed.
+  // Should match a previous call to StartKeepAlive().
+  static void EndKeepAlive();
 
-  static const_iterator end() {
-    return browsers_.end();
-  }
+  // Returns true if application will continue running after the last Browser
+  // closes.
+  static bool WillKeepAlive();
 
-  static size_t size() {
-    return browsers_.size();
-  }
+  static const_iterator begin() { return browsers_.begin(); }
+  static const_iterator end() { return browsers_.end(); }
+
+  static size_t size() { return browsers_.size(); }
 
   // Returns iterated access to list of open browsers ordered by when
   // they were last active. The underlying data structure is a vector
@@ -142,16 +155,20 @@ class BrowserList {
   // Returns true if at least one off the record session is active.
   static bool IsOffTheRecordSessionActive();
 
-  // Called when the last browser is closed.
-  static void AllBrowsersClosed();
+  // Called once there are no more browsers open and the application is exiting.
+  static void AllBrowsersClosedAndAppExiting();
 
  private:
   // Helper method to remove a browser instance from a list of browsers
-  static void RemoveBrowserFrom(Browser* browser, list_type* browser_list);
+  static void RemoveBrowserFrom(Browser* browser, BrowserVector* browser_list);
 
-  static list_type browsers_;
-  static std::vector<Observer*> observers_;
-  static list_type last_active_browsers_;
+  static BrowserVector browsers_;
+  static BrowserVector last_active_browsers_;
+  static ObserverList<Observer> observers_;
+
+  // Counter of calls to StartKeepAlive(). If non-zero, the application will
+  // continue running after the last browser has exited.
+  static int keep_alive_count_;
 };
 
 class TabContents;

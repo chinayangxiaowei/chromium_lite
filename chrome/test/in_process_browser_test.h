@@ -4,12 +4,18 @@
 
 #ifndef CHROME_TEST_IN_PROCESS_BROWSER_TEST_H_
 #define CHROME_TEST_IN_PROCESS_BROWSER_TEST_H_
+#pragma once
 
-#include "net/url_request/url_request_unittest.h"
+#include "base/compiler_specific.h"
+#include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
+#include "net/test/test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class Browser;
+class CommandLine;
 class Profile;
+
 namespace net {
 class RuleBasedHostResolverProc;
 }
@@ -56,16 +62,18 @@ class InProcessBrowserTest : public testing::Test {
   // Restores state configured in SetUp.
   virtual void TearDown();
 
-  // This method is used to decide if user data dir
-  // needs to be deleted or not.
-  virtual bool ShouldDeleteProfile() { return true; }
-
  protected:
   // Returns the browser created by CreateBrowser.
   Browser* browser() const { return browser_; }
 
   // Override this rather than TestBody.
   virtual void RunTestOnMainThread() = 0;
+
+  // Helper to initialize the user data directory.  Called by SetUp() after
+  // erasing the user data directory, but before any browser is launched.
+  // If a test wishes to set up some initial non-empty state in the user
+  // data directory before the browser starts up, it can do so here.
+  virtual void SetUpUserDataDirectory() {};
 
   // We need these special methods because InProcessBrowserTest::SetUp is the
   // bottom of the stack that winds up calling your test method, so it is not
@@ -87,20 +95,18 @@ class InProcessBrowserTest : public testing::Test {
   // main thread before the browser is torn down.
   virtual void CleanUpOnMainThread() {}
 
-  // Invoked when a test is not finishing in a timely manner.
-  void TimedOut();
-
-  // Sets Initial Timeout value.
-  void SetInitialTimeoutInMS(int initial_timeout);
-
-  // Starts an HTTP server.
-  HTTPTestServer* StartHTTPServer();
+  // Returns the testing server. Guaranteed to be non-NULL.
+  net::TestServer* test_server() { return &test_server_; }
 
   // Creates a browser with a single tab (about:blank), waits for the tab to
   // finish loading and shows the browser.
   //
   // This is invoked from Setup.
   virtual Browser* CreateBrowser(Profile* profile);
+
+  // Creates a browser for a popup window with a single tab (about:blank), waits
+  // for the tab to finish loading, and shows the browser.
+  Browser* CreateBrowserForPopup(Profile* profile);
 
   // Returns the host resolver being used for the tests. Subclasses might want
   // to configure it inside tests.
@@ -112,18 +118,24 @@ class InProcessBrowserTest : public testing::Test {
   // constructor.
   void set_show_window(bool show) { show_window_ = show; }
   void EnableDOMAutomation() { dom_automation_enabled_ = true; }
-  void EnableSingleProcess() { single_process_ = true; }
+  void EnableTabCloseableStateWatcher() {
+    tab_closeable_state_watcher_enabled_ = true;
+  }
 
  private:
-  // Invokes CreateBrowser to create a browser, then RunTestOnMainThread, and
-  // destroys the browser.
+  // This is invoked from main after browser_init/browser_main have completed.
+  // This prepares for the test by creating a new browser, runs the test
+  // (RunTestOnMainThread), quits the browsers and returns.
   void RunTestOnMainThreadLoop();
+
+  // Quits all open browsers and waits until there are no more browsers.
+  void QuitBrowsers();
 
   // Browser created from CreateBrowser.
   Browser* browser_;
 
-  // HTTPServer, created when StartHTTPServer is invoked.
-  scoped_refptr<HTTPTestServer> http_server_;
+  // Testing server, started on demand.
+  net::TestServer test_server_;
 
   // Whether this test requires the browser windows to be shown (interactive
   // tests for example need the windows shown).
@@ -133,18 +145,16 @@ class InProcessBrowserTest : public testing::Test {
   // that can send messages back to the browser).
   bool dom_automation_enabled_;
 
-  // Whether to run the test in single-process mode.
-  bool single_process_;
+  // Whether this test requires the TabCloseableStateWatcher.
+  bool tab_closeable_state_watcher_enabled_;
 
   // We muck with the global command line for this process.  Keep the original
-  // so we can reset it when we're done.
+  // so we can reset it when we're done.  This matters when running the browser
+  // tests in "single process" (all tests in one process) mode.
   scoped_ptr<CommandLine> original_command_line_;
 
   // Saved to restore the value of RenderProcessHost::run_renderer_in_process.
   bool original_single_process_;
-
-  // Initial timeout value in ms.
-  int initial_timeout_;
 
   // Host resolver to use during the test.
   scoped_refptr<net::RuleBasedHostResolverProc> host_resolver_;

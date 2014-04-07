@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/search_engines/template_url_table_model.h"
 
+#include <string>
 #include <vector>
 
 #include "app/l10n_util.h"
@@ -15,9 +16,12 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/favicon_service.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/search_engines/template_url.h"
+#include "chrome/browser/search_engines/template_url_model.h"
 #include "gfx/codec/png_codec.h"
 #include "grit/app_resources.h"
 #include "grit/generated_resources.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 // Group IDs used by TemplateURLTableModel.
 static const int kMainGroupID = 0;
@@ -82,7 +86,7 @@ class ModelEntry {
     if (!fav_icon_url.is_valid()) {
       // The favicon url isn't always set. Guess at one here.
       if (template_url_.url() && template_url_.url()->IsValid()) {
-        GURL url = GURL(WideToUTF16Hack(template_url_.url()->url()));
+        GURL url = GURL(template_url_.url()->url());
         if (url.is_valid())
           fav_icon_url = TemplateURL::GenerateFaviconURL(url);
       }
@@ -114,7 +118,7 @@ class ModelEntry {
   TemplateURLTableModel* model_;
   CancelableRequestConsumer request_consumer_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(ModelEntry);
+  DISALLOW_COPY_AND_ASSIGN(ModelEntry);
 };
 
 // TemplateURLTableModel -----------------------------------------
@@ -159,8 +163,10 @@ void TemplateURLTableModel::Reload() {
     const TemplateURL* template_url = *i;
     // NOTE: we don't use ShowInDefaultList here to avoid things bouncing
     // the lists while editing.
-    if (!template_url->show_in_default_list())
+    if (!template_url->show_in_default_list() &&
+        !template_url->IsExtensionKeyword()) {
       entries_.push_back(new ModelEntry(this, *template_url));
+    }
   }
 
   if (observer_)
@@ -189,15 +195,10 @@ std::wstring TemplateURLTableModel::GetText(int row, int col_id) {
     }
 
     case IDS_SEARCH_ENGINES_EDITOR_KEYWORD_COLUMN: {
-      const std::wstring& keyword = url.keyword();
       // Keyword should be domain name. Force it to have LTR directionality.
-      if (base::i18n::IsRTL()) {
-        std::wstring localized_keyword = keyword;
-        base::i18n::WrapStringWithLTRFormatting(&localized_keyword);
-        return localized_keyword;
-      }
-      return keyword;
-      break;
+      string16 keyword = WideToUTF16(url.keyword());
+      keyword = base::i18n::GetDisplayStringInLTRDirectionality(keyword);
+      return UTF16ToWide(keyword);
     }
 
     default:
@@ -248,8 +249,8 @@ void TemplateURLTableModel::Remove(int index) {
   template_url_model_->RemoveObserver(this);
   const TemplateURL* template_url = &GetTemplateURL(index);
 
-  scoped_ptr<ModelEntry> entry(entries_[static_cast<int>(index)]);
-  entries_.erase(entries_.begin() + static_cast<int>(index));
+  scoped_ptr<ModelEntry> entry(entries_[index]);
+  entries_.erase(entries_.begin() + index);
   if (index < last_search_engine_index_)
     last_search_engine_index_--;
   if (observer_)
@@ -273,13 +274,14 @@ void TemplateURLTableModel::Add(int index, TemplateURL* template_url) {
 }
 
 void TemplateURLTableModel::ModifyTemplateURL(int index,
-                                              const std::wstring& title,
-                                              const std::wstring& keyword,
-                                              const std::wstring& url) {
+                                              const string16& title,
+                                              const string16& keyword,
+                                              const std::string& url) {
   DCHECK(index >= 0 && index <= RowCount());
   const TemplateURL* template_url = &GetTemplateURL(index);
   template_url_model_->RemoveObserver(this);
-  template_url_model_->ResetTemplateURL(template_url, title, keyword, url);
+  template_url_model_->ResetTemplateURL(template_url, UTF16ToWideHack(title),
+                                        UTF16ToWideHack(keyword), url);
   if (template_url_model_->GetDefaultSearchProvider() == template_url &&
       !TemplateURL::SupportsReplacement(template_url)) {
     // The entry was the default search provider, but the url has been modified
@@ -348,8 +350,13 @@ int TemplateURLTableModel::MakeDefaultTemplateURL(int index) {
 
   // The formatting of the default engine is different; notify the table that
   // both old and new entries have changed.
-  if (current_default != NULL)
-    NotifyChanged(IndexOfTemplateURL(current_default));
+  if (current_default != NULL) {
+    int old_index = IndexOfTemplateURL(current_default);
+    // current_default may not be in the list of TemplateURLs if the database is
+    // corrupt and the default TemplateURL is used from preferences
+    if (old_index >= 0)
+      NotifyChanged(old_index);
+  }
   const int new_index = IndexOfTemplateURL(keyword);
   NotifyChanged(new_index);
 
@@ -358,8 +365,10 @@ int TemplateURLTableModel::MakeDefaultTemplateURL(int index) {
 }
 
 void TemplateURLTableModel::NotifyChanged(int index) {
-  if (observer_)
+  if (observer_) {
+    DCHECK_GE(index, 0);
     observer_->OnItemsChanged(index, 1);
+  }
 }
 
 void TemplateURLTableModel::FavIconAvailable(ModelEntry* entry) {

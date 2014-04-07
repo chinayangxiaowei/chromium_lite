@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include <gdk/gdkkeysyms.h>
 #include <gtk/gtk.h>
 
-#include "app/l10n_util.h"
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "chrome/browser/gtk/gtk_theme_provider.h"
@@ -20,14 +19,15 @@
 namespace {
 
 // The height of the arrow, and the width will be about twice the height.
-const int kArrowSize = 5;
+const int kArrowSize = 8;
 
-// Number of pixels to the start of the arrow from the edge of the window.
-const int kArrowX = 13;
+// Number of pixels to the middle of the arrow from the close edge of the
+// window.
+const int kArrowX = 18;
 
 // Number of pixels between the tip of the arrow and the region we're
 // pointing to.
-const int kArrowToContentPadding = -6;
+const int kArrowToContentPadding = -4;
 
 // We draw flat diagonal corners, each corner is an NxN square.
 const int kCornerSize = 3;
@@ -65,6 +65,7 @@ InfoBubbleGtk::InfoBubbleGtk(GtkThemeProvider* provider,
       theme_provider_(provider),
       accel_group_(gtk_accel_group_new()),
       toplevel_window_(NULL),
+      anchor_widget_(NULL),
       mask_region_(NULL),
       preferred_arrow_location_(ARROW_LOCATION_TOP_LEFT),
       current_arrow_location_(ARROW_LOCATION_TOP_LEFT),
@@ -80,38 +81,8 @@ InfoBubbleGtk::~InfoBubbleGtk() {
     delegate_->InfoBubbleClosing(this, closed_by_escape_);
 
   g_object_unref(accel_group_);
-  if (mask_region_) {
+  if (mask_region_)
     gdk_region_destroy(mask_region_);
-    mask_region_ = NULL;
-  }
-
-  if (anchor_widget_) {
-    g_signal_handlers_disconnect_by_func(
-        anchor_widget_,
-        reinterpret_cast<gpointer>(OnAnchorAllocateThunk),
-        this);
-    g_signal_handlers_disconnect_by_func(
-        anchor_widget_,
-        reinterpret_cast<gpointer>(gtk_widget_destroyed),
-        &anchor_widget_);
-  }
-  anchor_widget_ = NULL;
-
-  if (toplevel_window_) {
-    g_signal_handlers_disconnect_by_func(
-        toplevel_window_,
-        reinterpret_cast<gpointer>(OnToplevelConfigureThunk),
-        this);
-    g_signal_handlers_disconnect_by_func(
-        toplevel_window_,
-        reinterpret_cast<gpointer>(OnToplevelUnmapThunk),
-        this);
-    g_signal_handlers_disconnect_by_func(
-        toplevel_window_,
-        reinterpret_cast<gpointer>(gtk_widget_destroyed),
-        &toplevel_window_);
-  }
-  toplevel_window_ = NULL;
 }
 
 void InfoBubbleGtk::Init(GtkWidget* anchor_widget,
@@ -164,32 +135,29 @@ void InfoBubbleGtk::Init(GtkWidget* anchor_widget,
 
   gtk_widget_add_events(window_, GDK_BUTTON_PRESS_MASK);
 
-  g_signal_connect(window_, "expose-event",
-                   G_CALLBACK(OnExposeThunk), this);
-  g_signal_connect(window_, "size-allocate",
-                   G_CALLBACK(OnSizeAllocateThunk), this);
-  g_signal_connect(window_, "button-press-event",
+  signals_.Connect(window_, "expose-event", G_CALLBACK(OnExposeThunk), this);
+  signals_.Connect(window_, "size-allocate", G_CALLBACK(OnSizeAllocateThunk),
+                   this);
+  signals_.Connect(window_, "button-press-event",
                    G_CALLBACK(OnButtonPressThunk), this);
-  g_signal_connect(window_, "destroy",
-                   G_CALLBACK(OnDestroyThunk), this);
-  g_signal_connect(window_, "hide",
-                   G_CALLBACK(OnHideThunk), this);
+  signals_.Connect(window_, "destroy", G_CALLBACK(OnDestroyThunk), this);
+  signals_.Connect(window_, "hide", G_CALLBACK(OnHideThunk), this);
 
   // If the toplevel window is being used as the anchor, then the signals below
   // are enough to keep us positioned correctly.
   if (anchor_widget_ != GTK_WIDGET(toplevel_window_)) {
-    g_signal_connect(anchor_widget_, "size-allocate",
+    signals_.Connect(anchor_widget_, "size-allocate",
                      G_CALLBACK(OnAnchorAllocateThunk), this);
-    g_signal_connect(anchor_widget_, "destroy",
+    signals_.Connect(anchor_widget_, "destroy",
                      G_CALLBACK(gtk_widget_destroyed), &anchor_widget_);
   }
 
-  g_signal_connect(toplevel_window_, "configure-event",
+  signals_.Connect(toplevel_window_, "configure-event",
                    G_CALLBACK(OnToplevelConfigureThunk), this);
-  g_signal_connect(toplevel_window_, "unmap-event",
+  signals_.Connect(toplevel_window_, "unmap-event",
                    G_CALLBACK(OnToplevelUnmapThunk), this);
   // Set |toplevel_window_| to NULL if it gets destroyed.
-  g_signal_connect(toplevel_window_, "destroy",
+  signals_.Connect(toplevel_window_, "destroy",
                    G_CALLBACK(gtk_widget_destroyed), &toplevel_window_);
 
   gtk_widget_show_all(window_);
@@ -323,6 +291,7 @@ void InfoBubbleGtk::UpdateWindowShape() {
   mask_region_ = gdk_region_polygon(&points[0],
                                     points.size(),
                                     GDK_EVEN_ODD_RULE);
+  gdk_window_shape_combine_region(window_->window, NULL, 0, 0);
   gdk_window_shape_combine_region(window_->window, mask_region_, 0, 0);
 }
 
@@ -411,7 +380,8 @@ void InfoBubbleGtk::GrabPointerAndKeyboard() {
   }
 }
 
-gboolean InfoBubbleGtk::OnEscape() {
+gboolean InfoBubbleGtk::OnEscape(GtkAccelGroup* group, GObject* acceleratable,
+                                 guint keyval, GdkModifierType modifier) {
   closed_by_escape_ = true;
   Close();
   return TRUE;

@@ -4,8 +4,9 @@
 
 #ifndef CHROME_TEST_TEST_LOCATION_BAR_H_
 #define CHROME_TEST_TEST_LOCATION_BAR_H_
+#pragma once
 
-#include "chrome/browser/first_run.h"
+#include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/location_bar.h"
 #include "chrome/common/page_transition_types.h"
 #include "webkit/glue/window_open_disposition.h"
@@ -29,13 +30,13 @@ class TestLocationBar : public LocationBar {
 
   // Overridden from LocationBar:
   virtual void ShowFirstRunBubble(FirstRun::BubbleType bubble_type) {}
+  virtual void SetSuggestedText(const string16& text) {}
   virtual std::wstring GetInputString() const { return input_string_; }
   virtual WindowOpenDisposition GetWindowOpenDisposition() const {
     return disposition_;
   }
   virtual PageTransition::Type GetPageTransition() const { return transition_; }
   virtual void AcceptInput() {}
-  virtual void AcceptInputWithDisposition(WindowOpenDisposition) {}
   virtual void FocusLocation(bool select_all) {}
   virtual void FocusSearch() {}
   virtual void UpdateContentSettingsIcons() {}
@@ -43,6 +44,9 @@ class TestLocationBar : public LocationBar {
   virtual void InvalidatePageActions() {}
   virtual void SaveStateToContents(TabContents* contents) {}
   virtual void Revert() {}
+  virtual const AutocompleteEditView* location_entry() const {
+    return NULL;
+  }
   virtual AutocompleteEditView* location_entry() {
     return NULL;
   }

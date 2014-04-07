@@ -4,24 +4,27 @@
 
 #ifndef CHROME_BROWSER_WEBDATA_WEB_DATABASE_H_
 #define CHROME_BROWSER_WEBDATA_WEB_DATABASE_H_
+#pragma once
 
 #include <vector>
 
 #include "app/sql/connection.h"
 #include "app/sql/init_status.h"
 #include "app/sql/meta_table.h"
+#include "base/gtest_prod_util.h"
 #include "base/scoped_ptr.h"
-#include "chrome/browser/search_engines/template_url.h"
-#include "third_party/skia/include/core/SkBitmap.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
-#include "webkit/glue/form_field.h"
+#include "base/string16.h"
+#include "chrome/browser/search_engines/template_url_id.h"
 
 class AutofillChange;
 class AutofillEntry;
 class AutoFillProfile;
 class CreditCard;
 class FilePath;
+class GURL;
 class NotificationService;
+class SkBitmap;
+class TemplateURL;
 class WebDatabaseTest;
 
 namespace base {
@@ -29,6 +32,7 @@ class Time;
 }
 
 namespace webkit_glue {
+class FormField;
 struct PasswordForm;
 }
 
@@ -66,7 +70,7 @@ class WebDatabase {
 
   // Removes the specified keyword.
   // Returns true if successful.
-  bool RemoveKeyword(TemplateURL::IDType id);
+  bool RemoveKeyword(TemplateURLID id);
 
   // Loads the keywords into the specified vector. It's up to the caller to
   // delete the returned objects.
@@ -125,14 +129,14 @@ class WebDatabase {
 
   // Loads the complete list of password forms into the specified vector |forms|
   // if include_blacklisted is true, otherwise only loads those which are
-  // actually autofillable; i.e haven't been blacklisted by the user selecting
+  // actually autofill-able; i.e haven't been blacklisted by the user selecting
   // the 'Never for this site' button.
   bool GetAllLogins(std::vector<webkit_glue::PasswordForm*>* forms,
                     bool include_blacklisted);
 
   //////////////////////////////////////////////////////////////////////////////
   //
-  // Autofill
+  // AutoFill
   //
   //////////////////////////////////////////////////////////////////////////////
 
@@ -237,24 +241,26 @@ class WebDatabase {
   virtual bool GetAutoFillProfiles(std::vector<AutoFillProfile*>* profiles);
 
   // Records a single credit card in the credit_cards table.
-  bool AddCreditCard(const CreditCard& creditcard);
+  bool AddCreditCard(const CreditCard& credit_card);
 
-  // Updates the database values for the specified profile.
-  bool UpdateCreditCard(const CreditCard& profile);
+  // Updates the database values for the specified credit card.
+  bool UpdateCreditCard(const CreditCard& credit_card);
 
-  // Removes a row from the autofill_profiles table.  |profile_id| is the
-  // unique ID of the profile to remove.
-  bool RemoveCreditCard(int profile_id);
+  // Removes a row from the credit_cards table.  |credit_card_id| is the
+  // unique ID of the credit card to remove.
+  bool RemoveCreditCard(int credit_card_id);
 
-  // Retrieves a profile with label |label|.  The caller owns |profile|.
+  // Retrieves a credit card with label |label|.  The caller owns
+  // |credit_card_id|.
   bool GetCreditCardForLabel(const string16& label,
-                                  CreditCard** profile);
+                                  CreditCard** credit_card);
 
-  // Retrieves credit card for a card with unique id |card_id|.
-  bool GetCreditCardForID(int card_id, CreditCard** card);
+  // Retrieves credit card for a card with unique id |credit_card_id|.
+  bool GetCreditCardForID(int credit_card_id, CreditCard** credit_card);
 
-  // Retrieves all profiles in the database.  Caller owns the returned profiles.
-  virtual bool GetCreditCards(std::vector<CreditCard*>* profiles);
+  // Retrieves all credit cards in the database.  Caller owns the returned
+  // credit cards.
+  virtual bool GetCreditCards(std::vector<CreditCard*>* credit_cards);
 
   //////////////////////////////////////////////////////////////////////////////
   //
@@ -270,14 +276,39 @@ class WebDatabase {
 
   bool RemoveWebApp(const GURL& url);
 
+  //////////////////////////////////////////////////////////////////////////////
+  //
+  // Token Service
+  //
+  //////////////////////////////////////////////////////////////////////////////
+
+  // Remove all tokens previously set with SetTokenForService.
+  bool RemoveAllTokens();
+
+  // Retrieves all tokens previously set with SetTokenForService.
+  // Returns true if there were tokens and we decrypted them,
+  // false if there was a failure somehow
+  bool GetAllTokens(std::map<std::string, std::string>* tokens);
+
+  // Store a token in the token_service table. Stored encrypted. May cause
+  // a mac keychain popup.
+  // True if we encrypted a token and stored it, false otherwise.
+  bool SetTokenForService(const std::string& service,
+                          const std::string& token);
+
  private:
-  FRIEND_TEST(WebDatabaseTest, Autofill);
-  FRIEND_TEST(WebDatabaseTest, Autofill_AddChanges);
-  FRIEND_TEST(WebDatabaseTest, Autofill_RemoveBetweenChanges);
-  FRIEND_TEST(WebDatabaseTest, Autofill_GetAllAutofillEntries_OneResult);
-  FRIEND_TEST(WebDatabaseTest, Autofill_GetAllAutofillEntries_TwoDistinct);
-  FRIEND_TEST(WebDatabaseTest, Autofill_GetAllAutofillEntries_TwoSame);
-  FRIEND_TEST(WebDatabaseTest, Autofill_UpdateDontReplace);
+  FRIEND_TEST_ALL_PREFIXES(WebDatabaseTest, Autofill);
+  FRIEND_TEST_ALL_PREFIXES(WebDatabaseTest, Autofill_AddChanges);
+  FRIEND_TEST_ALL_PREFIXES(WebDatabaseTest, Autofill_RemoveBetweenChanges);
+  FRIEND_TEST_ALL_PREFIXES(WebDatabaseTest,
+                           Autofill_GetAllAutofillEntries_OneResult);
+  FRIEND_TEST_ALL_PREFIXES(WebDatabaseTest,
+                           Autofill_GetAllAutofillEntries_TwoDistinct);
+  FRIEND_TEST_ALL_PREFIXES(WebDatabaseTest,
+                           Autofill_GetAllAutofillEntries_TwoSame);
+  FRIEND_TEST_ALL_PREFIXES(WebDatabaseTest, Autofill_UpdateDontReplace);
+  FRIEND_TEST_ALL_PREFIXES(WebDatabaseTest, Autofill_AddFormFieldValues);
+
   // Methods for adding autofill entries at a specified time.  For
   // testing only.
   bool AddFormFieldValuesTime(
@@ -303,10 +334,13 @@ class WebDatabase {
   bool InitAutofillDatesTable();
   bool InitAutoFillProfilesTable();
   bool InitCreditCardsTable();
+  bool InitTokenServiceTable();
   bool InitWebAppIconsTable();
   bool InitWebAppsTable();
 
-  void MigrateOldVersionsAsNeeded();
+  // Used by |Init()| to migration database schema from older versions to
+  // current version.
+  sql::InitStatus MigrateOldVersionsAsNeeded();
 
   sql::Connection db_;
   sql::MetaTable meta_table_;

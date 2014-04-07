@@ -8,13 +8,12 @@
 #include "base/file_util.h"
 #include "base/message_loop.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/profile.h"
 #include "net/base/net_errors.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebSecurityOrigin.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
-#include "webkit/glue/webkit_glue.h"
 
 BrowsingDataDatabaseHelper::BrowsingDataDatabaseHelper(Profile* profile)
     : tracker_(profile->GetDatabaseTracker()),
@@ -27,31 +26,31 @@ BrowsingDataDatabaseHelper::~BrowsingDataDatabaseHelper() {
 
 void BrowsingDataDatabaseHelper::StartFetching(
     Callback1<const std::vector<DatabaseInfo>& >::Type* callback) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!is_fetching_);
   DCHECK(callback);
   is_fetching_ = true;
   database_info_.clear();
   completion_callback_.reset(callback);
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE, NewRunnableMethod(
+  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE, NewRunnableMethod(
       this, &BrowsingDataDatabaseHelper::FetchDatabaseInfoInFileThread));
 }
 
 void BrowsingDataDatabaseHelper::CancelNotification() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   completion_callback_.reset(NULL);
 }
 
 void BrowsingDataDatabaseHelper::DeleteDatabase(const std::string& origin,
                                                 const std::string& name) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE, NewRunnableMethod(
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE, NewRunnableMethod(
       this, &BrowsingDataDatabaseHelper::DeleteDatabaseInFileThread, origin,
       name));
 }
 
 void BrowsingDataDatabaseHelper::FetchDatabaseInfoInFileThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   std::vector<webkit_database::OriginInfo> origins_info;
   if (tracker_.get() && tracker_->GetAllOriginsInfo(&origins_info)) {
     for (std::vector<webkit_database::OriginInfo>::const_iterator ori =
@@ -63,21 +62,22 @@ void BrowsingDataDatabaseHelper::FetchDatabaseInfoInFileThread() {
         // Extension state is not considered browsing data.
         continue;
       }
-      scoped_ptr<WebKit::WebSecurityOrigin> web_security_origin(
+      WebKit::WebSecurityOrigin web_security_origin =
           WebKit::WebSecurityOrigin::createFromDatabaseIdentifier(
-              ori->GetOrigin()));
+              ori->GetOrigin());
       std::vector<string16> databases;
       ori->GetAllDatabaseNames(&databases);
       for (std::vector<string16>::const_iterator db = databases.begin();
            db != databases.end(); ++db) {
         FilePath file_path = tracker_->GetFullDBFilePath(ori->GetOrigin(), *db);
-        file_util::FileInfo file_info;
+        base::PlatformFileInfo file_info;
         if (file_util::GetFileInfo(file_path, &file_info)) {
           database_info_.push_back(DatabaseInfo(
-                web_security_origin->host().utf8(),
+                web_security_origin.host().utf8(),
                 UTF16ToUTF8(*db),
                 origin_identifier,
                 UTF16ToUTF8(ori->GetDatabaseDescription(*db)),
+                web_security_origin.toString().utf8(),
                 file_info.size,
                 file_info.last_modified));
         }
@@ -85,12 +85,12 @@ void BrowsingDataDatabaseHelper::FetchDatabaseInfoInFileThread() {
     }
   }
 
-  ChromeThread::PostTask(ChromeThread::UI, FROM_HERE, NewRunnableMethod(
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE, NewRunnableMethod(
       this, &BrowsingDataDatabaseHelper::NotifyInUIThread));
 }
 
 void BrowsingDataDatabaseHelper::NotifyInUIThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(is_fetching_);
   // Note: completion_callback_ mutates only in the UI thread, so it's safe to
   // test it here.
@@ -105,8 +105,54 @@ void BrowsingDataDatabaseHelper::NotifyInUIThread() {
 void BrowsingDataDatabaseHelper::DeleteDatabaseInFileThread(
     const std::string& origin,
     const std::string& name) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   if (!tracker_.get())
     return;
   tracker_->DeleteDatabase(UTF8ToUTF16(origin), UTF8ToUTF16(name), NULL);
+}
+
+CannedBrowsingDataDatabaseHelper::CannedBrowsingDataDatabaseHelper(
+    Profile* profile)
+    : BrowsingDataDatabaseHelper(profile) {
+}
+
+void CannedBrowsingDataDatabaseHelper::AddDatabase(
+    const GURL& origin,
+    const std::string& name,
+    const std::string& description) {
+  WebKit::WebSecurityOrigin web_security_origin =
+      WebKit::WebSecurityOrigin::createFromString(
+          UTF8ToUTF16(origin.spec()));
+  std::string origin_identifier =
+      web_security_origin.databaseIdentifier().utf8();
+
+  for (std::vector<DatabaseInfo>::iterator database = database_info_.begin();
+       database != database_info_.end(); ++database) {
+    if (database->origin_identifier == origin_identifier &&
+        database->database_name == name)
+      return;
+  }
+
+  database_info_.push_back(DatabaseInfo(
+        web_security_origin.host().utf8(),
+        name,
+        origin_identifier,
+        description,
+        web_security_origin.toString().utf8(),
+        0,
+        base::Time()));
+}
+
+void CannedBrowsingDataDatabaseHelper::Reset() {
+  database_info_.clear();
+}
+
+bool CannedBrowsingDataDatabaseHelper::empty() const {
+ return database_info_.empty();
+}
+
+void CannedBrowsingDataDatabaseHelper::StartFetching(
+    Callback1<const std::vector<DatabaseInfo>& >::Type* callback) {
+  callback->Run(database_info_);
+  delete callback;
 }

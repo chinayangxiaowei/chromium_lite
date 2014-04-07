@@ -4,7 +4,9 @@
 
 #ifndef GFX_GTK_NATIVE_VIEW_ID_MANAGER_H_
 #define GFX_GTK_NATIVE_VIEW_ID_MANAGER_H_
+#pragma once
 
+#include <gtk/gtk.h>
 #include <map>
 
 #include "base/singleton.h"
@@ -58,32 +60,58 @@ class GtkNativeViewManager {
   // |*xid| is set to 0.
   bool GetXIDForId(XID* xid, gfx::NativeViewId id);
 
+  // Generate an XID that doesn't change.
+  //
+  // The GPU process assumes that the XID associated with a GL context
+  // does not change. To maintain this invariant we create and overlay
+  // whose XID is static. This requires reparenting as the underlying
+  // window comes and goes.  It incurs a bit of overhead, so a permanent
+  // XID must be requested.
+  //
+  // Must be called from the UI thread so that the widget that we
+  // overlay does not change while we construct the overlay.
+  //
+  // xid: (output) the resulting X window
+  // id: a value previously returned from GetIdForWidget
+  // returns: true if |id| is a valid id, false otherwise.
+  bool GetPermanentXIDForId(XID* xid, gfx::NativeViewId id);
+
   // These are actually private functions, but need to be called from statics.
   void OnRealize(gfx::NativeView widget);
   void OnUnrealize(gfx::NativeView widget);
   void OnDestroy(gfx::NativeView widget);
+  void OnSizeAllocate(gfx::NativeView widget, GtkAllocation *alloc);
+
+  Lock& unrealize_lock() { return unrealize_lock_; }
 
  private:
   // This object is a singleton:
   GtkNativeViewManager();
+  ~GtkNativeViewManager();
   friend struct DefaultSingletonTraits<GtkNativeViewManager>;
 
   struct NativeViewInfo {
-    NativeViewInfo()
-        : x_window_id(0) {
-    }
-
+    NativeViewInfo() : x_window_id(0), permanent_window_id(0) { }
+    // XID associated with GTK widget.
     XID x_window_id;
+    // Permanent overlay (0 if not requested yet).
+    XID permanent_window_id;
   };
 
   gfx::NativeViewId GetWidgetId(gfx::NativeView id);
 
+  // This lock can be used to block GTK from unrealizing windows. This is needed
+  // when the BACKGROUND_X11 thread is using a window obtained via GetXIDForId,
+  // and can't allow the X11 resource to be deleted.
+  Lock unrealize_lock_;
+
   // protects native_view_to_id_ and id_to_info_
   Lock lock_;
-    // If asked for an id for the same widget twice, we want to return the same
-    // id. So this records the current mapping.
-    std::map<gfx::NativeView, gfx::NativeViewId> native_view_to_id_;
-    std::map<gfx::NativeViewId, NativeViewInfo> id_to_info_;
+
+  // If asked for an id for the same widget twice, we want to return the same
+  // id. So this records the current mapping.
+  std::map<gfx::NativeView, gfx::NativeViewId> native_view_to_id_;
+  std::map<gfx::NativeViewId, NativeViewInfo> id_to_info_;
 
   DISALLOW_COPY_AND_ASSIGN(GtkNativeViewManager);
 };

@@ -14,7 +14,11 @@
 
 #include "base/file_util.h"
 #include "base/hash_tables.h"
+#include "base/histogram.h"
 #include "base/logging.h"
+#include "base/stl_util-inl.h"
+#include "base/string_number_conversions.h"
+#include "base/string_util.h"
 #include "chrome/browser/sync/protocol/bookmark_specifics.pb.h"
 #include "chrome/browser/sync/protocol/service_constants.h"
 #include "chrome/browser/sync/protocol/sync.pb.h"
@@ -22,7 +26,7 @@
 #include "chrome/browser/sync/syncable/syncable_columns.h"
 #include "chrome/browser/sync/util/crypto_helpers.h"
 #include "chrome/common/sqlite_utils.h"
-#include "third_party/sqlite/preprocessed/sqlite3.h"
+#include "third_party/sqlite/sqlite3.h"
 
 // Sometimes threads contend on the DB lock itself, especially when one thread
 // is calling SaveChanges.  In the worst case scenario, the user can put his
@@ -39,7 +43,8 @@ namespace syncable {
 static const string::size_type kUpdateStatementBufferSize = 2048;
 
 // Increment this version whenever updating DB tables.
-extern const int32 kCurrentDBVersion = 71;  // Extern only for our unittest.
+extern const int32 kCurrentDBVersion;  // Global visibility for our unittest.
+const int32 kCurrentDBVersion = 73;
 
 namespace {
 
@@ -93,7 +98,7 @@ int UnpackEntry(SQLStatement* statement, EntryKernel** kernel) {
   int query_result = statement->step();
   if (SQLITE_ROW == query_result) {
     *kernel = new EntryKernel;
-    (*kernel)->clear_dirty();
+    (*kernel)->clear_dirty(NULL);
     DCHECK(statement->column_count() == static_cast<int>(FIELD_COUNT));
     int i = 0;
     for (i = BEGIN_FIELDS; i < INT64_FIELDS_END; ++i) {
@@ -178,26 +183,35 @@ DirectoryBackingStore::~DirectoryBackingStore() {
 
 bool DirectoryBackingStore::OpenAndConfigureHandleHelper(
     sqlite3** handle) const {
-  if (SQLITE_OK == OpenSqliteDb(backing_filepath_, handle)) {
+  if (SQLITE_OK == sqlite_utils::OpenSqliteDb(backing_filepath_, handle)) {
     sqlite_utils::scoped_sqlite_db_ptr scoped_handle(*handle);
-    sqlite3_busy_timeout(*handle, std::numeric_limits<int>::max());
+    sqlite3_busy_timeout(scoped_handle.get(), std::numeric_limits<int>::max());
     {
-      SQLStatement statement;
-      statement.prepare(*handle, "PRAGMA fullfsync = 1");
-      if (SQLITE_DONE != statement.step()) {
-        LOG(ERROR) << sqlite3_errmsg(*handle);
+      string integrity_error;
+      bool is_ok = CheckIntegrity(scoped_handle.get(), &integrity_error);
+      if (!is_ok) {
+        LOG(ERROR) << "Integrity check failed: " << integrity_error;
         return false;
       }
     }
     {
       SQLStatement statement;
-      statement.prepare(*handle, "PRAGMA synchronous = 2");
+      statement.prepare(scoped_handle.get(), "PRAGMA fullfsync = 1");
       if (SQLITE_DONE != statement.step()) {
-        LOG(ERROR) << sqlite3_errmsg(*handle);
+        LOG(ERROR) << sqlite3_errmsg(scoped_handle.get());
         return false;
       }
     }
-    sqlite3_busy_timeout(*handle, kDirectoryBackingStoreBusyTimeoutMs);
+    {
+      SQLStatement statement;
+      statement.prepare(scoped_handle.get(), "PRAGMA synchronous = 2");
+      if (SQLITE_DONE != statement.step()) {
+        LOG(ERROR) << sqlite3_errmsg(scoped_handle.get());
+        return false;
+      }
+    }
+    sqlite3_busy_timeout(scoped_handle.release(),
+                         kDirectoryBackingStoreBusyTimeoutMs);
 #if defined(OS_WIN)
     // Do not index this file. Scanning can occur every time we close the file,
     // which causes long delays in SQLite's file locking.
@@ -207,48 +221,130 @@ bool DirectoryBackingStore::OpenAndConfigureHandleHelper(
                         attrs | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED);
 #endif
 
-    scoped_handle.release();
     return true;
   }
   return false;
 }
 
-DirOpenResult DirectoryBackingStore::Load(MetahandlesIndex* entry_bucket,
-    ExtendedAttributes* xattrs_bucket,
+bool DirectoryBackingStore::CheckIntegrity(sqlite3* handle, string* error)
+    const {
+  SQLStatement statement;
+  statement.prepare(handle, "PRAGMA integrity_check(1)");
+  if (SQLITE_ROW != statement.step()) {
+    *error =  sqlite3_errmsg(handle);
+    return false;
+  }
+  string integrity_result = statement.column_text(0);
+  if (integrity_result != "ok") {
+    *error = integrity_result;
+    return false;
+  }
+  return true;
+}
+
+DirOpenResult DirectoryBackingStore::DoLoad(MetahandlesIndex* entry_bucket,
     Directory::KernelLoadInfo* kernel_load_info) {
+  {
+    DirOpenResult result = InitializeTables();
+    if (result != OPENED)
+      return result;
+  }
+
+  if (!DropDeletedEntries())
+    return FAILED_DATABASE_CORRUPT;
+  if (!LoadEntries(entry_bucket))
+    return FAILED_DATABASE_CORRUPT;
+  if (!LoadInfo(kernel_load_info))
+    return FAILED_DATABASE_CORRUPT;
+
+  return OPENED;
+}
+
+DirOpenResult DirectoryBackingStore::Load(MetahandlesIndex* entry_bucket,
+    Directory::KernelLoadInfo* kernel_load_info) {
+
+  // Open database handle.
   if (!BeginLoad())
     return FAILED_OPEN_DATABASE;
 
-  DirOpenResult result = InitializeTables();
-  if (OPENED != result)
-    return result;
+  // Load data from the database.
+  DirOpenResult result = DoLoad(entry_bucket, kernel_load_info);
 
-  if (!DropDeletedEntries() ||
-      !LoadEntries(entry_bucket) ||
-      !LoadExtendedAttributes(xattrs_bucket) ||
-      !LoadInfo(kernel_load_info)) {
-    return FAILED_DATABASE_CORRUPT;
-  }
+  // Clean up partial results after failure.
+  if (result != OPENED)
+    STLDeleteElements(entry_bucket);
 
+  // Close database handle.
   EndLoad();
-  return OPENED;
+
+  return result;
 }
 
 bool DirectoryBackingStore::BeginLoad() {
   DCHECK(load_dbhandle_ == NULL);
   bool ret = OpenAndConfigureHandleHelper(&load_dbhandle_);
   if (ret)
-    return ret;
+    return true;
   // Something's gone wrong. Nuke the database and try again.
+  using ::operator<<;  // For string16.
   LOG(ERROR) << "Sync database " << backing_filepath_.value()
              << " corrupt. Deleting and recreating.";
   file_util::Delete(backing_filepath_, false);
-  return OpenAndConfigureHandleHelper(&load_dbhandle_);
+  bool failed_again = !OpenAndConfigureHandleHelper(&load_dbhandle_);
+
+  // Using failed_again here lets us distinguish from cases where corruption
+  // occurred even when re-opening a fresh directory (they'll go in a separate
+  // double weight histogram bucket).  Failing twice in a row means we disable
+  // sync, so it's useful to see this number separately.
+  int bucket = failed_again ? 2 : 1;
+#if defined(OS_WIN)
+  UMA_HISTOGRAM_COUNTS_100("Sync.DirectoryOpenFailedWin", bucket);
+#elif defined(OS_MACOSX)
+  UMA_HISTOGRAM_COUNTS_100("Sync.DirectoryOpenFailedMac", bucket);
+#else
+  UMA_HISTOGRAM_COUNTS_100("Sync.DirectoryOpenFailedNotWinMac", bucket);
+
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+  UMA_HISTOGRAM_COUNTS_100("Sync.DirectoryOpenFailedLinux", bucket);
+#elif defined(OS_CHROMEOS)
+  UMA_HISTOGRAM_COUNTS_100("Sync.DirectoryOpenFailedCros", bucket);
+#else
+  UMA_HISTOGRAM_COUNTS_100("Sync.DirectoryOpenFailedOther", bucket);
+#endif  // OS_LINUX && !OS_CHROMEOS
+#endif  // OS_WIN
+  return !failed_again;
 }
 
 void DirectoryBackingStore::EndLoad() {
   sqlite3_close(load_dbhandle_);
   load_dbhandle_ = NULL;  // No longer used.
+}
+
+void DirectoryBackingStore::EndSave() {
+  sqlite3_close(save_dbhandle_);
+  save_dbhandle_ = NULL;
+}
+
+bool DirectoryBackingStore::DeleteEntries(const MetahandleSet& handles) {
+  if (handles.empty())
+    return true;
+
+  sqlite3* dbhandle = LazyGetSaveHandle();
+
+  string query = "DELETE FROM metas WHERE metahandle IN (";
+  for (MetahandleSet::const_iterator it = handles.begin(); it != handles.end();
+       ++it) {
+    if (it != handles.begin())
+      query.append(",");
+    query.append(base::Int64ToString(*it));
+  }
+  query.append(")");
+  SQLStatement statement;
+  int result = statement.prepare(dbhandle, query.data(), query.size());
+  if (SQLITE_OK == result)
+    result = statement.step();
+
+  return SQLITE_DONE == result;
 }
 
 bool DirectoryBackingStore::SaveChanges(
@@ -260,8 +356,7 @@ bool DirectoryBackingStore::SaveChanges(
   // just stop here if there's nothing to save.
   bool save_info =
     (Directory::KERNEL_SHARE_INFO_DIRTY == snapshot.kernel_info_status);
-  if (snapshot.dirty_metas.size() < 1 && snapshot.dirty_xattrs.size() < 1 &&
-      !save_info)
+  if (snapshot.dirty_metas.size() < 1 && !save_info)
     return true;
 
   SQLTransaction transaction(dbhandle);
@@ -275,26 +370,20 @@ bool DirectoryBackingStore::SaveChanges(
       return false;
   }
 
-  for (ExtendedAttributes::const_iterator i = snapshot.dirty_xattrs.begin();
-       i != snapshot.dirty_xattrs.end(); ++i) {
-    DCHECK(i->second.dirty);
-    if (i->second.is_deleted) {
-      if (!DeleteExtendedAttributeFromDB(i))
-        return false;
-    } else {
-      if (!SaveExtendedAttributeToDB(i))
-        return false;
-    }
-  }
+  if (!DeleteEntries(snapshot.metahandles_to_purge))
+    return false;
 
   if (save_info) {
     const Directory::PersistedKernelInfo& info = snapshot.kernel_info;
     SQLStatement update;
     update.prepare(dbhandle, "UPDATE share_info "
                    "SET store_birthday = ?, "
-                   "next_id = ?");
+                   "next_id = ?, "
+                   "notification_state = ?");
     update.bind_string(0, info.store_birthday);
     update.bind_int64(1, info.next_id);
+    update.bind_blob(2, info.notification_state.data(),
+                     info.notification_state.size());
 
     if (!(SQLITE_DONE == update.step() &&
           SQLITE_OK == update.reset() &&
@@ -354,6 +443,19 @@ DirOpenResult DirectoryBackingStore::InitializeTables() {
       version_on_disk = 71;
   }
 
+  // Version 72 removed extended attributes, a legacy way to do extensible
+  // key/value information, stored in their own table.
+  if (version_on_disk == 71) {
+    if (MigrateVersion71To72())
+      version_on_disk = 72;
+  }
+
+  // Version 73 added a field for notification state.
+  if (version_on_disk == 72) {
+    if (MigrateVersion72To73())
+      version_on_disk = 73;
+  }
+
   // If one of the migrations requested it, drop columns that aren't current.
   // It's only safe to do this after migrating all the way to the current
   // version.
@@ -369,7 +471,7 @@ DirOpenResult DirectoryBackingStore::InitializeTables() {
       return FAILED_NEWER_VERSION;
     }
     // Fallback (re-sync everything) migration path.
-    LOG(INFO) << "Old/null sync database, version " << version_on_disk;
+    VLOG(1) << "Old/null sync database, version " << version_on_disk;
     // Delete the existing database (if any), and create a fresh one.
     if (SQLITE_OK == last_result) {
       DropAllTables();
@@ -390,7 +492,7 @@ DirOpenResult DirectoryBackingStore::InitializeTables() {
       string db_create_version = statement.column_text(0);
       int db_create_time = statement.column_int(1);
       statement.reset();
-      LOG(INFO) << "DB created at " << db_create_time << " by version " <<
+      VLOG(1) << "DB created at " << db_create_time << " by version " <<
           db_create_version;
     }
     // COMMIT TRANSACTION rolls back on failure.
@@ -449,42 +551,18 @@ bool DirectoryBackingStore::LoadEntries(MetahandlesIndex* entry_bucket) {
   return SQLITE_DONE == query_result;
 }
 
-bool DirectoryBackingStore::LoadExtendedAttributes(
-    ExtendedAttributes* xattrs_bucket) {
-  SQLStatement statement;
-  statement.prepare(
-      load_dbhandle_,
-      "SELECT metahandle, key, value FROM extended_attributes");
-  int step_result = statement.step();
-  while (SQLITE_ROW == step_result) {
-    int64 metahandle = statement.column_int64(0);
-
-    string path_string_key;
-    statement.column_string(1, &path_string_key);
-
-    ExtendedAttributeValue val;
-    statement.column_blob_as_vector(2, &(val.value));
-    val.is_deleted = false;
-
-    ExtendedAttributeKey key(metahandle, path_string_key);
-    xattrs_bucket->insert(std::make_pair(key, val));
-    step_result = statement.step();
-  }
-
-  return SQLITE_DONE == step_result;
-}
-
 bool DirectoryBackingStore::LoadInfo(Directory::KernelLoadInfo* info) {
   {
     SQLStatement query;
     query.prepare(load_dbhandle_,
-                  "SELECT store_birthday, next_id, cache_guid "
-                  "FROM share_info");
+                  "SELECT store_birthday, next_id, cache_guid, "
+                  "notification_state FROM share_info");
     if (SQLITE_ROW != query.step())
       return false;
     info->kernel_info.store_birthday = query.column_string(0);
     info->kernel_info.next_id = query.column_int64(1);
     info->cache_guid = query.column_string(2);
+    query.column_blob_as_string(3, &info->kernel_info.notification_state);
   }
   {
     SQLStatement query;
@@ -541,49 +619,7 @@ bool DirectoryBackingStore::SaveEntryToDB(const EntryKernel& entry) {
           1 == statement.changes());
 }
 
-bool DirectoryBackingStore::SaveExtendedAttributeToDB(
-    ExtendedAttributes::const_iterator i) {
-  DCHECK(save_dbhandle_);
-  SQLStatement insert;
-  insert.prepare(save_dbhandle_,
-                 "INSERT INTO extended_attributes "
-                 "(metahandle, key, value) "
-                 "values ( ?, ?, ? )");
-  insert.bind_int64(0, i->first.metahandle);
-  insert.bind_string(1, i->first.key);
-  insert.bind_blob(2, &i->second.value.at(0), i->second.value.size());
-  return (SQLITE_DONE == insert.step() &&
-          SQLITE_OK == insert.reset() &&
-          1 == insert.changes());
-}
-
-bool DirectoryBackingStore::DeleteExtendedAttributeFromDB(
-    ExtendedAttributes::const_iterator i) {
-  DCHECK(save_dbhandle_);
-  SQLStatement delete_attribute;
-  delete_attribute.prepare(save_dbhandle_,
-                           "DELETE FROM extended_attributes "
-                           "WHERE metahandle = ? AND key = ? ");
-  delete_attribute.bind_int64(0, i->first.metahandle);
-  delete_attribute.bind_string(1, i->first.key);
-  if (!(SQLITE_DONE == delete_attribute.step() &&
-        SQLITE_OK == delete_attribute.reset() &&
-        1 == delete_attribute.changes())) {
-    LOG(ERROR) << "DeleteExtendedAttributeFromDB(),StepDone() failed "
-        << "for metahandle: " << i->first.metahandle << " key: "
-        << i->first.key;
-    return false;
-  }
-  // The attribute may have never been saved to the database if it was
-  // created and then immediately deleted.  So don't check that we
-  // deleted exactly 1 row.
-  return true;
-}
-
 bool DirectoryBackingStore::DropDeletedEntries() {
-  static const char delete_extended_attributes[] =
-      "DELETE FROM extended_attributes WHERE metahandle IN "
-      "(SELECT metahandle from death_row)";
   static const char delete_metas[] = "DELETE FROM metas WHERE metahandle IN "
                                      "(SELECT metahandle from death_row)";
   // Put all statements into a transaction for better performance
@@ -599,9 +635,6 @@ bool DirectoryBackingStore::DropDeletedEntries() {
                                "SELECT metahandle from metas WHERE is_del > 0 "
                                " AND is_unsynced < 1"
                                " AND is_unapplied_update < 1")) {
-    return false;
-  }
-  if (SQLITE_DONE != ExecQuery(load_dbhandle_, delete_extended_attributes)) {
     return false;
   }
   if (SQLITE_DONE != ExecQuery(load_dbhandle_, delete_metas)) {
@@ -627,19 +660,6 @@ int DirectoryBackingStore::SafeDropTable(const char* table_name) {
   }
 
   return result;
-}
-
-int DirectoryBackingStore::CreateExtendedAttributeTable() {
-  int result = SafeDropTable("extended_attributes");
-  if (result != SQLITE_DONE)
-    return result;
-  LOG(INFO) << "CreateExtendedAttributeTable";
-  return ExecQuery(load_dbhandle_,
-                   "CREATE TABLE extended_attributes("
-                   "metahandle bigint, "
-                   "key varchar(127), "
-                   "value blob, "
-                   "PRIMARY KEY(metahandle, key) ON CONFLICT REPLACE)");
 }
 
 void DirectoryBackingStore::DropAllTables() {
@@ -718,7 +738,7 @@ bool DirectoryBackingStore::SetVersion(int version) {
 }
 
 int DirectoryBackingStore::GetVersion() {
-  if (!DoesSqliteTableExist(load_dbhandle_, "share_version"))
+  if (!sqlite_utils::DoesSqliteTableExist(load_dbhandle_, "share_version"))
     return 0;
   SQLStatement version_query;
   version_query.prepare(load_dbhandle_, "SELECT data from share_version");
@@ -869,7 +889,9 @@ bool DirectoryBackingStore::MigrateVersion70To71() {
 
   // Drop the columns from the old share_info table via a temp table.
   const bool kCreateAsTempShareInfo = true;
-  int result = CreateShareInfoTable(kCreateAsTempShareInfo);
+  const bool kWithNotificationState = false;
+  int result =
+      CreateShareInfoTable(kCreateAsTempShareInfo, kWithNotificationState);
   if (result != SQLITE_DONE)
     return false;
   ExecQuery(load_dbhandle_,
@@ -888,8 +910,24 @@ bool DirectoryBackingStore::MigrateVersion70To71() {
   return true;
 }
 
+bool DirectoryBackingStore::MigrateVersion71To72() {
+  SafeDropTable("extended_attributes");
+  SetVersion(72);
+  return true;
+}
+
+bool DirectoryBackingStore::MigrateVersion72To73() {
+  int result =
+      ExecQuery(load_dbhandle_,
+                "ALTER TABLE share_info ADD COLUMN notification_state BLOB");
+  if (result != SQLITE_DONE)
+    return false;
+  SetVersion(73);
+  return true;
+}
+
 int DirectoryBackingStore::CreateTables() {
-  LOG(INFO) << "First run, creating tables";
+  VLOG(1) << "First run, creating tables";
   // Create two little tables share_version and share_info
   int result = ExecQuery(load_dbhandle_,
                          "CREATE TABLE share_version ("
@@ -906,7 +944,10 @@ int DirectoryBackingStore::CreateTables() {
   if (result != SQLITE_DONE)
     return result;
 
-  result = CreateShareInfoTable(false);
+  const bool kCreateAsTempShareInfo = false;
+  const bool kWithNotificationState = true;
+  result =
+      CreateShareInfoTable(kCreateAsTempShareInfo, kWithNotificationState);
   if (result != SQLITE_DONE)
     return result;
   {
@@ -918,13 +959,15 @@ int DirectoryBackingStore::CreateTables() {
                                       "?, "   // db_create_version
                                       "?, "   // db_create_time
                                       "-2, "  // next_id
-                                      "?)");   // cache_guid);
+                                      "?, "   // cache_guid
+                                      "?);");  // notification_state
     statement.bind_string(0, dir_name_);                   // id
     statement.bind_string(1, dir_name_);                   // name
     statement.bind_string(2, "");                          // store_birthday
     statement.bind_string(3, SYNC_ENGINE_VERSION_STRING);  // db_create_version
     statement.bind_int(4, static_cast<int32>(time(0)));    // db_create_time
     statement.bind_string(5, GenerateCacheGUID());         // cache_guid
+    statement.bind_blob(6, NULL, 0);                      // notification_state
     result = statement.step();
   }
   if (result != SQLITE_DONE)
@@ -949,15 +992,12 @@ int DirectoryBackingStore::CreateTables() {
     statement.bind_int64(1, now);
     result = statement.step();
   }
-  if (result != SQLITE_DONE)
-    return result;
-  result = CreateExtendedAttributeTable();
   return result;
 }
 
 sqlite3* DirectoryBackingStore::LazyGetSaveHandle() {
   if (!save_dbhandle_ && !OpenAndConfigureHandleHelper(&save_dbhandle_)) {
-    DCHECK(FALSE) << "Unable to open handle for saving";
+    NOTREACHED() << "Unable to open handle for saving";
     return NULL;
   }
   return save_dbhandle_;
@@ -985,7 +1025,8 @@ int DirectoryBackingStore::CreateModelsTable() {
       "initial_sync_ended BOOLEAN default 0)");
 }
 
-int DirectoryBackingStore::CreateShareInfoTable(bool is_temporary) {
+int DirectoryBackingStore::CreateShareInfoTable(
+    bool is_temporary, bool with_notification_state) {
   const char* name = is_temporary ? "temp_share_info" : "share_info";
   string query = "CREATE TABLE ";
   query.append(name);
@@ -999,7 +1040,11 @@ int DirectoryBackingStore::CreateShareInfoTable(bool is_temporary) {
       "db_create_version TEXT, "
       "db_create_time INT, "
       "next_id INT default -2, "
-      "cache_guid TEXT)");
+      "cache_guid TEXT");
+  if (with_notification_state) {
+    query.append(", notification_state BLOB");
+  }
+  query.append(")");
   return ExecQuery(load_dbhandle_, query.c_str());
 }
 

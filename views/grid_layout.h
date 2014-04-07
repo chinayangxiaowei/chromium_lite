@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_GRID_LAYOUT_H_
 #define VIEWS_GRID_LAYOUT_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -183,8 +184,7 @@ class GridLayout : public LayoutManager {
   // they both call into this method. This sizes the Columns/Rows as
   // appropriate. If layout is true, width/height give the width/height the
   // of the host, otherwise they are ignored.
-     void SizeRowsAndColumns(bool layout, int width, int height,
-                             gfx::Size* pref);
+  void SizeRowsAndColumns(bool layout, int width, int height, gfx::Size* pref);
 
   // Calculates the master columns of all the column sets. See Column for
   // a description of what a master column is.

@@ -4,8 +4,8 @@
 
 #include <list>
 #include <map>
-#include <set>
 
+#include "base/lock.h"
 #include "base/scoped_ptr.h"
 #include "base/time.h"
 #include "base/waitable_event.h"
@@ -13,8 +13,10 @@
 #include "chrome/browser/sync/engine/syncer_thread.h"
 #include "chrome/browser/sync/engine/syncer_types.h"
 #include "chrome/browser/sync/sessions/sync_session_context.h"
-#include "chrome/test/sync/engine/mock_server_connection.h"
+#include "chrome/browser/sync/util/channel.h"
+#include "chrome/test/sync/engine/mock_connection_manager.h"
 #include "chrome/test/sync/engine/test_directory_setter_upper.h"
+#include "chrome/test/sync/sessions/test_scoped_session_event_listener.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -26,36 +28,57 @@ using testing::AnyNumber;
 using testing::Field;
 
 namespace browser_sync {
+using sessions::ErrorCounters;
+using sessions::TestScopedSessionEventListener;
 using sessions::SyncSessionContext;
+using sessions::SyncSessionSnapshot;
+using sessions::SyncerStatus;
 
 typedef testing::Test SyncerThreadTest;
 typedef SyncerThread::WaitInterval WaitInterval;
 
-class SyncerThreadWithSyncerTest : public testing::Test,
-                                   public ModelSafeWorkerRegistrar {
+ACTION_P(SignalEvent, event) {
+  event->Signal();
+}
+
+SyncSessionSnapshot SessionSnapshotForTest(
+    int64 num_server_changes_remaining, int64 max_local_timestamp,
+    int64 unsynced_count) {
+  return SyncSessionSnapshot(SyncerStatus(), ErrorCounters(),
+      num_server_changes_remaining, max_local_timestamp, false,
+      syncable::ModelTypeBitSet(), false, false, unsynced_count, 0, false);
+}
+
+class ListenerMock : public SyncEngineEventListener {
  public:
-  SyncerThreadWithSyncerTest() : sync_cycle_ended_event_(false, false) {}
+  MOCK_METHOD1(OnSyncEngineEvent, void(const SyncEngineEvent&));
+};
+
+class SyncerThreadWithSyncerTest : public testing::Test,
+                                   public ModelSafeWorkerRegistrar,
+                                   public SyncEngineEventListener {
+ public:
+  SyncerThreadWithSyncerTest()
+      : max_wait_time_(TimeDelta::FromSeconds(10)),
+        sync_cycle_ended_event_(false, false) {}
   virtual void SetUp() {
     metadb_.SetUp();
     connection_.reset(new MockConnectionManager(metadb_.manager(),
                                                 metadb_.name()));
-    allstatus_.reset(new AllStatus());
     worker_ = new ModelSafeWorker();
-    SyncSessionContext* context = new SyncSessionContext(connection_.get(),
-        NULL, metadb_.manager(), this);
-    syncer_thread_ = new SyncerThread(context, allstatus_.get());
-    syncer_event_hookup_.reset(
-        NewEventListenerHookup(syncer_thread_->relay_channel(), this,
-            &SyncerThreadWithSyncerTest::HandleSyncerEvent));
-    allstatus_->WatchSyncerThread(syncer_thread_);
+    std::vector<SyncEngineEventListener*> listeners;
+    listeners.push_back(this);
+    context_ = new SyncSessionContext(connection_.get(), metadb_.manager(),
+                                      this, listeners);
+    syncer_thread_ = new SyncerThread(context_);
     syncer_thread_->SetConnected(true);
     syncable::ModelTypeBitSet expected_types;
     expected_types[syncable::BOOKMARKS] = true;
     connection_->ExpectGetUpdatesRequestTypes(expected_types);
   }
   virtual void TearDown() {
+    context_ = NULL;
     syncer_thread_ = NULL;
-    allstatus_.reset();
     connection_.reset();
     metadb_.TearDown();
   }
@@ -77,38 +100,79 @@ class SyncerThreadWithSyncerTest : public testing::Test,
 
   // Waits an indefinite amount of sync cycles for the syncer thread to become
   // throttled.  Only call this if a throttle is supposed to occur!
-  void WaitForThrottle() {
-    while (!syncer_thread()->IsSyncingCurrentlySilenced())
-      sync_cycle_ended_event_.Wait();
+  bool WaitForThrottle() {
+    int max_cycles = 5;
+    while (max_cycles && !syncer_thread()->IsSyncingCurrentlySilenced()) {
+      sync_cycle_ended_event_.TimedWait(max_wait_time_);
+      max_cycles--;
+    }
+
+    return syncer_thread()->IsSyncingCurrentlySilenced();
   }
 
   void WaitForDisconnect() {
     // Wait for the SyncerThread to detect loss of connection, up to a max of
     // 10 seconds to timeout the test.
     AutoLock lock(syncer_thread()->lock_);
-    TimeTicks start = TimeTicks::HighResNow();
+    TimeTicks start = TimeTicks::Now();
     TimeDelta ten_seconds = TimeDelta::FromSeconds(10);
     while (syncer_thread()->vault_.connected_) {
       syncer_thread()->vault_field_changed_.TimedWait(ten_seconds);
-      if (TimeTicks::HighResNow() - start > ten_seconds)
+      if (TimeTicks::Now() - start > ten_seconds)
         break;
     }
     EXPECT_FALSE(syncer_thread()->vault_.connected_);
   }
 
+  bool Pause(ListenerMock* listener) {
+    WaitableEvent event(false, false);
+    {
+      AutoLock lock(syncer_thread()->lock_);
+      EXPECT_CALL(*listener, OnSyncEngineEvent(
+          Field(&SyncEngineEvent::what_happened,
+          SyncEngineEvent::SYNCER_THREAD_PAUSED))).
+          WillOnce(SignalEvent(&event));
+    }
+    if (!syncer_thread()->RequestPause())
+      return false;
+    return event.TimedWait(max_wait_time_);
+  }
+
+  bool Resume(ListenerMock* listener) {
+    WaitableEvent event(false, false);
+    {
+      AutoLock lock(syncer_thread()->lock_);
+      EXPECT_CALL(*listener, OnSyncEngineEvent(
+          Field(&SyncEngineEvent::what_happened,
+          SyncEngineEvent::SYNCER_THREAD_RESUMED))).
+          WillOnce(SignalEvent(&event));
+    }
+    if (!syncer_thread()->RequestResume())
+      return false;
+    return event.TimedWait(max_wait_time_);
+  }
+
+  void PreventThreadFromPolling() {
+    const TimeDelta poll_interval = TimeDelta::FromMinutes(5);
+    syncer_thread()->SetSyncerShortPollInterval(poll_interval);
+  }
+
  private:
 
-  void HandleSyncerEvent(const SyncerEvent& event) {
-    if (event.what_happened == SyncerEvent::SYNC_CYCLE_ENDED)
+  virtual void OnSyncEngineEvent(const SyncEngineEvent& event) {
+    if (event.what_happened == SyncEngineEvent::SYNC_CYCLE_ENDED)
       sync_cycle_ended_event_.Signal();
   }
 
+ protected:
+  TimeDelta max_wait_time_;
+  SyncSessionContext* context_;
+
+ private:
   ManuallyOpenedTestDirectorySetterUpper metadb_;
   scoped_ptr<MockConnectionManager> connection_;
-  scoped_ptr<AllStatus> allstatus_;
   scoped_refptr<SyncerThread> syncer_thread_;
   scoped_refptr<ModelSafeWorker> worker_;
-  scoped_ptr<EventListenerHookup> syncer_event_hookup_;
   base::WaitableEvent sync_cycle_ended_event_;
   DISALLOW_COPY_AND_ASSIGN(SyncerThreadWithSyncerTest);
 };
@@ -156,13 +220,15 @@ class SyncShareIntercept
 };
 
 TEST_F(SyncerThreadTest, Construction) {
-  SyncSessionContext* context = new SyncSessionContext(NULL, NULL, NULL, NULL);
-  scoped_refptr<SyncerThread> syncer_thread(new SyncerThread(context, NULL));
+  SyncSessionContext* context = new SyncSessionContext(NULL, NULL, NULL,
+      std::vector<SyncEngineEventListener*>());
+  scoped_refptr<SyncerThread> syncer_thread(new SyncerThread(context));
 }
 
 TEST_F(SyncerThreadTest, StartStop) {
-  SyncSessionContext* context = new SyncSessionContext(NULL, NULL, NULL, NULL);
-  scoped_refptr<SyncerThread> syncer_thread(new SyncerThread(context, NULL));
+  SyncSessionContext* context = new SyncSessionContext(NULL, NULL, NULL,
+      std::vector<SyncEngineEventListener*>());
+  scoped_refptr<SyncerThread> syncer_thread(new SyncerThread(context));
   EXPECT_TRUE(syncer_thread->Start());
   EXPECT_TRUE(syncer_thread->Stop(2000));
 
@@ -172,9 +238,23 @@ TEST_F(SyncerThreadTest, StartStop) {
   EXPECT_TRUE(syncer_thread->Stop(2000));
 }
 
+TEST(SyncerThread, GetRecommendedDelay) {
+  EXPECT_LE(0, SyncerThread::GetRecommendedDelaySeconds(0));
+  EXPECT_LE(1, SyncerThread::GetRecommendedDelaySeconds(1));
+  EXPECT_LE(50, SyncerThread::GetRecommendedDelaySeconds(50));
+  EXPECT_LE(10, SyncerThread::GetRecommendedDelaySeconds(10));
+  EXPECT_EQ(SyncerThread::kMaxBackoffSeconds,
+            SyncerThread::GetRecommendedDelaySeconds(
+                SyncerThread::kMaxBackoffSeconds));
+  EXPECT_EQ(SyncerThread::kMaxBackoffSeconds,
+            SyncerThread::GetRecommendedDelaySeconds(
+                SyncerThread::kMaxBackoffSeconds+1));
+}
+
 TEST_F(SyncerThreadTest, CalculateSyncWaitTime) {
-  SyncSessionContext* context = new SyncSessionContext(NULL, NULL, NULL, NULL);
-  scoped_refptr<SyncerThread> syncer_thread(new SyncerThread(context, NULL));
+  SyncSessionContext* context = new SyncSessionContext(NULL, NULL, NULL,
+      std::vector<SyncEngineEventListener*>());
+  scoped_refptr<SyncerThread> syncer_thread(new SyncerThread(context));
   syncer_thread->DisableIdleDetection();
 
   // Syncer_polling_interval_ is less than max poll interval.
@@ -233,8 +313,9 @@ TEST_F(SyncerThreadTest, CalculateSyncWaitTime) {
 TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
   // Set up the environment.
   int user_idle_milliseconds_param = 0;
-  SyncSessionContext* context = new SyncSessionContext(NULL, NULL, NULL, NULL);
-  scoped_refptr<SyncerThread> syncer_thread(new SyncerThread(context, NULL));
+  SyncSessionContext* context = new SyncSessionContext(NULL, NULL, NULL,
+      std::vector<SyncEngineEventListener*>());
+  scoped_refptr<SyncerThread> syncer_thread(new SyncerThread(context));
   syncer_thread->DisableIdleDetection();
   // Hold the lock to appease asserts in code.
   AutoLock lock(syncer_thread->lock_);
@@ -242,13 +323,11 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
   // Notifications disabled should result in a polling interval of
   // kDefaultShortPollInterval.
   {
-    AllStatus::Status status = {};
-    status.notifications_enabled = 0;
+    context->set_notifications_enabled(false);
     bool continue_sync_cycle_param = false;
 
     // No work and no backoff.
     WaitInterval interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -263,7 +342,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     // In this case the continue_sync_cycle is turned off.
     continue_sync_cycle_param = true;
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -279,13 +357,11 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
   // Notifications enabled should result in a polling interval of
   // SyncerThread::kDefaultLongPollIntervalSeconds.
   {
-    AllStatus::Status status = {};
-    status.notifications_enabled = 1;
+    context->set_notifications_enabled(true);
     bool continue_sync_cycle_param = false;
 
     // No work and no backoff.
     WaitInterval interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -300,7 +376,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     // In this case the continue_sync_cycle is turned off.
     continue_sync_cycle_param = true;
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -317,13 +392,11 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
   // available do not match the updates received, or the unsynced count is
   // non-zero.
   {
-    AllStatus::Status status = {};
-    status.updates_available = 1;
-    status.updates_received = 0;
+    // More server changes remaining to download.
+    context->set_last_snapshot(SessionSnapshotForTest(1, 0, 0));
     bool continue_sync_cycle_param = false;
 
     WaitInterval interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -336,7 +409,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
 
     continue_sync_cycle_param = false;
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -348,7 +420,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     ASSERT_TRUE(continue_sync_cycle_param);
 
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -359,7 +430,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     ASSERT_FALSE(interval.had_nudge_during_backoff);
 
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -370,15 +440,15 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     ASSERT_FALSE(interval.had_nudge_during_backoff);
     ASSERT_TRUE(continue_sync_cycle_param);
 
-    status.updates_received = 1;
+    // Now simulate no more server changes remaining.
+    context->set_last_snapshot(SessionSnapshotForTest(1, 1, 0));
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
         false);
 
-    ASSERT_EQ(SyncerThread::kDefaultShortPollIntervalSeconds,
+    ASSERT_EQ(SyncerThread::kDefaultLongPollIntervalSeconds,
                 interval.poll_delta.InSeconds());
     ASSERT_EQ(WaitInterval::NORMAL, interval.mode);
     ASSERT_FALSE(interval.had_nudge_during_backoff);
@@ -386,12 +456,12 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
   }
 
   {
-    AllStatus::Status status = {};
-    status.unsynced_count = 1;
+
+    // Now try with unsynced local items.
+    context->set_last_snapshot(SessionSnapshotForTest(0, 0, 1));
     bool continue_sync_cycle_param = false;
 
     WaitInterval interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -404,7 +474,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
 
     continue_sync_cycle_param = false;
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         0,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -415,15 +484,14 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     ASSERT_FALSE(interval.had_nudge_during_backoff);
     ASSERT_TRUE(continue_sync_cycle_param);
 
-    status.unsynced_count = 0;
+    context->set_last_snapshot(SessionSnapshotForTest(0, 0, 0));
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         4,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
         false);
 
-    ASSERT_EQ(SyncerThread::kDefaultShortPollIntervalSeconds,
+    ASSERT_EQ(SyncerThread::kDefaultLongPollIntervalSeconds,
               interval.poll_delta.InSeconds());
     ASSERT_EQ(WaitInterval::NORMAL, interval.mode);
     ASSERT_FALSE(interval.had_nudge_during_backoff);
@@ -432,14 +500,13 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
 
   // Regression for exponential backoff reset when the syncer is nudged.
   {
-    AllStatus::Status status = {};
-    status.unsynced_count = 1;
+
+    context->set_last_snapshot(SessionSnapshotForTest(0, 0, 1));
     bool continue_sync_cycle_param = false;
 
     // Expect move from default polling interval to exponential backoff due to
     // unsynced_count != 0.
     WaitInterval interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         3600,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -452,7 +519,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
 
     continue_sync_cycle_param = false;
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         3600,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -465,7 +531,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
 
     // Expect exponential backoff.
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         2,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -477,7 +542,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     ASSERT_TRUE(continue_sync_cycle_param);
 
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         2,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -491,7 +555,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     syncer_thread->vault_.current_wait_interval_ = interval;
 
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         static_cast<int>(interval.poll_delta.InSeconds()),
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -508,7 +571,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     // backoff.
     syncer_thread->vault_.current_wait_interval_.mode = WaitInterval::NORMAL;
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         2,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -523,7 +585,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
 
     // And if another interval expires, we get a bigger backoff.
     WaitInterval new_interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         static_cast<int>(interval.poll_delta.InSeconds()),
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -539,7 +600,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     // should return to the minimum.
     continue_sync_cycle_param = false;
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         3600,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -552,7 +612,6 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
 
     continue_sync_cycle_param = false;
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         3600,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
@@ -564,15 +623,14 @@ TEST_F(SyncerThreadTest, CalculatePollingWaitTime) {
     ASSERT_TRUE(continue_sync_cycle_param);
 
     // Setting unsynced_count = 0 returns us to the default polling interval.
-    status.unsynced_count = 0;
+    context->set_last_snapshot(SessionSnapshotForTest(0, 0, 0));
     interval = syncer_thread->CalculatePollingWaitTime(
-        status,
         4,
         &user_idle_milliseconds_param,
         &continue_sync_cycle_param,
         true);
 
-    ASSERT_EQ(SyncerThread::kDefaultShortPollIntervalSeconds,
+    ASSERT_EQ(SyncerThread::kDefaultLongPollIntervalSeconds,
               interval.poll_delta.InSeconds());
     ASSERT_EQ(WaitInterval::NORMAL, interval.mode);
     ASSERT_FALSE(interval.had_nudge_during_backoff);
@@ -588,8 +646,8 @@ TEST_F(SyncerThreadWithSyncerTest, Polling) {
   syncer_thread()->SetSyncerShortPollInterval(poll_interval);
   EXPECT_TRUE(syncer_thread()->Start());
 
-  // Calling Open() should cause the SyncerThread to create a Syncer.
   metadb()->Open();
+  syncer_thread()->CreateSyncer(metadb()->name());
 
   TimeDelta two_polls = poll_interval + poll_interval;
   // We could theoretically return immediately from the wait if the interceptor
@@ -619,10 +677,11 @@ TEST_F(SyncerThreadWithSyncerTest, Nudge) {
   SyncShareIntercept interceptor;
   connection()->SetMidCommitObserver(&interceptor);
   // We don't want a poll to happen during this test (except the first one).
-  const TimeDelta poll_interval = TimeDelta::FromMinutes(5);
-  syncer_thread()->SetSyncerShortPollInterval(poll_interval);
+  PreventThreadFromPolling();
   EXPECT_TRUE(syncer_thread()->Start());
   metadb()->Open();
+  syncer_thread()->CreateSyncer(metadb()->name());
+  const TimeDelta poll_interval = TimeDelta::FromMinutes(5);
   interceptor.WaitForSyncShare(1, poll_interval + poll_interval);
 
   EXPECT_EQ(static_cast<unsigned int>(1),
@@ -646,6 +705,7 @@ TEST_F(SyncerThreadWithSyncerTest, Throttling) {
 
   EXPECT_TRUE(syncer_thread()->Start());
   metadb()->Open();
+  syncer_thread()->CreateSyncer(metadb()->name());
 
   // Wait for some healthy syncing.
   interceptor.WaitForSyncShare(4, poll_interval + poll_interval);
@@ -663,10 +723,50 @@ TEST_F(SyncerThreadWithSyncerTest, Throttling) {
   // Wait until the syncer thread reports that it is throttled.  Any further
   // sync share interceptions will result in failure.  If things are broken,
   // we may never halt.
-  WaitForThrottle();
+  ASSERT_TRUE(WaitForThrottle());
   EXPECT_TRUE(syncer_thread()->IsSyncingCurrentlySilenced());
 
   EXPECT_TRUE(syncer_thread()->Stop(2000));
+}
+
+TEST_F(SyncerThreadWithSyncerTest, StopSyncPermanently) {
+  // The SyncerThread should request an exit from the Syncer and set
+  // conditions for termination.
+  const TimeDelta poll_interval = TimeDelta::FromMilliseconds(10);
+  syncer_thread()->SetSyncerShortPollInterval(poll_interval);
+
+  ListenerMock listener;
+  WaitableEvent sync_cycle_ended_event(false, false);
+  WaitableEvent syncer_thread_exiting_event(false, false);
+  TestScopedSessionEventListener reg(context_, &listener);
+
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::STATUS_CHANGED))).
+      Times(AnyNumber());
+
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
+      Times(AnyNumber()).
+      WillOnce(SignalEvent(&sync_cycle_ended_event));
+
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+          SyncEngineEvent::STOP_SYNCING_PERMANENTLY)));
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_EXITING))).
+      WillOnce(SignalEvent(&syncer_thread_exiting_event));
+
+  EXPECT_TRUE(syncer_thread()->Start());
+  metadb()->Open();
+  syncer_thread()->CreateSyncer(metadb()->name());
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
+
+  connection()->set_store_birthday("NotYourLuckyDay");
+  ASSERT_TRUE(syncer_thread_exiting_event.TimedWait(max_wait_time_));
+  EXPECT_TRUE(syncer_thread()->Stop(0));
 }
 
 TEST_F(SyncerThreadWithSyncerTest, AuthInvalid) {
@@ -677,6 +777,7 @@ TEST_F(SyncerThreadWithSyncerTest, AuthInvalid) {
   syncer_thread()->SetSyncerShortPollInterval(poll_interval);
   EXPECT_TRUE(syncer_thread()->Start());
   metadb()->Open();
+  syncer_thread()->CreateSyncer(metadb()->name());
 
   // Wait for some healthy syncing.
   interceptor.WaitForSyncShare(2, TimeDelta::FromSeconds(10));
@@ -711,86 +812,235 @@ TEST_F(SyncerThreadWithSyncerTest, AuthInvalid) {
   EXPECT_TRUE(syncer_thread()->Stop(2000));
 }
 
-ACTION_P(SignalEvent, event) {
-  event->Signal();
-}
-
-class ListenerMock {
- public:
-  MOCK_METHOD1(HandleEvent, void(const SyncerEvent&));
-};
-
-// TODO(skrul): Bug 39070.
-TEST_F(SyncerThreadWithSyncerTest, DISABLED_Pause) {
+// TODO(skrul): The "Pause" and "PauseWhenNotConnected" tests are
+// marked FLAKY because they sometimes fail on the Windows buildbots.
+// I have been unable to reproduce this hang after extensive testing
+// on a local Windows machine so these tests will remain flaky in
+// order to help diagnose the problem.
+TEST_F(SyncerThreadWithSyncerTest, FLAKY_Pause) {
   WaitableEvent sync_cycle_ended_event(false, false);
   WaitableEvent paused_event(false, false);
   WaitableEvent resumed_event(false, false);
-  // We don't want a poll to happen during this test (except the first one).
-  const TimeDelta poll_interval = TimeDelta::FromMinutes(5);
-  syncer_thread()->SetSyncerShortPollInterval(poll_interval);
+  PreventThreadFromPolling();
 
   ListenerMock listener;
-  scoped_ptr<EventListenerHookup> hookup;
-  hookup.reset(
-      NewEventListenerHookup(syncer_thread()->relay_channel(),
-                             &listener,
-                             &ListenerMock::HandleEvent));
-
-  EXPECT_CALL(listener, HandleEvent(
-      Field(&SyncerEvent::what_happened, SyncerEvent::STATUS_CHANGED))).
+  TestScopedSessionEventListener reg(context_, &listener);
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::STATUS_CHANGED))).
       Times(AnyNumber());
 
-  // Syncer thread is not running, should fail.
-  EXPECT_FALSE(syncer_thread()->RequestPause());
-  EXPECT_FALSE(syncer_thread()->RequestResume());
-
   // Wait for the initial sync to complete.
-  EXPECT_CALL(listener, HandleEvent(
-      Field(&SyncerEvent::what_happened, SyncerEvent::SYNC_CYCLE_ENDED))).
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
       WillOnce(SignalEvent(&sync_cycle_ended_event));
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_EXITING)));
+
   ASSERT_TRUE(syncer_thread()->Start());
   metadb()->Open();
-  sync_cycle_ended_event.Wait();
+  syncer_thread()->CreateSyncer(metadb()->name());
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
 
   // Request a pause.
-  EXPECT_CALL(listener, HandleEvent(
-      Field(&SyncerEvent::what_happened, SyncerEvent::PAUSED))).
-      WillOnce(SignalEvent(&paused_event));
-  ASSERT_TRUE(syncer_thread()->RequestPause());
-  paused_event.Wait();
+  ASSERT_TRUE(Pause(&listener));
 
   // Resuming the pause.
-  EXPECT_CALL(listener, HandleEvent(
-      Field(&SyncerEvent::what_happened, SyncerEvent::RESUMED))).
-      WillOnce(SignalEvent(&resumed_event));
-  ASSERT_TRUE(syncer_thread()->RequestResume());
-  resumed_event.Wait();
+  ASSERT_TRUE(Resume(&listener));
 
   // Not paused, should fail.
   EXPECT_FALSE(syncer_thread()->RequestResume());
 
   // Request a pause.
-  EXPECT_CALL(listener, HandleEvent(
-      Field(&SyncerEvent::what_happened, SyncerEvent::PAUSED))).
-      WillOnce(SignalEvent(&paused_event));
-  ASSERT_TRUE(syncer_thread()->RequestPause());
-  paused_event.Wait();
+  ASSERT_TRUE(Pause(&listener));
 
   // Nudge the syncer, this should do nothing while we are paused.
   syncer_thread()->NudgeSyncer(0, SyncerThread::kUnknown);
 
   // Resuming will cause the nudge to be processed and a sync cycle to run.
-  EXPECT_CALL(listener, HandleEvent(
-      Field(&SyncerEvent::what_happened, SyncerEvent::RESUMED))).
-      WillOnce(SignalEvent(&resumed_event));
-  // Wait for the sync cycle to run.
-  EXPECT_CALL(listener, HandleEvent(
-      Field(&SyncerEvent::what_happened, SyncerEvent::SYNC_CYCLE_ENDED))).
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
       WillOnce(SignalEvent(&sync_cycle_ended_event));
-  ASSERT_TRUE(syncer_thread()->RequestResume());
-  resumed_event.Wait();
-  sync_cycle_ended_event.Wait();
+  ASSERT_TRUE(Resume(&listener));
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
 
+  EXPECT_TRUE(syncer_thread()->Stop(2000));
+}
+
+TEST_F(SyncerThreadWithSyncerTest, StartWhenNotConnected) {
+  WaitableEvent sync_cycle_ended_event(false, false);
+  WaitableEvent event(false, false);
+  ListenerMock listener;
+  TestScopedSessionEventListener reg(context_, &listener);
+  PreventThreadFromPolling();
+
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::STATUS_CHANGED))).
+      Times(AnyNumber());
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_EXITING)));
+
+  connection()->SetServerNotReachable();
+  metadb()->Open();
+  syncer_thread()->CreateSyncer(metadb()->name());
+
+  // Syncer thread will always go through once cycle at the start,
+  // then it will wait for a connection.
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
+      WillOnce(SignalEvent(&sync_cycle_ended_event));
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_WAITING_FOR_CONNECTION))).
+      WillOnce(SignalEvent(&event));
+  ASSERT_TRUE(syncer_thread()->Start());
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
+  ASSERT_TRUE(event.TimedWait(max_wait_time_));
+
+  // Connect, will put the syncer thread into its usually poll wait.
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_CONNECTED))).
+      WillOnce(SignalEvent(&event));
+  connection()->SetServerReachable();
+  ASSERT_TRUE(event.TimedWait(max_wait_time_));
+
+  // Nudge the syncer to complete a cycle.
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
+      WillOnce(SignalEvent(&sync_cycle_ended_event));
+  syncer_thread()->NudgeSyncer(0, SyncerThread::kUnknown);
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
+
+  EXPECT_TRUE(syncer_thread()->Stop(2000));
+}
+
+// TODO(skrul): See TODO comment on the "Pause" test above for an
+// explanation of the usage of FLAKY here.
+// TODO(pinkerton): disabled due to hanging on test bots http://crbug.com/39070
+TEST_F(SyncerThreadWithSyncerTest, DISABLED_PauseWhenNotConnected) {
+  WaitableEvent sync_cycle_ended_event(false, false);
+  WaitableEvent event(false, false);
+  ListenerMock listener;
+  TestScopedSessionEventListener reg(context_, &listener);
+  PreventThreadFromPolling();
+
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::STATUS_CHANGED))).
+      Times(AnyNumber());
+
+  // Put the thread into a "waiting for connection" state.
+  connection()->SetServerNotReachable();
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
+      WillOnce(SignalEvent(&sync_cycle_ended_event));
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_WAITING_FOR_CONNECTION))).
+      WillOnce(SignalEvent(&event));
+  metadb()->Open();
+  syncer_thread()->CreateSyncer(metadb()->name());
+
+  ASSERT_TRUE(syncer_thread()->Start());
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
+  ASSERT_TRUE(event.TimedWait(max_wait_time_));
+
+  // Pause and resume the thread while waiting for a connection.
+  ASSERT_TRUE(Pause(&listener));
+  ASSERT_TRUE(Resume(&listener));
+
+  // Make a connection and let the syncer cycle.
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
+      WillOnce(SignalEvent(&sync_cycle_ended_event));
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_CONNECTED))).
+      WillOnce(SignalEvent(&event));
+  connection()->SetServerReachable();
+  ASSERT_TRUE(event.TimedWait(max_wait_time_));
+  syncer_thread()->NudgeSyncer(0, SyncerThread::kUnknown);
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
+
+  // Disconnect and get into the waiting for a connection state.
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_WAITING_FOR_CONNECTION))).
+      WillOnce(SignalEvent(&event));
+  connection()->SetServerNotReachable();
+  ASSERT_TRUE(event.TimedWait(max_wait_time_));
+
+  // Pause so we can test getting a connection while paused.
+  ASSERT_TRUE(Pause(&listener));
+
+  // Get a connection then resume.
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_CONNECTED))).
+      WillOnce(SignalEvent(&event));
+  connection()->SetServerReachable();
+  ASSERT_TRUE(event.TimedWait(max_wait_time_));
+
+  ASSERT_TRUE(Resume(&listener));
+
+  // Cycle the syncer to show we are not longer paused.
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
+      WillOnce(SignalEvent(&sync_cycle_ended_event));
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_EXITING)));
+
+  syncer_thread()->NudgeSyncer(0, SyncerThread::kUnknown);
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
+
+  EXPECT_TRUE(syncer_thread()->Stop(2000));
+}
+
+TEST_F(SyncerThreadWithSyncerTest, PauseResumeWhenNotRunning) {
+  WaitableEvent sync_cycle_ended_event(false, false);
+  WaitableEvent event(false, false);
+  ListenerMock listener;
+  TestScopedSessionEventListener reg(context_, &listener);
+  PreventThreadFromPolling();
+
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::STATUS_CHANGED))).
+      Times(AnyNumber());
+
+  // Pause and resume the syncer while not running
+  ASSERT_TRUE(Pause(&listener));
+  ASSERT_TRUE(Resume(&listener));
+
+  // Pause the thread then start the syncer.
+  ASSERT_TRUE(Pause(&listener));
+  metadb()->Open();
+  syncer_thread()->CreateSyncer(metadb()->name());
+  ASSERT_TRUE(syncer_thread()->Start());
+
+  // Resume and let the syncer cycle.
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNC_CYCLE_ENDED))).
+      WillOnce(SignalEvent(&sync_cycle_ended_event));
+  EXPECT_CALL(listener, OnSyncEngineEvent(
+      Field(&SyncEngineEvent::what_happened,
+      SyncEngineEvent::SYNCER_THREAD_EXITING)));
+
+  ASSERT_TRUE(Resume(&listener));
+  ASSERT_TRUE(sync_cycle_ended_event.TimedWait(max_wait_time_));
   EXPECT_TRUE(syncer_thread()->Stop(2000));
 }
 

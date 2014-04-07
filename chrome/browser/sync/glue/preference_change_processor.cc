@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <set>
 #include <string>
 
+#include "base/auto_reset.h"
 #include "base/json/json_reader.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/chrome_thread.h"
@@ -25,48 +26,80 @@ PreferenceChangeProcessor::PreferenceChangeProcessor(
     UnrecoverableErrorHandler* error_handler)
     : ChangeProcessor(error_handler),
       pref_service_(NULL),
-      model_associator_(model_associator) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+      model_associator_(model_associator),
+      processing_pref_change_(false) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(model_associator);
   DCHECK(error_handler);
 }
 
 PreferenceChangeProcessor::~PreferenceChangeProcessor() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
 void PreferenceChangeProcessor::Observe(NotificationType type,
                                         const NotificationSource& source,
                                         const NotificationDetails& details) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(running());
   DCHECK(NotificationType::PREF_CHANGED == type);
   DCHECK_EQ(pref_service_, Source<PrefService>(source).ptr());
 
-  std::wstring* name = Details<std::wstring>(details).ptr();
+  // Avoid recursion.
+  if (processing_pref_change_)
+    return;
+
+  AutoReset<bool> guard(&processing_pref_change_, true);
+  std::string* name = Details<std::string>(details).ptr();
   const PrefService::Preference* preference =
       pref_service_->FindPreference((*name).c_str());
   DCHECK(preference);
+  int64 sync_id = model_associator_->GetSyncIdFromChromeId(*name);
+  bool user_modifiable = preference->IsUserModifiable();
+  if (!user_modifiable) {
+    // We do not track preferences the user cannot change.
+    model_associator_->Disassociate(sync_id);
+    return;
+  }
 
   sync_api::WriteTransaction trans(share_handle());
   sync_api::WriteNode node(&trans);
 
-  int64 sync_id = model_associator_->GetSyncIdFromChromeId(*name);
+  // Since we don't create sync nodes for preferences that are not under control
+  // of the user or still have their default value, this changed preference may
+  // not have a sync node yet. If so, we create a node. Similarly, a preference
+  // may become user-modifiable (e.g. due to laxer policy configuration), in
+  // which case we also need to create a sync node and associate it.
   if (sync_api::kInvalidId == sync_id) {
-    LOG(ERROR) << "Unexpected notification for: " << *name;
-    error_handler()->OnUnrecoverableError();
-    return;
-  } else {
-    if (!node.InitByIdLookup(sync_id)) {
-      LOG(ERROR) << "Preference node lookup failed.";
-      error_handler()->OnUnrecoverableError();
+    sync_api::ReadNode root(&trans);
+    if (!root.InitByTagLookup(browser_sync::kPreferencesTag)) {
+      error_handler()->OnUnrecoverableError(FROM_HERE, "Can't find root.");
       return;
     }
+
+    // InitPrefNodeAndAssociate takes care of writing the value to the sync
+    // node if appropriate.
+    if (!model_associator_->InitPrefNodeAndAssociate(&trans,
+                                                     root,
+                                                     preference)) {
+      error_handler()->OnUnrecoverableError(FROM_HERE,
+                                            "Can't create sync node.");
+    }
+    return;
   }
 
-  if (!WritePreference(&node, *name, preference->GetValue())) {
-    LOG(ERROR) << "Failed to update preference node.";
-    error_handler()->OnUnrecoverableError();
+  if (!node.InitByIdLookup(sync_id)) {
+    error_handler()->OnUnrecoverableError(FROM_HERE,
+                                          "Preference node lookup failed.");
+    return;
+  }
+
+  if (!PreferenceModelAssociator::WritePreferenceToNode(
+          preference->name(),
+          *preference->GetValue(),
+          &node)) {
+    error_handler()->OnUnrecoverableError(FROM_HERE,
+                                          "Failed to update preference node.");
     return;
   }
 }
@@ -75,7 +108,7 @@ void PreferenceChangeProcessor::ApplyChangesFromSyncModel(
     const sync_api::BaseTransaction* trans,
     const sync_api::SyncManager::ChangeRecord* changes,
     int change_count) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   if (!running())
     return;
   StopObserving();
@@ -94,13 +127,13 @@ void PreferenceChangeProcessor::ApplyChangesFromSyncModel(
     }
 
     if (!node.InitByIdLookup(changes[i].id)) {
-      LOG(ERROR) << "Preference node lookup failed.";
-      error_handler()->OnUnrecoverableError();
+      error_handler()->OnUnrecoverableError(FROM_HERE,
+                                            "Preference node lookup failed.");
       return;
     }
     DCHECK(syncable::PREFERENCES == node.GetModelType());
 
-    std::wstring name;
+    std::string name;
     scoped_ptr<Value> value(ReadPreference(&node, &name));
     // Skip values we can't deserialize.
     if (!value.get())
@@ -111,8 +144,15 @@ void PreferenceChangeProcessor::ApplyChangesFromSyncModel(
     // client and a Windows client, the Windows client does not
     // support kShowPageOptionsButtons.  Ignore updates from these
     // preferences.
-    const wchar_t* pref_name = name.c_str();
+    const char* pref_name = name.c_str();
     if (model_associator_->synced_preferences().count(pref_name) == 0)
+      continue;
+
+    // Don't try to overwrite preferences not controllable by the user.
+    const PrefService::Preference* pref =
+        pref_service_->FindPreference(pref_name);
+    DCHECK(pref);
+    if (!pref->IsUserModifiable())
       continue;
 
     if (sync_api::SyncManager::ChangeRecord::ACTION_DELETE ==
@@ -120,63 +160,47 @@ void PreferenceChangeProcessor::ApplyChangesFromSyncModel(
       pref_service_->ClearPref(pref_name);
     } else {
       pref_service_->Set(pref_name, *value);
-      if (0 == name.compare(prefs::kShowBookmarkBar)) {
-        // If it was the bookmark bar, send an additional notification.
-        NotificationService::current()->Notify(
-            NotificationType::BOOKMARK_BAR_VISIBILITY_PREF_CHANGED,
-            Source<PreferenceChangeProcessor>(this),
-            NotificationService::NoDetails());
+
+      // If this is a newly added node, associate.
+      if (sync_api::SyncManager::ChangeRecord::ACTION_ADD ==
+          changes[i].action) {
+        const PrefService::Preference* preference =
+            pref_service_->FindPreference(name.c_str());
+        model_associator_->Associate(preference, changes[i].id);
       }
+
+      model_associator_->AfterUpdateOperations(name);
     }
   }
   StartObserving();
 }
 
-bool PreferenceChangeProcessor::WritePreference(
-    sync_api::WriteNode* node,
-    const std::wstring& name,
-    const Value* value) {
-  std::string serialized;
-  JSONStringValueSerializer json(&serialized);
-  if (!json.Serialize(*value)) {
-    LOG(ERROR) << "Failed to serialize preference value.";
-    error_handler()->OnUnrecoverableError();
-    return false;
-  }
-
-  sync_pb::PreferenceSpecifics preference;
-  preference.set_name(WideToUTF8(name));
-  preference.set_value(serialized);
-  node->SetPreferenceSpecifics(preference);
-  node->SetTitle(name);
-  return true;
-}
-
 Value* PreferenceChangeProcessor::ReadPreference(
     sync_api::ReadNode* node,
-    std::wstring* name) {
+    std::string* name) {
   const sync_pb::PreferenceSpecifics& preference(
       node->GetPreferenceSpecifics());
   base::JSONReader reader;
   scoped_ptr<Value> value(reader.JsonToValue(preference.value(), false, false));
   if (!value.get()) {
-    LOG(ERROR) << "Failed to deserialize preference value: "
-               << reader.GetErrorMessage();
-    error_handler()->OnUnrecoverableError();
+    std::string err = "Failed to deserialize preference value: " +
+        reader.GetErrorMessage();
+    error_handler()->OnUnrecoverableError(FROM_HERE, err);
     return NULL;
   }
-  *name = UTF8ToWide(preference.name());
+  *name = preference.name();
   return value.release();
 }
 
 void PreferenceChangeProcessor::StartImpl(Profile* profile) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   pref_service_ = profile->GetPrefs();
+  registrar_.Init(pref_service_);
   StartObserving();
 }
 
 void PreferenceChangeProcessor::StopImpl() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   StopObserving();
   pref_service_ = NULL;
 }
@@ -184,19 +208,19 @@ void PreferenceChangeProcessor::StopImpl() {
 
 void PreferenceChangeProcessor::StartObserving() {
   DCHECK(pref_service_);
-  for (std::set<std::wstring>::const_iterator it =
+  for (std::set<std::string>::const_iterator it =
       model_associator_->synced_preferences().begin();
       it != model_associator_->synced_preferences().end(); ++it) {
-    pref_service_->AddPrefObserver((*it).c_str(), this);
+    registrar_.Add((*it).c_str(), this);
   }
 }
 
 void PreferenceChangeProcessor::StopObserving() {
   DCHECK(pref_service_);
-  for (std::set<std::wstring>::const_iterator it =
+  for (std::set<std::string>::const_iterator it =
       model_associator_->synced_preferences().begin();
       it != model_associator_->synced_preferences().end(); ++it) {
-    pref_service_->RemovePrefObserver((*it).c_str(), this);
+    registrar_.Remove((*it).c_str(), this);
   }
 }
 

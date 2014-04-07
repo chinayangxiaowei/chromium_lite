@@ -4,13 +4,14 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_HISTORY_MODEL_WORKER_H_
 #define CHROME_BROWSER_SYNC_GLUE_HISTORY_MODEL_WORKER_H_
+#pragma once
 
 #include "chrome/browser/sync/engine/model_safe_worker.h"
 
 #include "base/basictypes.h"
+#include "base/callback.h"
 #include "base/ref_counted.h"
 #include "chrome/browser/cancelable_request.h"
-#include "chrome/browser/sync/util/closure.h"
 
 class HistoryService;
 
@@ -26,9 +27,10 @@ class HistoryModelWorker : public browser_sync::ModelSafeWorker,
                            public CancelableRequestConsumerBase {
  public:
   explicit HistoryModelWorker(HistoryService* history_service);
+  virtual ~HistoryModelWorker();
 
   // ModelSafeWorker implementation. Called on syncapi SyncerThread.
-  void DoWorkAndWaitUntilDone(Closure* work);
+  void DoWorkAndWaitUntilDone(Callback0::Type* work);
   virtual ModelSafeGroup GetModelSafeGroup() { return GROUP_HISTORY; }
   virtual bool CurrentThreadIsWorkThread();
 
@@ -38,6 +40,13 @@ class HistoryModelWorker : public browser_sync::ModelSafeWorker,
 
   virtual void OnRequestRemoved(CancelableRequestProvider* provider,
                                 CancelableRequestProvider::Handle handle) {}
+
+  virtual void WillExecute(CancelableRequestProvider* provider,
+                           CancelableRequestProvider::Handle handle) {}
+
+  virtual void DidExecute(CancelableRequestProvider* provider,
+                          CancelableRequestProvider::Handle handle) {}
+
  private:
   scoped_refptr<HistoryService> history_service_;
   DISALLOW_COPY_AND_ASSIGN(HistoryModelWorker);

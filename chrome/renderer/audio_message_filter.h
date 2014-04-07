@@ -9,23 +9,27 @@
 
 #ifndef CHROME_RENDERER_AUDIO_MESSAGE_FILTER_H_
 #define CHROME_RENDERER_AUDIO_MESSAGE_FILTER_H_
+#pragma once
 
+#include "base/gtest_prod_util.h"
 #include "base/id_map.h"
 #include "base/shared_memory.h"
 #include "base/sync_socket.h"
-#include "base/time.h"
 #include "ipc/ipc_channel_proxy.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
+#include "media/audio/audio_buffers_state.h"
 
 struct ViewMsg_AudioStreamState_Params;
+
+namespace base {
+class Time;
+}
 
 class AudioMessageFilter : public IPC::ChannelProxy::MessageFilter {
  public:
   class Delegate {
    public:
     // Called when an audio packet is requested from the browser process.
-    virtual void OnRequestPacket(uint32 bytes_in_buffer,
-                                 const base::Time& message_timestamp) = 0;
+    virtual void OnRequestPacket(AudioBuffersState buffers_state) = 0;
 
     // Called when state of an audio stream has changed in the browser process.
     virtual void OnStateChanged(
@@ -66,8 +70,8 @@ class AudioMessageFilter : public IPC::ChannelProxy::MessageFilter {
   // For access to |message_loop_|.
   friend class AudioRendererImplTest;
 
-  FRIEND_TEST(AudioMessageFilterTest, Basic);
-  FRIEND_TEST(AudioMessageFilterTest, Delegates);
+  FRIEND_TEST_ALL_PREFIXES(AudioMessageFilterTest, Basic);
+  FRIEND_TEST_ALL_PREFIXES(AudioMessageFilterTest, Delegates);
 
   // IPC::ChannelProxy::MessageFilter override. Called on IO thread.
   virtual bool OnMessageReceived(const IPC::Message& message);
@@ -77,7 +81,7 @@ class AudioMessageFilter : public IPC::ChannelProxy::MessageFilter {
 
   // Received when browser process wants more audio packet.
   void OnRequestPacket(const IPC::Message& msg, int stream_id,
-                       uint32 bytes_in_buffer, int64 message_timestamp);
+                       AudioBuffersState buffers_state);
 
   // Received when browser process has created an audio output stream.
   void OnStreamCreated(int stream_id, base::SharedMemoryHandle handle,
@@ -115,4 +119,3 @@ class AudioMessageFilter : public IPC::ChannelProxy::MessageFilter {
 };
 
 #endif  // CHROME_RENDERER_AUDIO_MESSAGE_FILTER_H_
-

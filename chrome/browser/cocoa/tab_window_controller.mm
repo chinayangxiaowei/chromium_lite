@@ -6,6 +6,7 @@
 
 #include "app/theme_provider.h"
 #include "base/logging.h"
+#import "chrome/browser/cocoa/focus_tracker.h"
 #import "chrome/browser/cocoa/tab_strip_view.h"
 #import "chrome/browser/cocoa/themed_window.h"
 
@@ -39,7 +40,6 @@
 @end
 
 @implementation TabWindowController
-@synthesize tabStripView = tabStripView_;
 @synthesize tabContentArea = tabContentArea_;
 
 - (id)initWithWindow:(NSWindow*)window {
@@ -49,22 +49,92 @@
   return self;
 }
 
+// Add the side tab strip to the left side of the window's content area,
+// making it fill the full height of the content area.
+- (void)addSideTabStripToWindow {
+  NSView* contentView = [[self window] contentView];
+  NSRect contentFrame = [contentView frame];
+  NSRect sideStripFrame =
+      NSMakeRect(0, 0,
+                 NSWidth([sideTabStripView_ frame]),
+                 NSHeight(contentFrame));
+  [sideTabStripView_ setFrame:sideStripFrame];
+  [contentView addSubview:sideTabStripView_];
+}
+
+// Add the top tab strop to the window, above the content box and add it to the
+// view hierarchy as a sibling of the content view so it can overlap with the
+// window frame.
+- (void)addTopTabStripToWindow {
+  NSRect contentFrame = [tabContentArea_ frame];
+  NSRect tabFrame =
+      NSMakeRect(0, NSMaxY(contentFrame),
+                 NSWidth(contentFrame),
+                 NSHeight([topTabStripView_ frame]));
+  [topTabStripView_ setFrame:tabFrame];
+  NSView* contentParent = [[[self window] contentView] superview];
+  [contentParent addSubview:topTabStripView_];
+}
+
 - (void)windowDidLoad {
+  // Cache the difference in height between the window content area and the
+  // tab content area.
+  NSRect tabFrame = [tabContentArea_ frame];
+  NSRect contentFrame = [[[self window] contentView] frame];
+  contentAreaHeightDelta_ = NSHeight(contentFrame) - NSHeight(tabFrame);
+
   if ([self hasTabStrip]) {
-    // Place the tab bar above the content box and add it to the view hierarchy
-    // as a sibling of the content view so it can overlap with the window frame.
-    NSRect tabFrame = [tabContentArea_ frame];
-    tabFrame.origin = NSMakePoint(0, NSMaxY(tabFrame));
-    tabFrame.size.height = NSHeight([tabStripView_ frame]);
-    [tabStripView_ setFrame:tabFrame];
-    [[[[self window] contentView] superview] addSubview:tabStripView_];
+    if ([self useVerticalTabs]) {
+      // No top tabstrip so remove the tabContentArea offset.
+      tabFrame.size.height = contentFrame.size.height;
+      [tabContentArea_ setFrame:tabFrame];
+      [self addSideTabStripToWindow];
+    } else {
+      [self addTopTabStripToWindow];
+    }
   } else {
-    // No tabstrip so remove the tabContentArea offset.
-    NSRect tabFrame = [tabContentArea_ frame];
-    NSRect contentFrame = [[[self window] contentView] frame];
+    // No top tabstrip so remove the tabContentArea offset.
     tabFrame.size.height = contentFrame.size.height;
     [tabContentArea_ setFrame:tabFrame];
   }
+}
+
+// Toggles from one display mode of the tab strip to another. Will automatically
+// call -layoutSubviews to reposition other content.
+- (void)toggleTabStripDisplayMode {
+  // Adjust the size of the tab contents to either use more or less space,
+  // depending on the direction of the toggle. This needs to be done prior to
+  // adding back in the top tab strip as its position is based off the MaxY
+  // of the tab content area.
+  BOOL useVertical = [self useVerticalTabs];
+  NSRect tabContentsFrame = [tabContentArea_ frame];
+  tabContentsFrame.size.height += useVertical ?
+      contentAreaHeightDelta_ : -contentAreaHeightDelta_;
+  [tabContentArea_ setFrame:tabContentsFrame];
+
+  if (useVertical) {
+    // Remove the top tab strip and add the sidebar in.
+    [topTabStripView_ removeFromSuperview];
+    [self addSideTabStripToWindow];
+  } else {
+    // Remove the side tab strip and add the top tab strip as a sibling of the
+    // window's content area.
+    [sideTabStripView_ removeFromSuperview];
+    NSRect tabContentsFrame = [tabContentArea_ frame];
+    tabContentsFrame.size.height -= contentAreaHeightDelta_;
+    [tabContentArea_ setFrame:tabContentsFrame];
+    [self addTopTabStripToWindow];
+  }
+
+  [self layoutSubviews];
+}
+
+// Return the appropriate tab strip based on whether or not side tabs are
+// enabled.
+- (TabStripView*)tabStripView {
+  if ([self useVerticalTabs])
+    return sideTabStripView_;
+  return topTabStripView_;
 }
 
 - (void)removeOverlay {
@@ -92,8 +162,11 @@
     // borderless).
     [[overlayWindow_ contentView] addSubview:cachedContentView_];
   } else {
-    [[[[self window] contentView] superview] addSubview:[self tabStripView]];
     [[self window] setContentView:cachedContentView_];
+    // The TabStripView always needs to be in front of the window's content
+    // view and therefore it should always be added after the content view is
+    // set.
+    [[[[self window] contentView] superview] addSubview:[self tabStripView]];
     [[[[self window] contentView] superview] updateTrackingAreas];
   }
 }
@@ -121,13 +194,21 @@
     [overlayWindow_ setDelegate:self];
     cachedContentView_ = [window contentView];
     [window addChildWindow:overlayWindow_ ordered:NSWindowAbove];
+    // Sets explictly nil to the responder and then restores it.
+    // Leaving the first responder non-null here
+    // causes [RenderWidgethostViewCocoa resignFirstResponder] and
+    // following RenderWidgetHost::Blur(), which results unexpected
+    // focus lost.
+    focusBeforeOverlay_.reset([[FocusTracker alloc] initWithWindow:window]);
+    [window makeFirstResponder:nil];
     [self moveViewsBetweenWindowAndOverlay:useOverlay];
     [overlayWindow_ orderFront:nil];
   } else if (!useOverlay && overlayWindow_) {
     DCHECK(cachedContentView_);
     [window setContentView:cachedContentView_];
     [self moveViewsBetweenWindowAndOverlay:useOverlay];
-    [window makeFirstResponder:cachedContentView_];
+    [focusBeforeOverlay_ restoreFocusInWindow:window];
+    focusBeforeOverlay_.reset(nil);
     [window display];
     [window removeChildWindow:overlayWindow_];
     [overlayWindow_ orderOut:nil];
@@ -237,6 +318,12 @@
   return YES;
 }
 
+- (BOOL)useVerticalTabs {
+  // Subclasses should implement this.
+  NOTIMPLEMENTED();
+  return NO;
+}
+
 - (BOOL)isTabDraggable:(NSView*)tabView {
   return ![lockedTabs_ containsObject:tabView];
 }
@@ -253,6 +340,12 @@
 // during a drag.
 - (void)deferPerformClose {
   closeDeferred_ = YES;
+}
+
+// Called when the size of the window content area has changed. Override to
+// position specific views. Base class implementation does nothing.
+- (void)layoutSubviews {
+  NOTIMPLEMENTED();
 }
 
 @end

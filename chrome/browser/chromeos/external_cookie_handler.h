@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_EXTERNAL_COOKIE_HANDLER_H_
 #define CHROME_BROWSER_CHROMEOS_EXTERNAL_COOKIE_HANDLER_H_
+#pragma once
 
 #include <string>
 
@@ -30,11 +31,6 @@ class ExternalCookieHandler {
 
   // Given a pipe to read cookies from, reads and adds them to |cookie_store|.
   virtual bool HandleCookies(net::CookieStore *cookie_store);
-
-  // Checks |parsed_command_line| for the --cookie-pipe; if found, reads
-  // cookies from the pipe and adds them to the cookie store found in |profile|.
-  static void GetCookies(const CommandLine& parsed_command_line,
-                         Profile* profile);
 
   // The url with which we associate the read-in cookies.
   static const char kGoogleAccountsUrl[];

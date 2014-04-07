@@ -14,6 +14,7 @@
 #include "chrome/browser/history/archived_database.h"
 #include "chrome/browser/history/history_database.h"
 #include "chrome/browser/history/history_notifications.h"
+#include "chrome/browser/history/text_database.h"
 #include "chrome/browser/history/text_database_manager.h"
 #include "chrome/browser/history/thumbnail_database.h"
 #include "chrome/common/notification_type.h"
@@ -122,6 +123,14 @@ const int kExpirationDelaySec = 30;
 // history to expire last iteration, it's likely there is nothing next
 // iteration, so we want to wait longer before checking to avoid wasting CPU.
 const int kExpirationEmptyDelayMin = 5;
+
+// The number of minutes that we wait for before scheduling a task to
+// delete old history index files.
+const int kIndexExpirationDelayMin = 2;
+
+// The number of the most recent months for which we do not want to delete
+// the history index files.
+const int kStoreHistoryIndexesForMonths = 12;
 
 }  // namespace
 
@@ -303,6 +312,7 @@ void ExpireHistoryBackend::StartArchivingOldStuff(
   // Initialize the queue with all tasks for the first set of iterations.
   InitWorkQueue();
   ScheduleArchive();
+  ScheduleExpireHistoryIndexFiles();
 }
 
 void ExpireHistoryBackend::DeleteFaviconsIfPossible(
@@ -419,7 +429,7 @@ URLID ExpireHistoryBackend::ArchiveOneURL(const URLRow& url_row) {
   URLRow archived_row;
   if (archived_db_->GetRowForURL(url_row.url(), &archived_row)) {
     // TODO(sky): bug 1168470, need to archive past search terms.
-    // FIXME(brettw) should be copy the visit counts over? This will mean that
+    // TODO(brettw): should be copy the visit counts over? This will mean that
     // the main DB's visit counts are only for the last 3 months rather than
     // accumulative.
     archived_row.set_last_visit(url_row.last_visit());
@@ -502,7 +512,7 @@ void ExpireHistoryBackend::ExpireURLsForVisits(
 void ExpireHistoryBackend::ArchiveURLsAndVisits(
     const VisitVector& visits,
     DeleteDependencies* dependencies) {
-  if (!archived_db_)
+  if (!archived_db_ || !main_db_)
     return;
 
   // Make sure all unique URL rows are added to the dependency list and the
@@ -529,6 +539,12 @@ void ExpireHistoryBackend::ArchiveURLsAndVisits(
     }
   }
 
+  // Retrieve the sources for all the archived visits before archiving.
+  // The returned visit_sources vector should contain the source for each visit
+  // from visits at the same index.
+  VisitSourceMap visit_sources;
+  main_db_->GetVisitsSource(visits, &visit_sources);
+
   // Now archive the visits since we know the URL ID to make them reference.
   // The source visit list should still reference the visits in the main DB, but
   // we will update it to reflect only the visits that were successfully
@@ -540,7 +556,9 @@ void ExpireHistoryBackend::ArchiveURLsAndVisits(
     VisitRow cur_visit(visits[i]);
     cur_visit.url_id = main_id_to_archived_id[cur_visit.url_id];
     cur_visit.referring_visit = 0;
-    archived_db_->AddVisit(&cur_visit);
+    VisitSourceMap::iterator iter = visit_sources.find(visits[i].visit_id);
+    archived_db_->AddVisit(&cur_visit,
+        iter == visit_sources.end() ? SOURCE_BROWSED : iter->second);
     // Ignore failures, we will delete it from the main DB no matter what.
   }
 }
@@ -556,7 +574,6 @@ void ExpireHistoryBackend::ScheduleArchive() {
     delay = TimeDelta::FromSeconds(kExpirationDelaySec);
   }
 
-  factory_.RevokeAll();
   MessageLoop::current()->PostDelayedTask(FROM_HERE, factory_.NewRunnableMethod(
           &ExpireHistoryBackend::DoArchiveIteration), delay.InMilliseconds());
 }
@@ -638,7 +655,42 @@ bool ExpireHistoryBackend::ArchiveSomeOldHistory(
 }
 
 void ExpireHistoryBackend::ParanoidExpireHistory() {
-  // FIXME(brettw): Bug 1067331: write this to clean up any errors.
+  // TODO(brettw): Bug 1067331: write this to clean up any errors.
+}
+
+void ExpireHistoryBackend::ScheduleExpireHistoryIndexFiles() {
+  if (!text_db_) {
+    // Can't expire old history index files because we
+    // don't know where they're located.
+    return;
+  }
+
+  TimeDelta delay = TimeDelta::FromMinutes(kIndexExpirationDelayMin);
+  MessageLoop::current()->PostDelayedTask(
+      FROM_HERE, factory_.NewRunnableMethod(
+          &ExpireHistoryBackend::DoExpireHistoryIndexFiles),
+      delay.InMilliseconds());
+}
+
+void ExpireHistoryBackend::DoExpireHistoryIndexFiles() {
+  Time::Exploded exploded;
+  Time::Now().LocalExplode(&exploded);
+  int cutoff_month =
+      exploded.year * 12 + exploded.month - kStoreHistoryIndexesForMonths;
+  TextDatabase::DBIdent cutoff_id =
+      (cutoff_month / 12) * 100 + (cutoff_month % 12);
+
+  FilePath::StringType history_index_files_pattern = TextDatabase::file_base();
+  history_index_files_pattern.append(FILE_PATH_LITERAL("*"));
+  file_util::FileEnumerator file_enumerator(
+      text_db_->GetDir(), false, file_util::FileEnumerator::FILES,
+      history_index_files_pattern);
+  for (FilePath file = file_enumerator.Next(); !file.empty();
+       file = file_enumerator.Next()) {
+    TextDatabase::DBIdent file_id = TextDatabase::FileNameToID(file);
+    if (file_id < cutoff_id)
+      file_util::Delete(file, false);
+  }
 }
 
 BookmarkService* ExpireHistoryBackend::GetBookmarkService() {

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_TEST_UI_UI_LAYOUT_TEST_H_
 #define CHROME_TEST_UI_UI_LAYOUT_TEST_H_
+#pragma once
 
 #include "base/file_path.h"
 #include "chrome/test/ui/ui_test.h"
@@ -33,6 +34,7 @@ class UILayoutTest : public UITest {
   FilePath new_http_root_dir_;
   FilePath new_layout_test_dir_;
   FilePath rebase_result_dir_;
+  FilePath rebase_result_chromium_dir_;
   FilePath rebase_result_win_dir_;
   std::string layout_test_controller_;
 

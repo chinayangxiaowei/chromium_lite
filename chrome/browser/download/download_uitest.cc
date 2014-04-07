@@ -172,9 +172,10 @@ class DownloadTest : public UITest {
 
 // Download a file with non-viewable content, verify that the
 // download tab opened and the file exists.
-// All download tests are flaky on all platforms, http://crbug.com/35275.
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
 // Additionally, there is Windows-specific flake, http://crbug.com/20809.
-TEST_F(DownloadTest, FLAKY_DownloadMimeType) {
+TEST_F(DownloadTest, DISABLED_DownloadMimeType) {
   FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
 
   EXPECT_EQ(1, GetTabCount());
@@ -192,7 +193,8 @@ TEST_F(DownloadTest, FLAKY_DownloadMimeType) {
 
 // Access a file with a viewable mime-type, verify that a download
 // did not initiate.
-// All download tests are flaky on all platforms, http://crbug.com/35275.
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
 // Additionally, there is Windows-specific flake, http://crbug.com/20809.
 TEST_F(DownloadTest, FLAKY_NoDownload) {
   FilePath file(FILE_PATH_LITERAL("download-test2.html"));
@@ -219,9 +221,10 @@ TEST_F(DownloadTest, FLAKY_NoDownload) {
 // Download a 0-size file with a content-disposition header, verify that the
 // download tab opened and the file exists as the filename specified in the
 // header.  This also ensures we properly handle empty file downloads.
-// All download tests are flaky on all platforms, http://crbug.com/35275.
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
 // Additionally, there is Windows-specific flake, http://crbug.com/20809.
-TEST_F(DownloadTest, FLAKY_ContentDisposition) {
+TEST_F(DownloadTest, DISABLED_ContentDisposition) {
   FilePath file(FILE_PATH_LITERAL("download-test3.gif"));
   FilePath download_file(FILE_PATH_LITERAL("download-test3-attachment.gif"));
 
@@ -240,9 +243,10 @@ TEST_F(DownloadTest, FLAKY_ContentDisposition) {
 // tab, opening a second tab, closing the shelf, going back to the first tab,
 // and checking that the shelf is closed.
 // See bug http://crbug.com/26325
-// All download tests are flaky on all platforms, http://crbug.com/35275.
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
 // Additionally, there is Windows-specific flake, http://crbug.com/20809.
-TEST_F(DownloadTest, FLAKY_PerWindowShelf) {
+TEST_F(DownloadTest, DISABLED_PerWindowShelf) {
   FilePath file(FILE_PATH_LITERAL("download-test3.gif"));
   FilePath download_file(FILE_PATH_LITERAL("download-test3-attachment.gif"));
 
@@ -281,7 +285,8 @@ TEST_F(DownloadTest, FLAKY_PerWindowShelf) {
 // The test will first attempt to download a file; but the server will "pause"
 // in the middle until the server receives a second request for
 // "download-finish.  At that time, the download will finish.
-// All download tests are flaky on all platforms, http://crbug.com/35275.
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
 // Additionally, there is Windows-specific flake, http://crbug.com/20809.
 TEST_F(DownloadTest, FLAKY_UnknownSize) {
   GURL url(URLRequestSlowDownloadJob::kUnknownSizeUrl);
@@ -292,8 +297,10 @@ TEST_F(DownloadTest, FLAKY_UnknownSize) {
               L"100% - " + filename.ToWStringHack());
 }
 
-// http://b/1158253
-TEST_F(DownloadTest, DISABLED_KnownSize) {
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, FLAKY_KnownSize) {
   GURL url(URLRequestSlowDownloadJob::kKnownSizeUrl);
   FilePath filename;
   net::FileURLToFilePath(url, &filename);
@@ -304,9 +311,10 @@ TEST_F(DownloadTest, DISABLED_KnownSize) {
 
 // Test that when downloading an item in Incognito mode, we don't crash when
 // closing the last Incognito window (http://crbug.com/13983).
-// All download tests are flaky on all platforms, http://crbug.com/35275.
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
 // Additionally, there is Windows-specific flake, http://crbug.com/20809.
-TEST_F(DownloadTest, FLAKY_IncognitoDownload) {
+TEST_F(DownloadTest, DISABLED_IncognitoDownload) {
   // Open a regular window and sanity check default values for window / tab
   // count and shelf visibility.
   scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
@@ -325,6 +333,9 @@ TEST_F(DownloadTest, FLAKY_IncognitoDownload) {
   ASSERT_EQ(2, window_count);
   scoped_refptr<BrowserProxy> incognito(automation()->GetBrowserWindow(1));
   ASSERT_TRUE(incognito.get());
+  // Wait for the new tab UI to load.
+  int load_time;
+  ASSERT_TRUE(automation()->WaitForInitialNewTabUILoad(&load_time));
 
   // Download something.
   FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
@@ -343,6 +354,214 @@ TEST_F(DownloadTest, FLAKY_IncognitoDownload) {
   // Verify that the regular window does not have a download shelf.
   EXPECT_TRUE(browser->IsShelfVisible(&is_shelf_visible));
   EXPECT_FALSE(is_shelf_visible);
+
+  CheckDownload(file);
+}
+
+// All of the following tests are disabled, see http://crbug.com/43066
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, FLAKY_DontCloseNewTab1) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count = 0;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  ASSERT_EQ(1, window_count);
+  EXPECT_EQ(1, GetTabCount());
+
+  scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+  ASSERT_TRUE(tab_proxy.get());
+
+  FilePath file1(FILE_PATH_LITERAL("download-test2.html"));
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsyncWithDisposition(
+      URLRequestMockHTTPJob::GetMockUrl(file1),
+      NEW_BACKGROUND_TAB));
+  // We should have two tabs now.
+  WaitUntilTabCount(2);
+}
+
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, FLAKY_CloseNewTab1) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count = 0;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  ASSERT_EQ(1, window_count);
+  EXPECT_EQ(1, GetTabCount());
+
+  scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+  ASSERT_TRUE(tab_proxy.get());
+
+  FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsyncWithDisposition(
+      URLRequestMockHTTPJob::GetMockUrl(file),
+      NEW_BACKGROUND_TAB));
+  // When the download starts, we should still have one tab.
+  ASSERT_TRUE(WaitForDownloadShelfVisible(browser));
+  EXPECT_EQ(1, GetTabCount());
+
+  CheckDownload(file);
+}
+
+// Disabled, see http://crbug.com/43066
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, FLAKY_DontCloseNewTab2) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count = 0;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  ASSERT_EQ(1, window_count);
+  EXPECT_EQ(1, GetTabCount());
+
+  scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+  ASSERT_TRUE(tab_proxy.get());
+
+  ASSERT_TRUE(tab_proxy->NavigateToURL(URLRequestMockHTTPJob::GetMockUrl(
+      FilePath(FILE_PATH_LITERAL("download_page1.html")))));
+
+  FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsync(GURL("javascript:openNew()")));
+
+  ASSERT_TRUE(WaitForDownloadShelfVisible(browser));
+  EXPECT_EQ(2, GetTabCount());
+
+  CheckDownload(file);
+}
+
+// Flaky, see http://crbug.com/43066
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, FLAKY_DontCloseNewTab3) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count = 0;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  ASSERT_EQ(1, window_count);
+  EXPECT_EQ(1, GetTabCount());
+
+  scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+  ASSERT_TRUE(tab_proxy.get());
+
+  ASSERT_TRUE(tab_proxy->NavigateToURL(URLRequestMockHTTPJob::GetMockUrl(
+      FilePath(FILE_PATH_LITERAL("download_page2.html")))));
+
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsync(GURL("javascript:openNew()")));
+
+  FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsync(
+      URLRequestMockHTTPJob::GetMockUrl(file)));
+
+  ASSERT_TRUE(WaitForDownloadShelfVisible(browser));
+  EXPECT_EQ(2, GetTabCount());
+
+  CheckDownload(file);
+}
+
+// Flaky, see http://crbug.com/43066
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, FLAKY_CloseNewTab2) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count = 0;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  ASSERT_EQ(1, window_count);
+  EXPECT_EQ(1, GetTabCount());
+
+  scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+  ASSERT_TRUE(tab_proxy.get());
+
+  ASSERT_TRUE(tab_proxy->NavigateToURL(URLRequestMockHTTPJob::GetMockUrl(
+      FilePath(FILE_PATH_LITERAL("download_page3.html")))));
+
+  FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsync(GURL("javascript:openNew()")));
+
+  ASSERT_TRUE(WaitForDownloadShelfVisible(browser));
+  EXPECT_EQ(1, GetTabCount());
+
+  CheckDownload(file);
+}
+
+// Flaky, see http://crbug.com/43066
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, FLAKY_CloseNewTab3) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count = 0;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  ASSERT_EQ(1, window_count);
+  EXPECT_EQ(1, GetTabCount());
+
+  scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+  ASSERT_TRUE(tab_proxy.get());
+
+  ASSERT_TRUE(tab_proxy->NavigateToURL(URLRequestMockHTTPJob::GetMockUrl(
+      FilePath(FILE_PATH_LITERAL("download_page4.html")))));
+
+  FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsync(
+      GURL("javascript:document.getElementById('form').submit()")));
+
+  ASSERT_TRUE(WaitForDownloadShelfVisible(browser));
+  EXPECT_EQ(1, GetTabCount());
+
+  CheckDownload(file);
+}
+
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, DISABLED_DontCloseNewWindow) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count = 0;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  ASSERT_EQ(1, window_count);
+  EXPECT_EQ(1, GetTabCount());
+
+  scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+  ASSERT_TRUE(tab_proxy.get());
+
+  FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsyncWithDisposition(
+      URLRequestMockHTTPJob::GetMockUrl(file), NEW_WINDOW));
+
+  ASSERT_TRUE(automation()->WaitForWindowCountToBecome(2));
+
+  CheckDownload(file);
+}
+
+// Regression test for http://crbug.com/44454
+// See also http://crbug.com/50060.
+// All download tests are flaky on all platforms, http://crbug.com/35275,
+// http://crbug.com/48913 and especially http://crbug.com/50060.
+// Additionally, there is Windows-specific flake, http://crbug.com/20809.
+TEST_F(DownloadTest, DISABLED_NewWindow) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count = 0;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  ASSERT_EQ(1, window_count);
+  EXPECT_EQ(1, GetTabCount());
+
+  scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+  ASSERT_TRUE(tab_proxy.get());
+
+  FilePath file(FILE_PATH_LITERAL("download-test1.lib"));
+  ASSERT_TRUE(tab_proxy->NavigateToURLAsyncWithDisposition(
+    URLRequestMockHTTPJob::GetMockUrl(file), NEW_WINDOW));
+
+  ASSERT_TRUE(automation()->WaitForWindowCountToBecome(2));
 
   CheckDownload(file);
 }

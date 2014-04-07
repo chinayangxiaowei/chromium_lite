@@ -1,11 +1,14 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef APP_L10N_UTIL_MAC_H_
 #define APP_L10N_UTIL_MAC_H_
+#pragma once
 
-#include "app/l10n_util.h"
+#include <string>
+#include <vector>
+
 #include "base/basictypes.h"
 #include "base/string16.h"
 
@@ -41,6 +44,13 @@ NSString* GetNSStringF(int message_id,
                        const string16& b,
                        const string16& c,
                        const string16& d);
+
+// Variants that return the offset(s) of the replaced parameters. (See
+// app/l10n_util.h for more details.)
+NSString* GetNSStringF(int message_id,
+                       const string16& a,
+                       const string16& b,
+                       std::vector<size_t>* offsets);
 
 // Same as GetNSString, but runs the result through FixUpWindowsStyleLabel
 // before returning it.

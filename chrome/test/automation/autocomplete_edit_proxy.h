@@ -1,13 +1,15 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TEST_AUTOMATION_AUTOCOMPLETE_EDIT_PROXY_H_
 #define CHROME_TEST_AUTOMATION_AUTOCOMPLETE_EDIT_PROXY_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
+#include "base/string_number_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/test/automation/automation_handle_tracker.h"
 #include "googleurl/src/gurl.h"
@@ -86,30 +88,30 @@ struct ParamTraits<AutocompleteMatchData> {
     return true;
   }
 
-  static void Log(const param_type& p, std::wstring* l) {
-    l->append(L"[");
-    l->append(UTF8ToWide(p.provider_name));
-    l->append(L" ");
-    l->append(IntToWString(p.relevance));
-    l->append(L" ");
-    l->append(p.deletable ? L"true" : L"false");
-    l->append(L" ");
-    l->append(p.fill_into_edit);
-    l->append(L" ");
-    l->append(IntToWString(p.inline_autocomplete_offset));
-    l->append(L" ");
-    l->append(UTF8ToWide(p.destination_url.spec()));
-    l->append(L" ");
-    l->append(p.contents);
-    l->append(L" ");
-    l->append(p.description);
-    l->append(L" ");
-    l->append(p.is_history_what_you_typed_match ? L"true" : L"false");
-    l->append(L" ");
-    l->append(UTF8ToWide(p.type));
-    l->append(L" ");
-    l->append(p.starred ? L"true" : L"false");
-    l->append(L"]");
+  static void Log(const param_type& p, std::string* l) {
+    l->append("[");
+    l->append(p.provider_name);
+    l->append(" ");
+    l->append(base::IntToString(p.relevance));
+    l->append(" ");
+    l->append(p.deletable ? "true" : "false");
+    l->append(" ");
+    LogParam(p.fill_into_edit, l);
+    l->append(" ");
+    l->append(base::IntToString(p.inline_autocomplete_offset));
+    l->append(" ");
+    l->append(p.destination_url.spec());
+    l->append(" ");
+    LogParam(p.contents, l);
+    l->append(" ");
+    LogParam(p.description, l);
+    l->append(" ");
+    l->append(p.is_history_what_you_typed_match ? "true" : "false");
+    l->append(" ");
+    l->append(p.type);
+    l->append(" ");
+    l->append(p.starred ? "true" : "false");
+    l->append("]");
   }
 };
 }  // namespace IPC
@@ -140,13 +142,16 @@ class AutocompleteEditProxy : public AutomationResourceProxy {
   // Gets a list of autocomplete matches that have been gathered so far.
   bool GetAutocompleteMatches(Matches* matches) const;
 
+  // Waits for the autocomplete edit to receive focus.
+  bool WaitForFocus() const;
+
   // Waits for all queries to autocomplete providers to complete.
   // |wait_timeout_ms| gives the number of milliseconds to wait for the query
   // to finish. Returns false if IPC call failed or if the function times out.
   bool WaitForQuery(int wait_timeout_ms) const;
 
  private:
-  DISALLOW_EVIL_CONSTRUCTORS(AutocompleteEditProxy);
+  DISALLOW_COPY_AND_ASSIGN(AutocompleteEditProxy);
 };
 
 #endif  // CHROME_TEST_AUTOMATION_AUTOCOMPLETE_EDIT_PROXY_H_

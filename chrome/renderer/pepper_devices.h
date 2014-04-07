@@ -4,6 +4,7 @@
 
 #ifndef CHROME_RENDERER_PEPPER_DEVICES_H_
 #define CHROME_RENDERER_PEPPER_DEVICES_H_
+#pragma once
 
 #include "app/surface/transport_dib.h"
 #include "base/basictypes.h"
@@ -15,9 +16,9 @@
 #include "gfx/rect.h"
 #include "third_party/npapi/bindings/npapi.h"
 #include "third_party/npapi/bindings/npapi_extensions.h"
-#include "third_party/skia/include/core/SkBitmap.h"
 
 class WebPluginDelegatePepper;
+class SkBitmap;
 
 // Lists all contexts currently open for painting. These are ones requested by
 // the plugin but not destroyed by it yet. The source pointer is the raw
@@ -96,7 +97,6 @@ class Graphics2DDeviceContext {
 class AudioDeviceContext : public AudioMessageFilter::Delegate,
                            public base::DelegateSimpleThread::Delegate {
  public:
-  // TODO(neb): if plugin_delegate parameter is indeed unused, remove it
   explicit AudioDeviceContext() : stream_id_(0) {
   }
   virtual ~AudioDeviceContext();
@@ -112,21 +112,20 @@ class AudioDeviceContext : public AudioMessageFilter::Delegate,
  private:
 
   // AudioMessageFilter::Delegate implementation
-  virtual void OnRequestPacket(uint32 bytes_in_buffer,
-                               const base::Time& message_timestamp);
+  virtual void OnRequestPacket(AudioBuffersState buffers_state);
   virtual void OnStateChanged(const ViewMsg_AudioStreamState_Params& state);
   virtual void OnCreated(base::SharedMemoryHandle handle, uint32 length);
   virtual void OnLowLatencyCreated(base::SharedMemoryHandle handle,
                                    base::SyncSocket::Handle socket_handle,
                                    uint32 length);
   virtual void OnVolume(double volume);
+  virtual void OnDestroy();
   // End of AudioMessageFilter::Delegate implementation
 
   // DelegateSimpleThread::Delegate implementation
   virtual void Run();
   // End of DelegateSimpleThread::Delegate implementation
 
-  void OnDestroy();
   void FireAudioCallback() {
     if (context_ && context_->config.callback) {
       context_->config.callback(context_);
@@ -143,4 +142,3 @@ class AudioDeviceContext : public AudioMessageFilter::Delegate,
 };
 
 #endif  // CHROME_RENDERER_PEPPER_DEVICES_H_
-

@@ -33,7 +33,7 @@ class AudioRendererBase : public AudioRenderer {
   // MediaFilter implementation.
   virtual void Play(FilterCallback* callback);
   virtual void Pause(FilterCallback* callback);
-  virtual void Stop();
+  virtual void Stop(FilterCallback* callback);
 
   virtual void Seek(base::TimeDelta time, FilterCallback* callback);
 
@@ -55,9 +55,9 @@ class AudioRendererBase : public AudioRenderer {
   // this time, such as stopping any running threads.
   virtual void OnStop() = 0;
 
-  // Called when a AudioDecoder::Read() completes and decrements
+  // Called when a AudioDecoder completes decoding and decrements
   // |pending_reads_|.
-  virtual void OnReadComplete(Buffer* buffer_in);
+  virtual void ConsumeAudioSamples(scoped_refptr<Buffer> buffer_in);
 
   // Fills the given buffer with audio data by delegating to its |algorithm_|.
   // FillBuffer() also takes care of updating the clock. Returns the number of
@@ -78,7 +78,8 @@ class AudioRendererBase : public AudioRenderer {
   // Safe to call on any thread.
   uint32 FillBuffer(uint8* dest,
                     uint32 len,
-                    const base::TimeDelta& playback_delay);
+                    const base::TimeDelta& playback_delay,
+                    bool buffers_empty);
 
   // Helper to parse a media format and return whether we were successful
   // retrieving all the information we care about.
@@ -134,6 +135,8 @@ class AudioRendererBase : public AudioRenderer {
   // Filter callbacks.
   scoped_ptr<FilterCallback> pause_callback_;
   scoped_ptr<FilterCallback> seek_callback_;
+
+  base::TimeDelta seek_timestamp_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioRendererBase);
 };

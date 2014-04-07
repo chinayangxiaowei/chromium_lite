@@ -9,12 +9,12 @@
 
 #include <set>
 
-#include "app/resource_bundle.h"
-#include "app/theme_provider.h"
 #include "app/win_util.h"
+#include "base/win_util.h"
+#include "chrome/browser/accessibility/browser_accessibility_state.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/browser_list.h"
-#include "chrome/browser/browser_theme_provider.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/browser/views/frame/app_panel_browser_frame_view.h"
 #include "chrome/browser/views/frame/browser_non_client_frame_view.h"
 #include "chrome/browser/views/frame/browser_root_view.h"
@@ -28,6 +28,9 @@
 // static
 static const int kClientEdgeThickness = 3;
 static const int kTabDragWindowAlpha = 200;
+// We need to offset the DWMFrame into the toolbar so that the blackness
+// doesn't show up on our rounded corners.
+static const int kDWMFrameTopOffset = 3;
 
 // static (Factory method.)
 BrowserFrame* BrowserFrame::Create(BrowserView* browser_view,
@@ -69,9 +72,6 @@ views::Window* BrowserFrameWin::GetWindow() {
   return this;
 }
 
-void BrowserFrameWin::TabStripCreated(BaseTabStrip* tabstrip) {
-}
-
 int BrowserFrameWin::GetMinimizeButtonOffset() const {
   TITLEBARINFOEX titlebar_info;
   titlebar_info.cbSize = sizeof(TITLEBARINFOEX);
@@ -86,6 +86,10 @@ int BrowserFrameWin::GetMinimizeButtonOffset() const {
 
 gfx::Rect BrowserFrameWin::GetBoundsForTabStrip(BaseTabStrip* tabstrip) const {
   return browser_frame_view_->GetBoundsForTabStrip(tabstrip);
+}
+
+int BrowserFrameWin::GetHorizontalTabStripVerticalOffset(bool restored) const {
+  return browser_frame_view_->GetHorizontalTabStripVerticalOffset(restored);
 }
 
 void BrowserFrameWin::UpdateThrobber(bool running) {
@@ -108,6 +112,9 @@ bool BrowserFrameWin::AlwaysUseNativeFrame() const {
   if (browser_view_->IsBrowserTypePanel())
     return false;
 
+  if (browser_view_->browser()->type() == Browser::TYPE_EXTENSION_APP)
+    return false;
+
   // We don't theme popup or app windows, so regardless of whether or not a
   // theme is active for normal browser windows, we don't want to use the custom
   // frame for popups/apps.
@@ -123,8 +130,14 @@ views::View* BrowserFrameWin::GetFrameView() const {
   return browser_frame_view_;
 }
 
-void BrowserFrameWin::PaintTabStripShadow(gfx::Canvas* canvas) {
-  browser_frame_view_->PaintTabStripShadow(canvas);
+void BrowserFrameWin::TabStripDisplayModeChanged() {
+  if (GetRootView()->GetChildViewCount() > 0) {
+    // Make sure the child of the root view gets Layout again.
+    GetRootView()->GetChildViewAt(0)->InvalidateLayout();
+  }
+  GetRootView()->Layout();
+
+  UpdateDWMFrame();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -205,13 +218,15 @@ LRESULT BrowserFrameWin::OnNCHitTest(const CPoint& pt) {
 }
 
 void BrowserFrameWin::OnWindowPosChanged(WINDOWPOS* window_pos) {
+  WindowWin::OnWindowPosChanged(window_pos);
+  UpdateDWMFrame();
+
   // Windows lies to us about the position of the minimize button before a
-  // window is visible. We use the position of the minimize button to place the
-  // distributor logo in official builds. When the window is shown, we need to
-  // re-layout and schedule a paint for the non-client frame view so that the
-  // distributor logo has the correct position when the window becomes visible.
-  // This fixes bugs where the distributor logo appears to overlay the minimize
-  // button. http://crbug.com/15520
+  // window is visible.  We use this position to place the OTR avatar in RTL
+  // mode, so when the window is shown, we need to re-layout and schedule a
+  // paint for the non-client frame view so that the icon top has the correct
+  // position when the window becomes visible.  This fixes bugs where the icon
+  // appears to overlay the minimize button.
   // Note that we will call Layout every time SetWindowPos is called with
   // SWP_SHOWWINDOW, however callers typically are careful about not specifying
   // this flag unless necessary to avoid flicker.
@@ -219,11 +234,6 @@ void BrowserFrameWin::OnWindowPosChanged(WINDOWPOS* window_pos) {
     GetNonClientView()->Layout();
     GetNonClientView()->SchedulePaint();
   }
-
-  UpdateDWMFrame();
-
-  // Let the default window procedure handle - IMPORTANT!
-  WindowWin::OnWindowPosChanged(window_pos);
 }
 
 ThemeProvider* BrowserFrameWin::GetThemeProvider() const {
@@ -232,6 +242,11 @@ ThemeProvider* BrowserFrameWin::GetThemeProvider() const {
 
 ThemeProvider* BrowserFrameWin::GetDefaultThemeProvider() const {
   return profile_->GetThemeProvider();
+}
+
+void BrowserFrameWin::OnScreenReaderDetected() {
+  Singleton<BrowserAccessibilityState>()->OnScreenReaderDetected();
+  WindowWin::OnScreenReaderDetected();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -297,26 +312,13 @@ void BrowserFrameWin::UpdateDWMFrame() {
     // In maximized mode, we only have a titlebar strip of glass, no side/bottom
     // borders.
     if (!browser_view_->IsFullscreen()) {
-      if (browser_view_->UsingSideTabs()) {
-        margins.cxLeftWidth +=
-            GetBoundsForTabStrip(browser_view_->tabstrip()).right();
-        margins.cyTopHeight += GetSystemMetrics(SM_CYSIZEFRAME);
-      } else {
-        margins.cyTopHeight =
-            GetBoundsForTabStrip(browser_view_->tabstrip()).bottom();
-      }
+      gfx::Rect tabstrip_bounds(
+          GetBoundsForTabStrip(browser_view_->tabstrip()));
+      margins.cyTopHeight = (browser_view_->UseVerticalTabs() ?
+          tabstrip_bounds.y() : tabstrip_bounds.bottom()) + kDWMFrameTopOffset;
     }
   } else {
     // For popup and app windows we want to use the default margins.
   }
   DwmExtendFrameIntoClientArea(GetNativeView(), &margins);
-
-  DWORD window_style = GetWindowLong(GWL_STYLE);
-  if (browser_view_->UsingSideTabs()) {
-    if (window_style & WS_CAPTION)
-      SetWindowLong(GWL_STYLE, window_style & ~WS_CAPTION);
-  } else {
-    if (!(window_style & WS_CAPTION))
-      SetWindowLong(GWL_STYLE, window_style | WS_CAPTION);
-  }
 }

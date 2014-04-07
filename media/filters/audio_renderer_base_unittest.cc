@@ -49,11 +49,12 @@ class AudioRendererBaseTest : public ::testing::Test {
   // Give the decoder some non-garbage media properties.
   AudioRendererBaseTest()
       : renderer_(new MockAudioRendererBase()),
-        decoder_(new MockAudioDecoder()) {
+        decoder_(new MockAudioDecoder()),
+        pending_reads_(0) {
     renderer_->set_host(&host_);
 
     // Queue all reads from the decoder.
-    EXPECT_CALL(*decoder_, Read(NotNull()))
+    EXPECT_CALL(*decoder_, ProduceAudioSamples(_))
         .WillRepeatedly(Invoke(this, &AudioRendererBaseTest::EnqueueCallback));
 
     // Sets the essential media format keys for this decoder.
@@ -67,11 +68,11 @@ class AudioRendererBaseTest : public ::testing::Test {
   }
 
   virtual ~AudioRendererBaseTest() {
-    STLDeleteElements(&read_queue_);
-
     // Expect a call into the subclass.
     EXPECT_CALL(*renderer_, OnStop());
-    renderer_->Stop();
+    EXPECT_CALL(callback_, OnFilterCallback());
+    EXPECT_CALL(callback_, OnCallbackDestroyed());
+    renderer_->Stop(callback_.NewCallback());
   }
 
  protected:
@@ -84,12 +85,12 @@ class AudioRendererBaseTest : public ::testing::Test {
   StrictMock<MockFilterCallback> callback_;
   MediaFormat decoder_media_format_;
 
-  // Receives asynchronous read requests sent to |decoder_|.
-  std::deque<Callback1<Buffer*>::Type*> read_queue_;
+  // Number of asynchronous read requests sent to |decoder_|.
+  size_t pending_reads_;
 
  private:
-  void EnqueueCallback(Callback1<Buffer*>::Type* callback) {
-    read_queue_.push_back(callback);
+  void EnqueueCallback(scoped_refptr<Buffer> buffer) {
+    ++pending_reads_;
   }
 
   DISALLOW_COPY_AND_ASSIGN(AudioRendererBaseTest);
@@ -113,7 +114,7 @@ TEST_F(AudioRendererBaseTest, Initialize_Failed) {
 
   // Initialize, we expect to have no reads.
   renderer_->Initialize(decoder_, callback_.NewCallback());
-  EXPECT_EQ(0u, read_queue_.size());
+  EXPECT_EQ(0u, pending_reads_);
 }
 
 TEST_F(AudioRendererBaseTest, Initialize_Successful) {
@@ -136,23 +137,22 @@ TEST_F(AudioRendererBaseTest, Initialize_Successful) {
 
   // Initialize, we shouldn't have any reads.
   renderer_->Initialize(decoder_, callback_.NewCallback());
-  EXPECT_EQ(0u, read_queue_.size());
+  EXPECT_EQ(0u, pending_reads_);
 
   // Now seek to trigger prerolling.
   renderer_->Seek(base::TimeDelta(), seek_callback.NewCallback());
-  EXPECT_EQ(kMaxQueueSize, read_queue_.size());
+  EXPECT_EQ(kMaxQueueSize, pending_reads_);
 
   // Verify our seek callback hasn't been executed yet.
   renderer_->CheckPoint(0);
 
   // Now satisfy the read requests.  Our callback should be executed after
   // exiting this loop.
-  while (!read_queue_.empty()) {
+  while (pending_reads_) {
     scoped_refptr<DataBuffer> buffer = new DataBuffer(1024);
     buffer->SetDataSize(1024);
-    read_queue_.front()->Run(buffer);
-    delete read_queue_.front();
-    read_queue_.pop_front();
+    --pending_reads_;
+    decoder_->consume_audio_samples_callback()->Run(buffer);
   }
 }
 
@@ -176,11 +176,11 @@ TEST_F(AudioRendererBaseTest, OneCompleteReadCycle) {
 
   // Initialize, we shouldn't have any reads.
   renderer_->Initialize(decoder_, callback_.NewCallback());
-  EXPECT_EQ(0u, read_queue_.size());
+  EXPECT_EQ(0u, pending_reads_);
 
   // Now seek to trigger prerolling.
   renderer_->Seek(base::TimeDelta(), seek_callback.NewCallback());
-  EXPECT_EQ(kMaxQueueSize, read_queue_.size());
+  EXPECT_EQ(kMaxQueueSize, pending_reads_);
 
   // Verify our seek callback hasn't been executed yet.
   renderer_->CheckPoint(0);
@@ -189,12 +189,11 @@ TEST_F(AudioRendererBaseTest, OneCompleteReadCycle) {
   // exiting this loop.
   const uint32 kDataSize = 1024;
   uint32 bytes_buffered = 0;
-  while (!read_queue_.empty()) {
+  while (pending_reads_) {
     scoped_refptr<DataBuffer> buffer = new DataBuffer(kDataSize);
     buffer->SetDataSize(kDataSize);
-    read_queue_.front()->Run(buffer);
-    delete read_queue_.front();
-    read_queue_.pop_front();
+    decoder_->consume_audio_samples_callback()->Run(buffer);
+    --pending_reads_;
     bytes_buffered += kDataSize;
   }
 
@@ -211,24 +210,24 @@ TEST_F(AudioRendererBaseTest, OneCompleteReadCycle) {
   uint8 buffer[kDataSize];
   for (size_t i = 0; i < kMaxQueueSize; ++i) {
     EXPECT_EQ(kDataSize,
-              renderer_->FillBuffer(buffer, kDataSize, base::TimeDelta()));
+              renderer_->FillBuffer(buffer, kDataSize,
+                                    base::TimeDelta(), true));
     bytes_buffered -= kDataSize;
   }
 
   // Make sure the read request queue is full.
-  EXPECT_EQ(kMaxQueueSize, read_queue_.size());
+  EXPECT_EQ(kMaxQueueSize, pending_reads_);
 
   // Fulfill the read with an end-of-stream packet.
   scoped_refptr<DataBuffer> last_buffer = new DataBuffer(0);
-  read_queue_.front()->Run(last_buffer);
-  delete read_queue_.front();
-  read_queue_.pop_front();
+  decoder_->consume_audio_samples_callback()->Run(last_buffer);
+  --pending_reads_;
 
   // We shouldn't report ended until all data has been flushed out.
   EXPECT_FALSE(renderer_->HasEnded());
 
   // We should have one less read request in the queue.
-  EXPECT_EQ(kMaxQueueSize - 1, read_queue_.size());
+  EXPECT_EQ(kMaxQueueSize - 1, pending_reads_);
 
   // Flush the entire internal buffer and verify NotifyEnded() isn't called
   // right away.
@@ -236,7 +235,8 @@ TEST_F(AudioRendererBaseTest, OneCompleteReadCycle) {
   EXPECT_EQ(0u, bytes_buffered % kDataSize);
   while (bytes_buffered > 0) {
     EXPECT_EQ(kDataSize,
-              renderer_->FillBuffer(buffer, kDataSize, base::TimeDelta()));
+              renderer_->FillBuffer(buffer, kDataSize,
+                                    base::TimeDelta(), true));
     bytes_buffered -= kDataSize;
   }
 
@@ -248,13 +248,15 @@ TEST_F(AudioRendererBaseTest, OneCompleteReadCycle) {
 
   // Do an additional read to trigger NotifyEnded().
   EXPECT_CALL(host_, NotifyEnded());
-  EXPECT_EQ(0u, renderer_->FillBuffer(buffer, kDataSize, base::TimeDelta()));
+  EXPECT_EQ(0u, renderer_->FillBuffer(buffer, kDataSize,
+                                      base::TimeDelta(), true));
 
   // We should now report ended.
   EXPECT_TRUE(renderer_->HasEnded());
 
   // Further reads should return muted audio and not notify any more.
-  EXPECT_EQ(0u, renderer_->FillBuffer(buffer, kDataSize, base::TimeDelta()));
+  EXPECT_EQ(0u, renderer_->FillBuffer(buffer, kDataSize,
+                                      base::TimeDelta(), true));
 }
 
 }  // namespace media

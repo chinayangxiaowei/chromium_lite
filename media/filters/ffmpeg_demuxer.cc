@@ -4,11 +4,13 @@
 
 #include "base/callback.h"
 #include "base/command_line.h"
+#include "base/message_loop.h"
 #include "base/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "base/time.h"
 #include "media/base/filter_host.h"
+#include "media/base/limits.h"
 #include "media/base/media_switches.h"
 #include "media/ffmpeg/ffmpeg_common.h"
 #include "media/ffmpeg/ffmpeg_util.h"
@@ -105,19 +107,20 @@ bool FFmpegDemuxerStream::HasPendingReads() {
   return !read_queue_.empty();
 }
 
-base::TimeDelta FFmpegDemuxerStream::EnqueuePacket(AVPacket* packet) {
+void FFmpegDemuxerStream::EnqueuePacket(AVPacket* packet) {
   DCHECK_EQ(MessageLoop::current(), demuxer_->message_loop());
   base::TimeDelta timestamp =
       ConvertStreamTimestamp(stream_->time_base, packet->pts);
   base::TimeDelta duration =
       ConvertStreamTimestamp(stream_->time_base, packet->duration);
+
   if (stopped_) {
     NOTREACHED() << "Attempted to enqueue packet on a stopped stream";
-    return timestamp;
+    return;
   }
 
   // Convert if the packet if there is bitstream filter.
-  if (bitstream_converter_.get() &&
+  if (packet->data && bitstream_converter_.get() &&
       !bitstream_converter_->ConvertPacket(packet)) {
     LOG(ERROR) << "Format converstion failed.";
   }
@@ -127,11 +130,11 @@ base::TimeDelta FFmpegDemuxerStream::EnqueuePacket(AVPacket* packet) {
       new AVPacketBuffer(packet, timestamp, duration);
   if (!buffer) {
     NOTREACHED() << "Unable to allocate AVPacketBuffer";
-    return timestamp;
+    return;
   }
   buffer_queue_.push_back(buffer);
   FulfillPendingRead();
-  return timestamp;
+  return;
 }
 
 void FFmpegDemuxerStream::FlushBuffers() {
@@ -203,9 +206,27 @@ void FFmpegDemuxerStream::FulfillPendingRead() {
   read_callback->Run(buffer);
 }
 
-void FFmpegDemuxerStream::SetBitstreamConverter(
-    BitstreamConverter* converter) {
-  bitstream_converter_.reset(converter);
+void FFmpegDemuxerStream::EnableBitstreamConverter() {
+  // Called by hardware decoder to require different bitstream converter.
+  // Currently we assume that converter is determined by codec_id;
+  DCHECK(stream_);
+
+  const char* filter_name = NULL;
+  if (stream_->codec->codec_id == CODEC_ID_H264) {
+    filter_name = "h264_mp4toannexb";
+  } else if (stream_->codec->codec_id == CODEC_ID_MPEG4) {
+    filter_name = "mpeg4video_es";
+  } else if (stream_->codec->codec_id == CODEC_ID_WMV3) {
+    filter_name = "vc1_asftorcv";
+  } else if (stream_->codec->codec_id == CODEC_ID_VC1) {
+    filter_name = "vc1_asftoannexg";
+  }
+
+  if (filter_name) {
+    bitstream_converter_.reset(
+        new FFmpegBitstreamConverter(filter_name, stream_->codec));
+    CHECK(bitstream_converter_->Initialize());
+  }
 }
 
 // static
@@ -225,8 +246,7 @@ FFmpegDemuxer::FFmpegDemuxer()
       read_event_(false, false),
       read_has_failed_(false),
       last_read_bytes_(0),
-      read_position_(0),
-      first_seek_hack_(true) {
+      read_position_(0) {
 }
 
 FFmpegDemuxer::~FFmpegDemuxer() {
@@ -265,10 +285,10 @@ void FFmpegDemuxer::PostDemuxTask() {
       NewRunnableMethod(this, &FFmpegDemuxer::DemuxTask));
 }
 
-void FFmpegDemuxer::Stop() {
+void FFmpegDemuxer::Stop(FilterCallback* callback) {
   // Post a task to notify the streams to stop as well.
   message_loop()->PostTask(FROM_HERE,
-      NewRunnableMethod(this, &FFmpegDemuxer::StopTask));
+      NewRunnableMethod(this, &FFmpegDemuxer::StopTask, callback));
 
   // Then wakes up the thread from reading.
   SignalReadCompleted(DataSource::kReadError);
@@ -283,11 +303,9 @@ void FFmpegDemuxer::Seek(base::TimeDelta time, FilterCallback* callback) {
       NewRunnableMethod(this, &FFmpegDemuxer::SeekTask, time, callback));
 }
 
-void FFmpegDemuxer::OnReceivedMessage(FilterMessage message) {
-  if (message == kMsgDisableAudio) {
-    message_loop()->PostTask(FROM_HERE,
-        NewRunnableMethod(this, &FFmpegDemuxer::DisableAudioStreamTask));
-  }
+void FFmpegDemuxer::OnAudioRendererDisabled() {
+  message_loop()->PostTask(FROM_HERE,
+      NewRunnableMethod(this, &FFmpegDemuxer::DisableAudioStreamTask));
 }
 
 void FFmpegDemuxer::Initialize(DataSource* data_source,
@@ -337,6 +355,9 @@ int FFmpegDemuxer::Read(int size, uint8* data) {
     return AVERROR_IO;
   }
   read_position_ += last_read_bytes;
+
+  host()->SetCurrentReadPosition(read_position_);
+
   return last_read_bytes;
 }
 
@@ -406,38 +427,21 @@ void FFmpegDemuxer::InitializeTask(DataSource* data_source,
 
   // Create demuxer streams for all supported streams.
   base::TimeDelta max_duration;
+  const bool kDemuxerIsWebm = !strcmp("webm", format_context_->iformat->name);
   for (size_t i = 0; i < format_context_->nb_streams; ++i) {
     AVCodecContext* codec_context = format_context_->streams[i]->codec;
     CodecType codec_type = codec_context->codec_type;
     if (codec_type == CODEC_TYPE_AUDIO || codec_type == CODEC_TYPE_VIDEO) {
       AVStream* stream = format_context_->streams[i];
+      // WebM is currently strictly VP8 and Vorbis.
+      if (kDemuxerIsWebm && (stream->codec->codec_id != CODEC_ID_VP8 &&
+        stream->codec->codec_id != CODEC_ID_VORBIS)) {
+        packet_streams_.push_back(NULL);
+        continue;
+      }
+
       FFmpegDemuxerStream* demuxer_stream
           = new FFmpegDemuxerStream(this, stream);
-
-      // Initialize the bitstream if OpenMAX is enabled.
-      // TODO(hclam): Should be enabled by the decoder.
-      if (CommandLine::ForCurrentProcess()->HasSwitch(
-              switches::kEnableOpenMax)) {
-        // TODO(ajwong): Unittest this branch of the if statement.
-        // TODO(hclam): In addition to codec we should also check the container.
-        const char* filter_name = NULL;
-        if (stream->codec->codec_id == CODEC_ID_H264) {
-          filter_name = "h264_mp4toannexb";
-        } else if (stream->codec->codec_id == CODEC_ID_MPEG4) {
-          filter_name = "mpeg4video_es";
-        } else if (stream->codec->codec_id == CODEC_ID_WMV3) {
-          filter_name = "vc1_asftorcv";
-        } else if (stream->codec->codec_id == CODEC_ID_VC1) {
-          filter_name = "vc1_asftoannexg";
-        }
-
-        if (filter_name) {
-          BitstreamConverter* bitstream_converter =
-              new FFmpegBitstreamConverter(filter_name, codec_context);
-          CHECK(bitstream_converter->Initialize());
-          demuxer_stream->SetBitstreamConverter(bitstream_converter);
-        }
-      }
 
       DCHECK(demuxer_stream);
       streams_.push_back(demuxer_stream);
@@ -459,7 +463,13 @@ void FFmpegDemuxer::InitializeTask(DataSource* data_source,
     max_duration =
         std::max(max_duration,
                  ConvertTimestamp(av_time_base, format_context_->duration));
+  } else {
+    // If the duration is not a valid value. Assume that this is a live stream
+    // and we set duration to the maximum int64 number to represent infinity.
+    max_duration = base::TimeDelta::FromMicroseconds(
+        Limits::kMaxTimeInMicroseconds);
   }
+
   // Good to go: set the duration and notify we're done initializing.
   host()->SetDuration(max_duration);
   callback->Run();
@@ -475,21 +485,8 @@ void FFmpegDemuxer::SeekTask(base::TimeDelta time, FilterCallback* callback) {
     (*iter)->FlushBuffers();
   }
 
-  // Do NOT call av_seek_frame() if we were just created.  For some reason it
-  // causes Ogg+Theora/Vorbis videos to become heavily out of sync.
-  //
-  // TODO(scherkus): fix the av_seek_frame() hackery!
-  if (first_seek_hack_) {
-    first_seek_hack_ = false;
-    callback->Run();
-    return;
-  }
-
-  // Seek backwards if requested timestamp is behind FFmpeg's current time.
-  int flags = 0;
-  if (time <= current_timestamp_) {
-    flags |= AVSEEK_FLAG_BACKWARD;
-  }
+  // Always seek to a timestamp less than or equal to the desired timestamp.
+  int flags = AVSEEK_FLAG_BACKWARD;
 
   // Passing -1 as our stream index lets FFmpeg pick a default stream.  FFmpeg
   // will attempt to use the lowest-index video stream, if present, followed by
@@ -529,7 +526,12 @@ void FFmpegDemuxer::DemuxTask() {
   // thread.
   DCHECK_GE(packet->stream_index, 0);
   DCHECK_LT(packet->stream_index, static_cast<int>(packet_streams_.size()));
-  FFmpegDemuxerStream* demuxer_stream = packet_streams_[packet->stream_index];
+  FFmpegDemuxerStream* demuxer_stream = NULL;
+  size_t i = packet->stream_index;
+  // Defend against ffmpeg giving us a bad stream index.
+  if (i < packet_streams_.size()) {
+    demuxer_stream = packet_streams_[i];
+  }
   if (demuxer_stream) {
     // Queue the packet with the appropriate stream.  The stream takes
     // ownership of the AVPacket.
@@ -541,7 +543,7 @@ void FFmpegDemuxer::DemuxTask() {
       // other codecs.  It is safe to call this function even if the packet does
       // not refer to inner memory from FFmpeg.
       av_dup_packet(packet.get());
-      current_timestamp_ = demuxer_stream->EnqueuePacket(packet.release());
+      demuxer_stream->EnqueuePacket(packet.release());
     }
   }
 
@@ -552,11 +554,15 @@ void FFmpegDemuxer::DemuxTask() {
   }
 }
 
-void FFmpegDemuxer::StopTask() {
+void FFmpegDemuxer::StopTask(FilterCallback* callback) {
   DCHECK_EQ(MessageLoop::current(), message_loop());
   StreamVector::iterator iter;
   for (iter = streams_.begin(); iter != streams_.end(); ++iter) {
     (*iter)->Stop();
+  }
+  if (callback) {
+    callback->Run();
+    delete callback;
   }
 }
 

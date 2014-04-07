@@ -9,14 +9,15 @@
 #include <set>
 
 #include "base/file_path.h"
+#include "base/gtest_prod_util.h"
 #include "base/observer_list.h"
+#include "base/platform_file.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/string_util.h"
 #include "base/time.h"
 #include "net/base/completion_callback.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 #include "webkit/database/database_connections.h"
 
 namespace sql {
@@ -100,7 +101,7 @@ class DatabaseTracker
     virtual ~Observer() {}
   };
 
-  explicit DatabaseTracker(const FilePath& profile_path);
+  DatabaseTracker(const FilePath& profile_path, bool is_incognito);
 
   void DatabaseOpened(const string16& origin_identifier,
                       const string16& database_name,
@@ -144,10 +145,12 @@ class DatabaseTracker
                      net::CompletionCallback* callback);
 
   // Delete any databases that have been touched since the cutoff date that's
-  // supplied. Returns net::OK on success, net::FAILED if not all databases
-  // could be deleted, and net::ERR_IO_PENDING and |callback| is invoked upon
-  // completion, if non-NULL.
+  // supplied, omitting any that match IDs within |protected_origins|.
+  // Returns net::OK on success, net::FAILED if not all databases could be
+  // deleted, and net::ERR_IO_PENDING and |callback| is invoked upon completion,
+  // if non-NULL.
   int DeleteDataModifiedSince(const base::Time& cutoff,
+                              const std::vector<string16>& protected_origins,
                               net::CompletionCallback* callback);
 
   // Delete all databases that belong to the given origin. Returns net::OK on
@@ -155,6 +158,18 @@ class DatabaseTracker
   // net::ERR_IO_PENDING and |callback| is invoked upon completion, if non-NULL.
   int DeleteDataForOrigin(const string16& origin_identifier,
                           net::CompletionCallback* callback);
+
+  bool IsIncognitoProfile() const { return is_incognito_; }
+
+  void GetIncognitoFileHandle(const string16& vfs_file_path,
+                              base::PlatformFile* file_handle) const;
+  void SaveIncognitoFileHandle(const string16& vfs_file_path,
+                               const base::PlatformFile& file_handle);
+  bool CloseIncognitoFileHandle(const string16& vfs_file_path);
+  bool HasSavedIncognitoFileHandle(const string16& vfs_file_path) const;
+
+  // Deletes the directory that stores all DBs in incognito mode, if it exists.
+  void DeleteIncognitoDBDirectory();
 
   static void ClearLocalState(const FilePath& profile_path);
 
@@ -164,6 +179,8 @@ class DatabaseTracker
 
   typedef std::map<string16, std::set<string16> > DatabaseSet;
   typedef std::map<net::CompletionCallback*, DatabaseSet> PendingCompletionMap;
+  typedef std::map<string16, base::PlatformFile> FileHandlesMap;
+  typedef std::map<string16, string16> OriginDirectoriesMap;
 
   class CachedOriginInfo : public OriginInfo {
    public:
@@ -216,8 +233,13 @@ class DatabaseTracker
   void ScheduleDatabasesForDeletion(const DatabaseSet& databases,
                                     net::CompletionCallback* callback);
 
+  // Returns the directory where all DB files for the given origin are stored.
+  string16 GetOriginDirectory(const string16& origin_identifier);
+
   bool is_initialized_;
   const bool is_incognito_;
+  bool shutting_down_;
+  const FilePath profile_path_;
   const FilePath db_dir_;
   scoped_ptr<sql::Connection> db_;
   scoped_ptr<DatabasesTable> databases_table_;
@@ -238,8 +260,21 @@ class DatabaseTracker
   // to quota_table_ every time an extention is loaded.
   std::map<string16, int64> in_memory_quotas_;
 
-  FRIEND_TEST(DatabaseTrackerTest, DatabaseTracker);
-  FRIEND_TEST(DatabaseTrackerTest, NoInitIncognito);
+  // When in incognito mode, store a DELETE_ON_CLOSE handle to each
+  // main DB and journal file that was accessed. When the incognito profile
+  // goes away (or when the browser crashes), all these handles will be
+  // closed, and the files will be deleted.
+  FileHandlesMap incognito_file_handles_;
+
+  // In a non-incognito profile, all DBs in an origin are stored in a directory
+  // named after the origin. In an incognito profile though, we do not want the
+  // directory structure to reveal the origins visited by the user (in case the
+  // browser process crashes and those directories are not deleted). So we use
+  // this map to assign directory names that do not reveal this information.
+  OriginDirectoriesMap incognito_origin_directories_;
+  int incognito_origin_directories_generator_;
+
+  FRIEND_TEST_ALL_PREFIXES(DatabaseTracker, TestHelper);
 };
 
 }  // namespace webkit_database

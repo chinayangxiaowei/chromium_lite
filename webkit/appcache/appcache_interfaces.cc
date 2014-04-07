@@ -7,8 +7,10 @@
 #include "googleurl/src/gurl.h"
 #include "net/url_request/url_request.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebApplicationCacheHost.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebConsoleMessage.h"
 
 using WebKit::WebApplicationCacheHost;
+using WebKit::WebConsoleMessage;
 
 namespace appcache {
 
@@ -20,6 +22,29 @@ const char kHttpGETMethod[] = "GET";
 const char kHttpHEADMethod[] = "HEAD";
 
 const FilePath::CharType kAppCacheDatabaseName[] = FILE_PATH_LITERAL("Index");
+
+AppCacheInfo::AppCacheInfo()
+    : cache_id(kNoCacheId),
+      status(UNCACHED),
+      size(0),
+      is_complete(false) {
+}
+
+AppCacheInfo::~AppCacheInfo() {
+}
+
+AppCacheResourceInfo::AppCacheResourceInfo()
+    : url(),
+      size(0),
+      is_master(0),
+      is_manifest(0),
+      is_fallback(0),
+      is_foreign(0),
+      is_explicit(0) {
+}
+
+AppCacheResourceInfo::~AppCacheResourceInfo() {
+}
 
 bool IsSchemeSupported(const GURL& url) {
   bool supported = url.SchemeIs(kHttpScheme) || url.SchemeIs(kHttpsScheme);
@@ -74,5 +99,13 @@ COMPILE_ASSERT((int)WebApplicationCacheHost::CachedEvent ==
                (int)CACHED_EVENT, CachedEvent);
 COMPILE_ASSERT((int)WebApplicationCacheHost::ObsoleteEvent ==
                (int)OBSOLETE_EVENT, ObsoleteEvent);
+COMPILE_ASSERT((int)WebConsoleMessage::LevelTip ==
+               (int)LOG_TIP, LevelTip);
+COMPILE_ASSERT((int)WebConsoleMessage::LevelLog ==
+               (int)LOG_INFO, LevelLog);
+COMPILE_ASSERT((int)WebConsoleMessage::LevelWarning ==
+               (int)LOG_WARNING, LevelWarning);
+COMPILE_ASSERT((int)WebConsoleMessage::LevelError ==
+               (int)LOG_ERROR, LevelError);
 
-}  // namespace
+}  // namespace appcache

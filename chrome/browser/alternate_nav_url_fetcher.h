@@ -4,11 +4,12 @@
 
 #ifndef CHROME_BROWSER_ALTERNATE_NAV_URL_FETCHER_H_
 #define CHROME_BROWSER_ALTERNATE_NAV_URL_FETCHER_H_
+#pragma once
 
 #include <string>
 
-#include "chrome/browser/net/url_fetcher.h"
 #include "chrome/browser/tab_contents/infobar_delegate.h"
+#include "chrome/common/net/url_fetcher.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 
@@ -55,8 +56,8 @@ class AlternateNavURLFetcher : public NotificationObserver,
                                   const std::string& data);
 
   // LinkInfoBarDelegate
-  virtual std::wstring GetMessageTextWithOffset(size_t* link_offset) const;
-  virtual std::wstring GetLinkText() const;
+  virtual string16 GetMessageTextWithOffset(size_t* link_offset) const;
+  virtual string16 GetLinkText() const;
   virtual SkBitmap* GetIcon() const;
   virtual bool LinkClicked(WindowOpenDisposition disposition);
   virtual void InfoBarClosed();

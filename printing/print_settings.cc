@@ -1,12 +1,21 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "printing/print_settings.h"
 
+// TODO(jhawkins): Move platform-specific implementations to their own files.
+#if defined(USE_X11)
+#include <gtk/gtk.h>
+#include <gtk/gtkprinter.h>
+#include "printing/native_metafile.h"
+#endif  // defined(USE_X11)
+
 #include "base/atomic_sequence_num.h"
 #include "base/logging.h"
+#include "base/string_piece.h"
 #include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
 #include "printing/units.h"
 
 namespace printing {
@@ -24,6 +33,9 @@ PrintSettings::PrintSettings()
       landscape_(false) {
 }
 
+PrintSettings::~PrintSettings() {
+}
+
 void PrintSettings::Clear() {
   ranges.clear();
   min_shrink = 1.25;
@@ -32,12 +44,12 @@ void PrintSettings::Clear() {
   selection_only = false;
   printer_name_.clear();
   device_name_.clear();
-  page_setup_pixels_.Clear();
+  page_setup_device_units_.Clear();
   dpi_ = 0;
   landscape_ = false;
 }
 
-#ifdef WIN32
+#if defined(OS_WIN)
 void PrintSettings::Init(HDC hdc,
                          const DEVMODE& dev_mode,
                          const PageRanges& new_ranges,
@@ -60,15 +72,17 @@ void PrintSettings::Init(HDC hdc,
   DCHECK_EQ(GetDeviceCaps(hdc, SCALINGFACTORX), 0);
   DCHECK_EQ(GetDeviceCaps(hdc, SCALINGFACTORY), 0);
 
-  // Initialize page_setup_pixels_.
-  gfx::Size physical_size_pixels(GetDeviceCaps(hdc, PHYSICALWIDTH),
-                                 GetDeviceCaps(hdc, PHYSICALHEIGHT));
-  gfx::Rect printable_area_pixels(GetDeviceCaps(hdc, PHYSICALOFFSETX),
-                                  GetDeviceCaps(hdc, PHYSICALOFFSETY),
-                                  GetDeviceCaps(hdc, HORZRES),
-                                  GetDeviceCaps(hdc, VERTRES));
+  // Initialize page_setup_device_units_.
+  gfx::Size physical_size_device_units(GetDeviceCaps(hdc, PHYSICALWIDTH),
+                                       GetDeviceCaps(hdc, PHYSICALHEIGHT));
+  gfx::Rect printable_area_device_units(GetDeviceCaps(hdc, PHYSICALOFFSETX),
+                                        GetDeviceCaps(hdc, PHYSICALOFFSETY),
+                                        GetDeviceCaps(hdc, HORZRES),
+                                        GetDeviceCaps(hdc, VERTRES));
 
-  SetPrinterPrintableArea(physical_size_pixels, printable_area_pixels);
+  SetPrinterPrintableArea(physical_size_device_units,
+                          printable_area_device_units,
+                          dpi_);
 }
 #elif defined(OS_MACOSX)
 void PrintSettings::Init(PMPrinter printer, PMPageFormat page_format,
@@ -91,7 +105,7 @@ void PrintSettings::Init(PMPrinter printer, PMPageFormat page_format,
     for (uint32 i = 1; i <= resolution_count; ++i) {
       PMResolution resolution;
       PMPrinterGetIndexedPrinterResolution(printer, i, &resolution);
-      if (best_resolution.hRes > resolution.hRes)
+      if (resolution.hRes > best_resolution.hRes)
         best_resolution = resolution;
     }
   }
@@ -103,36 +117,92 @@ void PrintSettings::Init(PMPrinter printer, PMPageFormat page_format,
   PMRect page_rect, paper_rect;
   PMGetAdjustedPageRect(page_format, &page_rect);
   PMGetAdjustedPaperRect(page_format, &paper_rect);
-  const double pixels_per_point = dpi_ / 72.0;
-  gfx::Size physical_size_pixels(
-      (paper_rect.right - paper_rect.left) * pixels_per_point,
-      (paper_rect.bottom - paper_rect.top) * pixels_per_point);
-  gfx::Rect printable_area_pixels(
-      (page_rect.left - paper_rect.left) * pixels_per_point,
-      (page_rect.top - paper_rect.top) * pixels_per_point,
-      (page_rect.right - page_rect.left) * pixels_per_point,
-      (page_rect.bottom - page_rect.top) * pixels_per_point);
+  // Device units are in points. Units per inch is 72.
+  gfx::Size physical_size_device_units(
+      (paper_rect.right - paper_rect.left),
+      (paper_rect.bottom - paper_rect.top));
+  gfx::Rect printable_area_device_units(
+      (page_rect.left - paper_rect.left),
+      (page_rect.top - paper_rect.top),
+      (page_rect.right - page_rect.left),
+      (page_rect.bottom - page_rect.top));
 
-  SetPrinterPrintableArea(physical_size_pixels, printable_area_pixels);
+  SetPrinterPrintableArea(physical_size_device_units,
+                          printable_area_device_units,
+                          72);
+}
+#elif defined(USE_X11)
+void PrintSettings::Init(GtkPrintSettings* settings,
+                         GtkPageSetup* page_setup,
+                         const PageRanges& new_ranges,
+                         bool print_selection_only) {
+  // TODO(jhawkins): |printer_name_| and |device_name_| should be string16.
+  base::StringPiece name(
+      reinterpret_cast<const char*>(gtk_print_settings_get_printer(settings)));
+  printer_name_ = UTF8ToWide(name);
+  device_name_ = printer_name_;
+  ranges = new_ranges;
+  selection_only = print_selection_only;
+
+  GtkPageOrientation orientation = gtk_print_settings_get_orientation(settings);
+  landscape_ = orientation == GTK_PAGE_ORIENTATION_LANDSCAPE;
+
+  gfx::Size physical_size_device_units;
+  gfx::Rect printable_area_device_units;
+  dpi_ = gtk_print_settings_get_resolution(settings);
+  if (dpi_) {
+    // Initialize page_setup_device_units_.
+    physical_size_device_units.SetSize(
+        gtk_page_setup_get_paper_width(page_setup, GTK_UNIT_INCH) * dpi_,
+        gtk_page_setup_get_paper_height(page_setup, GTK_UNIT_INCH) * dpi_);
+    printable_area_device_units.SetRect(
+        gtk_page_setup_get_left_margin(page_setup, GTK_UNIT_INCH) * dpi_,
+        gtk_page_setup_get_top_margin(page_setup, GTK_UNIT_INCH) * dpi_,
+        gtk_page_setup_get_page_width(page_setup, GTK_UNIT_INCH) * dpi_,
+        gtk_page_setup_get_page_height(page_setup, GTK_UNIT_INCH) * dpi_);
+  } else {
+    // Use dummy values if we cannot get valid values.
+    // TODO(jhawkins) Remove this hack when the Linux printing refactoring
+    // finishes.
+    dpi_ = kPixelsPerInch;
+    double page_width_in_pixel = 8.5 * dpi_;
+    double page_height_in_pixel = 11.0 * dpi_;
+    physical_size_device_units.SetSize(
+      static_cast<int>(page_width_in_pixel),
+      static_cast<int>(page_height_in_pixel));
+    printable_area_device_units.SetRect(
+      static_cast<int>(
+          NativeMetafile::kLeftMarginInInch * printing::kPixelsPerInch),
+      static_cast<int>(
+          NativeMetafile::kTopMarginInInch * printing::kPixelsPerInch),
+      page_width_in_pixel,
+      page_height_in_pixel);
+  }
+  SetPrinterPrintableArea(physical_size_device_units,
+                          printable_area_device_units,
+                          dpi_);
 }
 #endif
 
 void PrintSettings::SetPrinterPrintableArea(
-    gfx::Size const& physical_size_pixels,
-    gfx::Rect const& printable_area_pixels) {
+    gfx::Size const& physical_size_device_units,
+    gfx::Rect const& printable_area_device_units,
+    int units_per_inch) {
 
   int header_footer_text_height = 0;
   int margin_printer_units = 0;
   if (use_overlays) {
     // Hard-code text_height = 0.5cm = ~1/5 of inch.
-    header_footer_text_height = ConvertUnit(500, kHundrethsMMPerInch, dpi_);
+    header_footer_text_height = ConvertUnit(500, kHundrethsMMPerInch,
+                                            units_per_inch);
     // Default margins 1.0cm = ~2/5 of an inch.
-    margin_printer_units = ConvertUnit(1000, kHundrethsMMPerInch, dpi_);
+    margin_printer_units = ConvertUnit(1000, kHundrethsMMPerInch,
+                                       units_per_inch);
   }
   // Start by setting the user configuration
-  page_setup_pixels_.Init(physical_size_pixels,
-                          printable_area_pixels,
-                          header_footer_text_height);
+  page_setup_device_units_.Init(physical_size_device_units,
+                                printable_area_device_units,
+                                header_footer_text_height);
 
 
   // Apply default margins (not user configurable just yet).
@@ -145,7 +215,7 @@ void PrintSettings::SetPrinterPrintableArea(
   margins.top = margin_printer_units;
   margins.right = margin_printer_units;
   margins.bottom = margin_printer_units;
-  page_setup_pixels_.SetRequestedMargins(margins);
+  page_setup_device_units_.SetRequestedMargins(margins);
 }
 
 bool PrintSettings::Equals(const PrintSettings& rhs) const {
@@ -158,7 +228,7 @@ bool PrintSettings::Equals(const PrintSettings& rhs) const {
       desired_dpi == rhs.desired_dpi &&
       overlays.Equals(rhs.overlays) &&
       device_name_ == rhs.device_name_ &&
-      page_setup_pixels_.Equals(rhs.page_setup_pixels_) &&
+      page_setup_device_units_.Equals(rhs.page_setup_device_units_) &&
       dpi_ == rhs.dpi_ &&
       landscape_ == rhs.landscape_;
 }

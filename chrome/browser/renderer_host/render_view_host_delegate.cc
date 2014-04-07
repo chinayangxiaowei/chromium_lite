@@ -5,12 +5,14 @@
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
 
 #include "base/singleton.h"
+#include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "chrome/common/renderer_preferences.h"
 #include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #include "webkit/glue/webpreferences.h"
 
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
 #include "chrome/browser/gtk/gtk_util.h"
 #endif
 
@@ -30,6 +32,11 @@ RenderViewHostDelegate::GetBrowserIntegrationDelegate() {
 
 RenderViewHostDelegate::Resource*
 RenderViewHostDelegate::GetResourceDelegate() {
+  return NULL;
+}
+
+RenderViewHostDelegate::ContentSettings*
+RenderViewHostDelegate::GetContentSettingsDelegate() {
   return NULL;
 }
 
@@ -62,6 +69,21 @@ RenderViewHostDelegate::GetBookmarkDragDelegate() {
   return NULL;
 }
 
+RenderViewHostDelegate::BlockedPlugin*
+RenderViewHostDelegate::GetBlockedPluginDelegate() {
+  return NULL;
+}
+
+RenderViewHostDelegate::SSL*
+RenderViewHostDelegate::GetSSLDelegate() {
+  return NULL;
+}
+
+RenderViewHostDelegate::FileSelect*
+RenderViewHostDelegate::GetFileSelectDelegate() {
+  return NULL;
+}
+
 AutomationResourceRoutingDelegate*
 RenderViewHostDelegate::GetAutomationResourceRoutingDelegate() {
   return NULL;
@@ -83,14 +105,14 @@ WebPreferences RenderViewHostDelegate::GetWebkitPrefs() {
   return WebPreferences();
 }
 
-bool RenderViewHostDelegate::CanBlur() const {
-  return true;
-}
-
 gfx::Rect RenderViewHostDelegate::GetRootWindowResizerRect() const {
   return gfx::Rect();
 }
 
 bool RenderViewHostDelegate::IsExternalTabContainer() const {
+  return false;
+}
+
+bool RenderViewHostDelegate::View::ShouldDrawDropShadow() {
   return false;
 }

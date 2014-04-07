@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_BROWSER_RENDER_PROCESS_HOST_H_
 #define CHROME_BROWSER_RENDERER_HOST_BROWSER_RENDER_PROCESS_HOST_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -17,6 +18,7 @@
 #include "base/timer.h"
 #include "chrome/browser/child_process_launcher.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCache.h"
 
@@ -59,8 +61,7 @@ class BrowserRenderProcessHost : public RenderProcessHost,
   ~BrowserRenderProcessHost();
 
   // RenderProcessHost implementation (public portion).
-  virtual bool Init(bool is_extensions_process,
-                    URLRequestContextGetter* request_context);
+  virtual bool Init(bool is_accessibility_enabled, bool is_extensions_process);
   virtual int GetNextRoutingID();
   virtual void CancelResourceRequests(int render_widget_id);
   virtual void CrossSiteClosePageACK(const ViewMsg_ClosePage_Params& params);
@@ -110,6 +111,7 @@ class BrowserRenderProcessHost : public RenderProcessHost,
   void OnExtensionAddListener(const std::string& event_name);
   void OnExtensionRemoveListener(const std::string& event_name);
   void OnExtensionCloseChannel(int port_id);
+  void OnUserMetricsRecordAction(const std::string& action);
 
   // Initialize support for visited links. Send the renderer process its initial
   // set of visited links.
@@ -125,6 +127,10 @@ class BrowserRenderProcessHost : public RenderProcessHost,
 
   // Sends the renderer process a new set of user scripts.
   void SendUserScriptsUpdate(base::SharedMemory* shared_memory);
+
+  // Sends the renderer process the list of all loaded extensions along with a
+  // subset of information the renderer needs about them.
+  void SendExtensionInfo();
 
   // Generates a command line to be used to spawn a renderer and appends the
   // results to |*command_line|.
@@ -192,6 +198,9 @@ class BrowserRenderProcessHost : public RenderProcessHost,
 
   // Buffer visited links and send them to to renderer.
   scoped_ptr<VisitedLinkUpdater> visited_link_updater_;
+
+  // True if this prcoess should have accessibility enabled;
+  bool accessibility_enabled_;
 
   // True iff this process is being used as an extension process. Not valid
   // when running in single-process mode.

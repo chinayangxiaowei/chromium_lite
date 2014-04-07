@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_ASYNC_RESOURCE_HANDLER_H_
 #define CHROME_BROWSER_RENDERER_HOST_ASYNC_RESOURCE_HANDLER_H_
+#pragma once
 
 #include <string>
 
@@ -37,6 +38,7 @@ class AsyncResourceHandler : public ResourceHandler {
                            const URLRequestStatus& status,
                            const std::string& security_info);
   void OnRequestClosed();
+  void OnDataDownloaded(int request_id, int bytes_downloaded);
 
   static void GlobalCleanup();
 

@@ -16,6 +16,8 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/ref_counted.h"
+#include "base/string_number_conversions.h"
+#include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "media/base/data_buffer.h"
 #include "media/filters/audio_renderer_algorithm_ola.h"
@@ -71,7 +73,7 @@ int main(int argc, const char** argv) {
   CommandLine::Init(argc, argv);
   const CommandLine* cmd_line = CommandLine::ForCurrentProcess();
 
-  std::vector<std::wstring> filenames(cmd_line->GetLooseValues());
+  const std::vector<CommandLine::StringType>& filenames = cmd_line->args();
   if (filenames.empty()) {
     std::cerr << "Usage: " << argv[0] << " RATE INFILE OUTFILE\n"
               << std::endl;
@@ -79,23 +81,28 @@ int main(int argc, const char** argv) {
   }
 
   // Retrieve command line options.
-  std::string in_path(WideToUTF8(filenames[1]));
-  std::string out_path(WideToUTF8(filenames[2]));
+  FilePath in_path(filenames[1]);
+  FilePath out_path(filenames[2]);
   double playback_rate = 0.0;
 
   // Determine speed of rerecord.
-  if (!StringToDouble(WideToUTF8(filenames[0]), &playback_rate))
+#if defined(OS_WIN)
+  std::string filename_str = WideToASCII(filenames[0]);
+#else
+  const std::string& filename_str = filenames[0];
+#endif
+  if (!base::StringToDouble(filename_str, &playback_rate))
     playback_rate = 0.0;
 
   // Open input file.
-  ScopedFILE input(file_util::OpenFile(in_path.c_str(), "rb"));
+  ScopedFILE input(file_util::OpenFile(in_path, "rb"));
   if (!(input.get())) {
     LOG(ERROR) << "could not open input";
     return 1;
   }
 
   // Open output file.
-  ScopedFILE output(file_util::OpenFile(out_path.c_str(), "wb"));
+  ScopedFILE output(file_util::OpenFile(out_path, "wb"));
   if (!(output.get())) {
     LOG(ERROR) << "could not open output";
     return 1;
@@ -125,7 +132,7 @@ int main(int argc, const char** argv) {
   ola.FlushBuffers();
 
   // Print out input format.
-  std::cout << in_path << "\n"
+  std::cout << in_path.value() << "\n"
             << "Channels: " << wav.channels << "\n"
             << "Sample Rate: " << wav.sample_rate << "\n"
             << "Bit Rate: " << wav.bit_rate << "\n"

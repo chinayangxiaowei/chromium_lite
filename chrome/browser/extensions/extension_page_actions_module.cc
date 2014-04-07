@@ -1,10 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_page_actions_module.h"
 
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/profile.h"
@@ -14,6 +14,7 @@
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/extensions/extension_error_utils.h"
 #include "chrome/common/render_messages.h"
 
@@ -31,13 +32,10 @@ const char kNoIconSpecified[] = "Page action has no icons to show.";
 
 // TODO(EXTENSIONS_DEPRECATED): obsolete API.
 bool PageActionFunction::SetPageActionEnabled(bool enable) {
-  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_LIST));
-  const ListValue* args = args_as_list();
-
   std::string page_action_id;
-  EXTENSION_FUNCTION_VALIDATE(args->GetString(0, &page_action_id));
+  EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &page_action_id));
   DictionaryValue* action;
-  EXTENSION_FUNCTION_VALIDATE(args->GetDictionary(1, &action));
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(1, &action));
 
   int tab_id;
   EXTENSION_FUNCTION_VALIDATE(action->GetInteger(keys::kTabIdKey, &tab_id));
@@ -70,11 +68,11 @@ bool PageActionFunction::SetPageActionEnabled(bool enable) {
 
   // Find the TabContents that contains this tab id.
   TabContents* contents = NULL;
-  ExtensionTabUtil::GetTabById(tab_id, profile(), include_incognito(),
-                               NULL, NULL, &contents, NULL);
-  if (!contents) {
-    error_ = ExtensionErrorUtils::FormatErrorMessage(kNoTabError,
-                                                     IntToString(tab_id));
+  bool result = ExtensionTabUtil::GetTabById(
+      tab_id, profile(), include_incognito(), NULL, NULL, &contents, NULL);
+  if (!result || !contents) {
+    error_ = ExtensionErrorUtils::FormatErrorMessage(
+        kNoTabError, base::IntToString(tab_id));
     return false;
   }
 
@@ -103,11 +101,11 @@ bool PageActionFunction::InitCommon(int tab_id) {
 
   // Find the TabContents that contains this tab id.
   contents_ = NULL;
-  ExtensionTabUtil::GetTabById(tab_id, profile(), include_incognito(),
-                               NULL, NULL, &contents_, NULL);
-  if (!contents_) {
-    error_ = ExtensionErrorUtils::FormatErrorMessage(kNoTabError,
-                                                     IntToString(tab_id));
+  bool result = ExtensionTabUtil::GetTabById(
+      tab_id, profile(), include_incognito(), NULL, NULL, &contents_, NULL);
+  if (!result || !contents_) {
+    error_ = ExtensionErrorUtils::FormatErrorMessage(
+        kNoTabError, base::IntToString(tab_id));
     return false;
   }
 
@@ -116,7 +114,7 @@ bool PageActionFunction::InitCommon(int tab_id) {
 
 bool PageActionFunction::SetVisible(bool visible) {
   int tab_id;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetAsInteger(&tab_id));
+  EXTENSION_FUNCTION_VALIDATE(args_->GetInteger(0, &tab_id));
   if (!InitCommon(tab_id))
     return false;
 
@@ -142,11 +140,11 @@ bool PageActionHideFunction::RunImpl() {
 }
 
 bool PageActionSetIconFunction::RunImpl() {
-  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_DICTIONARY));
-  const DictionaryValue* args = args_as_dictionary();
+  DictionaryValue* args;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(0, &args));
 
   int tab_id;
-  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(L"tabId", &tab_id));
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger("tabId", &tab_id));
   if (!InitCommon(tab_id))
     return false;
 
@@ -154,14 +152,14 @@ bool PageActionSetIconFunction::RunImpl() {
   // icon index.
   BinaryValue* binary;
   int icon_index;
-  if (args->GetBinary(L"imageData", &binary)) {
+  if (args->GetBinary("imageData", &binary)) {
     IPC::Message bitmap_pickle(binary->GetBuffer(), binary->GetSize());
     void* iter = NULL;
     scoped_ptr<SkBitmap> bitmap(new SkBitmap);
     EXTENSION_FUNCTION_VALIDATE(
         IPC::ReadParam(&bitmap_pickle, &iter, bitmap.get()));
     page_action_->SetIcon(tab_id, *bitmap);
-  } else if (args->GetInteger(L"iconIndex", &icon_index)) {
+  } else if (args->GetInteger("iconIndex", &icon_index)) {
     if (icon_index < 0 || static_cast<size_t>(icon_index) >=
                               page_action_->icon_paths()->size()) {
       error_ = kIconIndexOutOfBounds;
@@ -178,16 +176,16 @@ bool PageActionSetIconFunction::RunImpl() {
 }
 
 bool PageActionSetTitleFunction::RunImpl() {
-  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_DICTIONARY));
-  const DictionaryValue* args = args_as_dictionary();
+  DictionaryValue* args;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(0, &args));
 
   int tab_id;
-  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(L"tabId", &tab_id));
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger("tabId", &tab_id));
   if (!InitCommon(tab_id))
     return false;
 
   std::string title;
-  EXTENSION_FUNCTION_VALIDATE(args->GetString(L"title", &title));
+  EXTENSION_FUNCTION_VALIDATE(args->GetString("title", &title));
 
   page_action_->SetTitle(tab_id, title);
   contents_->PageActionStateChanged();
@@ -195,18 +193,18 @@ bool PageActionSetTitleFunction::RunImpl() {
 }
 
 bool PageActionSetPopupFunction::RunImpl() {
-  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_DICTIONARY));
-  const DictionaryValue* args = args_as_dictionary();
+  DictionaryValue* args;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(0, &args));
 
   int tab_id;
-  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(L"tabId", &tab_id));
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger("tabId", &tab_id));
   if (!InitCommon(tab_id))
     return false;
 
   // TODO(skerner): Consider allowing null and undefined to mean the popup
   // should be removed.
   std::string popup_string;
-  EXTENSION_FUNCTION_VALIDATE(args->GetString(L"popup", &popup_string));
+  EXTENSION_FUNCTION_VALIDATE(args->GetString("popup", &popup_string));
 
   GURL popup_url;
   if (!popup_string.empty())
@@ -220,16 +218,16 @@ bool PageActionSetPopupFunction::RunImpl() {
 // Not currently exposed to extensions. To re-enable, add mapping in
 // extension_function_dispatcher.
 bool PageActionSetBadgeBackgroundColorFunction::RunImpl() {
-  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_DICTIONARY));
-  const DictionaryValue* args = args_as_dictionary();
+  DictionaryValue* args;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(0, &args));
 
   int tab_id;
-  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(L"tabId", &tab_id));
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger("tabId", &tab_id));
   if (!InitCommon(tab_id))
     return false;
 
   ListValue* color_value;
-  EXTENSION_FUNCTION_VALIDATE(args->GetList(L"color", &color_value));
+  EXTENSION_FUNCTION_VALIDATE(args->GetList("color", &color_value));
   EXTENSION_FUNCTION_VALIDATE(color_value->GetSize() == 4);
 
   int color_array[4] = {0};
@@ -246,16 +244,16 @@ bool PageActionSetBadgeBackgroundColorFunction::RunImpl() {
 // Not currently exposed to extensions. To re-enable, add mapping in
 // extension_function_dispatcher.
 bool PageActionSetBadgeTextColorFunction::RunImpl() {
-  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_DICTIONARY));
-  const DictionaryValue* args = args_as_dictionary();
+  DictionaryValue* args;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(0, &args));
 
   int tab_id;
-  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(L"tabId", &tab_id));
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger("tabId", &tab_id));
   if (!InitCommon(tab_id))
     return false;
 
   ListValue* color_value;
-  EXTENSION_FUNCTION_VALIDATE(args->GetList(L"color", &color_value));
+  EXTENSION_FUNCTION_VALIDATE(args->GetList("color", &color_value));
   EXTENSION_FUNCTION_VALIDATE(color_value->GetSize() == 4);
 
   int color_array[4] = {0};
@@ -272,16 +270,16 @@ bool PageActionSetBadgeTextColorFunction::RunImpl() {
 // Not currently exposed to extensions. To re-enable, add mapping in
 // extension_function_dispatcher.
 bool PageActionSetBadgeTextFunction::RunImpl() {
-  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_DICTIONARY));
-  const DictionaryValue* args = args_as_dictionary();
+  DictionaryValue* args;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(0, &args));
 
   int tab_id;
-  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(L"tabId", &tab_id));
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger("tabId", &tab_id));
   if (!InitCommon(tab_id))
     return false;
 
   std::string text;
-  EXTENSION_FUNCTION_VALIDATE(args->GetString(L"text", &text));
+  EXTENSION_FUNCTION_VALIDATE(args->GetString("text", &text));
 
   page_action_->SetBadgeText(tab_id, text);
   contents_->PageActionStateChanged();

@@ -4,12 +4,13 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_OPTIONS_LANGUAGE_HANGUL_CONFIG_VIEW_H_
 #define CHROME_BROWSER_CHROMEOS_OPTIONS_LANGUAGE_HANGUL_CONFIG_VIEW_H_
+#pragma once
 
 #include <string>
 
 #include "base/scoped_ptr.h"
-#include "chrome/browser/chromeos/cros/language_library.h"
-#include "chrome/browser/pref_member.h"
+#include "chrome/browser/chromeos/cros/input_method_library.h"
+#include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/views/options/options_page_view.h"
 #include "views/controls/combobox/combobox.h"
 #include "views/controls/label.h"
@@ -18,7 +19,8 @@
 namespace chromeos {
 
 class HangulKeyboardComboboxModel;
-// A dialog box for showing a password textfield.
+
+// A dialog box for showing Korean input method preferences.
 class LanguageHangulConfigView : public views::Combobox::Listener,
                                  public views::DialogDelegate,
                                  public OptionsPageView {
@@ -34,6 +36,9 @@ class LanguageHangulConfigView : public views::Combobox::Listener,
   // views::DialogDelegate overrides.
   virtual bool IsModal() const { return true; }
   virtual views::View* GetContentsView() { return this; }
+  virtual int GetDialogButtons() const;
+  virtual std::wstring GetDialogButtonLabel(
+      MessageBoxFlags::DialogButton button) const;
   virtual std::wstring GetWindowTitle() const;
 
   // views::View overrides.

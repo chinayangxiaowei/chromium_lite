@@ -18,6 +18,7 @@
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/stats_table.h"
+#include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "gfx/codec/png_codec.h"
@@ -32,6 +33,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebAccessibilityObject.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebDeviceOrientationClientMock.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSpeechInputControllerMock.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebScriptController.h"
@@ -46,10 +49,12 @@
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/webpreferences.h"
 #include "webkit/tools/test_shell/accessibility_controller.h"
+#include "webkit/tools/test_shell/notification_presenter.h"
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 #include "webkit/tools/test_shell/test_navigation_controller.h"
 #include "webkit/tools/test_shell/test_shell_devtools_agent.h"
 #include "webkit/tools/test_shell/test_shell_devtools_client.h"
+#include "webkit/tools/test_shell/test_shell_request_context.h"
 #include "webkit/tools/test_shell/test_shell_switches.h"
 #include "webkit/tools/test_shell/test_webview_delegate.h"
 
@@ -98,17 +103,20 @@ class URLRequestTestShellFileJob : public URLRequestFileJob {
   DISALLOW_COPY_AND_ASSIGN(URLRequestTestShellFileJob);
 };
 
+
 }  // namespace
 
 // Initialize static member variable
 WindowList* TestShell::window_list_;
 WebPreferences* TestShell::web_prefs_ = NULL;
 bool TestShell::developer_extras_enabled_ = false;
-bool TestShell::inspector_test_mode_ = false;
 bool TestShell::layout_test_mode_ = false;
+bool TestShell::allow_external_pages_ = false;
 int TestShell::file_test_timeout_ms_ = kDefaultFileTestTimeoutMillisecs;
 bool TestShell::test_is_preparing_ = false;
 bool TestShell::test_is_pending_ = false;
+bool TestShell::accelerated_2d_canvas_enabled_ = false;
+bool TestShell::accelerated_compositing_enabled_ = false;
 
 TestShell::TestShell()
     : m_mainWnd(NULL),
@@ -134,11 +142,18 @@ TestShell::TestShell()
     plain_text_controller_.reset(new PlainTextController(this));
     text_input_controller_.reset(new TextInputController(this));
     navigation_controller_.reset(new TestNavigationController(this));
+    notification_presenter_.reset(new TestNotificationPresenter(this));
 
     URLRequestFilter* filter = URLRequestFilter::GetInstance();
     filter->AddHostnameHandler("test-shell-resource", "inspector",
                                &URLRequestTestShellFileJob::InspectorFactory);
     url_util::AddStandardScheme("test-shell-resource");
+
+    if (!file_system_root_.CreateUniqueTempDir()) {
+      LOG(WARNING) << "Failed to create a temp dir for the filesystem."
+                      "FileSystem feature will be disabled.";
+      DCHECK(file_system_root_.path().empty());
+    }
 }
 
 TestShell::~TestShell() {
@@ -227,6 +242,8 @@ void TestShell::Dump(TestShell* shell) {
   if (frame) {
     bool should_dump_as_text =
         shell->layout_test_controller_->ShouldDumpAsText();
+    bool should_generate_pixel_results =
+        shell->layout_test_controller()->ShouldGeneratePixelResults();
     bool dumped_anything = false;
     if (params->dump_tree) {
       dumped_anything = true;
@@ -236,7 +253,10 @@ void TestShell::Dump(TestShell* shell) {
         // Plain text pages should be dumped as text
         const string16& mime_type =
             frame->dataSource()->response().mimeType();
-        should_dump_as_text = EqualsASCII(mime_type, "text/plain");
+        if (EqualsASCII(mime_type, "text/plain")) {
+          should_dump_as_text = true;
+          should_generate_pixel_results = false;
+        }
       }
       if (should_dump_as_text) {
         bool recursive = shell->layout_test_controller_->
@@ -264,7 +284,7 @@ void TestShell::Dump(TestShell* shell) {
       }
     }
 
-    if (params->dump_pixels && !should_dump_as_text) {
+    if (params->dump_pixels && should_generate_pixel_results) {
       // Image output: we write the image data to the file given on the
       // command line (for the dump pixels argument), and the MD5 sum to
       // stdout.
@@ -321,7 +341,7 @@ void TestShell::Dump(TestShell* shell) {
 
 // static
 std::string TestShell::DumpImage(skia::PlatformCanvas* canvas,
-    const std::wstring& file_name, const std::string& pixel_hash) {
+    const FilePath& path, const std::string& pixel_hash) {
   skia::BitmapPlatformDevice& device =
       static_cast<skia::BitmapPlatformDevice&>(canvas->getTopPlatformDevice());
   const SkBitmap& src_bmp = device.accessBitmap(false);
@@ -335,21 +355,15 @@ std::string TestShell::DumpImage(skia::PlatformCanvas* canvas,
   // to keep it. On Windows, the alpha channel is wrong since text/form control
   // drawing may have erased it in a few places. So on Windows we force it to
   // opaque and also don't write the alpha channel for the reference. Linux
-  // doesn't have the wrong alpha like Windows, but we ignore it anyway.
-#if defined(OS_WIN)
+  // doesn't have the wrong alpha like Windows, but we try to match Windows.
+#if defined(OS_MACOSX)
+  bool discard_transparency = false;
+#else
   bool discard_transparency = true;
   device.makeOpaque(0, 0, src_bmp.width(), src_bmp.height());
-#elif defined(OS_MACOSX)
-  bool discard_transparency = false;
-#elif defined(OS_POSIX)
-  bool discard_transparency = true;
 #endif
 
-  // Compute MD5 sum.  We should have done this before calling
-  // device.makeOpaque on Windows.  Because we do it after the call, there are
-  // some images that are the pixel identical on windows and other platforms
-  // but have different MD5 sums.  At this point, rebaselining all the windows
-  // tests is too much of a pain, so we just check in different baselines.
+  // Compute MD5 sum.
   MD5Context ctx;
   MD5Init(&ctx);
   MD5Update(&ctx, src_bmp.getPixels(), src_bmp.getSize());
@@ -367,7 +381,7 @@ std::string TestShell::DumpImage(skia::PlatformCanvas* canvas,
         static_cast<int>(src_bmp.rowBytes()), discard_transparency, &png);
 
     // Write to disk.
-    file_util::WriteFile(file_name, reinterpret_cast<const char *>(&png[0]),
+    file_util::WriteFile(path, reinterpret_cast<const char *>(&png[0]),
                          png.size());
   }
 
@@ -433,6 +447,16 @@ void TestShell::SetAllowScriptsToCloseWindows() {
 }
 
 // static
+void TestShell::SetAccelerated2dCanvasEnabled(bool enabled) {
+  accelerated_2d_canvas_enabled_ = enabled;
+}
+
+// static
+void TestShell::SetAcceleratedCompositingEnabled(bool enabled) {
+  accelerated_compositing_enabled_ = enabled;
+}
+
+// static
 void TestShell::ResetWebPreferences() {
     DCHECK(web_prefs_);
 
@@ -482,6 +506,7 @@ void TestShell::ResetWebPreferences() {
         web_prefs_->text_areas_are_resizable = false;
         web_prefs_->java_enabled = false;
         web_prefs_->allow_scripts_to_close_windows = false;
+        web_prefs_->javascript_can_access_clipboard = true;
         web_prefs_->xss_auditor_enabled = false;
         // It's off by default for Chrome, but we don't want to
         // lose the coverage of dynamic font tests in webkit test.
@@ -493,7 +518,10 @@ void TestShell::ResetWebPreferences() {
         // LayoutTests were written with Safari Mac in mind which does not allow
         // tabbing to links by default.
         web_prefs_->tabs_to_links = false;
-
+        web_prefs_->accelerated_2d_canvas_enabled =
+            accelerated_2d_canvas_enabled_;
+        web_prefs_->accelerated_compositing_enabled =
+            accelerated_compositing_enabled_;
         // Allow those layout tests running as local files, i.e. under
         // LayoutTests/http/tests/local, to access http server.
         if (layout_test_mode_)
@@ -576,11 +604,6 @@ WebView* TestShell::CreateWebView() {
   return new_win->webView();
 }
 
-void TestShell::InitializeDevToolsAgent(WebView* webView) {
-  DCHECK(!dev_tools_agent_.get());
-  dev_tools_agent_.reset(new TestShellDevToolsAgent(webView));
-}
-
 void TestShell::ShowDevTools() {
   if (!devtools_shell_) {
     FilePath dir_exe;
@@ -623,6 +646,7 @@ void TestShell::ResetTestController() {
   accessibility_controller_->Reset();
   layout_test_controller_->Reset();
   event_sending_controller_->Reset();
+  notification_presenter_->Reset();
   delegate_->Reset();
 }
 
@@ -689,7 +713,7 @@ void TestShell::GoBackOrForward(int offset) {
 }
 
 void TestShell::DumpDocumentText() {
-  std::wstring file_path;
+  FilePath file_path;
   if (!PromptForSaveFile(L"Dump document text", &file_path))
       return;
 
@@ -699,7 +723,7 @@ void TestShell::DumpDocumentText() {
 }
 
 void TestShell::DumpRenderTree() {
-  std::wstring file_path;
+  FilePath file_path;
   if (!PromptForSaveFile(L"Dump render tree", &file_path))
     return;
 
@@ -740,6 +764,29 @@ void TestShell::SetFocus(WebWidgetHost* host, bool enable) {
   }
 }
 
+WebKit::WebDeviceOrientationClientMock*
+TestShell::device_orientation_client_mock() {
+  if (!device_orientation_client_mock_.get()) {
+    device_orientation_client_mock_.reset(
+        WebKit::WebDeviceOrientationClientMock::create());
+  }
+  return device_orientation_client_mock_.get();
+}
+
+WebKit::WebSpeechInputControllerMock*
+TestShell::CreateSpeechInputControllerMock(
+    WebKit::WebSpeechInputListener* listener) {
+  DCHECK(!speech_input_controller_mock_.get());
+  speech_input_controller_mock_.reset(
+      WebKit::WebSpeechInputControllerMock::create(listener));
+  return speech_input_controller_mock_.get();
+}
+
+WebKit::WebSpeechInputControllerMock*
+TestShell::speech_input_controller_mock() {
+  return speech_input_controller_mock_.get();
+}
+
 //-----------------------------------------------------------------------------
 
 namespace webkit_glue {
@@ -767,16 +814,13 @@ bool GetPluginFinderURL(std::string* plugin_finder_url) {
 }
 
 bool IsDefaultPluginEnabled() {
-#if defined(OS_WIN)
   FilePath exe_path;
 
   if (PathService::Get(base::FILE_EXE, &exe_path)) {
-    std::wstring exe_name = file_util::GetFilenameFromPath(
-        exe_path.ToWStringHack());
+    std::wstring exe_name = exe_path.BaseName().ToWStringHack();
     if (StartsWith(exe_name, L"test_shell_tests", false))
       return true;
   }
-#endif  // OS_WIN
   return false;
 }
 
@@ -789,8 +833,8 @@ bool IsProtocolSupportedForMedia(const GURL& url) {
   return false;
 }
 
-std::wstring GetWebKitLocale() {
-  return L"en-US";
+std::string GetWebKitLocale() {
+  return "en-US";
 }
 
 void CloseCurrentConnections() {
@@ -800,5 +844,36 @@ void CloseCurrentConnections() {
 void SetCacheMode(bool enabled) {
   // Used in benchmarking,  Ignored for test_shell.
 }
+
+void ClearCache() {
+  // Used in benchmarking,  Ignored for test_shell.
+}
+
+void EnableSpdy(bool enable) {
+  // Used in benchmarking,  Ignored for test_shell.
+}
+
+void UserMetricsRecordAction(const std::string& action) {
+}
+
+std::string GetProductVersion() {
+  return std::string("Chrome/0.0.0.0");
+}
+
+bool IsSingleProcess() {
+  return true;
+}
+
+#if defined(OS_LINUX)
+int MatchFontWithFallback(const std::string& face, bool bold,
+                          bool italic, int charset) {
+  return -1;
+}
+
+bool GetFontTable(int fd, uint32_t table, uint8_t* output,
+                  size_t* output_length) {
+  return false;
+}
+#endif
 
 }  // namespace webkit_glue

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,16 @@
 
 #include "base/logging.h"
 
-NonThreadSafe::NonThreadSafe()
-    : valid_thread_id_(PlatformThread::CurrentId()) {
+NonThreadSafe::~NonThreadSafe() {
+  DCHECK(CalledOnValidThread());
 }
 
 bool NonThreadSafe::CalledOnValidThread() const {
-  return valid_thread_id_ == PlatformThread::CurrentId();
+  return thread_checker_.CalledOnValidThread();
 }
 
-NonThreadSafe::~NonThreadSafe() {
-  DCHECK(CalledOnValidThread());
+void NonThreadSafe::DetachFromThread() {
+  thread_checker_.DetachFromThread();
 }
 
 #endif  // NDEBUG

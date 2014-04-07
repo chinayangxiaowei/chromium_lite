@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_DEBUGGER_INSPECTABLE_TAB_PROXY_H_
 #define CHROME_BROWSER_DEBUGGER_INSPECTABLE_TAB_PROXY_H_
+#pragma once
 
 #include <string>
 
@@ -25,8 +26,8 @@ class InspectableTabProxy {
   typedef base::hash_map<int32, NavigationController*> ControllersMap;
   typedef base::hash_map<int32, DevToolsClientHostImpl*> IdToClientHostMap;
 
-  InspectableTabProxy() {}
-  virtual ~InspectableTabProxy() {}
+  InspectableTabProxy();
+  virtual ~InspectableTabProxy();
 
   // Returns a map of NavigationControllerKeys to NavigationControllers
   // for all Browser instances. Clients should not keep the result around
@@ -63,13 +64,9 @@ class DevToolsClientHostImpl : public DevToolsClientHost {
   DevToolsClientHostImpl(
     int32 id,
     DebuggerRemoteService* service,
-    InspectableTabProxy::IdToClientHostMap* map)
-      : id_(id),
-        service_(service),
-        map_(map) {}
-  ~DevToolsClientHostImpl() {
-    map_->erase(this->id_);
-  }
+    InspectableTabProxy::IdToClientHostMap* map);
+  ~DevToolsClientHostImpl();
+
   DebuggerRemoteService* debugger_remote_service() {
     return service_;
   }
@@ -82,8 +79,7 @@ class DevToolsClientHostImpl : public DevToolsClientHost {
 
  private:
   // Message handling routines
-  void OnRpcMessage(const DevToolsMessageData& data);
-  void DebuggerOutput(const std::string& msg);
+  void OnDebuggerOutput(const std::string& msg);
   void FrameNavigate(const std::string& url);
   void TabClosed();
 

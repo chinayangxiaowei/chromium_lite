@@ -4,7 +4,7 @@
 
 // Scopers help you manage ownership of a pointer, helping you easily manage the
 // a pointer within a scope, and automatically destroying the pointer at the
-// end of a scope.  There are two main classes you will use, which coorespond
+// end of a scope.  There are two main classes you will use, which correspond
 // to the operators new/delete and new[]/delete[].
 //
 // Example usage (scoped_ptr):
@@ -19,7 +19,7 @@
 //     foo.reset(new Foo("wee3"));   // Foo("wee2") was destroyed.
 //     foo->Method();                // Foo::Method() called.
 //     foo.get()->Method();          // Foo::Method() called.
-//     SomeFunc(foo.release());      // SomeFunc takes owernship, foo no longer
+//     SomeFunc(foo.release());      // SomeFunc takes ownership, foo no longer
 //                                   // manages a pointer.
 //     foo.reset(new Foo("wee4"));   // foo manages a pointer again.
 //     foo.reset();                  // Foo("wee4") destroyed, foo no longer
@@ -35,6 +35,7 @@
 
 #ifndef BASE_SCOPED_PTR_H_
 #define BASE_SCOPED_PTR_H_
+#pragma once
 
 // This is an implementation designed to match the anticipated future TR2
 // implementation of the scoped_ptr class, and its closely-related brethren,
@@ -43,6 +44,8 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <cstddef>
+
+#include "base/compiler_specific.h"
 
 // A scoped_ptr<T> is like a T*, except that the destructor of scoped_ptr<T>
 // automatically deletes the pointer it holds (if any).
@@ -60,7 +63,7 @@ class scoped_ptr {
   // The element type
   typedef C element_type;
 
-  // Constructor.  Defaults to intializing with NULL.
+  // Constructor.  Defaults to initializing with NULL.
   // There is no way to create an uninitialized scoped_ptr.
   // The input parameter must be allocated with new.
   explicit scoped_ptr(C* p = NULL) : ptr_(p) { }
@@ -113,7 +116,7 @@ class scoped_ptr {
   // If this object holds a NULL pointer, the return value is NULL.
   // After this operation, this object will hold a NULL pointer,
   // and will not own the object any more.
-  C* release() {
+  C* release() WARN_UNUSED_RESULT {
     C* retVal = ptr_;
     ptr_ = NULL;
     return retVal;
@@ -220,7 +223,7 @@ class scoped_array {
   // If this object holds a NULL pointer, the return value is NULL.
   // After this operation, this object will hold a NULL pointer,
   // and will not own the object any more.
-  C* release() {
+  C* release() WARN_UNUSED_RESULT {
     C* retVal = array_;
     array_ = NULL;
     return retVal;
@@ -273,7 +276,7 @@ class scoped_ptr_malloc {
   // The element type
   typedef C element_type;
 
-  // Constructor.  Defaults to intializing with NULL.
+  // Constructor.  Defaults to initializing with NULL.
   // There is no way to create an uninitialized scoped_ptr.
   // The input parameter must be allocated with an allocator that matches the
   // Free functor.  For the default Free functor, this is malloc, calloc, or
@@ -315,7 +318,7 @@ class scoped_ptr_malloc {
   // Comparison operators.
   // These return whether a scoped_ptr_malloc and a plain pointer refer
   // to the same object, not just to two different but equal objects.
-  // For compatibility wwith the boost-derived implementation, these
+  // For compatibility with the boost-derived implementation, these
   // take non-const arguments.
   bool operator==(C* p) const {
     return ptr_ == p;
@@ -337,7 +340,7 @@ class scoped_ptr_malloc {
   // If this object holds a NULL pointer, the return value is NULL.
   // After this operation, this object will hold a NULL pointer,
   // and will not own the object any more.
-  C* release() {
+  C* release() WARN_UNUSED_RESULT {
     C* tmp = ptr_;
     ptr_ = NULL;
     return tmp;

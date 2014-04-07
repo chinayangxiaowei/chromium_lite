@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #ifndef CHROME_BROWSER_HISTORY_HISTORY_MARSHALING_H__
 #define CHROME_BROWSER_HISTORY_HISTORY_MARSHALING_H__
+#pragma once
 
 #include "base/scoped_vector.h"
 #include "chrome/browser/cancelable_request.h"
@@ -15,49 +16,6 @@
 #include "chrome/browser/history/page_usage_data.h"
 
 namespace history {
-
-// Navigation -----------------------------------------------------------------
-
-// Marshalling structure for AddPage.
-class HistoryAddPageArgs
-    : public base::RefCountedThreadSafe<HistoryAddPageArgs> {
- public:
-  HistoryAddPageArgs(const GURL& arg_url,
-                     base::Time arg_time,
-                     const void* arg_id_scope,
-                     int32 arg_page_id,
-                     const GURL& arg_referrer,
-                     const history::RedirectList& arg_redirects,
-                     PageTransition::Type arg_transition,
-                     bool arg_did_replace_entry)
-      : url(arg_url),
-        time(arg_time),
-        id_scope(arg_id_scope),
-        page_id(arg_page_id),
-        referrer(arg_referrer),
-        redirects(arg_redirects),
-        transition(arg_transition),
-        did_replace_entry(arg_did_replace_entry) {
-  }
-
-  GURL url;
-  base::Time time;
-
-  const void* id_scope;
-  int32 page_id;
-
-  GURL referrer;
-  history::RedirectList redirects;
-  PageTransition::Type transition;
-  bool did_replace_entry;
-
- private:
-  friend class base::RefCountedThreadSafe<HistoryAddPageArgs>;
-
-  ~HistoryAddPageArgs() {}
-
-  DISALLOW_EVIL_CONSTRUCTORS(HistoryAddPageArgs);
-};
 
 // Querying -------------------------------------------------------------------
 
@@ -81,6 +39,10 @@ typedef CancelableRequest1<HistoryService::QueryTopURLsAndRedirectsCallback,
                                   history::RedirectMap> >
     QueryTopURLsAndRedirectsRequest;
 
+typedef CancelableRequest1<HistoryService::QueryMostVisitedURLsCallback,
+                           history::MostVisitedURLList>
+    QueryMostVisitedURLsRequest;
+
 // Thumbnails -----------------------------------------------------------------
 
 typedef CancelableRequest<HistoryService::ThumbnailDataCallback>
@@ -99,10 +61,6 @@ typedef CancelableRequest1<HistoryService::DownloadQueryCallback,
 
 typedef CancelableRequest<HistoryService::DownloadCreateCallback>
     DownloadCreateRequest;
-
-typedef CancelableRequest1<HistoryService::DownloadSearchCallback,
-                          std::vector<int64> >
-    DownloadSearchRequest;
 
 // Deletion --------------------------------------------------------------------
 

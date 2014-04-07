@@ -44,8 +44,7 @@ enum {
 #endif
 
 PCMQueueOutAudioOutputStream::PCMQueueOutAudioOutputStream(
-    AudioManagerMac* manager, int channels, int sampling_rate,
-    char bits_per_sample)
+    AudioManagerMac* manager, AudioParameters params)
         : format_(),
           audio_queue_(NULL),
           buffer_(),
@@ -59,20 +58,20 @@ PCMQueueOutAudioOutputStream::PCMQueueOutAudioOutputStream(
   // A frame is one sample across all channels. In interleaved audio the per
   // frame fields identify the set of n |channels|. In uncompressed audio, a
   // packet is always one frame.
-  format_.mSampleRate = sampling_rate;
+  format_.mSampleRate = params.sample_rate;
   format_.mFormatID = kAudioFormatLinearPCM;
   format_.mFormatFlags = kLinearPCMFormatFlagIsPacked |
                          kLinearPCMFormatFlagIsSignedInteger;
-  format_.mBitsPerChannel = bits_per_sample;
-  format_.mChannelsPerFrame = channels;
+  format_.mBitsPerChannel = params.bits_per_sample;
+  format_.mChannelsPerFrame = params.channels;
   format_.mFramesPerPacket = 1;
-  format_.mBytesPerPacket = (format_.mBitsPerChannel * channels) / 8;
+  format_.mBytesPerPacket = (format_.mBitsPerChannel * params.channels) / 8;
   format_.mBytesPerFrame = format_.mBytesPerPacket;
 
   // Silence buffer has a duration of 6ms to simulate the behavior of Windows.
   // This value is choosen by experiments and macs cannot keep up with
   // anything less than 6ms.
-  silence_bytes_ = format_.mBytesPerFrame * sampling_rate * 6 / 1000;
+  silence_bytes_ = format_.mBytesPerFrame * params.sample_rate * 6 / 1000;
 }
 
 PCMQueueOutAudioOutputStream::~PCMQueueOutAudioOutputStream() {
@@ -143,7 +142,7 @@ void PCMQueueOutAudioOutputStream::Close() {
   }
   // Inform the audio manager that we have been closed. This can cause our
   // destruction.
-  manager_->ReleaseStream(this);
+  manager_->ReleaseOutputStream(this);
 }
 
 void PCMQueueOutAudioOutputStream::Stop() {
@@ -217,8 +216,10 @@ void PCMQueueOutAudioOutputStream::RenderCallback(void* p_this,
   if (!static_cast<AudioQueueUserData*>(buffer->mUserData)->empty_buffer)
     audio_stream->pending_bytes_ -= buffer->mAudioDataByteSize;
   uint32 capacity = buffer->mAudioDataBytesCapacity;
-  uint32 filled = source->OnMoreData(audio_stream, buffer->mAudioData,
-                                     capacity, audio_stream->pending_bytes_);
+  // TODO(sergeyu): Specify correct hardware delay for AudioBuffersState.
+  uint32 filled = source->OnMoreData(
+      audio_stream, reinterpret_cast<uint8*>(buffer->mAudioData), capacity,
+      AudioBuffersState(audio_stream->pending_bytes_, 0));
 
   // In order to keep the callback running, we need to provide a positive amount
   // of data to the audio queue. To simulate the behavior of Windows, we write

@@ -508,6 +508,11 @@ bool IsSupportedRenameCall(FILE_RENAME_INFORMATION* file_info, DWORD length,
   if (length < sizeof(FILE_RENAME_INFORMATION))
     return false;
 
+  // Make sure file name length doesn't exceed the message length
+  if (length - offsetof(FILE_RENAME_INFORMATION, FileName) <
+      file_info->FileNameLength)
+    return false;
+
   // We don't support a root directory.
   if (file_info->RootDirectory)
     return false;
@@ -558,6 +563,12 @@ void operator delete(void* memory, sandbox::AllocationType type) {
   } else {
     NOTREACHED_NT();
   }
+}
+
+void operator delete(void* memory, sandbox::AllocationType type,
+                     void* near_to) {
+  UNREFERENCED_PARAMETER(near_to);
+  operator delete(memory, type);
 }
 
 void* __cdecl operator new(size_t size, void* buffer,

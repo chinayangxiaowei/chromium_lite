@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_OBSERVER_LIST_H__
 #define BASE_OBSERVER_LIST_H__
+#pragma once
 
 #include <algorithm>
 #include <limits>
@@ -149,11 +150,9 @@ class ObserverListBase {
     }
   }
 
- protected:
-  size_t size() const {
-    return observers_.size();
-  }
+  size_t size() const { return observers_.size(); }
 
+ protected:
   void Compact() {
     typename ListType::iterator it = observers_.begin();
     while (it != observers_.end()) {

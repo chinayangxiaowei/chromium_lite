@@ -2,32 +2,44 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <QuartzCore/CAOpenGLLayer.h>
+#include <QuartzCore/QuartzCore.h>
 
 #include "chrome/browser/renderer_host/render_widget_host_view_mac.h"
 
+#include "chrome/browser/chrome_thread.h"
+#include "app/app_switches.h"
 #include "app/surface/io_surface_support_mac.h"
 #import "base/chrome_application_mac.h"
+#include "base/command_line.h"
 #include "base/histogram.h"
+#include "base/logging.h"
+#import "base/scoped_nsautorelease_pool.h"
 #import "base/scoped_nsobject.h"
 #include "base/string_util.h"
+#include "base/sys_info.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/browser_trial.h"
 #import "chrome/browser/cocoa/rwhvm_editcommand_helper.h"
+#import "chrome/browser/cocoa/view_id_util.h"
 #include "chrome/browser/plugin_process_host.h"
 #include "chrome/browser/renderer_host/backing_store_mac.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_widget_host.h"
 #include "chrome/browser/spellchecker_platform_engine.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/native_web_keyboard_event.h"
 #include "chrome/common/edit_command.h"
 #include "chrome/common/plugin_messages.h"
 #include "chrome/common/render_messages.h"
 #include "skia/ext/platform_canvas.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "third_party/WebKit/WebKit/chromium/public/mac/WebInputEventFactory.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebInputEvent.h"
+#include "webkit/glue/plugins/webplugin.h"
+#include "webkit/glue/webaccessibility.h"
 #include "webkit/glue/webmenurunner_mac.h"
+#import "third_party/mozilla/ComplexTextInputPanel.h"
 
 using WebKit::WebInputEvent;
 using WebKit::WebInputEventFactory;
@@ -48,57 +60,363 @@ static inline int ToWebKitModifiers(NSUInteger flags) {
 - (id)initWithRenderWidgetHostViewMac:(RenderWidgetHostViewMac*)r;
 - (void)keyEvent:(NSEvent *)theEvent wasKeyEquivalent:(BOOL)equiv;
 - (void)cancelChildPopups;
-- (void)attachPluginLayer;
 @end
+
+// This API was published since 10.6. Provide the declaration so it can be
+// // called below when building with the 10.5 SDK.
+#if MAC_OS_X_VERSION_MAX_ALLOWED <= MAC_OS_X_VERSION_10_5
+@class NSTextInputContext;
+@interface NSResponder (AppKitDetails)
+- (NSTextInputContext *)inputContext;
+@end
+#endif
 
 namespace {
 
 // Maximum number of characters we allow in a tooltip.
 const size_t kMaxTooltipLength = 1024;
 
+// TODO(suzhe): Upstream this function.
+WebKit::WebColor WebColorFromNSColor(NSColor *color) {
+  CGFloat r, g, b, a;
+  [color getRed:&r green:&g blue:&b alpha:&a];
+
+  return
+      std::max(0, std::min(static_cast<int>(lroundf(255.0f * a)), 255)) << 24 |
+      std::max(0, std::min(static_cast<int>(lroundf(255.0f * r)), 255)) << 16 |
+      std::max(0, std::min(static_cast<int>(lroundf(255.0f * g)), 255)) << 8  |
+      std::max(0, std::min(static_cast<int>(lroundf(255.0f * b)), 255));
 }
 
-// AcceleratedPluginLayer ------------------------------------------------------
+// Extract underline information from an attributed string.
+// Mostly copied from third_party/WebKit/WebKit/mac/WebView/WebHTMLView.mm
+void ExtractUnderlines(
+    NSAttributedString* string,
+    std::vector<WebKit::WebCompositionUnderline>* underlines) {
+  int length = [[string string] length];
+  int i = 0;
+  while (i < length) {
+    NSRange range;
+    NSDictionary* attrs = [string attributesAtIndex:i
+                              longestEffectiveRange:&range
+                                            inRange:NSMakeRange(i, length - i)];
+    if (NSNumber *style = [attrs objectForKey:NSUnderlineStyleAttributeName]) {
+      WebKit::WebColor color = SK_ColorBLACK;
+      if (NSColor *colorAttr =
+          [attrs objectForKey:NSUnderlineColorAttributeName]) {
+        color = WebColorFromNSColor(
+            [colorAttr colorUsingColorSpaceName:NSDeviceRGBColorSpace]);
+      }
+      underlines->push_back(WebKit::WebCompositionUnderline(
+          range.location, NSMaxRange(range), color, [style intValue] > 1));
+    }
+    i = range.location + range.length;
+  }
+}
 
-// This subclass of CAOpenGLLayer hosts the output of accelerated plugins on
+// EnablePasswordInput() and DisablePasswordInput() are copied from
+// enableSecureTextInput() and disableSecureTextInput() functions in
+// third_party/WebKit/WebCore/platform/SecureTextInput.cpp
+// But we don't call EnableSecureEventInput() and DisableSecureEventInput()
+// here, because they are already called in webkit and they are system wide
+// functions.
+void EnablePasswordInput() {
+  CFArrayRef inputSources = TISCreateASCIICapableInputSourceList();
+  TSMSetDocumentProperty(0, kTSMDocumentEnabledInputSourcesPropertyTag,
+                         sizeof(CFArrayRef), &inputSources);
+  CFRelease(inputSources);
+}
+
+void DisablePasswordInput() {
+  TSMRemoveDocumentProperty(0, kTSMDocumentEnabledInputSourcesPropertyTag);
+}
+
+}  // namespace
+
+// AcceleratedPluginView ------------------------------------------------------
+
+// This subclass of NSView hosts the output of accelerated plugins on
 // the page.
 
-@interface AcceleratedPluginLayer : CAOpenGLLayer {
-  RenderWidgetHostViewMac* renderWidgetHostView_;  // weak
-}
+// This class takes a couple of locks, some indirectly. The lock hiearchy is:
+// 1. The DisplayLink lock, implicit to the display link owned by this view.
+//    It is taken by the framework before |DrawOneAcceleratedPluginCallback()|
+//    is called, and during CVDisplayLink* function calls.
+// 2. The CGL lock, taken explicitly.
+// 3. The AcceleratedSurfaceContainerManagerMac's lock, which it takes when any
+//    of its methods are called.
+//
+// No code should ever try to acquire a lock further up in the hierarchy if it
+// already owns a lower lock. For example, while the CGL lock is taken, no
+// CVDisplayLink* functions must be called.
 
-- (id)initWithRenderWidgetHostViewMac:(RenderWidgetHostViewMac*)r;
+// Informal protocol implemented by windows that need to be informed explicitly
+// about underlay surfaces.
+@interface NSObject (UnderlayableSurface)
+- (void)underlaySurfaceAdded;
+- (void)underlaySurfaceRemoved;
 @end
 
-@implementation AcceleratedPluginLayer
-- (id)initWithRenderWidgetHostViewMac:(RenderWidgetHostViewMac*)r {
-  self = [super init];
-  if (self != nil) {
+@interface AcceleratedPluginView : NSView {
+  scoped_nsobject<NSOpenGLPixelFormat> glPixelFormat_;
+  CGLPixelFormatObj cglPixelFormat_;  // weak, backed by |glPixelFormat_|.
+  scoped_nsobject<NSOpenGLContext> glContext_;
+  CGLContextObj cglContext_;  // weak, backed by |glContext_|.
+
+  CVDisplayLinkRef displayLink_;  // Owned by us.
+
+  RenderWidgetHostViewMac* renderWidgetHostView_;  // weak
+  gfx::PluginWindowHandle pluginHandle_;  // weak
+
+  // True if the backing IO surface was updated since we last painted.
+  BOOL surfaceWasSwapped_;
+
+  // Cocoa methods can only be called on the main thread, so have a copy of the
+  // view's size, since it's required on the displaylink thread.
+  NSSize cachedSize_;
+
+  // -globalFrameDidChange: can be called recursively, this counts how often it
+  // holds the CGL lock.
+  int globalFrameDidChangeCGLLockCount_;
+}
+
+- (id)initWithRenderWidgetHostViewMac:(RenderWidgetHostViewMac*)r
+                         pluginHandle:(gfx::PluginWindowHandle)pluginHandle;
+- (void)drawView;
+
+// NSViews autorelease subviews when they die. The RWHVMac gets destroyed when
+// RHWVCocoa gets dealloc'd, which means the AcceleratedPluginView child views
+// can be around a little longer than the RWHVMac. This is called when the
+// RWHVMac is about to be deleted (but it's still valid while this method runs).
+- (void)onRenderWidgetHostViewGone;
+
+// This _must_ be atomic, since it's accessed from several threads.
+@property BOOL surfaceWasSwapped;
+
+// This _must_ be atomic, since it's accessed from several threads.
+@property NSSize cachedSize;
+@end
+
+@implementation AcceleratedPluginView
+@synthesize surfaceWasSwapped = surfaceWasSwapped_;
+@synthesize cachedSize = cachedSize_;
+
+- (CVReturn)getFrameForTime:(const CVTimeStamp*)outputTime {
+  // There is no autorelease pool when this method is called because it will be
+  // called from a background thread.
+  base::ScopedNSAutoreleasePool pool;
+
+  if (![self surfaceWasSwapped])
+    return kCVReturnSuccess;
+
+  [self drawView];
+  [self setSurfaceWasSwapped:NO];
+  return kCVReturnSuccess;
+}
+
+// This is the renderer output callback function
+static CVReturn DrawOneAcceleratedPluginCallback(
+    CVDisplayLinkRef displayLink,
+    const CVTimeStamp* now,
+    const CVTimeStamp* outputTime,
+    CVOptionFlags flagsIn,
+    CVOptionFlags* flagsOut,
+    void* displayLinkContext) {
+  CVReturn result =
+      [(AcceleratedPluginView*)displayLinkContext getFrameForTime:outputTime];
+  return result;
+}
+
+- (id)initWithRenderWidgetHostViewMac:(RenderWidgetHostViewMac*)r
+                         pluginHandle:(gfx::PluginWindowHandle)pluginHandle {
+  if ((self = [super initWithFrame:NSZeroRect])) {
     renderWidgetHostView_ = r;
+    pluginHandle_ = pluginHandle;
+    cachedSize_ = NSZeroSize;
+
+    [self setAutoresizingMask:NSViewMaxXMargin|NSViewMinYMargin];
+
+    NSOpenGLPixelFormatAttribute attributes[] =
+        { NSOpenGLPFAAccelerated, NSOpenGLPFADoubleBuffer, 0};
+
+    glPixelFormat_.reset([[NSOpenGLPixelFormat alloc]
+        initWithAttributes:attributes]);
+    glContext_.reset([[NSOpenGLContext alloc] initWithFormat:glPixelFormat_
+                                                shareContext:nil]);
+
+    if (!CommandLine::ForCurrentProcess()->HasSwitch(
+        switches::kDisableHolePunching)) {
+      // We "punch a hole" in the window, and have the WindowServer render the
+      // OpenGL surface underneath so we can draw over it.
+      GLint belowWindow = -1;
+      [glContext_ setValues:&belowWindow forParameter:NSOpenGLCPSurfaceOrder];
+    }
+
+    cglContext_ = (CGLContextObj)[glContext_ CGLContextObj];
+    cglPixelFormat_ = (CGLPixelFormatObj)[glPixelFormat_ CGLPixelFormatObj];
+
+    // Draw at beam vsync.
+    GLint swapInterval;
+    if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kDisableGpuVsync))
+      swapInterval = 0;
+    else
+      swapInterval = 1;
+    [glContext_ setValues:&swapInterval forParameter:NSOpenGLCPSwapInterval];
+
+    // Set up a display link to do OpenGL rendering on a background thread.
+    CVDisplayLinkCreateWithActiveCGDisplays(&displayLink_);
   }
   return self;
 }
 
-- (void)drawInCGLContext:(CGLContextObj)glContext
-             pixelFormat:(CGLPixelFormatObj)pixelFormat
-            forLayerTime:(CFTimeInterval)timeInterval
-             displayTime:(const CVTimeStamp *)timeStamp {
-  renderWidgetHostView_->DrawAcceleratedSurfaceInstances(glContext);
-  [super drawInCGLContext:glContext
-              pixelFormat:pixelFormat
-             forLayerTime:timeInterval
-              displayTime:timeStamp];
+- (void)dealloc {
+  CVDisplayLinkRelease(displayLink_);
+  if (renderWidgetHostView_)
+    renderWidgetHostView_->DeallocFakePluginWindowHandle(pluginHandle_);
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+  [super dealloc];
 }
 
-- (void)setFrame:(CGRect)rect {
-  // The frame we get when the superlayer resizes doesn't make sense, so ignore
-  // it and just match the superlayer's size. See the email thread referenced in
-  // ensureAcceleratedPluginLayer for an explanation of why the superlayer
-  // isn't trustworthy.
-  if ([self superlayer])
-    [super setFrame:[[self superlayer] bounds]];
-  else
-    [super setFrame:rect];
+- (void)drawView {
+  // Called on a background thread. Synchronized via the CGL context lock.
+  CGLLockContext(cglContext_);
+
+  if (renderWidgetHostView_) {
+    // TODO(thakis): Pixel or view coordinates for size?
+    renderWidgetHostView_->DrawAcceleratedSurfaceInstance(
+        cglContext_, pluginHandle_, [self cachedSize]);
+  }
+
+  CGLFlushDrawable(cglContext_);
+  CGLUnlockContext(cglContext_);
+}
+
+- (void)onRenderWidgetHostViewGone {
+  CGLLockContext(cglContext_);
+  // Deallocate the plugin handle while we still can.
+  renderWidgetHostView_->DeallocFakePluginWindowHandle(pluginHandle_);
+  renderWidgetHostView_ = NULL;
+  CGLUnlockContext(cglContext_);
+}
+
+- (void)drawRect:(NSRect)rect {
+  if (!CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kDisableHolePunching)) {
+    const NSRect* dirtyRects;
+    int dirtyRectCount;
+    [self getRectsBeingDrawn:&dirtyRects count:&dirtyRectCount];
+
+    // Punch a hole so that the OpenGL view shows through.
+    [[NSColor clearColor] set];
+    NSRectFillList(dirtyRects, dirtyRectCount);
+  }
+
+  [self drawView];
+}
+
+- (void)rightMouseDown:(NSEvent*)event {
+  // The NSResponder documentation: "Note: The NSView implementation of this
+  // method does not pass the message up the responder chain, it handles it
+  // directly."
+  // That's bad, we want the next responder (RWHVMac) to handle this event to
+  // dispatch it to the renderer.
+  [[self nextResponder] rightMouseDown:event];
+}
+
+- (void)globalFrameDidChange:(NSNotification*)notification {
+  globalFrameDidChangeCGLLockCount_++;
+  CGLLockContext(cglContext_);
+  // This call to -update can call -globalFrameDidChange: again, see
+  // http://crbug.com/55754 comments 22 and 24.
+  [glContext_ update];
+
+  // You would think that -update updates the viewport. You would be wrong.
+  CGLSetCurrentContext(cglContext_);
+  NSSize size = [self frame].size;
+  glViewport(0, 0, size.width, size.height);
+
+  CGLUnlockContext(cglContext_);
+  globalFrameDidChangeCGLLockCount_--;
+
+  if (globalFrameDidChangeCGLLockCount_ == 0) {
+    // Make sure the view is synchronized with the correct display.
+    CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(
+       displayLink_, cglContext_, cglPixelFormat_);
+  }
+}
+
+- (void)renewGState {
+  // Synchronize with window server to avoid flashes or corrupt drawing.
+  [[self window] disableScreenUpdatesUntilFlush];
+  [self globalFrameDidChange:nil];
+  [super renewGState];
+}
+
+- (void)lockFocus {
+  [super lockFocus];
+
+  // If we're using OpenGL, make sure it is connected and that the display link
+  // is running.
+  if ([glContext_ view] != self) {
+    [glContext_ setView:self];
+
+    [[NSNotificationCenter defaultCenter]
+         addObserver:self
+            selector:@selector(globalFrameDidChange:)
+                name:NSViewGlobalFrameDidChangeNotification
+              object:self];
+    CVDisplayLinkSetOutputCallback(
+        displayLink_, &DrawOneAcceleratedPluginCallback, self);
+    CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(
+        displayLink_, cglContext_, cglPixelFormat_);
+    CVDisplayLinkStart(displayLink_);
+  }
+  [glContext_ makeCurrentContext];
+}
+
+- (void)viewWillMoveToWindow:(NSWindow*)newWindow {
+  // Stop the display link thread while the view is not visible.
+  if (newWindow) {
+    if (displayLink_ && !CVDisplayLinkIsRunning(displayLink_))
+      CVDisplayLinkStart(displayLink_);
+  } else {
+    if (displayLink_ && CVDisplayLinkIsRunning(displayLink_))
+      CVDisplayLinkStop(displayLink_);
+  }
+
+  // If hole punching is enabled, inform the window hosting this accelerated
+  // view that it needs to be opaque.
+  if (!CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kDisableHolePunching)) {
+    if ([[self window] respondsToSelector:@selector(underlaySurfaceRemoved)]) {
+      [static_cast<id>([self window]) underlaySurfaceRemoved];
+    }
+
+    if ([newWindow respondsToSelector:@selector(underlaySurfaceAdded)]) {
+      [static_cast<id>(newWindow) underlaySurfaceAdded];
+    }
+  }
+}
+
+- (void)setFrame:(NSRect)frameRect {
+  [self setCachedSize:frameRect.size];
+  [super setFrame:frameRect];
+}
+
+- (void)setFrameSize:(NSSize)newSize {
+  [self setCachedSize:newSize];
+  [super setFrameSize:newSize];
+}
+
+- (BOOL)acceptsFirstResponder {
+  // Accept first responder if the first responder isn't the RWHVMac.
+  return [[self window] firstResponder] != [self superview];
+}
+
+- (BOOL)becomeFirstResponder {
+  // Delegate first responder to the RWHVMac.
+  [[self window] makeFirstResponder:[self superview]];
+  return YES;
 }
 @end
 
@@ -127,6 +445,7 @@ RenderWidgetHostViewMac::RenderWidgetHostViewMac(RenderWidgetHost* widget)
     : render_widget_host_(widget),
       about_to_validate_and_paint_(false),
       call_set_needs_display_in_rect_pending_(false),
+      text_input_type_(WebKit::WebTextInputTypeNone),
       is_loading_(false),
       is_hidden_(false),
       is_popup_menu_(false),
@@ -138,6 +457,11 @@ RenderWidgetHostViewMac::RenderWidgetHostViewMac(RenderWidgetHost* widget)
   cocoa_view_ = [[[RenderWidgetHostViewCocoa alloc]
                   initWithRenderWidgetHostViewMac:this] autorelease];
   render_widget_host_->set_view(this);
+
+  // Turn on accessibility only if one or both of these flags is true.
+  renderer_accessible_ = IsVoiceOverRunning() ||
+                             CommandLine::ForCurrentProcess()->HasSwitch(
+                                 switches::kForceRendererAccessibility);
 }
 
 RenderWidgetHostViewMac::~RenderWidgetHostViewMac() {
@@ -168,6 +492,11 @@ void RenderWidgetHostViewMac::InitAsPopup(
                                     pos.width(),
                                     pos.height());
   [cocoa_view_ setFrame:initial_frame];
+}
+
+void RenderWidgetHostViewMac::InitAsFullscreen(
+    RenderWidgetHostView* parent_host_view) {
+  NOTIMPLEMENTED() << "Full screen not implemented on Mac";
 }
 
 RenderWidgetHost* RenderWidgetHostViewMac::GetRenderWidgetHost() const {
@@ -217,10 +546,11 @@ void RenderWidgetHostViewMac::SetSize(const gfx::Size& size) {
   // superview is another RenderWidgetHostViewCocoa, but even if it's directly
   // in a TabContentsViewCocoa, they're both BaseViews.
   gfx::Rect rect =
-      [(BaseView*)[cocoa_view_ superview] NSRectToRect:[cocoa_view_ frame]];
+      [(BaseView*)[cocoa_view_ superview] flipNSRectToRect:[cocoa_view_ frame]];
   rect.set_width(size.width());
   rect.set_height(size.height());
-  [cocoa_view_ setFrame:[(BaseView*)[cocoa_view_ superview] RectToNSRect:rect]];
+  [cocoa_view_ setFrame:
+      [(BaseView*)[cocoa_view_ superview] flipRectToNSRect:rect]];
 }
 
 gfx::NativeView RenderWidgetHostViewMac::GetNativeView() {
@@ -229,23 +559,44 @@ gfx::NativeView RenderWidgetHostViewMac::GetNativeView() {
 
 void RenderWidgetHostViewMac::MovePluginWindows(
     const std::vector<webkit_glue::WebPluginGeometry>& moves) {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   // Handle movement of accelerated plugins, which are the only "windowed"
   // plugins that exist on the Mac.
-  if (moves.size() > 0) {
-    for (std::vector<webkit_glue::WebPluginGeometry>::const_iterator iter =
-             moves.begin();
-         iter != moves.end();
-         ++iter) {
-      webkit_glue::WebPluginGeometry geom = *iter;
-      // Ignore bogus moves which claim to move the plugin to (0, 0)
-      // with width and height (0, 0)
-      if (geom.window_rect.x() != 0 ||
-          geom.window_rect.y() != 0 ||
-          geom.window_rect.width() != 0 ||
-          geom.window_rect.height() != 0) {
-        plugin_container_manager_.MovePluginContainer(geom);
-      }
+  for (std::vector<webkit_glue::WebPluginGeometry>::const_iterator iter =
+           moves.begin();
+       iter != moves.end();
+       ++iter) {
+    webkit_glue::WebPluginGeometry geom = *iter;
+    // Ignore bogus moves which claim to move the plugin to (0, 0)
+    // with width and height (0, 0)
+    if (geom.window_rect.x() == 0 &&
+        geom.window_rect.y() == 0 &&
+        geom.window_rect.IsEmpty()) {
+      continue;
     }
+
+    gfx::Rect rect = geom.window_rect;
+    if (geom.visible) {
+      rect.set_x(rect.x() + geom.clip_rect.x());
+      rect.set_y(rect.y() + geom.clip_rect.y());
+      rect.set_width(geom.clip_rect.width());
+      rect.set_height(geom.clip_rect.height());
+    }
+
+    PluginViewMap::iterator it = plugin_views_.find(geom.window);
+    DCHECK(plugin_views_.end() != it);
+    if (plugin_views_.end() == it) {
+      continue;
+    }
+    NSRect new_rect([cocoa_view_ flipRectToNSRect:rect]);
+    [it->second setFrame:new_rect];
+    [it->second setNeedsDisplay:YES];
+
+    plugin_container_manager_.SetPluginContainerGeometry(geom);
+
+    BOOL visible =
+        plugin_container_manager_.SurfaceShouldBeVisible(geom.window);
+    [it->second setHidden:!visible];
   }
 }
 
@@ -278,7 +629,7 @@ bool RenderWidgetHostViewMac::IsShowing() {
 }
 
 gfx::Rect RenderWidgetHostViewMac::GetViewBounds() const {
-  return [cocoa_view_ NSRectToRect:[cocoa_view_ bounds]];
+  return [cocoa_view_ flipNSRectToRect:[cocoa_view_ bounds]];
 }
 
 void RenderWidgetHostViewMac::UpdateCursor(const WebCursor& cursor) {
@@ -310,27 +661,42 @@ void RenderWidgetHostViewMac::SetIsLoading(bool is_loading) {
   UpdateCursorIfOverSelf();
 }
 
-void RenderWidgetHostViewMac::IMEUpdateStatus(int control,
-                                              const gfx::Rect& caret_rect) {
-  // Reset the IME state and finish an ongoing composition in the renderer.
-  if (control == IME_DISABLE || control == IME_COMPLETE_COMPOSITION)
-    [cocoa_view_ cancelComposition];
+void RenderWidgetHostViewMac::ImeUpdateTextInputState(
+    WebKit::WebTextInputType type,
+    const gfx::Rect& caret_rect) {
+  if (text_input_type_ != type) {
+    text_input_type_ = type;
+    if (HasFocus())
+      SetTextInputActive(true);
+  }
 
   // We need to convert the coordinate of the cursor rectangle sent from the
-  // renderer and save it. Our IME backend uses a coordinate system whose
-  // origin is the upper-left corner of this view. On the other hand, Cocoa
-  // uses a coordinate system whose origin is the lower-left corner of this
-  // view. So, we convert the cursor rectangle and save it.
-  [cocoa_view_ setCaretRect:[cocoa_view_ RectToNSRect:caret_rect]];
+  // renderer and save it. Our input method backend uses a coordinate system
+  // whose origin is the upper-left corner of this view. On the other hand,
+  // Cocoa uses a coordinate system whose origin is the lower-left corner of
+  // this view. So, we convert the cursor rectangle and save it.
+  [cocoa_view_ setCaretRect:[cocoa_view_ flipRectToNSRect:caret_rect]];
 }
 
-void RenderWidgetHostViewMac::DidPaintBackingStoreRects(
-    const std::vector<gfx::Rect>& rects) {
+void RenderWidgetHostViewMac::ImeCancelComposition() {
+  [cocoa_view_ cancelComposition];
+}
+
+void RenderWidgetHostViewMac::DidUpdateBackingStore(
+    const gfx::Rect& scroll_rect, int scroll_dx, int scroll_dy,
+    const std::vector<gfx::Rect>& copy_rects) {
   if (is_hidden_)
     return;
 
+  std::vector<gfx::Rect> rects(copy_rects);
+
+  // Because the findbar might be open, we cannot use scrollRect:by: here.  For
+  // now, simply mark all of scroll rect as dirty.
+  if (!scroll_rect.IsEmpty())
+    rects.push_back(scroll_rect);
+
   for (size_t i = 0; i < rects.size(); ++i) {
-    NSRect ns_rect = [cocoa_view_ RectToNSRect:rects[i]];
+    NSRect ns_rect = [cocoa_view_ flipRectToNSRect:rects[i]];
 
     if (about_to_validate_and_paint_) {
       // As much as we'd like to use -setNeedsDisplayInRect: here, we can't.
@@ -360,21 +726,6 @@ void RenderWidgetHostViewMac::DidPaintBackingStoreRects(
     [cocoa_view_ displayIfNeeded];
 }
 
-void RenderWidgetHostViewMac::DidScrollBackingStoreRect(const gfx::Rect& rect,
-                                                        int dx, int dy) {
-  if (is_hidden_)
-    return;
-
-  // Because the findbar might be open, we cannot use scrollRect:by: here.  We
-  // also cannot force a synchronous paint because we are about to get a call to
-  // DidPaintBackingStoreRects() for the newly-exposed regions of the view, and
-  // painting twice per scroll is wasteful and could push us above the 60Hz
-  // update limit.  For now, simply mark all of |cocoa_view_| as dirty.  The
-  // coming call to DidPaintBackingStoreRects() will force a synchronous paint
-  // for us.
-  [cocoa_view_ setNeedsDisplay:YES];
-}
-
 void RenderWidgetHostViewMac::RenderViewGone() {
   // TODO(darin): keep this around, and draw sad-tab into it.
   UpdateCursorIfOverSelf();
@@ -393,8 +744,14 @@ void RenderWidgetHostViewMac::Destroy() {
   if (!is_popup_menu_) {
     // Depth-first destroy all popups. Use ShutdownHost() to enforce
     // deepest-first ordering.
-    for (RenderWidgetHostViewCocoa* subview in [cocoa_view_ subviews]) {
-      [subview renderWidgetHostViewMac]->ShutdownHost();
+    for (NSView* subview in [cocoa_view_ subviews]) {
+      if ([subview isKindOfClass:[RenderWidgetHostViewCocoa class]]) {
+        [static_cast<RenderWidgetHostViewCocoa*>(subview)
+            renderWidgetHostViewMac]->ShutdownHost();
+      } else if ([subview isKindOfClass:[AcceleratedPluginView class]]) {
+        [static_cast<AcceleratedPluginView*>(subview)
+            onRenderWidgetHostViewGone];
+      }
     }
 
     // We've been told to destroy.
@@ -443,6 +800,14 @@ void RenderWidgetHostViewMac::SetTooltipText(const std::wstring& tooltip_text) {
   }
 }
 
+//
+// RenderWidgetHostViewCocoa uses the stored selection text,
+// which implements NSServicesRequests protocol.
+//
+void RenderWidgetHostViewMac::SelectionChanged(const std::string& text) {
+  selected_text_ = text;
+}
+
 BackingStore* RenderWidgetHostViewMac::AllocBackingStore(
     const gfx::Size& size) {
   return new BackingStoreMac(render_widget_host_, size);
@@ -454,13 +819,19 @@ VideoLayer* RenderWidgetHostViewMac::AllocVideoLayer(
   return NULL;
 }
 
+// Sets whether or not to accept first responder status.
+void RenderWidgetHostViewMac::SetTakesFocusOnlyOnMouseDown(bool flag) {
+  [cocoa_view_ setTakesFocusOnlyOnMouseDown:flag];
+}
+
 // Display a popup menu for WebKit using Cocoa widgets.
 void RenderWidgetHostViewMac::ShowPopupWithItems(
     gfx::Rect bounds,
     int item_height,
     double item_font_size,
     int selected_item,
-    const std::vector<WebMenuItem>& items) {
+    const std::vector<WebMenuItem>& items,
+    bool right_aligned) {
   is_popup_menu_ = true;
 
   // Retain the Cocoa view for the duration of the pop-up so that it can't
@@ -479,7 +850,8 @@ void RenderWidgetHostViewMac::ShowPopupWithItems(
   // Display the menu.
   scoped_nsobject<WebMenuRunner> menu_runner;
   menu_runner.reset([[WebMenuRunner alloc] initWithItems:items
-                                                fontSize:item_font_size]);
+                                                fontSize:item_font_size
+                                            rightAligned:right_aligned]);
 
   {
     // Make sure events can be pumped while the menu is up.
@@ -533,15 +905,68 @@ void RenderWidgetHostViewMac::KillSelf() {
   }
 }
 
-gfx::PluginWindowHandle
-RenderWidgetHostViewMac::AllocateFakePluginWindowHandle() {
-  // Make sure we have a layer for the plugin to draw into.
-  [cocoa_view_ ensureAcceleratedPluginLayer];
+void RenderWidgetHostViewMac::SetPluginImeEnabled(bool enabled, int plugin_id) {
+  [cocoa_view_ setPluginImeEnabled:(enabled ? YES : NO) forPlugin:plugin_id];
+}
 
-  return plugin_container_manager_.AllocateFakePluginWindowHandle();
+bool RenderWidgetHostViewMac::PostProcessEventForPluginIme(
+    const NativeWebKeyboardEvent& event) {
+  // Check WebInputEvent type since multiple types of events can be sent into
+  // WebKit for the same OS event (e.g., RawKeyDown and Char), so filtering is
+  // necessary to avoid double processing.
+  // Also check the native type, since NSFlagsChanged is considered a key event
+  // for WebKit purposes, but isn't considered a key event by the OS.
+  if (event.type == WebInputEvent::RawKeyDown &&
+      [event.os_event type] == NSKeyDown)
+    return [cocoa_view_ postProcessEventForPluginIme:event.os_event];
+  return false;
+}
+
+void RenderWidgetHostViewMac::PluginImeCompositionConfirmed(
+    const string16& text, int plugin_id) {
+  if (render_widget_host_) {
+    render_widget_host_->Send(new ViewMsg_PluginImeCompositionConfirmed(
+        render_widget_host_->routing_id(), text, plugin_id));
+  }
+}
+
+gfx::PluginWindowHandle
+RenderWidgetHostViewMac::AllocateFakePluginWindowHandle(bool opaque,
+                                                        bool root) {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  // Create an NSView to host the plugin's/compositor's pixels.
+  gfx::PluginWindowHandle handle =
+      plugin_container_manager_.AllocateFakePluginWindowHandle(opaque, root);
+
+  scoped_nsobject<AcceleratedPluginView> plugin_view(
+      [[AcceleratedPluginView alloc] initWithRenderWidgetHostViewMac:this
+                                                        pluginHandle:handle]);
+  [plugin_view setHidden:YES];
+
+  [cocoa_view_ addSubview:plugin_view];
+  plugin_views_[handle] = plugin_view;
+
+  return handle;
 }
 
 void RenderWidgetHostViewMac::DestroyFakePluginWindowHandle(
+    gfx::PluginWindowHandle window) {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  PluginViewMap::iterator it = plugin_views_.find(window);
+  DCHECK(plugin_views_.end() != it);
+  if (plugin_views_.end() == it) {
+    return;
+  }
+  [it->second removeFromSuperview];
+  plugin_views_.erase(it);
+
+  // The view's dealloc will call DeallocFakePluginWindowHandle(), which will
+  // remove the handle from |plugin_container_manager_|. This code path is
+  // taken if a plugin is removed, but the RWHVMac itself stays alive.
+}
+
+// This is called by AcceleratedPluginView's -dealloc.
+void RenderWidgetHostViewMac::DeallocFakePluginWindowHandle(
     gfx::PluginWindowHandle window) {
   plugin_container_manager_.DestroyFakePluginWindowHandle(window);
 }
@@ -551,10 +976,24 @@ void RenderWidgetHostViewMac::AcceleratedSurfaceSetIOSurface(
     int32 width,
     int32 height,
     uint64 io_surface_identifier) {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   plugin_container_manager_.SetSizeAndIOSurface(window,
                                                 width,
                                                 height,
                                                 io_surface_identifier);
+
+  if (plugin_container_manager_.IsRootContainer(window)) {
+    // Fake up a WebPluginGeometry for the root window to set the
+    // container's size; we will never get a notification from the
+    // browser about the root window, only plugins.
+    webkit_glue::WebPluginGeometry geom;
+    gfx::Rect rect(0, 0, width, height);
+    geom.window = window;
+    geom.window_rect = rect;
+    geom.clip_rect = rect;
+    geom.visible = true;
+    MovePluginWindows(std::vector<webkit_glue::WebPluginGeometry>(1, geom));
+  }
 }
 
 void RenderWidgetHostViewMac::AcceleratedSurfaceSetTransportDIB(
@@ -562,6 +1001,7 @@ void RenderWidgetHostViewMac::AcceleratedSurfaceSetTransportDIB(
     int32 width,
     int32 height,
     TransportDIB::Handle transport_dib) {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   plugin_container_manager_.SetSizeAndTransportDIB(window,
                                                    width,
                                                    height,
@@ -570,25 +1010,67 @@ void RenderWidgetHostViewMac::AcceleratedSurfaceSetTransportDIB(
 
 void RenderWidgetHostViewMac::AcceleratedSurfaceBuffersSwapped(
     gfx::PluginWindowHandle window) {
-  [cocoa_view_ drawAcceleratedPluginLayer];
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  PluginViewMap::iterator it = plugin_views_.find(window);
+  DCHECK(plugin_views_.end() != it);
+  if (plugin_views_.end() == it) {
+    return;
+  }
+  DCHECK([it->second isKindOfClass:[AcceleratedPluginView class]]);
+
+  plugin_container_manager_.SetSurfaceWasPaintedTo(window);
+  AcceleratedPluginView* view =
+      static_cast<AcceleratedPluginView*>(it->second);
+  // The surface is hidden until its first paint, to not show gargabe.
+  if (plugin_container_manager_.SurfaceShouldBeVisible(window))
+    [view setHidden:NO];
+  [view setSurfaceWasSwapped:YES];
 }
 
-void RenderWidgetHostViewMac::DrawAcceleratedSurfaceInstances(
-    CGLContextObj context) {
+void RenderWidgetHostViewMac::GpuRenderingStateDidChange() {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  // Plugins are destroyed on page navigate. The compositor layer on the other
+  // hand is created on demand and then stays alive until its renderer process
+  // dies (usually on cross-domain navigation). Instead, only a flag
+  // |is_gpu_rendering_active()| is flipped when the compositor output should be
+  // shown/hidden.
+  // Show/hide the view belonging to the compositor here.
+  plugin_container_manager_.set_gpu_rendering_active(
+      GetRenderWidgetHost()->is_gpu_rendering_active());
+
+  gfx::PluginWindowHandle root_handle =
+      plugin_container_manager_.root_container_handle();
+  if (root_handle != gfx::kNullPluginWindow) {
+    PluginViewMap::iterator it = plugin_views_.find(root_handle);
+    DCHECK(plugin_views_.end() != it);
+    if (plugin_views_.end() == it) {
+      return;
+    }
+    bool visible =
+        plugin_container_manager_.SurfaceShouldBeVisible(root_handle);
+    [it->second setHidden:!visible];
+  }
+}
+
+void RenderWidgetHostViewMac::DrawAcceleratedSurfaceInstance(
+      CGLContextObj context,
+      gfx::PluginWindowHandle plugin_handle,
+      NSSize size) {
+  // Called on the display link thread.
   CGLSetCurrentContext(context);
-  gfx::Rect rect = GetWindowRect();
+
   glMatrixMode(GL_PROJECTION);
   glLoadIdentity();
   // Note that we place the origin at the upper left corner with +y
   // going down
-  glOrtho(0, rect.width(), rect.height(), 0, -1, 1);
+  glOrtho(0, size.width, size.height, 0, -1, 1);
   glMatrixMode(GL_MODELVIEW);
   glLoadIdentity();
 
-  plugin_container_manager_.Draw(context);
+  plugin_container_manager_.Draw(context, plugin_handle);
 }
 
-void RenderWidgetHostViewMac::AcceleratedSurfaceContextChanged() {
+void RenderWidgetHostViewMac::ForceTextureReload() {
   plugin_container_manager_.ForceTextureReload();
 }
 
@@ -602,12 +1084,18 @@ void RenderWidgetHostViewMac::ShutdownHost() {
   // Do not touch any members at this point, |this| has been deleted.
 }
 
+bool RenderWidgetHostViewMac::IsVoiceOverRunning() {
+  NSUserDefaults* user_defaults = [NSUserDefaults standardUserDefaults];
+  [user_defaults addSuiteNamed:@"com.apple.universalaccess"];
+  return 1 == [user_defaults integerForKey:@"voiceOverOnOffKey"];
+}
+
 namespace {
 
 // Adjusts an NSRect in Cocoa screen coordinates to have an origin in the upper
 // left of the primary screen (Carbon coordinates), and stuffs it into a
 // gfx::Rect.
-gfx::Rect NSRectToRect(const NSRect rect) {
+gfx::Rect FlipNSRectToRectScreen(const NSRect& rect) {
   gfx::Rect new_rect(NSRectToCGRect(rect));
   if ([[NSScreen screens] count] > 0) {
     new_rect.set_y([[[NSScreen screens] objectAtIndex:0] frame].size.height -
@@ -616,51 +1104,60 @@ gfx::Rect NSRectToRect(const NSRect rect) {
   return new_rect;
 }
 
+// Returns the window that visually contains the given view. This is different
+// from [view window] in the case of tab dragging, where the view's owning
+// window is a floating panel attached to the actual browser window that the tab
+// is visually part of.
+NSWindow* ApparentWindowForView(NSView* view) {
+  // TODO(shess): In case of !window, the view has been removed from
+  // the view hierarchy because the tab isn't main.  Could retrieve
+  // the information from the main tab for our window.
+  NSWindow* enclosing_window = [view window];
+
+  // See if this is a tab drag window. The width check is to distinguish that
+  // case from extension popup windows.
+  NSWindow* ancestor_window = [enclosing_window parentWindow];
+  if (ancestor_window && (NSWidth([enclosing_window frame]) ==
+                          NSWidth([ancestor_window frame]))) {
+    enclosing_window = ancestor_window;
+  }
+
+  return enclosing_window;
+}
+
 }  // namespace
 
 gfx::Rect RenderWidgetHostViewMac::GetWindowRect() {
   // TODO(shess): In case of !window, the view has been removed from
   // the view hierarchy because the tab isn't main.  Could retrieve
   // the information from the main tab for our window.
-  NSWindow* enclosing_window = [cocoa_view_ window];
-  if (!cocoa_view_ || !enclosing_window) {
+  NSWindow* enclosing_window = ApparentWindowForView(cocoa_view_);
+  if (!enclosing_window)
     return gfx::Rect();
-  }
-
-  // During dragging of a torn-off tab, [cocoa_view_ window] is a floating panel
-  // attached to the actual browser window that the tab is visually part of; we
-  // want the bounds of the browser window rather than the panel.
-  if ([enclosing_window parentWindow])
-    enclosing_window = [enclosing_window parentWindow];
 
   NSRect bounds = [cocoa_view_ bounds];
   bounds = [cocoa_view_ convertRect:bounds toView:nil];
   bounds.origin = [enclosing_window convertBaseToScreen:bounds.origin];
-  return NSRectToRect(bounds);
+  return FlipNSRectToRectScreen(bounds);
 }
 
 gfx::Rect RenderWidgetHostViewMac::GetRootWindowRect() {
   // TODO(shess): In case of !window, the view has been removed from
   // the view hierarchy because the tab isn't main.  Could retrieve
   // the information from the main tab for our window.
-  NSWindow* enclosing_window = [cocoa_view_ window];
-  if (!enclosing_window) {
+  NSWindow* enclosing_window = ApparentWindowForView(cocoa_view_);
+  if (!enclosing_window)
     return gfx::Rect();
-  }
-
-  // During dragging of a torn-off tab, [cocoa_view_ window] is a floating panel
-  // attached to the actual browser window that the tab is visually part of; we
-  // want the bounds of the browser window rather than the panel.
-  if ([enclosing_window parentWindow])
-    enclosing_window = [enclosing_window parentWindow];
 
   NSRect bounds = [enclosing_window frame];
-  return NSRectToRect(bounds);
+  return FlipNSRectToRectScreen(bounds);
 }
 
 void RenderWidgetHostViewMac::SetActive(bool active) {
   if (render_widget_host_)
     render_widget_host_->SetActive(active);
+  if (HasFocus())
+    SetTextInputActive(active);
 }
 
 void RenderWidgetHostViewMac::SetWindowVisibility(bool visible) {
@@ -693,61 +1190,24 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   return false;
 }
 
-// EditCommandMatcher ---------------------------------------------------------
-
-// This class is used to capture the shortcuts that a given key event maps to.
-// We instantiate a vanilla NSResponder, call interpretKeyEvents on it, and
-// record all of the selectors passed into doCommandBySelector while
-// interpreting the key event.  The selectors are converted into edit commands
-// which can be passed to the render process.
-//
-// Caveats:
-// - Shortcuts involving a sequence of key combinations (chords) don't work,
-// because we instantiate a new responder for each event.
-// - We ignore key combinations that don't include a modifier (ctrl, cmd, alt)
-// because this was causing strange behavior (e.g. tab always inserted a tab
-// rather than moving to the next field on the page).
-
-@interface EditCommandMatcher : NSResponder {
-  EditCommands* edit_commands_;
-}
-@end
-
-@implementation EditCommandMatcher
-
-- (id)initWithEditCommands:(EditCommands*)edit_commands {
-  if ((self = [super init]) != nil) {
-    edit_commands_ = edit_commands;
+void RenderWidgetHostViewMac::UpdateAccessibilityTree(
+    const webkit_glue::WebAccessibility& tree) {
+  if (renderer_accessible_) {
+    [cocoa_view_ setAccessibilityTree:tree];
   }
-  return self;
 }
 
-- (void)doCommandBySelector:(SEL)selector {
-  NSString* editCommand =
-      RWHVMEditCommandHelper::CommandNameForSelector(selector);
-  edit_commands_->push_back(
-      EditCommand(base::SysNSStringToUTF8(editCommand), ""));
+void RenderWidgetHostViewMac::SetTextInputActive(bool active) {
+  if (active) {
+    if (text_input_type_ == WebKit::WebTextInputTypePassword)
+      EnablePasswordInput();
+    else
+      DisablePasswordInput();
+  } else {
+    if (text_input_type_ == WebKit::WebTextInputTypePassword)
+      DisablePasswordInput();
+  }
 }
-
-- (void)insertText:(id)string {
-  // If we don't ignore this, then sometimes we get a bell.
-}
-
-+ (void)matchEditCommands:(EditCommands*)edit_commands
-                 forEvent:(NSEvent*)theEvent {
-  if ([theEvent type] != NSKeyDown)
-    return;
-  // Don't interpret plain key presses.  This screws up things like <Tab>.
-  NSUInteger flags = [theEvent modifierFlags];
-  flags &= (NSControlKeyMask | NSAlternateKeyMask | NSCommandKeyMask);
-  if (!flags)
-    return;
-  scoped_nsobject<EditCommandMatcher> matcher(
-      [[EditCommandMatcher alloc] initWithEditCommands:edit_commands]);
-  [matcher.get() interpretKeyEvents:[NSArray arrayWithObject:theEvent]];
-}
-
-@end
 
 // RenderWidgetHostViewCocoa ---------------------------------------------------
 
@@ -757,13 +1217,21 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
 
 - (id)initWithRenderWidgetHostViewMac:(RenderWidgetHostViewMac*)r {
   self = [super initWithFrame:NSZeroRect];
-  if (self != nil) {
+  if (self) {
     editCommand_helper_.reset(new RWHVMEditCommandHelper);
     editCommand_helper_->AddEditingSelectorsToClass([self class]);
 
     renderWidgetHostView_.reset(r);
     canBeKeyView_ = YES;
+    takesFocusOnlyOnMouseDown_ = NO;
     closeOnDeactivate_ = NO;
+
+    rendererAccessible_ =
+          !CommandLine::ForCurrentProcess()->HasSwitch(
+                    switches::kDisableRendererAccessibility);
+    accessibilityRequested_ = NO;
+    accessibilityReceived_ = NO;
+    pluginImeIdentifier_ = -1;
   }
   return self;
 }
@@ -772,31 +1240,53 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   canBeKeyView_ = can;
 }
 
+- (void)setTakesFocusOnlyOnMouseDown:(BOOL)b {
+  takesFocusOnlyOnMouseDown_ = b;
+}
+
 - (void)setCloseOnDeactivate:(BOOL)b {
   closeOnDeactivate_ = b;
 }
 
 - (void)mouseEvent:(NSEvent*)theEvent {
+  // TODO(rohitrao): Probably need to handle other mouse down events here.
+  if ([theEvent type] == NSLeftMouseDown && takesFocusOnlyOnMouseDown_) {
+    if (renderWidgetHostView_->render_widget_host_)
+      renderWidgetHostView_->render_widget_host_->OnMouseActivate();
+
+    // Manually take focus after the click but before forwarding it to the
+    // renderer.
+    [[self window] makeFirstResponder:self];
+  }
+
   // Don't cancel child popups; killing them on a mouse click would prevent the
   // user from positioning the insertion point in the text field spawning the
   // popup. A click outside the text field would cause the text field to drop
   // the focus, and then EditorClientImpl::textFieldDidEndEditing() would cancel
   // the popup anyway, so we're OK.
 
+  NSEventType type = [theEvent type];
+  if (type == NSLeftMouseDown)
+    hasOpenMouseDown_ = YES;
+  else if (type == NSLeftMouseUp)
+    hasOpenMouseDown_ = NO;
+
+  // TODO(suzhe): We should send mouse events to the input method first if it
+  // wants to handle them. But it won't work without implementing method
+  // - (NSUInteger)characterIndexForPoint:.
+  // See: http://code.google.com/p/chromium/issues/detail?id=47141
+  // Instead of sending mouse events to the input method first, we now just
+  // simply confirm all ongoing composition here.
+  if (type == NSLeftMouseDown || type == NSRightMouseDown ||
+      type == NSOtherMouseDown) {
+    [self confirmComposition];
+  }
+
   const WebMouseEvent& event =
       WebInputEventFactory::mouseEvent(theEvent, self);
+
   if (renderWidgetHostView_->render_widget_host_)
     renderWidgetHostView_->render_widget_host_->ForwardMouseEvent(event);
-
-  if ([theEvent type] == NSLeftMouseDown) {
-    [self cancelComposition];
-
-    hasOpenMouseDown_ = YES;
-  }
-
-  if ([theEvent type] == NSLeftMouseUp) {
-    hasOpenMouseDown_ = NO;
-  }
 }
 
 - (BOOL)performKeyEquivalent:(NSEvent*)theEvent {
@@ -844,7 +1334,7 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   [self keyEvent:theEvent wasKeyEquivalent:NO];
 }
 
-- (void)keyEvent:(NSEvent *)theEvent wasKeyEquivalent:(BOOL)equiv {
+- (void)keyEvent:(NSEvent*)theEvent wasKeyEquivalent:(BOOL)equiv {
   DCHECK([theEvent type] != NSKeyDown ||
          !equiv == !([theEvent modifierFlags] & NSCommandKeyMask));
 
@@ -888,16 +1378,27 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   // down event.
   handlingKeyDown_ = YES;
 
-  // These two variables might be set when handling the keyboard event.
+  // These variables might be set when handling the keyboard event.
   // Clear them here so that we can know whether they have changed afterwards.
   textToBeInserted_.clear();
-  newMarkedText_.clear();
+  markedText_.clear();
+  underlines_.clear();
+  unmarkTextCalled_ = NO;
+  hasEditCommands_ = NO;
+  editCommands_.clear();
 
   // Sends key down events to input method first, then we can decide what should
   // be done according to input method's feedback.
-  [self interpretKeyEvents:[NSArray arrayWithObject:theEvent]];
+  // If a plugin is active, bypass this step since events are forwarded directly
+  // to the plugin IME.
+  if (pluginImeIdentifier_ == -1)
+    [self interpretKeyEvents:[NSArray arrayWithObject:theEvent]];
 
   handlingKeyDown_ = NO;
+
+  // Indicates if we should send the key event and corresponding editor commands
+  // after processing the input method result.
+  BOOL delayEventUntilAfterImeCompostion = NO;
 
   // To emulate Windows, over-write |event.windowsKeyCode| to VK_PROCESSKEY
   // while an input method is composing or inserting a text.
@@ -906,19 +1407,25 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   // If the text to be inserted has only one character, then we don't need this
   // trick, because we'll send the text as a key press event instead.
   if (hasMarkedText_ || oldHasMarkedText || textToBeInserted_.length() > 1) {
-    event.windowsKeyCode = 0xE5;  // VKEY_PROCESSKEY
-    event.setKeyIdentifierFromWindowsKeyCode();
-    event.skip_in_browser = true;
+    NativeWebKeyboardEvent fakeEvent = event;
+    fakeEvent.windowsKeyCode = 0xE5;  // VKEY_PROCESSKEY
+    fakeEvent.setKeyIdentifierFromWindowsKeyCode();
+    fakeEvent.skip_in_browser = true;
+    widgetHost->ForwardKeyboardEvent(fakeEvent);
+    // If this key event was handled by the input method, but
+    // -doCommandBySelector: (invoked by the call to -interpretKeyEvents: above)
+    // enqueued edit commands, then in order to let webkit handle them
+    // correctly, we need to send the real key event and corresponding edit
+    // commands after processing the input method result.
+    // We shouldn't do this if a new marked text was set by the input method,
+    // otherwise the new marked text might be cancelled by webkit.
+    if (hasEditCommands_ && !hasMarkedText_)
+      delayEventUntilAfterImeCompostion = YES;
   } else {
-    // Look up shortcut, if any, for this key combination.
-    EditCommands editCommands;
-    [EditCommandMatcher matchEditCommands:&editCommands forEvent:theEvent];
-    if (!editCommands.empty())
-      widgetHost->ForwardEditCommandsForNextKeyEvent(editCommands);
+    if (!editCommands_.empty())
+      widgetHost->ForwardEditCommandsForNextKeyEvent(editCommands_);
+    widgetHost->ForwardKeyboardEvent(event);
   }
-
-  // Forward the key down event first.
-  widgetHost->ForwardKeyboardEvent(event);
 
   // Calling ForwardKeyboardEvent() could have destroyed the widget. When the
   // widget was destroyed, |renderWidgetHostView_->render_widget_host_| will
@@ -928,7 +1435,7 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
 
   // Then send keypress and/or composition related events.
   // If there was a marked text or the text to be inserted is longer than 1
-  // character, then we send the text by calling ImeConfirmComposition().
+  // character, then we send the text by calling ConfirmComposition().
   // Otherwise, if the text to be inserted only contains 1 character, then we
   // can just send a keypress event which is fabricated by changing the type of
   // the keydown event, so that we can retain all necessary informations, such
@@ -937,43 +1444,78 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   // Note that, |textToBeInserted_| is a UTF-16 string, but it's fine to only
   // handle BMP characters here, as we can always insert non-BMP characters as
   // text.
-  const NSUInteger kCtrlCmdKeyMask = NSControlKeyMask | NSCommandKeyMask;
   BOOL textInserted = NO;
-  if (textToBeInserted_.length() > (oldHasMarkedText ? 0 : 1)) {
+  if (textToBeInserted_.length() >
+      ((hasMarkedText_ || oldHasMarkedText) ? 0u : 1u)) {
     widgetHost->ImeConfirmComposition(textToBeInserted_);
     textInserted = YES;
-  } else if (textToBeInserted_.length() == 1) {
-    event.type = WebKit::WebInputEvent::Char;
-    event.text[0] = textToBeInserted_[0];
-    event.text[1] = 0;
-    event.skip_in_browser = true;
-    widgetHost->ForwardKeyboardEvent(event);
-  } else if (([theEvent modifierFlags] & kCtrlCmdKeyMask) &&
-             [[theEvent characters] length] > 0) {
-    // We don't get insertText: calls if ctrl is down and not even a keyDown:
-    // call if cmd is down, so synthesize a keypress event for these cases.
-    // Note that this makes our behavior deviate from the windows and linux
-    // versions of chrome (however, see http://crbug.com/13891 ), but it makes
-    // us behave similar to how Safari behaves.
-    event.type = WebKit::WebInputEvent::Char;
-    event.skip_in_browser = true;
-    widgetHost->ForwardKeyboardEvent(event);
   }
 
   // Updates or cancels the composition. If some text has been inserted, then
   // we don't need to cancel the composition explicitly.
-  if (hasMarkedText_ && newMarkedText_.length()) {
+  if (hasMarkedText_ && markedText_.length()) {
     // Sends the updated marked text to the renderer so it can update the
     // composition node in WebKit.
     // When marked text is available, |selectedRange_| will be the range being
-    // selected inside the marked text. We put the cursor at the beginning of
-    // the selected range.
-    widgetHost->ImeSetComposition(newMarkedText_,
-                                  selectedRange_.location,
+    // selected inside the marked text.
+    widgetHost->ImeSetComposition(markedText_, underlines_,
                                   selectedRange_.location,
                                   NSMaxRange(selectedRange_));
   } else if (oldHasMarkedText && !hasMarkedText_ && !textInserted) {
-    widgetHost->ImeCancelComposition();
+    if (unmarkTextCalled_)
+      widgetHost->ImeConfirmComposition();
+    else
+      widgetHost->ImeCancelComposition();
+  }
+
+  // If the key event was handled by the input method but it also generated some
+  // edit commands, then we need to send the real key event and corresponding
+  // edit commands here. This usually occurs when the input method wants to
+  // finish current composition session but still wants the application to
+  // handle the key event. See http://crbug.com/48161 for reference.
+  if (delayEventUntilAfterImeCompostion) {
+    // If |delayEventUntilAfterImeCompostion| is YES, then a fake key down event
+    // with windowsKeyCode == 0xE5 has already been sent to webkit.
+    // So before sending the real key down event, we need to send a fake key up
+    // event to balance it.
+    NativeWebKeyboardEvent fakeEvent = event;
+    fakeEvent.type = WebKit::WebInputEvent::KeyUp;
+    fakeEvent.skip_in_browser = true;
+    widgetHost->ForwardKeyboardEvent(fakeEvent);
+    // Not checking |renderWidgetHostView_->render_widget_host_| here because
+    // a key event with |skip_in_browser| == true won't be handled by browser,
+    // thus it won't destroy the widget.
+
+    if (!editCommands_.empty())
+      widgetHost->ForwardEditCommandsForNextKeyEvent(editCommands_);
+    widgetHost->ForwardKeyboardEvent(event);
+
+    // Calling ForwardKeyboardEvent() could have destroyed the widget. When the
+    // widget was destroyed, |renderWidgetHostView_->render_widget_host_| will
+    // be set to NULL. So we check it here and return immediately if it's NULL.
+    if (!renderWidgetHostView_->render_widget_host_)
+      return;
+  }
+
+  // Only send a corresponding key press event if there is no marked text.
+  if (!hasMarkedText_) {
+    if (!textInserted && textToBeInserted_.length() == 1) {
+      // If a single character was inserted, then we just send it as a keypress
+      // event.
+      event.type = WebKit::WebInputEvent::Char;
+      event.text[0] = textToBeInserted_[0];
+      event.text[1] = 0;
+      event.skip_in_browser = true;
+      widgetHost->ForwardKeyboardEvent(event);
+    } else if ((!textInserted || delayEventUntilAfterImeCompostion) &&
+               editCommands_.empty() && [[theEvent characters] length] > 0) {
+      // We don't get insertText: calls if ctrl or cmd is down, or the key event
+      // generates an insert command. So synthesize a keypress event for these
+      // cases, unless the key event generated any other command.
+      event.type = WebKit::WebInputEvent::Char;
+      event.skip_in_browser = true;
+      widgetHost->ForwardKeyboardEvent(event);
+    }
   }
 
   // Possibly autohide the cursor.
@@ -997,10 +1539,20 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   // If this view can be the key view, it is not a popup. Therefore, if it has
   // any children, they are popups that need to be canceled.
   if (canBeKeyView_) {
-    for (RenderWidgetHostViewCocoa* subview in [self subviews]) {
-      subview->renderWidgetHostView_->KillSelf();
+    for (NSView* subview in [self subviews]) {
+      if (![subview isKindOfClass:[RenderWidgetHostViewCocoa class]])
+        continue;  // Skip plugin views.
+
+      [static_cast<RenderWidgetHostViewCocoa*>(subview)
+          renderWidgetHostViewMac]->KillSelf();
     }
   }
+}
+
+- (void)setFrameSize:(NSSize)newSize {
+  [super setFrameSize:newSize];
+  if (renderWidgetHostView_->render_widget_host_)
+    renderWidgetHostView_->render_widget_host_->WasResized();
 }
 
 - (void)setFrame:(NSRect)frameRect {
@@ -1029,6 +1581,54 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   renderWidgetHostView_->invalid_rect_ = NSZeroRect;
 }
 
+// Fills with white the parts of the area to the right and bottom for |rect|
+// that intersect |damagedRect|.
+- (void)fillBottomRightRemainderOfRect:(gfx::Rect)rect
+                             dirtyRect:(gfx::Rect)damagedRect {
+  if (damagedRect.right() > rect.right()) {
+    int x = std::max(rect.right(), damagedRect.x());
+    int y = std::min(rect.bottom(), damagedRect.bottom());
+    int width = damagedRect.right() - x;
+    int height = damagedRect.y() - y;
+
+    // Extra fun to get around the fact that gfx::Rects can't have
+    // negative sizes.
+    if (width < 0) {
+      x += width;
+      width = -width;
+    }
+    if (height < 0) {
+      y += height;
+      height = -height;
+    }
+
+    NSRect r = [self flipRectToNSRect:gfx::Rect(x, y, width, height)];
+    [[NSColor whiteColor] set];
+    NSRectFill(r);
+  }
+  if (damagedRect.bottom() > rect.bottom()) {
+    int x = damagedRect.x();
+    int y = damagedRect.bottom();
+    int width = damagedRect.right() - x;
+    int height = std::max(rect.bottom(), damagedRect.y()) - y;
+
+    // Extra fun to get around the fact that gfx::Rects can't have
+    // negative sizes.
+    if (width < 0) {
+      x += width;
+      width = -width;
+    }
+    if (height < 0) {
+      y += height;
+      height = -height;
+    }
+
+    NSRect r = [self flipRectToNSRect:gfx::Rect(x, y, width, height)];
+    [[NSColor whiteColor] set];
+    NSRectFill(r);
+  }
+}
+
 - (void)drawRect:(NSRect)dirtyRect {
   if (!renderWidgetHostView_->render_widget_host_) {
     // TODO(shess): Consider using something more noticable?
@@ -1037,37 +1637,58 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
     return;
   }
 
-  DCHECK(renderWidgetHostView_->render_widget_host_->process()->HasConnection());
+  const gfx::Rect damagedRect([self flipNSRectToRect:dirtyRect]);
+
+  if (renderWidgetHostView_->render_widget_host_->is_gpu_rendering_active()) {
+    gfx::Rect gpuRect;
+
+    gfx::PluginWindowHandle root_handle =
+       renderWidgetHostView_->plugin_container_manager_.root_container_handle();
+    if (root_handle != gfx::kNullPluginWindow) {
+      RenderWidgetHostViewMac::PluginViewMap::iterator it =
+          renderWidgetHostView_->plugin_views_.find(root_handle);
+      DCHECK(it != renderWidgetHostView_->plugin_views_.end());
+      if (it != renderWidgetHostView_->plugin_views_.end() &&
+          ![it->second isHidden]) {
+        NSRect frame = [it->second frame];
+        frame.size = [it->second cachedSize];
+        gpuRect = [self flipNSRectToRect:frame];
+      }
+    }
+
+    [self fillBottomRightRemainderOfRect:gpuRect dirtyRect:damagedRect];
+    return;
+  }
+
+  DCHECK(
+      renderWidgetHostView_->render_widget_host_->process()->HasConnection());
   DCHECK(!renderWidgetHostView_->about_to_validate_and_paint_);
 
   renderWidgetHostView_->about_to_validate_and_paint_ = true;
-  BackingStoreMac* backing_store = static_cast<BackingStoreMac*>(
+  BackingStoreMac* backingStore = static_cast<BackingStoreMac*>(
       renderWidgetHostView_->render_widget_host_->GetBackingStore(true));
   renderWidgetHostView_->about_to_validate_and_paint_ = false;
 
-  if (backing_store) {
-    NSRect view_bounds = [self bounds];
-    gfx::Rect damaged_rect([self NSRectToRect:dirtyRect]);
-
-    gfx::Rect bitmap_rect(0, 0,
-                          backing_store->size().width(),
-                          backing_store->size().height());
+  if (backingStore) {
+    gfx::Rect bitmapRect(0, 0,
+                         backingStore->size().width(),
+                         backingStore->size().height());
 
     // Specify the proper y offset to ensure that the view is rooted to the
     // upper left corner.  This can be negative, if the window was resized
     // smaller and the renderer hasn't yet repainted.
-    int yOffset = NSHeight(view_bounds) - backing_store->size().height();
+    int yOffset = NSHeight([self bounds]) - backingStore->size().height();
 
-    gfx::Rect paint_rect = bitmap_rect.Intersect(damaged_rect);
-    if (!paint_rect.IsEmpty()) {
+    gfx::Rect paintRect = bitmapRect.Intersect(damagedRect);
+    if (!paintRect.IsEmpty()) {
       // if we have a CGLayer, draw that into the window
-      if (backing_store->cg_layer()) {
+      if (backingStore->cg_layer()) {
         CGContextRef context = static_cast<CGContextRef>(
             [[NSGraphicsContext currentContext] graphicsPort]);
 
         // TODO: add clipping to dirtyRect if it improves drawing performance.
         CGContextDrawLayerAtPoint(context, CGPointMake(0.0, yOffset),
-                                  backing_store->cg_layer());
+                                  backingStore->cg_layer());
       } else {
         // if we haven't created a layer yet, draw the cached bitmap into
         // the window.  The CGLayer will be created the next time the renderer
@@ -1075,56 +1696,16 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
         CGContextRef context = static_cast<CGContextRef>(
             [[NSGraphicsContext currentContext] graphicsPort]);
         scoped_cftyperef<CGImageRef> image(
-            CGBitmapContextCreateImage(backing_store->cg_bitmap()));
-        CGRect imageRect = bitmap_rect.ToCGRect();
+            CGBitmapContextCreateImage(backingStore->cg_bitmap()));
+        CGRect imageRect = bitmapRect.ToCGRect();
         imageRect.origin.y = yOffset;
         CGContextDrawImage(context, imageRect, image);
       }
     }
 
-    // Fill the remaining portion of the damaged_rect with white
-    if (damaged_rect.right() > bitmap_rect.right()) {
-      int x = std::max(bitmap_rect.right(), damaged_rect.x());
-      int y = std::min(bitmap_rect.bottom(), damaged_rect.bottom());
-      int width = damaged_rect.right() - x;
-      int height = damaged_rect.y() - y;
+    // Fill the remaining portion of the damagedRect with white
+    [self fillBottomRightRemainderOfRect:bitmapRect dirtyRect:damagedRect];
 
-      // Extra fun to get around the fact that gfx::Rects can't have
-      // negative sizes.
-      if (width < 0) {
-        x += width;
-        width = -width;
-      }
-      if (height < 0) {
-        y += height;
-        height = -height;
-      }
-
-      NSRect r = [self RectToNSRect:gfx::Rect(x, y, width, height)];
-      [[NSColor whiteColor] set];
-      NSRectFill(r);
-    }
-    if (damaged_rect.bottom() > bitmap_rect.bottom()) {
-      int x = damaged_rect.x();
-      int y = damaged_rect.bottom();
-      int width = damaged_rect.right() - x;
-      int height = std::max(bitmap_rect.bottom(), damaged_rect.y()) - y;
-
-      // Extra fun to get around the fact that gfx::Rects can't have
-      // negative sizes.
-      if (width < 0) {
-        x += width;
-        width = -width;
-      }
-      if (height < 0) {
-        y += height;
-        height = -height;
-      }
-
-      NSRect r = [self RectToNSRect:gfx::Rect(x, y, width, height)];
-      [[NSColor whiteColor] set];
-      NSRectFill(r);
-    }
     if (!renderWidgetHostView_->whiteout_start_time_.is_null()) {
       base::TimeDelta whiteout_duration = base::TimeTicks::Now() -
           renderWidgetHostView_->whiteout_start_time_;
@@ -1149,10 +1730,6 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
     if (renderWidgetHostView_->whiteout_start_time_.is_null())
       renderWidgetHostView_->whiteout_start_time_ = base::TimeTicks::Now();
   }
-
-  // This helps keep accelerated plugins' output in better sync with the
-  // window as it resizes.
-  [acceleratedPluginLayer_.get() setNeedsDisplay];
 }
 
 - (BOOL)canBecomeKeyView {
@@ -1166,7 +1743,7 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
   if (!renderWidgetHostView_->render_widget_host_)
     return NO;
 
-  return canBeKeyView_;
+  return canBeKeyView_ && !takesFocusOnlyOnMouseDown_;
 }
 
 - (BOOL)becomeFirstResponder {
@@ -1174,19 +1751,34 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
     return NO;
 
   renderWidgetHostView_->render_widget_host_->Focus();
-  renderWidgetHostView_->render_widget_host_->ImeSetInputMode(true);
+  renderWidgetHostView_->render_widget_host_->SetInputMethodActive(true);
+  renderWidgetHostView_->SetTextInputActive(true);
+
+  // Cancel any onging composition text which was left before we lost focus.
+  // TODO(suzhe): We should do it in -resignFirstResponder: method, but
+  // somehow that method won't be called when switching among different tabs.
+  // See http://crbug.com/47209
+  [self cancelComposition];
+
   return YES;
 }
 
 - (BOOL)resignFirstResponder {
+  renderWidgetHostView_->SetTextInputActive(false);
   if (!renderWidgetHostView_->render_widget_host_)
     return YES;
 
   if (closeOnDeactivate_)
     renderWidgetHostView_->KillSelf();
 
-  renderWidgetHostView_->render_widget_host_->ImeSetInputMode(false);
+  renderWidgetHostView_->render_widget_host_->SetInputMethodActive(false);
   renderWidgetHostView_->render_widget_host_->Blur();
+
+  // We should cancel any onging composition whenever RWH's Blur() method gets
+  // called, because in this case, webkit will confirm the ongoing composition
+  // internally.
+  [self cancelComposition];
+
   return YES;
 }
 
@@ -1218,6 +1810,102 @@ bool RenderWidgetHostViewMac::ContainsNativeView(
 // key presses to autohide on.
 + (BOOL)shouldAutohideCursorForEvent:(NSEvent*)event {
   return ([event type] == NSKeyDown) ? YES : NO;
+}
+
+// Create the BrowserAccessibility tree from the WebAccessibility tree passed
+// from the renderer.
+- (void)setAccessibilityTree:(const webkit_glue::WebAccessibility&) tree {
+  BrowserAccessibility* root =
+      [[BrowserAccessibility alloc] initWithObject:tree
+                                          delegate:self
+                                            parent:self];
+  [root autorelease];
+  accessibilityChildren_.reset([[NSArray alloc] initWithObjects:root, nil]);
+  accessibilityReceived_ = YES;
+}
+
+- (NSArray *)accessibilityArrayAttributeValues:(NSString *)attribute
+                                         index:(NSUInteger)index
+                                      maxCount:(NSUInteger)maxCount {
+  NSArray* fullArray = [self accessibilityAttributeValue:attribute];
+  NSUInteger totalLength = [fullArray count];
+  if (index >= totalLength)
+    return nil;
+  NSUInteger length = MIN(totalLength - index, maxCount);
+  return [fullArray subarrayWithRange:NSMakeRange(index, length)];
+}
+
+- (NSUInteger)accessibilityArrayAttributeCount:(NSString *)attribute {
+  NSArray* fullArray = [self accessibilityAttributeValue:attribute];
+  return [fullArray count];
+}
+
+- (id)accessibilityAttributeValue:(NSString *)attribute {
+  if (!accessibilityRequested_) {
+    renderWidgetHostView_->render_widget_host_->EnableRendererAccessibility();
+    accessibilityRequested_ = YES;
+  }
+  if (accessibilityReceived_) {
+    if (rendererAccessible_ &&
+        [attribute isEqualToString:NSAccessibilityChildrenAttribute]) {
+      return accessibilityChildren_.get();
+    } else if ([attribute isEqualToString:NSAccessibilityRoleAttribute]) {
+      return NSAccessibilityScrollAreaRole;
+    }
+  }
+  id ret = [super accessibilityAttributeValue:attribute];
+  return ret;
+}
+
+- (id)accessibilityHitTest:(NSPoint)point {
+  if (!accessibilityRequested_) {
+    renderWidgetHostView_->render_widget_host_->EnableRendererAccessibility();
+    accessibilityRequested_ = YES;
+  }
+  if (!accessibilityReceived_) {
+    return self;
+  }
+  NSPoint pointInWindow = [[self window] convertScreenToBase:point];
+  NSPoint localPoint = [self convertPoint:pointInWindow fromView:nil];
+  localPoint.y = NSHeight([self bounds]) - localPoint.y;
+  if ([accessibilityChildren_ count] == 0)
+    return self;
+  BrowserAccessibility* root = [accessibilityChildren_ objectAtIndex:0];
+  id obj = [root accessibilityHitTest:localPoint];
+  return obj;
+}
+
+- (BOOL)accessibilityIsIgnored {
+  return NO;
+}
+
+- (NSUInteger)accessibilityIndexOfChild:(id)child {
+  return [accessibilityChildren_ indexOfObject:child];
+}
+
+- (void)doDefaultAction:(int32)accessibilityObjectId {
+  renderWidgetHostView_->render_widget_host_->
+      AccessibilityDoDefaultAction(accessibilityObjectId);
+}
+
+// Convert a web accessibility's location in web coordinates into a cocoa
+// screen coordinate.
+- (NSPoint)accessibilityPointInScreen:(BrowserAccessibility*)accessibility {
+  NSPoint origin = [accessibility origin];
+  NSSize size = [accessibility size];
+  origin.y = NSHeight([self bounds]) - origin.y;
+  NSPoint originInWindow = [self convertPoint:origin toView:nil];
+  NSPoint originInScreen = [[self window] convertBaseToScreen:originInWindow];
+  originInScreen.y = originInScreen.y - size.height;
+  return originInScreen;
+}
+
+- (void)setAccessibilityFocus:(BOOL)focus
+              accessibilityId:(int32)accessibilityObjectId {
+  if (focus) {
+    renderWidgetHostView_->render_widget_host_->
+        SetAccessibilityFocus(accessibilityObjectId);
+  }
 }
 
 // Spellchecking methods
@@ -1500,9 +2188,9 @@ static const NSTrackingRectTag kTrackingRectTag = 0xBADFACE;
 //
 // This needs many sync IPC messages sent between a browser and a renderer for
 // each key event, which would probably result in key-typing jank.
-// To avoid this problem, this implementation processes key events (and IME
-// events) totally in a browser process and sends asynchronous input events,
-// almost same as KeyboardEvents (and TextEvents) of DOM Level 3, to a
+// To avoid this problem, this implementation processes key events (and input
+// method events) totally in a browser process and sends asynchronous input
+// events, almost same as KeyboardEvents (and TextEvents) of DOM Level 3, to a
 // renderer process.
 //
 // [RenderWidgetHostViewMac keyEvent] (browser) ->
@@ -1541,14 +2229,17 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
   // An input method requests a cursor rectangle to display its candidate
   // window.
   // Calculate the screen coordinate of the cursor rectangle saved in
-  // RenderWidgetHostViewMac::IMEUpdateStatus() and send it to the IME.
+  // RenderWidgetHostViewMac::ImeUpdateTextInputState() and send it to the
+  // input method.
   // Since this window may be moved since we receive the cursor rectangle last
-  // time we sent the cursor rectangle to the IME, so we should map from the
-  // view coordinate to the screen coordinate every time when an IME need it.
+  // time we sent the cursor rectangle to the input method, so we should map
+  // from the view coordinate to the screen coordinate every time when an input
+  // method need it.
   NSRect resultRect = [self convertRect:caretRect_ toView:nil];
   NSWindow* window = [self window];
   if (window)
     resultRect.origin = [window convertBaseToScreen:resultRect.origin];
+
   return resultRect;
 }
 
@@ -1567,7 +2258,7 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
   return hasMarkedText_ ? markedRange_ : NSMakeRange(NSNotFound, 0);
 }
 
-- (NSAttributedString *)attributedSubstringFromRange:(NSRange)nsRange {
+- (NSAttributedString *)attributedSubstringFromRange:(NSRange)range {
   // TODO(hbono): Even though many input method works without implementing
   // this method, we need to save a copy of the string in the setMarkedText
   // method and create a NSAttributedString with the given range.
@@ -1577,6 +2268,22 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
 
 - (NSInteger)conversationIdentifier {
   return reinterpret_cast<NSInteger>(self);
+}
+
+// Each RenderWidgetHostViewCocoa has its own input context, but we return
+// nil when the caret is in non-editable content or password box to avoid
+// making input methods do their work.
+- (NSTextInputContext *)inputContext {
+  if (pluginImeIdentifier_ != -1)
+    return [[ComplexTextInputPanel sharedComplexTextInputPanel] inputContext];
+
+  switch(renderWidgetHostView_->text_input_type_) {
+    case WebKit::WebTextInputTypeNone:
+    case WebKit::WebTextInputTypePassword:
+      return nil;
+    default:
+      return [super inputContext];
+  }
 }
 
 - (BOOL)hasMarkedText {
@@ -1596,11 +2303,15 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
   // text when it cancels an ongoing composition, i.e. I have never seen an
   // input method calls this method.
   hasMarkedText_ = NO;
+  markedText_.clear();
+  underlines_.clear();
 
-  // If we are handling a key down event, then ImeCancelComposition() will be
+  // If we are handling a key down event, then ConfirmComposition() will be
   // called in keyEvent: method.
   if (!handlingKeyDown_)
-    renderWidgetHostView_->render_widget_host_->ImeCancelComposition();
+    renderWidgetHostView_->render_widget_host_->ImeConfirmComposition();
+  else
+    unmarkTextCalled_ = YES;
 }
 
 - (void)setMarkedText:(id)string selectedRange:(NSRange)newSelRange {
@@ -1613,43 +2324,53 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
 
   markedRange_ = NSMakeRange(0, length);
   selectedRange_ = newSelRange;
-  newMarkedText_ = base::SysNSStringToUTF16(im_text);
+  markedText_ = base::SysNSStringToUTF16(im_text);
   hasMarkedText_ = (length > 0);
 
-  // If we are handling a key down event, then ImeSetComposition() will be
+  underlines_.clear();
+  if (isAttributedString) {
+    ExtractUnderlines(string, &underlines_);
+  } else {
+    // Use a thin black underline by default.
+    underlines_.push_back(
+        WebKit::WebCompositionUnderline(0, length, SK_ColorBLACK, false));
+  }
+
+  // If we are handling a key down event, then SetComposition() will be
   // called in keyEvent: method.
   // Input methods of Mac use setMarkedText calls with an empty text to cancel
   // an ongoing composition. So, we should check whether or not the given text
-  // is empty to update the IME state. (Our IME backend can automatically
-  // cancels an ongoing composition when we send an empty text. So, it is OK
-  // to send an empty text to the renderer.)
+  // is empty to update the input method state. (Our input method backend can
+  // automatically cancels an ongoing composition when we send an empty text.
+  // So, it is OK to send an empty text to the renderer.)
   if (!handlingKeyDown_) {
     renderWidgetHostView_->render_widget_host_->ImeSetComposition(
-        newMarkedText_, newSelRange.location, newSelRange.location,
-        NSMaxRange(newSelRange));
+        markedText_, underlines_,
+        newSelRange.location, NSMaxRange(newSelRange));
   }
 }
 
 - (void)doCommandBySelector:(SEL)selector {
   // An input method calls this function to dispatch an editing command to be
   // handled by this view.
-  // Even though most editing commands has been already handled by the
-  // RWHVMEditCommandHelper object, we need to handle an insertNewline: command
-  // and send a '\r' character to WebKit so that WebKit dispatches this
-  // character to onkeypress() event handlers.
-  // TODO(hbono): need to handle more commands?
-  if (selector == @selector(insertNewline:)) {
-    if (handlingKeyDown_) {
-      // If we are handling a key down event, then we just need to append a '\r'
-      // character to |textToBeInserted_| which will then be handled by
-      // keyEvent: method.
-      textToBeInserted_.push_back('\r');
-    } else {
-      // This call is not initiated by a key event, so just executed the
-      // corresponding editor command.
-      renderWidgetHostView_->render_widget_host_->ForwardEditCommand(
-          "InsertNewline", "");
-    }
+  if (selector == @selector(noop:))
+    return;
+
+  std::string command(
+      [RWHVMEditCommandHelper::CommandNameForSelector(selector) UTF8String]);
+
+  // If this method is called when handling a key down event, then we need to
+  // handle the command in the key event handler. Otherwise we can just handle
+  // it here.
+  if (handlingKeyDown_) {
+    hasEditCommands_ = YES;
+    // We ignore commands that insert characters, because this was causing
+    // strange behavior (e.g. tab always inserted a tab rather than moving to
+    // the next field on the page).
+    if (!StartsWithASCII(command, "insert", false))
+      editCommands_.push_back(EditCommand(command, ""));
+  } else {
+    renderWidgetHostView_->render_widget_host_->ForwardEditCommand(command, "");
   }
 }
 
@@ -1662,11 +2383,11 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
   // a Char event so it is dispatched to an onkeypress() event handler of
   // JavaScript.
   // On the other hand, when we are using input methods, we should send the
-  // given characters as an IME event and prevent the characters from being
-  // dispatched to onkeypress() event handlers.
+  // given characters as an input method event and prevent the characters from
+  // being dispatched to onkeypress() event handlers.
   // Text inserting might be initiated by other source instead of keyboard
   // events, such as the Characters dialog. In this case the text should be
-  // sent as an IME event as well.
+  // sent as an input method event as well.
   BOOL isAttributedString = [string isKindOfClass:[NSAttributedString class]];
   NSString* im_text = isAttributedString ? [string string] : string;
   if (handlingKeyDown_) {
@@ -1681,17 +2402,20 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
 }
 
 - (void)viewDidMoveToWindow {
-  // If we move into a new window, refresh the frame information. We don't need
-  // to do it if it was the same window as it used to be in, since that case
-  // is covered by DidBecomeSelected.
-  // We only want to do this for real browser views, not popups.
   if (canBeKeyView_) {
     NSWindow* newWindow = [self window];
     // Pointer comparison only, since we don't know if lastWindow_ is still
     // valid.
-    if (newWindow && (newWindow != lastWindow_)) {
-      lastWindow_ = newWindow;
-      renderWidgetHostView_->WindowFrameChanged();
+    if (newWindow) {
+      // If we move into a new window, refresh the frame information. We
+      // don't need to do it if it was the same window as it used to be in,
+      // since that case is covered by DidBecomeSelected. We only want to
+      // do this for real browser views, not popups.
+      if (newWindow != lastWindow_) {
+        lastWindow_ = newWindow;
+        renderWidgetHostView_->WindowFrameChanged();
+      }
+      renderWidgetHostView_->ForceTextureReload();
     }
   }
 
@@ -1757,52 +2481,6 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
   }
 }
 
-- (void)ensureAcceleratedPluginLayer {
-  if (acceleratedPluginLayer_.get())
-    return;
-
-  AcceleratedPluginLayer* pluginLayer = [[AcceleratedPluginLayer alloc]
-      initWithRenderWidgetHostViewMac:renderWidgetHostView_.get()];
-  acceleratedPluginLayer_.reset(pluginLayer);
-  // Make our layer resize to fit the superlayer
-  pluginLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
-  // Make the view layer-backed so that there will be a layer to hang the
-  // |layer| off of. This is not the "right" way to host a sublayer in a view,
-  // but the right way would require making the whole view's drawing system
-  // layer-based (using setLayer:). We don't want to do that (at least not
-  // yet) so instead we override setLayer: and re-bind our plugin layer each
-  // time the view's layer changes. For discussion see:
-  // http://lists.apple.com/archives/Cocoa-dev/2009/Feb/msg01132.html
-  [self setWantsLayer:YES];
-  [self attachPluginLayer];
-}
-
-- (void)attachPluginLayer {
-  CALayer* pluginLayer = acceleratedPluginLayer_.get();
-  if (!pluginLayer)
-    return;
-
-  CALayer* rootLayer = [self layer];
-  DCHECK(rootLayer != nil);
-  [pluginLayer setFrame:NSRectToCGRect([self bounds])];
-  [rootLayer addSublayer:pluginLayer];
-  renderWidgetHostView_->AcceleratedSurfaceContextChanged();
-}
-
-- (void)setLayer:(CALayer *)newLayer {
-  CALayer* pluginLayer = acceleratedPluginLayer_.get();
-  if (!newLayer && [pluginLayer superlayer])
-    [pluginLayer removeFromSuperlayer];
-
-  [super setLayer:newLayer];
-  if ([self layer])
-    [self attachPluginLayer];
-}
-
-- (void)drawAcceleratedPluginLayer {
-  [acceleratedPluginLayer_.get() setNeedsDisplay];
-}
-
 - (void)cancelComposition {
   if (!hasMarkedText_)
     return;
@@ -1814,7 +2492,118 @@ extern NSString *NSTextInputReplacementRangeAttributeName;
   NSInputManager *currentInputManager = [NSInputManager currentInputManager];
   [currentInputManager markedTextAbandoned:self];
 
-  [self unmarkText];
+  hasMarkedText_ = NO;
+  // Should not call [self unmarkText] here, because it'll send unnecessary
+  // cancel composition IPC message to the renderer.
+}
+
+- (void)confirmComposition {
+  if (!hasMarkedText_)
+    return;
+
+  if (renderWidgetHostView_->render_widget_host_)
+    renderWidgetHostView_->render_widget_host_->ImeConfirmComposition();
+
+  [self cancelComposition];
+}
+
+- (void)setPluginImeEnabled:(BOOL)enabled forPlugin:(int)pluginId {
+  if ((enabled && pluginId == pluginImeIdentifier_) ||
+      (!enabled && pluginId != pluginImeIdentifier_))
+    return;
+
+  // If IME was already active then either it is being cancelled, or the plugin
+  // changed; either way the current input needs to be cleared.
+  if (pluginImeIdentifier_ != -1)
+    [[ComplexTextInputPanel sharedComplexTextInputPanel] cancelInput];
+
+  pluginImeIdentifier_ = enabled ? pluginId : -1;
+}
+
+- (BOOL)postProcessEventForPluginIme:(NSEvent*)event {
+  if (pluginImeIdentifier_ == -1)
+    return false;
+
+  // ComplexTextInputPanel only works on 10.6+.
+  static BOOL sImeSupported = NO;
+  static BOOL sHaveCheckedSupport = NO;
+  if (!sHaveCheckedSupport) {
+    int32 major, minor, bugfix;
+    base::SysInfo::OperatingSystemVersionNumbers(&major, &minor, &bugfix);
+    sImeSupported = major > 10 || (major == 10 && minor > 5);
+    sHaveCheckedSupport = YES;
+  }
+  if (!sImeSupported)
+    return false;
+
+  ComplexTextInputPanel* inputPanel =
+      [ComplexTextInputPanel sharedComplexTextInputPanel];
+  NSString* composited_string = nil;
+  BOOL handled = [inputPanel interpretKeyEvent:event
+                                        string:&composited_string];
+  if (composited_string) {
+    renderWidgetHostView_->PluginImeCompositionConfirmed(
+        base::SysNSStringToUTF16(composited_string), pluginImeIdentifier_);
+  }
+  return handled;
+}
+
+- (ViewID)viewID {
+  return VIEW_ID_TAB_CONTAINER_FOCUS_VIEW;
+}
+
+// Overriding a NSResponder method to support application services.
+
+- (id)validRequestorForSendType:(NSString*)sendType
+                     returnType:(NSString*)returnType {
+  id requestor = nil;
+  BOOL sendTypeIsString = [sendType isEqual:NSStringPboardType];
+  BOOL returnTypeIsString = [returnType isEqual:NSStringPboardType];
+  BOOL hasText = !renderWidgetHostView_->selected_text().empty();
+  BOOL takesText =
+      renderWidgetHostView_->text_input_type_ != WebKit::WebTextInputTypeNone;
+
+  if (sendTypeIsString && hasText && !returnType) {
+    requestor = self;
+  } else if (!sendType && returnTypeIsString && takesText) {
+    requestor = self;
+  } else if (sendTypeIsString && returnTypeIsString && hasText && takesText) {
+    requestor = self;
+  } else {
+    requestor = [super validRequestorForSendType:sendType
+                                      returnType:returnType];
+  }
+  return requestor;
+}
+
+@end
+
+//
+// Supporting application services
+//
+@implementation RenderWidgetHostViewCocoa(NSServicesRequests)
+
+- (BOOL)writeSelectionToPasteboard:(NSPasteboard*)pboard
+                             types:(NSArray*)types {
+  const std::string& str = renderWidgetHostView_->selected_text();
+  if (![types containsObject:NSStringPboardType] || str.empty()) return NO;
+
+  scoped_nsobject<NSString> text([[NSString alloc]
+                                   initWithUTF8String:str.c_str()]);
+  NSArray* toDeclare = [NSArray arrayWithObject:NSStringPboardType];
+  [pboard declareTypes:toDeclare owner:nil];
+  return [pboard setString:text forType:NSStringPboardType];
+}
+
+- (BOOL)readSelectionFromPasteboard:(NSPasteboard*)pboard {
+  NSString *string = [pboard stringForType:NSStringPboardType];
+  if (!string) return NO;
+
+  // If the user is currently using an IME, confirm the IME input,
+  // and then insert the text from the service, the same as TextEdit and Safari.
+  [self confirmComposition];
+  [self insertText:string];
+  return YES;
 }
 
 @end

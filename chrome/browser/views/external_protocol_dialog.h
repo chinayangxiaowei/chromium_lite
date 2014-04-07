@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_VIEWS_EXTERNAL_PROTOCOL_DIALOG_H_
 #define CHROME_BROWSER_VIEWS_EXTERNAL_PROTOCOL_DIALOG_H_
+#pragma once
 
 #include "base/time.h"
 #include "googleurl/src/gurl.h"
@@ -50,7 +51,7 @@ class ExternalProtocolDialog : public views::DialogDelegate {
   GURL url_;
 
   // The time at which this dialog was created.
-  base::Time creation_time_;
+  base::TimeTicks creation_time_;
 
   DISALLOW_COPY_AND_ASSIGN(ExternalProtocolDialog);
 };

@@ -5,11 +5,11 @@
 #include "chrome/browser/sync/glue/theme_change_processor.h"
 
 #include "base/logging.h"
-#include "chrome/browser/browser_theme_provider.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/sync/engine/syncapi.h"
 #include "chrome/browser/sync/glue/theme_util.h"
 #include "chrome/browser/sync/protocol/theme_specifics.pb.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/notification_details.h"
 #include "chrome/common/notification_source.h"
@@ -19,7 +19,7 @@ namespace browser_sync {
 namespace {
 std::string GetThemeId(Extension* current_theme) {
   if (current_theme) {
-    DCHECK(current_theme->IsTheme());
+    DCHECK(current_theme->is_theme());
   }
   return current_theme ? current_theme->id() : "default/system";
 }
@@ -56,7 +56,7 @@ void ThemeChangeProcessor::Observe(NotificationType type,
       DCHECK_EQ(Source<BrowserThemeProvider>(source).ptr(),
                 profile_->GetThemeProvider());
       if (extension != NULL) {
-        DCHECK(extension->IsTheme());
+        DCHECK(extension->is_theme());
         DCHECK_EQ(extension->id(), current_or_future_theme_id);
         if (!current_theme || (current_theme->id() != extension->id())) {
           return;
@@ -71,7 +71,7 @@ void ThemeChangeProcessor::Observe(NotificationType type,
       // installed successfully.
       DCHECK_EQ(Source<Profile>(source).ptr(), profile_);
       CHECK(extension);
-      if (!extension->IsTheme()) {
+      if (!extension->is_theme()) {
         return;
       }
       LOG(INFO) << "Got EXTENSION_LOADED notification for theme "
@@ -87,7 +87,7 @@ void ThemeChangeProcessor::Observe(NotificationType type,
       // theme).
       DCHECK_EQ(Source<Profile>(source).ptr(), profile_);
       CHECK(extension);
-      if (!extension->IsTheme()) {
+      if (!extension->is_theme()) {
         return;
       }
       LOG(INFO) << "Got EXTENSION_UNLOADED notification for theme "
@@ -101,7 +101,7 @@ void ThemeChangeProcessor::Observe(NotificationType type,
 
   DCHECK_EQ(extension, current_theme);
   if (extension) {
-    DCHECK(extension->IsTheme());
+    DCHECK(extension->is_theme());
   }
   LOG(INFO) << "Theme changed to " << GetThemeId(extension);
 
@@ -112,9 +112,9 @@ void ThemeChangeProcessor::Observe(NotificationType type,
   sync_api::WriteNode node(&trans);
   if (!node.InitByClientTagLookup(syncable::THEMES,
                                   kCurrentThemeClientTag)) {
-    LOG(ERROR) << "Could not create node with client tag: "
-               << kCurrentThemeClientTag;
-    error_handler()->OnUnrecoverableError();
+    std::string err = "Could not create node with client tag: ";
+    error_handler()->OnUnrecoverableError(FROM_HERE,
+                                          err + kCurrentThemeClientTag);
     return;
   }
 
@@ -144,8 +144,9 @@ void ThemeChangeProcessor::ApplyChangesFromSyncModel(
   // we can remove the extra logic below.  See:
   // http://code.google.com/p/chromium/issues/detail?id=41696 .
   if (change_count < 1) {
-    LOG(ERROR) << "Unexpected change_count: " << change_count;
-    error_handler()->OnUnrecoverableError();
+    std::string err("Unexpected change_count: ");
+    err += change_count;
+    error_handler()->OnUnrecoverableError(FROM_HERE, err);
     return;
   }
   if (change_count > 1) {
@@ -154,8 +155,11 @@ void ThemeChangeProcessor::ApplyChangesFromSyncModel(
   }
   const sync_api::SyncManager::ChangeRecord& change =
       changes[change_count - 1];
-  if (change.action != sync_api::SyncManager::ChangeRecord::ACTION_UPDATE) {
-    LOG(WARNING) << "strange theme change.action: " << change.action;
+  if (change.action != sync_api::SyncManager::ChangeRecord::ACTION_UPDATE &&
+      change.action != sync_api::SyncManager::ChangeRecord::ACTION_DELETE) {
+    std::string err = "strange theme change.action " + change.action;
+    error_handler()->OnUnrecoverableError(FROM_HERE, err);
+    return;
   }
   sync_pb::ThemeSpecifics theme_specifics;
   // If the action is a delete, simply use the default values for
@@ -163,8 +167,8 @@ void ThemeChangeProcessor::ApplyChangesFromSyncModel(
   if (change.action != sync_api::SyncManager::ChangeRecord::ACTION_DELETE) {
     sync_api::ReadNode node(trans);
     if (!node.InitByIdLookup(change.id)) {
-      LOG(ERROR) << "Theme node lookup failed";
-      error_handler()->OnUnrecoverableError();
+      error_handler()->OnUnrecoverableError(FROM_HERE,
+                                            "Theme node lookup failed.");
       return;
     }
     DCHECK_EQ(node.GetModelType(), syncable::THEMES);

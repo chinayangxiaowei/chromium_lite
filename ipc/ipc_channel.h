@@ -4,6 +4,7 @@
 
 #ifndef IPC_IPC_CHANNEL_H_
 #define IPC_IPC_CHANNEL_H_
+#pragma once
 
 #include "ipc/ipc_message.h"
 
@@ -78,11 +79,6 @@ class Channel : public Message::Sender {
   //
   // |message| must be allocated using operator new.  This object will be
   // deleted once the contents of the Message have been sent.
-  //
-  //  FIXME bug 551500: the channel does not notice failures, so if the
-  //    renderer crashes, it will silently succeed, leaking the parameter.
-  //    At least the leak will be fixed by...
-  //
   virtual bool Send(Message* message);
 
 #if defined(OS_POSIX)

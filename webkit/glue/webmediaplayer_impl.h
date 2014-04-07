@@ -53,11 +53,11 @@
 #ifndef WEBKIT_GLUE_WEBMEDIAPLAYER_IMPL_H_
 #define WEBKIT_GLUE_WEBMEDIAPLAYER_IMPL_H_
 
-#include <vector>
-
 #include "base/lock.h"
 #include "base/message_loop.h"
 #include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
+#include "base/waitable_event.h"
 #include "gfx/rect.h"
 #include "gfx/size.h"
 #include "media/base/filters.h"
@@ -74,6 +74,8 @@ class FilterFactoryCollection;
 
 namespace webkit_glue {
 
+class MediaResourceLoaderBridgeFactory;
+class WebDataSource;
 class WebVideoRenderer;
 class WebVideoRendererFactoryFactory;
 
@@ -93,17 +95,21 @@ class WebMediaPlayerImpl : public WebKit::WebMediaPlayer,
     Proxy(MessageLoop* render_loop,
           WebMediaPlayerImpl* webmediaplayer);
 
-    // Public methods called from the video renderer.
+    // Methods for MediaFilter -> WebMediaPlayerImpl communication.
     void Repaint();
     void SetVideoRenderer(WebVideoRenderer* video_renderer);
+    void SetDataSource(WebDataSource* data_source);
 
-    // Public methods called from WebMediaPlayerImpl.
+    // Methods for WebMediaPlayerImpl -> MediaFilter communication.
     void Paint(skia::PlatformCanvas* canvas, const gfx::Rect& dest_rect);
     void SetSize(const gfx::Rect& rect);
     void Detach();
+    void GetCurrentFrame(scoped_refptr<media::VideoFrame>* frame_out);
+    void PutCurrentFrame(scoped_refptr<media::VideoFrame> frame);
+    bool HasSingleOrigin();
+    void AbortDataSource();
 
-    // Public methods called from the pipeline via callback issued by
-    // WebMediaPlayerImpl.
+    // Methods for PipelineImpl -> WebMediaPlayerImpl communication.
     void PipelineInitializationCallback();
     void PipelineSeekCallback();
     void PipelineEndedCallback();
@@ -139,6 +145,7 @@ class WebMediaPlayerImpl : public WebKit::WebMediaPlayer,
     // The render message loop where WebKit lives.
     MessageLoop* render_loop_;
     WebMediaPlayerImpl* webmediaplayer_;
+    scoped_refptr<WebDataSource> data_source_;
     scoped_refptr<WebVideoRenderer> video_renderer_;
 
     Lock lock_;
@@ -170,6 +177,8 @@ class WebMediaPlayerImpl : public WebKit::WebMediaPlayer,
   // a subclass of WebVideoRenderer.  Is deleted by WebMediaPlayerImpl.
   WebMediaPlayerImpl(WebKit::WebMediaPlayerClient* client,
                      media::FilterFactoryCollection* factory,
+                     MediaResourceLoaderBridgeFactory* bridge_factory,
+                     bool use_simple_data_source,
                      WebVideoRendererFactoryFactory* video_renderer_factory);
   virtual ~WebMediaPlayerImpl();
 
@@ -188,7 +197,7 @@ class WebMediaPlayerImpl : public WebKit::WebMediaPlayer,
   virtual void setVisible(bool visible);
   virtual bool setAutoBuffer(bool autoBuffer);
   virtual bool totalBytesKnown();
-  virtual const WebKit::WebTimeRanges& buffered() const;
+  virtual const WebKit::WebTimeRanges& buffered();
   virtual float maxTimeSeekable() const;
 
   // Methods for painting.
@@ -228,6 +237,9 @@ class WebMediaPlayerImpl : public WebKit::WebMediaPlayer,
   virtual bool hasSingleSecurityOrigin() const;
   virtual WebKit::WebMediaPlayer::MovieLoadType movieLoadType() const;
 
+  virtual WebKit::WebVideoFrame* getCurrentFrame();
+  virtual void putCurrentFrame(WebKit::WebVideoFrame* web_video_frame);
+
   // As we are closing the tab or even the browser, |main_loop_| is destroyed
   // even before this object gets destructed, so we need to know when
   // |main_loop_| is being destroyed and we can stop posting repaint task
@@ -254,6 +266,10 @@ class WebMediaPlayerImpl : public WebKit::WebMediaPlayer,
 
   // Destroy resources held.
   void Destroy();
+
+  // Callback executed after |pipeline_| stops which signals Destroy()
+  // to continue.
+  void PipelineStoppedCallback();
 
   // Getter method to |client_|.
   WebKit::WebMediaPlayerClient* GetClient();
@@ -295,6 +311,9 @@ class WebMediaPlayerImpl : public WebKit::WebMediaPlayer,
   WebKit::WebMediaPlayerClient* client_;
 
   scoped_refptr<Proxy> proxy_;
+
+  // Used to block Destroy() until Pipeline::Stop() is completed.
+  base::WaitableEvent pipeline_stopped_;
 
 #if WEBKIT_USING_CG
   scoped_ptr<skia::PlatformCanvas> skia_canvas_;

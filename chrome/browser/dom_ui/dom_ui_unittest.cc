@@ -2,14 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/dom_ui/new_tab_ui.h"
+#include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/renderer_host/test/test_render_view_host.h"
+#include "chrome/browser/tab_contents/navigation_controller.h"
+#include "chrome/browser/tab_contents/test_tab_contents.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/test/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class DOMUITest : public RenderViewHostTestHarness {
  public:
-  DOMUITest() : ui_thread_(ChromeThread::UI, MessageLoop::current()) {}
+  DOMUITest() : ui_thread_(BrowserThread::UI, MessageLoop::current()) {}
 
   // Tests navigating with a DOM UI from a fresh (nothing pending or committed)
   // state, through pending, committed, then another navigation. The first page
@@ -75,7 +80,7 @@ class DOMUITest : public RenderViewHostTestHarness {
   }
 
  private:
-  ChromeThread ui_thread_;
+  BrowserThread ui_thread_;
 
   DISALLOW_COPY_AND_ASSIGN(DOMUITest);
 };

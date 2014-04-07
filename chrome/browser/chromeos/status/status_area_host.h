@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_STATUS_STATUS_AREA_HOST_H_
 #define CHROME_BROWSER_CHROMEOS_STATUS_STATUS_AREA_HOST_H_
+#pragma once
 
 #include "gfx/native_widget_types.h"
 
@@ -32,10 +33,16 @@ class StatusAreaHost {
       const views::View* button_view) const = 0;
 
   // Opens options dialog related to the button specified.
-  virtual void OpenButtonOptions(const views::View* button_view) const = 0;
+  virtual void OpenButtonOptions(const views::View* button_view) = 0;
 
-  // Indicates if the button specified should be visible at the moment.
-  virtual bool IsButtonVisible(const views::View* button_view) const = 0;
+  // Executes browser command.
+  virtual void ExecuteBrowserCommand(int id) const = 0;
+
+  // True if status area hosted in browser. Otherwise it's OOBE/login state.
+  virtual bool IsBrowserMode() const = 0;
+
+  // True if status area hosted in screen locker.
+  virtual bool IsScreenLockerMode() const = 0;
 
  protected:
   virtual ~StatusAreaHost() {}
@@ -44,4 +51,3 @@ class StatusAreaHost {
 }  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_STATUS_STATUS_AREA_HOST_H_
-

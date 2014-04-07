@@ -6,9 +6,10 @@
 
 #ifndef CHROME_BROWSER_DEFAULTS_H_
 #define CHROME_BROWSER_DEFAULTS_H_
+#pragma once
 
 #include "build/build_config.h"
-#include "chrome/browser/session_startup_pref.h"
+#include "chrome/browser/prefs/session_startup_pref.h"
 
 namespace browser_defaults {
 
@@ -66,6 +67,22 @@ extern const bool kBootstrapSyncAuthentication;
 
 // Should other browsers be shown in about:memory page?
 extern const bool kShowOtherBrowsersInAboutMemory;
+
+// Should always open incognito windows when started with --incognito switch?
+extern const bool kAlwaysOpenIncognitoWindow;
+
+// Should the close button be shown in the Task Manager dialog?
+extern const bool kShowCancelButtonInTaskManager;
+
+//=============================================================================
+// Runtime "const" - set only once after parsing command line option and should
+// never be modified after that.
+
+// Are bookmark enabled? True by default.
+extern bool bookmarks_enabled;
+
+// Should we skip the user's preference for restore. False by default.
+extern bool skip_restore;
 
 }  // namespace browser_defaults
 

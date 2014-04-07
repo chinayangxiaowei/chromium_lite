@@ -5,26 +5,33 @@
 #include "views/controls/menu/menu_item_view.h"
 
 #include "app/resource_bundle.h"
-#include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/favicon_size.h"
 #include "grit/app_resources.h"
+#include "third_party/skia/include/effects/SkGradientShader.h"
 #include "views/controls/button/text_button.h"
 #include "views/controls/menu/menu_config.h"
+#include "views/controls/menu/radio_button_image_gtk.h"
 #include "views/controls/menu/submenu_view.h"
 
 namespace views {
 
 // Background color when the menu item is selected.
+#if defined(OS_CHROMEOS)
+static const SkColor kSelectedBackgroundColor = SkColorSetRGB(0xDC, 0xE4, 0xFA);
+#else
 static const SkColor kSelectedBackgroundColor = SkColorSetRGB(246, 249, 253);
+#endif
 
 gfx::Size MenuItemView::GetPreferredSize() {
   const gfx::Font& font = MenuConfig::instance().font;
   // TODO(sky): this is a workaround until I figure out why font.height()
   // isn't returning the right thing. We really only want to include
   // kFavIconSize if we're showing icons.
-  int content_height = std::max(kFavIconSize, font.height());
+  int content_height = std::max(kFavIconSize, font.GetHeight());
   return gfx::Size(
-      font.GetStringWidth(title_) + label_start_ + item_right_margin_,
+      font.GetStringWidth(title_) + label_start_ + item_right_margin_ +
+          GetChildPreferredWidth(),
       content_height + GetBottomMargin() + GetTopMargin());
 }
 
@@ -32,7 +39,8 @@ void MenuItemView::Paint(gfx::Canvas* canvas, bool for_drag) {
   const MenuConfig& config = MenuConfig::instance();
   bool render_selection =
       (!for_drag && IsSelected() &&
-       parent_menu_item_->GetSubmenu()->GetShowSelection(this));
+       parent_menu_item_->GetSubmenu()->GetShowSelection(this) &&
+       GetChildViewCount() == 0);
 
   int icon_x = config.item_left_margin;
   int top_margin = GetTopMargin();
@@ -46,7 +54,8 @@ void MenuItemView::Paint(gfx::Canvas* canvas, bool for_drag) {
   // only need the background when we want it to look different, as when we're
   // selected.
   if (render_selection)
-    canvas->drawColor(kSelectedBackgroundColor, SkXfermode::kSrc_Mode);
+    canvas->AsCanvasSkia()->drawColor(kSelectedBackgroundColor,
+                                      SkXfermode::kSrc_Mode);
 
   // Render the check.
   if (type_ == CHECKBOX && GetDelegate()->IsItemChecked(GetCommand())) {
@@ -56,21 +65,37 @@ void MenuItemView::Paint(gfx::Canvas* canvas, bool for_drag) {
     gfx::Rect check_bounds(icon_x, icon_y, check->width(), icon_height);
     AdjustBoundsForRTLUI(&check_bounds);
     canvas->DrawBitmapInt(*check, check_bounds.x(), check_bounds.y());
+  } else if (type_ == RADIO) {
+    const SkBitmap* image =
+        GetRadioButtonImage(GetDelegate()->IsItemChecked(GetCommand()));
+    canvas->DrawBitmapInt(*image,
+                          icon_x,
+                          top_margin +
+                          (height() - top_margin - bottom_margin -
+                           image->height()) / 2);
   }
 
   // Render the foreground.
+#if defined(OS_CHROMEOS)
+  SkColor fg_color =
+      IsEnabled() ? SK_ColorBLACK : SkColorSetRGB(0x80, 0x80, 0x80);
+#else
   SkColor fg_color =
       IsEnabled() ? TextButton::kEnabledColor : TextButton::kDisabledColor;
-  int width = this->width() - item_right_margin_ - label_start_;
+#endif
   const gfx::Font& font = MenuConfig::instance().font;
+  int accel_width = parent_menu_item_->GetSubmenu()->max_accelerator_width();
+  int width = this->width() - item_right_margin_ - label_start_ - accel_width;
   gfx::Rect text_bounds(label_start_, top_margin +
-                        (available_height - font.height()) / 2, width,
-                        font.height());
+                        (available_height - font.GetHeight()) / 2, width,
+                        font.GetHeight());
   text_bounds.set_x(MirroredLeftPointForRect(text_bounds));
   canvas->DrawStringInt(GetTitle(), font, fg_color,
                         text_bounds.x(), text_bounds.y(), text_bounds.width(),
                         text_bounds.height(),
                         GetRootMenuItem()->GetDrawStringFlags());
+
+  PaintAccelerator(canvas);
 
   // Render the icon.
   if (icon_.width() > 0) {

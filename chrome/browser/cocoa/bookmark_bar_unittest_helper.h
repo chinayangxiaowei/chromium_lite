@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_AUTOCOMPLETE_BOOKMARK_BAR_UNITTEST_HELPER_H_
 #define CHROME_BROWSER_COCOA_AUTOCOMPLETE_BOOKMARK_BAR_UNITTEST_HELPER_H_
+#pragma once
 
 #import <Foundation/Foundation.h>
 
@@ -39,9 +40,17 @@
 // containing window.
 - (NSPoint)top;
 
+// Return the bottom of the button in the base coordinate system of the
+// containing window.
+- (NSPoint)bottom;
+
 // Return the center-left point of the button in the base coordinate system
 // of the containing window.
 - (NSPoint)left;
+
+// Return the center-right point of the button in the base coordinate system
+// of the containing window.
+- (NSPoint)right;
 
 @end
 

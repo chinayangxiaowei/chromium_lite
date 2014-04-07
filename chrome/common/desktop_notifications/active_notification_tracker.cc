@@ -5,11 +5,16 @@
 #include "chrome/common/desktop_notifications/active_notification_tracker.h"
 
 #include "base/message_loop.h"
+#include "base/scoped_ptr.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebNotification.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebNotificationPermissionCallback.h"
 
 using WebKit::WebNotification;
 using WebKit::WebNotificationPermissionCallback;
+
+ActiveNotificationTracker::ActiveNotificationTracker() {}
+
+ActiveNotificationTracker::~ActiveNotificationTracker() {}
 
 bool ActiveNotificationTracker::GetId(
     const WebNotification& notification, int& id) {
@@ -51,6 +56,16 @@ void ActiveNotificationTracker::Clear() {
   while (!reverse_notification_table_.empty()) {
     ReverseTable::iterator iter = reverse_notification_table_.begin();
     UnregisterNotification((*iter).second);
+  }
+}
+
+void ActiveNotificationTracker::DetachAll() {
+  ReverseTable::iterator iter;
+  for (iter = reverse_notification_table_.begin();
+       iter != reverse_notification_table_.end();
+       ++iter) {
+    WebNotification notification(iter->first);
+    notification.detachPresenter();
   }
 }
 

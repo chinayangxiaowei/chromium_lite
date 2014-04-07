@@ -1,13 +1,14 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_FTP_FTP_AUTH_CACHE_H_
 #define NET_FTP_FTP_AUTH_CACHE_H_
+#pragma once
 
 #include <list>
-#include <string>
 
+#include "base/string16.h"
 #include "googleurl/src/gurl.h"
 
 namespace net {
@@ -26,20 +27,17 @@ class FtpAuthCache {
   static const size_t kMaxEntries;
 
   struct Entry {
-   Entry(const GURL& origin, const std::wstring& username,
-         const std::wstring& password)
-        : origin(origin),
-          username(username),
-          password(password) {
-    }
+    Entry(const GURL& origin, const string16& username,
+          const string16& password);
+    ~Entry();
 
     const GURL origin;
-    std::wstring username;
-    std::wstring password;
+    string16 username;
+    string16 password;
   };
 
-  FtpAuthCache() {}
-  ~FtpAuthCache() {}
+  FtpAuthCache();
+  ~FtpAuthCache();
 
   // Return Entry corresponding to given |origin| or NULL if not found.
   Entry* Lookup(const GURL& origin);
@@ -47,13 +45,13 @@ class FtpAuthCache {
   // Add an entry for |origin| to the cache (consisting of |username| and
   // |password|). If there is already an entry for |origin|, it will be
   // overwritten.
-  void Add(const GURL& origin, const std::wstring& username,
-           const std::wstring& password);
+  void Add(const GURL& origin, const string16& username,
+           const string16& password);
 
   // Remove the entry for |origin| from the cache, if one exists and matches
   // |username| and |password|.
-  void Remove(const GURL& origin, const std::wstring& username,
-              const std::wstring& password);
+  void Remove(const GURL& origin, const string16& username,
+              const string16& password);
 
  private:
   typedef std::list<Entry> EntryList;

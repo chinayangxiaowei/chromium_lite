@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,16 @@
 #include <gtk/gtk.h>
 
 #include "app/l10n_util.h"
-#include "app/resource_bundle.h"
 #include "base/basictypes.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
+#include "base/string16.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_editor.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
+#include "chrome/browser/bookmarks/recently_used_folders_combo_model.h"
 #include "chrome/browser/gtk/gtk_chrome_link_button.h"
 #include "chrome/browser/gtk/gtk_theme_provider.h"
 #include "chrome/browser/gtk/gtk_util.h"
@@ -31,63 +33,9 @@ namespace {
 // keeps track of the currently open bubble, or NULL if none is open.
 BookmarkBubbleGtk* g_bubble = NULL;
 
-// Max number of most recently used folders.
-const size_t kMaxMRUFolders = 5;
-
 // Padding between content and edge of info bubble.
 const int kContentBorder = 7;
 
-std::vector<const BookmarkNode*> PopulateFolderCombo(BookmarkModel* model,
-                                                     const GURL& url,
-                                                     GtkWidget* folder_combo) {
-  const BookmarkNode* bookmark_bar = model->GetBookmarkBarNode();
-  const BookmarkNode* other = model->other_node();
-  const BookmarkNode* node = model->GetMostRecentlyAddedNodeForURL(url);
-  const BookmarkNode* parent = node ? node->GetParent() : NULL;
-
-  // Use + 2 to account for bookmark bar and other node.
-  std::vector<const BookmarkNode*> recent_nodes =
-      bookmark_utils::GetMostRecentlyModifiedGroups(model, kMaxMRUFolders + 2);
-
-  std::vector<const BookmarkNode*> nodes;
-  // Make the parent the first item, unless it's the bookmark bar or other node.
-  if (parent && parent != bookmark_bar && parent != other)
-    nodes.push_back(parent);
-
-  for (size_t i = 0; i < recent_nodes.size(); ++i) {
-    if (recent_nodes[i] != parent &&
-        recent_nodes[i] != bookmark_bar &&
-        recent_nodes[i] != other) {
-      nodes.push_back(recent_nodes[i]);
-    }
-    // Make sure we only have kMaxMRUFolders in the first chunk.
-    if (nodes.size() == kMaxMRUFolders)
-      break;
-  }
-
-  // And put the bookmark bar and other nodes at the end of the list.
-  nodes.push_back(bookmark_bar);
-  nodes.push_back(other);
-
-  // We always have nodes + 1 entries in the combo.  The last entry will be
-  // the 'Select another folder...' entry that opens the bookmark editor.
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    gtk_combo_box_append_text(GTK_COMBO_BOX(folder_combo),
-                              WideToUTF8(nodes[i]->GetTitle()).c_str());
-  }
-  gtk_combo_box_append_text(GTK_COMBO_BOX(folder_combo),
-      l10n_util::GetStringUTF8(
-          IDS_BOOMARK_BUBBLE_CHOOSER_ANOTHER_FOLDER).c_str());
-
-  gint parent_index = 0;
-  if (parent) {
-    parent_index = static_cast<gint>(
-        std::find(nodes.begin(), nodes.end(), parent) - nodes.begin());
-  }
-  gtk_combo_box_set_active(GTK_COMBO_BOX(folder_combo), parent_index);
-
-  return nodes;
-}
 
 }  // namespace
 
@@ -96,11 +44,6 @@ void BookmarkBubbleGtk::Show(GtkWidget* anchor,
                              Profile* profile,
                              const GURL& url,
                              bool newly_bookmarked) {
-  // TODO(deanm): The Views code deals with the possibility of a bubble already
-  // being open, and then it just does nothing.  I am not sure how this could
-  // happen with the style of our GTK bubble since it has a grab.  I would also
-  // think that closing the previous bubble and opening the new one would make
-  // more sense, but I guess then you would commit the bubble's changes.
   DCHECK(!g_bubble);
   g_bubble = new BookmarkBubbleGtk(anchor, profile, url, newly_bookmarked);
 }
@@ -181,12 +124,8 @@ BookmarkBubbleGtk::BookmarkBubbleGtk(GtkWidget* anchor,
   gtk_box_pack_start(GTK_BOX(top), remove_button_,
                      FALSE, FALSE, 0);
 
-  // TODO(deanm): We should show the bookmark bar folder along with the top
-  // other choices and an entry to go into the bookmark editor.  Since we don't
-  // have the editor up yet on Linux, just show the bookmark bar for now.
   folder_combo_ = gtk_combo_box_new_text();
-  folder_nodes_ = PopulateFolderCombo(profile_->GetBookmarkModel(),
-                                      url_, folder_combo_);
+  InitFolderComboModel();
 
   // Create the edit entry for updating the bookmark name / title.
   name_entry_ = gtk_entry_new();
@@ -219,7 +158,7 @@ BookmarkBubbleGtk::BookmarkBubbleGtk(GtkWidget* anchor,
   gtk_container_set_focus_child(GTK_CONTAINER(content), table);
 
   InfoBubbleGtk::ArrowLocationGtk arrow_location =
-      !base::i18n::IsRTL() ?
+      base::i18n::IsRTL() ?
       InfoBubbleGtk::ARROW_LOCATION_TOP_LEFT :
       InfoBubbleGtk::ARROW_LOCATION_TOP_RIGHT;
   bubble_ = InfoBubbleGtk::Show(anchor_,
@@ -283,8 +222,8 @@ void BookmarkBubbleGtk::OnNameActivate(GtkWidget* widget) {
 }
 
 void BookmarkBubbleGtk::OnFolderChanged(GtkWidget* widget) {
-  size_t cur_folder = gtk_combo_box_get_active(GTK_COMBO_BOX(folder_combo_));
-  if (cur_folder == folder_nodes_.size()) {
+  int index = gtk_combo_box_get_active(GTK_COMBO_BOX(folder_combo_));
+  if (index == folder_combo_model_->GetItemCount() - 1) {
     UserMetrics::RecordAction(
         UserMetricsAction("BookmarkBubble_EditFromCombobox"), profile_);
     // GTK doesn't handle having the combo box destroyed from the changed
@@ -334,10 +273,8 @@ void BookmarkBubbleGtk::ApplyEdits() {
   BookmarkModel* model = profile_->GetBookmarkModel();
   const BookmarkNode* node = model->GetMostRecentlyAddedNodeForURL(url_);
   if (node) {
-    // NOTE: Would be nice to save a strlen and use gtk_entry_get_text_length,
-    // but it is fairly new and not always in our GTK version.
-    const std::wstring new_title(
-        UTF8ToWide(gtk_entry_get_text(GTK_ENTRY(name_entry_))));
+    const string16 new_title(
+        UTF8ToUTF16(gtk_entry_get_text(GTK_ENTRY(name_entry_))));
 
     if (new_title != node->GetTitle()) {
       model->SetTitle(node, new_title);
@@ -346,11 +283,11 @@ void BookmarkBubbleGtk::ApplyEdits() {
           profile_);
     }
 
-    size_t cur_folder = gtk_combo_box_get_active(GTK_COMBO_BOX(folder_combo_));
+    int index = gtk_combo_box_get_active(GTK_COMBO_BOX(folder_combo_));
 
-    // Last index ('Choose another folder...') is not in folder_nodes_.
-    if (cur_folder < folder_nodes_.size()) {
-      const BookmarkNode* new_parent = folder_nodes_[cur_folder];
+    // Last index means 'Choose another folder...'
+    if (index < folder_combo_model_->GetItemCount() - 1) {
+      const BookmarkNode* new_parent = folder_combo_model_->GetNodeAt(index);
       if (new_parent != node->GetParent()) {
         UserMetrics::RecordAction(
             UserMetricsAction("BookmarkBubble_ChangeParent"), profile_);
@@ -369,7 +306,7 @@ std::string BookmarkBubbleGtk::GetTitle() {
     return std::string();
   }
 
-  return WideToUTF8(node->GetTitle());
+  return UTF16ToUTF8(node->GetTitle());
 }
 
 void BookmarkBubbleGtk::ShowEditor() {
@@ -389,6 +326,22 @@ void BookmarkBubbleGtk::ShowEditor() {
   if (node) {
     BookmarkEditor::Show(toplevel, profile, NULL,
                          BookmarkEditor::EditDetails(node),
-                         BookmarkEditor::SHOW_TREE, NULL);
+                         BookmarkEditor::SHOW_TREE);
   }
+}
+
+void BookmarkBubbleGtk::InitFolderComboModel() {
+  folder_combo_model_.reset(new RecentlyUsedFoldersComboModel(
+      profile_->GetBookmarkModel(),
+      profile_->GetBookmarkModel()->GetMostRecentlyAddedNodeForURL(url_)));
+
+  // We always have nodes + 1 entries in the combo.  The last entry will be
+  // the 'Select another folder...' entry that opens the bookmark editor.
+  for (int i = 0; i < folder_combo_model_->GetItemCount(); ++i) {
+    gtk_combo_box_append_text(GTK_COMBO_BOX(folder_combo_),
+        UTF16ToUTF8(folder_combo_model_->GetItemAt(i)).c_str());
+  }
+
+  gtk_combo_box_set_active(GTK_COMBO_BOX(folder_combo_),
+                           folder_combo_model_->node_parent_index());
 }

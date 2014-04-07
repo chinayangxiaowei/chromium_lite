@@ -4,6 +4,7 @@
 
 #ifndef CHROME_RENDERER_EXTERNAL_HOST_BINDINGS_H_
 #define CHROME_RENDERER_EXTERNAL_HOST_BINDINGS_H_
+#pragma once
 
 #include "chrome/renderer/dom_ui_bindings.h"
 #include "ipc/ipc_message.h"
@@ -16,8 +17,7 @@
 class ExternalHostBindings : public DOMBoundBrowserObject {
  public:
   ExternalHostBindings();
-  virtual ~ExternalHostBindings() {
-  }
+  virtual ~ExternalHostBindings();
 
   // The postMessage() function provided to Javascript.
   void postMessage(const CppArgumentList& args, CppVariant* result);

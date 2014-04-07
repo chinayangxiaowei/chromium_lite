@@ -4,6 +4,7 @@
 
 #ifndef BASE_TASK_H_
 #define BASE_TASK_H_
+#pragma once
 
 #include "base/non_thread_safe.h"
 #include "base/raw_scoped_refptr_mismatch_checker.h"
@@ -18,8 +19,8 @@
 
 class Task : public tracked_objects::Tracked {
  public:
-  Task() {}
-  virtual ~Task() {}
+  Task();
+  virtual ~Task();
 
   // Tasks are automatically deleted after Run is called.
   virtual void Run() = 0;
@@ -27,6 +28,9 @@ class Task : public tracked_objects::Tracked {
 
 class CancelableTask : public Task {
  public:
+  CancelableTask();
+  virtual ~CancelableTask();
+
   // Not all tasks support cancellation.
   virtual void Cancel() = 0;
 };
@@ -103,30 +107,30 @@ class ScopedRunnableMethodFactory {
 
   template <class Method, class A, class B, class C>
   inline CancelableTask* NewRunnableMethod(Method method,
-                                 const A& a,
-                                 const B& b,
-                                 const C& c) {
+                                           const A& a,
+                                           const B& b,
+                                           const C& c) {
     return new RunnableMethod<Method, Tuple3<A, B, C> >(
         weak_factory_.GetWeakPtr(), method, MakeTuple(a, b, c));
   }
 
   template <class Method, class A, class B, class C, class D>
   inline CancelableTask* NewRunnableMethod(Method method,
-                                 const A& a,
-                                 const B& b,
-                                 const C& c,
-                                 const D& d) {
+                                           const A& a,
+                                           const B& b,
+                                           const C& c,
+                                           const D& d) {
     return new RunnableMethod<Method, Tuple4<A, B, C, D> >(
         weak_factory_.GetWeakPtr(), method, MakeTuple(a, b, c, d));
   }
 
   template <class Method, class A, class B, class C, class D, class E>
   inline CancelableTask* NewRunnableMethod(Method method,
-                                 const A& a,
-                                 const B& b,
-                                 const C& c,
-                                 const D& d,
-                                 const E& e) {
+                                           const A& a,
+                                           const B& b,
+                                           const C& c,
+                                           const D& d,
+                                           const E& e) {
     return new RunnableMethod<Method, Tuple5<A, B, C, D, E> >(
         weak_factory_.GetWeakPtr(), method, MakeTuple(a, b, c, d, e));
   }
@@ -139,7 +143,8 @@ class ScopedRunnableMethodFactory {
   template <class Method, class Params>
   class RunnableMethod : public CancelableTask {
    public:
-    RunnableMethod(const base::WeakPtr<T>& obj, Method meth,
+    RunnableMethod(const base::WeakPtr<T>& obj,
+                   Method meth,
                    const Params& params)
         : obj_(obj),
           meth_(meth),
@@ -183,6 +188,7 @@ class DeleteTask : public CancelableTask {
   virtual void Cancel() {
     obj_ = NULL;
   }
+
  private:
   T* obj_;
 };
@@ -200,6 +206,7 @@ class ReleaseTask : public CancelableTask {
   virtual void Cancel() {
     obj_ = NULL;
   }
+
  private:
   T* obj_;
 };
@@ -212,6 +219,9 @@ class ReleaseTask : public CancelableTask {
 // define other lifetime management.  For example, if the callee is known to
 // live longer than the RunnableMethod object, then a RunnableMethodTraits
 // struct could be defined with empty RetainCallee and ReleaseCallee methods.
+//
+// The DISABLE_RUNNABLE_METHOD_REFCOUNT macro is provided as a convenient way
+// for declaring a RunnableMethodTraits that disables refcounting.
 
 template <class T>
 struct RunnableMethodTraits {
@@ -251,6 +261,30 @@ struct RunnableMethodTraits {
 #endif
 };
 
+// Convenience macro for declaring a RunnableMethodTraits that disables
+// refcounting of a class.  This is useful if you know that the callee
+// will outlive the RunnableMethod object and thus do not need the ref counts.
+//
+// The invocation of DISABLE_RUNNABLE_METHOD_REFCOUNT should be done at the
+// global namespace scope.  Example:
+//
+//   namespace foo {
+//   class Bar {
+//     ...
+//   };
+//   }  // namespace foo
+//
+//   DISABLE_RUNNABLE_METHOD_REFCOUNT(foo::Bar);
+//
+// This is different from DISALLOW_COPY_AND_ASSIGN which is declared inside the
+// class.
+#define DISABLE_RUNNABLE_METHOD_REFCOUNT(TypeName) \
+  template <>                                      \
+  struct RunnableMethodTraits<TypeName> {          \
+    void RetainCallee(TypeName* manager) {}        \
+    void ReleaseCallee(TypeName* manager) {}       \
+  }
+
 // RunnableMethod and RunnableFunction -----------------------------------------
 //
 // Runnable methods are a type of task that call a function on an object when
@@ -265,7 +299,7 @@ struct RunnableMethodTraits {
 //                    want to call
 // Param            - the parameter(s) to the method, possibly packed as a Tuple
 // A                - the first parameter (if any) to the method
-// B                - the second parameter (if any) to the mathod
+// B                - the second parameter (if any) to the method
 //
 // Put these all together and you get an object that can call a method whose
 // signature is:
@@ -458,6 +492,38 @@ inline CancelableTask* NewRunnableFunction(Function function,
                                                                 MakeTuple(a, b,
                                                                           c, d,
                                                                           e));
+}
+
+template <class Function, class A, class B, class C, class D, class E,
+          class F>
+inline CancelableTask* NewRunnableFunction(Function function,
+                                           const A& a, const B& b,
+                                           const C& c, const D& d,
+                                           const E& e, const F& f) {
+  return new RunnableFunction<Function, Tuple6<A, B, C, D, E, F> >(function,
+      MakeTuple(a, b, c, d, e, f));
+}
+
+template <class Function, class A, class B, class C, class D, class E,
+          class F, class G>
+inline CancelableTask* NewRunnableFunction(Function function,
+                                           const A& a, const B& b,
+                                           const C& c, const D& d,
+                                           const E& e, const F& f,
+                                           const G& g) {
+  return new RunnableFunction<Function, Tuple7<A, B, C, D, E, F, G> >(function,
+      MakeTuple(a, b, c, d, e, f, g));
+}
+
+template <class Function, class A, class B, class C, class D, class E,
+          class F, class G, class H>
+inline CancelableTask* NewRunnableFunction(Function function,
+                                           const A& a, const B& b,
+                                           const C& c, const D& d,
+                                           const E& e, const F& f,
+                                           const G& g, const H& h) {
+  return new RunnableFunction<Function, Tuple8<A, B, C, D, E, F, G, H> >(
+      function, MakeTuple(a, b, c, d, e, f, g, h));
 }
 
 #endif  // BASE_TASK_H_

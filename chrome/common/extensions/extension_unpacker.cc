@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "base/scoped_temp_dir.h"
 #include "base/string_util.h"
 #include "base/thread.h"
+#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "net/base/file_stream.h"
 #include "chrome/common/common_param_traits.h"
@@ -26,18 +27,9 @@
 
 namespace errors = extension_manifest_errors;
 namespace keys = extension_manifest_keys;
+namespace filenames = extension_filenames;
 
 namespace {
-// The name of a temporary directory to install an extension into for
-// validation before finalizing install.
-const char kTempExtensionName[] = "TEMP_INSTALL";
-
-// The file to write our decoded images to, relative to the extension_path.
-const char kDecodedImagesFilename[] = "DECODED_IMAGES";
-
-// The file to write our decoded message catalogs to, relative to the
-// extension_path.
-const char kDecodedMessageCatalogsFilename[] = "DECODED_MESSAGE_CATALOGS";
 
 // Errors
 const char* kCouldNotCreateDirectoryError =
@@ -50,9 +42,7 @@ const char* kPathNamesMustBeAbsoluteOrLocalError =
 // A limit to stop us passing dangerously large canvases to the browser.
 const int kMaxImageCanvas = 4096 * 4096;
 
-}  // namespace
-
-static SkBitmap DecodeImage(const FilePath& path) {
+SkBitmap DecodeImage(const FilePath& path) {
   // Read the file from disk.
   std::string file_contents;
   if (!file_util::PathExists(path) ||
@@ -71,7 +61,7 @@ static SkBitmap DecodeImage(const FilePath& path) {
   return bitmap;
 }
 
-static bool PathContainsParentDirectory(const FilePath& path) {
+bool PathContainsParentDirectory(const FilePath& path) {
   const FilePath::StringType kSeparators(FilePath::kSeparators);
   const FilePath::StringType kParentDirectory(FilePath::kParentDirectory);
   const size_t npos = FilePath::StringType::npos;
@@ -89,6 +79,15 @@ static bool PathContainsParentDirectory(const FilePath& path) {
   }
 
   return false;
+}
+
+}  // namespace
+
+ExtensionUnpacker::ExtensionUnpacker(const FilePath& extension_path)
+    : extension_path_(extension_path) {
+}
+
+ExtensionUnpacker::~ExtensionUnpacker() {
 }
 
 DictionaryValue* ExtensionUnpacker::ReadManifest() {
@@ -148,13 +147,16 @@ bool ExtensionUnpacker::Run() {
 
   // <profile>/Extensions/INSTALL_TEMP/<version>
   temp_install_dir_ =
-      extension_path_.DirName().AppendASCII(kTempExtensionName);
+    extension_path_.DirName().AppendASCII(filenames::kTempExtensionName);
+
   if (!file_util::CreateDirectory(temp_install_dir_)) {
+
 #if defined(OS_WIN)
     std::string dir_string = WideToUTF8(temp_install_dir_.value());
 #else
     std::string dir_string = temp_install_dir_.value();
 #endif
+
     SetError(kCouldNotCreateDirectoryError + dir_string);
     return false;
   }
@@ -169,15 +171,13 @@ bool ExtensionUnpacker::Run() {
   if (!parsed_manifest_.get())
     return false;  // Error was already reported.
 
-  // NOTE: Since the Unpacker doesn't have the extension's public_id, the
+  // NOTE: Since the unpacker doesn't have the extension's public_id, the
   // InitFromValue is allowed to generate a temporary id for the extension.
   // ANY CODE THAT FOLLOWS SHOULD NOT DEPEND ON THE CORRECT ID OF THIS
   // EXTENSION.
   Extension extension(temp_install_dir_);
   std::string error;
-  if (!extension.InitFromValue(*parsed_manifest_,
-                               false,
-                               &error)) {
+  if (!extension.InitFromValue(*parsed_manifest_, false, &error)) {
     SetError(error);
     return false;
   }
@@ -209,7 +209,8 @@ bool ExtensionUnpacker::DumpImagesToFile() {
   IPC::Message pickle;  // We use a Message so we can use WriteParam.
   IPC::WriteParam(&pickle, decoded_images_);
 
-  FilePath path = extension_path_.DirName().AppendASCII(kDecodedImagesFilename);
+  FilePath path = extension_path_.DirName().AppendASCII(
+      filenames::kDecodedImagesFilename);
   if (!file_util::WriteFile(path, static_cast<const char*>(pickle.data()),
                             pickle.size())) {
     SetError("Could not write image data to disk.");
@@ -224,7 +225,7 @@ bool ExtensionUnpacker::DumpMessageCatalogsToFile() {
   IPC::WriteParam(&pickle, *parsed_catalogs_.get());
 
   FilePath path = extension_path_.DirName().AppendASCII(
-      kDecodedMessageCatalogsFilename);
+      filenames::kDecodedMessageCatalogsFilename);
   if (!file_util::WriteFile(path, static_cast<const char*>(pickle.data()),
                             pickle.size())) {
     SetError("Could not write message catalogs to disk.");
@@ -237,7 +238,7 @@ bool ExtensionUnpacker::DumpMessageCatalogsToFile() {
 // static
 bool ExtensionUnpacker::ReadImagesFromFile(const FilePath& extension_path,
                                            DecodedImages* images) {
-  FilePath path = extension_path.AppendASCII(kDecodedImagesFilename);
+  FilePath path = extension_path.AppendASCII(filenames::kDecodedImagesFilename);
   std::string file_str;
   if (!file_util::ReadFileToString(path, &file_str))
     return false;
@@ -250,7 +251,8 @@ bool ExtensionUnpacker::ReadImagesFromFile(const FilePath& extension_path,
 // static
 bool ExtensionUnpacker::ReadMessageCatalogsFromFile(
     const FilePath& extension_path, DictionaryValue* catalogs) {
-  FilePath path = extension_path.AppendASCII(kDecodedMessageCatalogsFilename);
+  FilePath path = extension_path.AppendASCII(
+      filenames::kDecodedMessageCatalogsFilename);
   std::string file_str;
   if (!file_util::ReadFileToString(path, &file_str))
     return false;
@@ -299,7 +301,7 @@ bool ExtensionUnpacker::ReadMessageCatalog(const FilePath& message_path) {
   if (!temp_install_dir_.AppendRelativePath(message_path, &relative_path))
     NOTREACHED();
 
-  parsed_catalogs_->Set(relative_path.DirName().ToWStringHack(),
+  parsed_catalogs_->Set(WideToUTF8(relative_path.DirName().ToWStringHack()),
                         root.release());
 
   return true;

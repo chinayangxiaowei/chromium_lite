@@ -10,7 +10,7 @@
 #include "base/file_util.h"
 #include "base/mime_util.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/download/download_util.h"
 #include "chrome/browser/download/drag_download_file.h"
 #include "chrome/browser/download/drag_download_util.h"
 #include "chrome/browser/gtk/gtk_util.h"
@@ -30,30 +30,25 @@ using WebKit::WebDragOperationNone;
 TabContentsDragSource::TabContentsDragSource(
     TabContentsView* tab_contents_view)
     : tab_contents_view_(tab_contents_view),
+      drag_pixbuf_(NULL),
       drag_failed_(false),
-      drag_widget_(NULL),
-      drag_icon_(NULL) {
-  drag_widget_ = gtk_invisible_new();
-  g_signal_connect(drag_widget_, "drag-failed",
+      drag_widget_(gtk_invisible_new()),
+      drag_icon_(gtk_window_new(GTK_WINDOW_POPUP)) {
+  signals_.Connect(drag_widget_, "drag-failed",
                    G_CALLBACK(OnDragFailedThunk), this);
-  g_signal_connect(drag_widget_, "drag-begin", G_CALLBACK(OnDragBeginThunk),
+  signals_.Connect(drag_widget_, "drag-begin",
+                   G_CALLBACK(OnDragBeginThunk),
                    this);
-  g_signal_connect(drag_widget_, "drag-end", G_CALLBACK(OnDragEndThunk), this);
-  g_signal_connect(drag_widget_, "drag-data-get",
+  signals_.Connect(drag_widget_, "drag-end",
+                   G_CALLBACK(OnDragEndThunk), this);
+  signals_.Connect(drag_widget_, "drag-data-get",
                    G_CALLBACK(OnDragDataGetThunk), this);
-  g_object_ref_sink(drag_widget_);
+
+  signals_.Connect(drag_icon_, "expose-event",
+                   G_CALLBACK(OnDragIconExposeThunk), this);
 }
 
 TabContentsDragSource::~TabContentsDragSource() {
-  g_signal_handlers_disconnect_by_func(drag_widget_,
-      reinterpret_cast<gpointer>(OnDragFailedThunk), this);
-  g_signal_handlers_disconnect_by_func(drag_widget_,
-      reinterpret_cast<gpointer>(OnDragBeginThunk), this);
-  g_signal_handlers_disconnect_by_func(drag_widget_,
-      reinterpret_cast<gpointer>(OnDragEndThunk), this);
-  g_signal_handlers_disconnect_by_func(drag_widget_,
-      reinterpret_cast<gpointer>(OnDragDataGetThunk), this);
-
   // Break the current drag, if any.
   if (drop_data_.get()) {
     gtk_grab_add(drag_widget_);
@@ -63,8 +58,7 @@ TabContentsDragSource::~TabContentsDragSource() {
   }
 
   gtk_widget_destroy(drag_widget_);
-  g_object_unref(drag_widget_);
-  drag_widget_ = NULL;
+  gtk_widget_destroy(drag_icon_);
 }
 
 TabContents* TabContentsDragSource::tab_contents() const {
@@ -104,7 +98,11 @@ void TabContentsDragSource::StartDragging(const WebDropData& drop_data,
   }
 
   drop_data_.reset(new WebDropData(drop_data));
-  drag_image_ = image;
+
+  // The image we get from WebKit makes heavy use of alpha-shading. This looks
+  // bad on non-compositing WMs. Fall back to the default drag icon.
+  if (!image.isNull() && gtk_util::IsScreenComposited())
+    drag_pixbuf_ = gfx::GdkPixbufFromSkBitmap(&image);
   image_offset_ = image_offset;
 
   GtkTargetList* list = gtk_dnd_util::GetTargetListFromCodeMask(targets_mask);
@@ -230,6 +228,7 @@ void TabContentsDragSource::OnDragDataGet(GtkWidget* sender,
         // Convert from the file url to the file path.
         GURL file_url(std::string(reinterpret_cast<char*>(file_url_value),
                                   file_url_len));
+        g_free(file_url_value);
         FilePath file_path;
         if (net::FileURLToFilePath(file_url, &file_path)) {
           // Open the file as a stream.
@@ -295,11 +294,11 @@ void TabContentsDragSource::OnDragBegin(GtkWidget* sender,
     std::string content_disposition("attachment; filename=");
     content_disposition += download_file_name_.value();
     FilePath generated_download_file_name;
-    DownloadManager::GenerateFileName(download_url_,
-                                      content_disposition,
-                                      std::string(),
-                                      download_mime_type,
-                                      &generated_download_file_name);
+    download_util::GenerateFileName(download_url_,
+                                    content_disposition,
+                                    std::string(),
+                                    download_mime_type,
+                                    &generated_download_file_name);
 
     // Pass the file name to the drop target by setting the source window's
     // XdndDirectSave0 property.
@@ -315,14 +314,18 @@ void TabContentsDragSource::OnDragBegin(GtkWidget* sender,
                         generated_download_file_name.value().length());
   }
 
-  if (!drag_image_.isNull()) {
-    GdkPixbuf* pixbuf = gfx::GdkPixbufFromSkBitmap(&drag_image_);
-    GtkWidget* image = gtk_image_new_from_pixbuf(pixbuf);
-    gtk_widget_show(image);
-    g_object_unref(pixbuf);
-    drag_icon_ = gtk_window_new(GTK_WINDOW_POPUP);
-    g_object_ref_sink(drag_icon_);
-    gtk_container_add(GTK_CONTAINER(drag_icon_), image);
+  if (drag_pixbuf_) {
+    gtk_widget_set_size_request(drag_icon_,
+                                gdk_pixbuf_get_width(drag_pixbuf_),
+                                gdk_pixbuf_get_height(drag_pixbuf_));
+
+    // We only need to do this once.
+    if (!GTK_WIDGET_REALIZED(drag_icon_)) {
+      GdkScreen* screen = gtk_widget_get_screen(drag_icon_);
+      GdkColormap* rgba = gdk_screen_get_rgba_colormap(screen);
+      if (rgba)
+        gtk_widget_set_colormap(drag_icon_, rgba);
+    }
 
     gtk_drag_set_icon_widget(drag_context, drag_icon_,
                              image_offset_.x(), image_offset_.y());
@@ -331,9 +334,9 @@ void TabContentsDragSource::OnDragBegin(GtkWidget* sender,
 
 void TabContentsDragSource::OnDragEnd(GtkWidget* sender,
                                       GdkDragContext* drag_context) {
-  if (drag_icon_) {
-    g_object_unref(drag_icon_);
-    drag_icon_ = NULL;
+  if (drag_pixbuf_) {
+    g_object_unref(drag_pixbuf_);
+    drag_pixbuf_ = NULL;
   }
 
   MessageLoopForUI::current()->RemoveObserver(this);
@@ -363,4 +366,17 @@ void TabContentsDragSource::OnDragEnd(GtkWidget* sender,
 
 gfx::NativeView TabContentsDragSource::GetContentNativeView() const {
   return tab_contents_view_->GetContentNativeView();
+}
+
+gboolean TabContentsDragSource::OnDragIconExpose(GtkWidget* sender,
+                                                 GdkEventExpose* event) {
+  cairo_t* cr = gdk_cairo_create(event->window);
+  gdk_cairo_rectangle(cr, &event->area);
+  cairo_clip(cr);
+  cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+  gdk_cairo_set_source_pixbuf(cr, drag_pixbuf_, 0, 0);
+  cairo_paint(cr);
+  cairo_destroy(cr);
+
+  return TRUE;
 }

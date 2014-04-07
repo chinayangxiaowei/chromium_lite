@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SSL_SSL_ERROR_HANDLER_H_
 #define CHROME_BROWSER_SSL_SSL_ERROR_HANDLER_H_
+#pragma once
 
 #include <string>
 
@@ -11,7 +12,6 @@
 #include "base/ref_counted.h"
 #include "chrome/browser/renderer_host/global_request_id.h"
 #include "chrome/browser/ssl/ssl_manager.h"
-#include "chrome/common/filter_policy.h"
 #include "googleurl/src/gurl.h"
 #include "webkit/glue/resource_type.h"
 
@@ -25,8 +25,8 @@ class URLRequest;
 // UI thread.  Subclasses should override the OnDispatched/OnDispatchFailed
 // methods to implement the actions that should be taken on the UI thread.
 // These methods can call the different convenience methods ContinueRequest/
-// CancelRequest/StartRequest to perform any required action on the URLRequest
-// the ErrorHandler was created with.
+// CancelRequest to perform any required action on the URLRequest the
+// ErrorHandler was created with.
 //
 // IMPORTANT NOTE:
 //
@@ -77,14 +77,6 @@ class SSLErrorHandler : public base::RefCountedThreadSafe<SSLErrorHandler> {
   // This method can be called from OnDispatchFailed and OnDispatched.
   void DenyRequest();
 
-  // Starts the associated URLRequest.  |filter_policy| specifies whether the
-  // ResourceDispatcher should attempt to filter the loaded content in order
-  // to make it secure (ex: images are made slightly transparent and are
-  // stamped).
-  // Should only be called when the URLRequest has not already been started.
-  // This method can be called from OnDispatchFailed and OnDispatched.
-  void StartRequest(FilterPolicy::Type filter_policy);
-
   // Does nothing on the URLRequest but ensures the current instance ref
   // count is decremented appropriately.  Subclasses that do not want to
   // take any specific actions in their OnDispatched/OnDispatchFailed should
@@ -101,13 +93,13 @@ class SSLErrorHandler : public base::RefCountedThreadSafe<SSLErrorHandler> {
                   const std::string& frame_origin,
                   const std::string& main_frame_origin);
 
-  virtual ~SSLErrorHandler() { }
+  virtual ~SSLErrorHandler();
 
   // The following 2 methods are the methods subclasses should implement.
-  virtual void OnDispatchFailed() { TakeNoAction(); }
+  virtual void OnDispatchFailed();
 
   // Can use the manager_ member.
-  virtual void OnDispatched() { TakeNoAction(); }
+  virtual void OnDispatched();
 
   // Should only be accessed on the UI thread.
   SSLManager* manager_;  // Our manager.
@@ -128,10 +120,6 @@ class SSLErrorHandler : public base::RefCountedThreadSafe<SSLErrorHandler> {
   //
   // Call on the IO thread.
   void CompleteContinueRequest();
-
-  // Completes the StartRequest operation on the IO thread.
-  // Call on the IO thread.
-  void CompleteStartRequest(FilterPolicy::Type filter_policy);
 
   // Derefs this instance.
   // Call on the IO thread.

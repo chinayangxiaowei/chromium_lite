@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_COMBOBOX_COMBOBOX_H_
 #define VIEWS_CONTROLS_COMBOBOX_COMBOBOX_H_
+#pragma once
 
 #include <string>
 
@@ -27,6 +28,9 @@ class Combobox : public View {
     virtual void ItemChanged(Combobox* combo_box,
                              int prev_index,
                              int new_index) = 0;
+
+   protected:
+    virtual ~Listener() {}
   };
 
   // |model| is not owned by the combo box.
@@ -57,8 +61,8 @@ class Combobox : public View {
   virtual void SetEnabled(bool enabled);
   virtual bool SkipDefaultKeyEventProcessing(const KeyEvent& e);
   virtual void PaintFocusBorder(gfx::Canvas* canvas);
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual bool GetAccessibleValue(std::wstring* value);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual std::wstring GetAccessibleValue();
 
  protected:
   virtual void Focus();
@@ -78,9 +82,6 @@ class Combobox : public View {
 
   // The current selection.
   int selected_item_;
-
-  // The accessible name of this control.
-  std::wstring accessible_name_;
 
   DISALLOW_COPY_AND_ASSIGN(Combobox);
 };

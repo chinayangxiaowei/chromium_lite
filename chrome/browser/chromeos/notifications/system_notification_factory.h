@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_NOTIFICATIONS_SYSTEM_NOTIFICATION_FACTORY_H_
 #define CHROME_BROWSER_CHROMEOS_NOTIFICATIONS_SYSTEM_NOTIFICATION_FACTORY_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "chrome/browser/notifications/notification.h"
@@ -21,6 +22,12 @@ class SystemNotificationFactory {
   static Notification Create(
       const GURL& icon, const string16& title,
       const string16& text,
+      NotificationDelegate* delegate);
+
+  // Creates a system notification with a footer link.
+  static Notification Create(
+      const GURL& icon, const string16& title,
+      const string16& text, const string16& link,
       NotificationDelegate* delegate);
 };
 

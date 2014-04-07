@@ -36,23 +36,22 @@ nacl64.exe: %(VersionDir)s\
 nacl64.dll: %(VersionDir)s\
 icudt42.dll: %(VersionDir)s\
 gears.dll: %(VersionDir)s\
-Themes\default.dll: %(VersionDir)s\Themes
+resources.pak: %(VersionDir)s\
 locales\*.dll: %(VersionDir)s\Locales
-Resources\bookmark_manager\*.*: %(VersionDir)s\Resources\bookmark_manager
-Resources\bookmark_manager\css\*.*: %(VersionDir)s\Resources\bookmark_manager\css
-Resources\bookmark_manager\images\*.*: %(VersionDir)s\Resources\bookmark_manager\images
-Resources\bookmark_manager\js\*.*: %(VersionDir)s\Resources\bookmark_manager\js
-Resources\bookmark_manager\js\bmm\*.*: %(VersionDir)s\Resources\bookmark_manager\js\bmm
-Resources\bookmark_manager\js\cr\*.*: %(VersionDir)s\Resources\bookmark_manager\js\cr
-Resources\bookmark_manager\js\cr\ui\*.*: %(VersionDir)s\Resources\bookmark_manager\js\cr\ui
 Resources\Inspector\*.*: %(VersionDir)s\Resources\Inspector
 Resources\Inspector\Images\*.*: %(VersionDir)s\Resources\Inspector\Images
 servers\*.dll: %(VersionDir)s\
 servers\*.exe: %(VersionDir)s\
+chrome_frame_helper.exe: %(VersionDir)s\
+chrome_frame_helper.dll: %(VersionDir)s\
 Extensions\*.*: %(VersionDir)s\Extensions\
 av*.dll: %(VersionDir)s\
+pdf.dll: %(VersionDir)s\
+d3dx9_42.dll: %(VersionDir)s\
+D3DCompiler_42.dll: %(VersionDir)s\
+libEGL.dll: %(VersionDir)s\
+libGLESv2.dll: %(VersionDir)s\
 
 [GOOGLE_CHROME]
-rlz.dll: %(VersionDir)s\
 gcswf32.dll: %(VersionDir)s\
 plugin.vch: %(VersionDir)s\

@@ -1,14 +1,17 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import "chrome/browser/cocoa/bookmark_menu_cocoa_controller.h"
+
 #include "app/text_elider.h"
 #include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_dll_resource.h"  // IDC_BOOKMARK_MENU
+#import "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/browser.h"
 #import "chrome/browser/cocoa/bookmark_menu_bridge.h"
-#import "chrome/browser/cocoa/bookmark_menu_cocoa_controller.h"
 #include "chrome/browser/cocoa/event_utils.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
@@ -26,12 +29,12 @@ const NSUInteger kMaximumMenuPixelsWide = 300;
 
 + (NSString*)menuTitleForNode:(const BookmarkNode*)node {
   NSFont* nsfont = [NSFont menuBarFontOfSize:0];  // 0 means "default"
-  gfx::Font font = gfx::Font::CreateFont(base::SysNSStringToWide([nsfont
-                                                                   fontName]),
-                                         (int)[nsfont pointSize]);
-  std::wstring title = gfx::ElideText(node->GetTitle(),
+  gfx::Font font(base::SysNSStringToWide([nsfont fontName]),
+                 static_cast<int>([nsfont pointSize]));
+  std::wstring title = gfx::ElideText(UTF16ToWideHack(node->GetTitle()),
                                       font,
-                                      kMaximumMenuPixelsWide);
+                                      kMaximumMenuPixelsWide,
+                                      false);
   return base::SysWideToNSString(title);
 }
 
@@ -53,6 +56,11 @@ const NSUInteger kMaximumMenuPixelsWide = 300;
   return [[[NSApp mainMenu] itemWithTag:IDC_BOOKMARK_MENU] submenu];
 }
 
+- (BOOL)validateMenuItem:(NSMenuItem*)menuItem {
+  AppController* controller = [NSApp delegate];
+  return [controller keyWindowIsNotModal];
+}
+
 // NSMenu delegate method: called just before menu is displayed.
 - (void)menuNeedsUpdate:(NSMenu*)menu {
   bridge_->UpdateMenu(menu);
@@ -66,8 +74,9 @@ const NSUInteger kMaximumMenuPixelsWide = 300;
 
 // Open the URL of the given BookmarkNode in the current tab.
 - (void)openURLForNode:(const BookmarkNode*)node {
-  Browser* browser =
-      Browser::GetOrCreateTabbedBrowser(bridge_->GetProfile());
+  Browser* browser = Browser::GetTabbedBrowser(bridge_->GetProfile(), true);
+  if (!browser)
+    browser = Browser::Create(bridge_->GetProfile());
   WindowOpenDisposition disposition =
       event_utils::WindowOpenDispositionFromNSEvent([NSApp currentEvent]);
   browser->OpenURL(node->GetURL(), GURL(), disposition,

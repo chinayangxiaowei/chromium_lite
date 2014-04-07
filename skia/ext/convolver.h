@@ -4,6 +4,7 @@
 
 #ifndef SKIA_EXT_CONVOLVER_H_
 #define SKIA_EXT_CONVOLVER_H_
+#pragma once
 
 #include <vector>
 
@@ -29,8 +30,8 @@ class ConvolutionFilter1D {
 
   typedef short Fixed;
 
-  ConvolutionFilter1D() : max_filter_(0) {
-  }
+  ConvolutionFilter1D();
+  ~ConvolutionFilter1D();
 
   // Convert between floating point and our fixed point representation.
   static Fixed FloatToFixed(float f) {

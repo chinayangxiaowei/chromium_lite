@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "base/scoped_ptr.h"
-#include "media/audio/audio_output.h"
+#include "media/audio/audio_io.h"
 
 class FakeAudioOutputStream : public AudioOutputStream {
  public:
@@ -26,7 +26,7 @@ class FakeAudioOutputStream : public AudioOutputStream {
   virtual void GetVolume(double* volume);
   virtual void Close();
 
-  char* buffer() { return buffer_.get(); }
+  uint8* buffer() { return buffer_.get(); }
   double volume() { return volume_; }
 
  private:
@@ -39,11 +39,11 @@ class FakeAudioOutputStream : public AudioOutputStream {
 
   double volume_;
   AudioSourceCallback* callback_;
-  scoped_array<char> buffer_;
+  scoped_array<uint8> buffer_;
   uint32 packet_size_;
+  bool closed_;
 
   DISALLOW_COPY_AND_ASSIGN(FakeAudioOutputStream);
 };
 
 #endif  // MEDIA_AUDIO_FAKE_AUDIO_OUTPUT_STREAM_H_
-

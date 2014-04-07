@@ -17,8 +17,11 @@
 
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/string_number_conversions.h"
+#include "base/string_split.h"
 #include "base/string_tokenizer.h"
 #include "base/string_util.h"
+#include "base/sys_info.h"
 
 namespace {
 
@@ -28,15 +31,34 @@ enum ParsingState {
 };
 
 // Reads /proc/<pid>/stat and populates |proc_stats| with the values split by
-// spaces.
-void GetProcStats(pid_t pid, std::vector<std::string>* proc_stats) {
+// spaces. Returns true if successful.
+bool GetProcStats(pid_t pid, std::vector<std::string>* proc_stats) {
   FilePath stat_file("/proc");
-  stat_file = stat_file.Append(IntToString(pid));
+  stat_file = stat_file.Append(base::IntToString(pid));
   stat_file = stat_file.Append("stat");
   std::string mem_stats;
   if (!file_util::ReadFileToString(stat_file, &mem_stats))
-    return;
+    return false;
   SplitString(mem_stats, ' ', proc_stats);
+  return true;
+}
+
+// Reads /proc/<pid>/cmdline and populates |proc_cmd_line_args| with the command
+// line arguments. Returns true if successful.
+// Note: /proc/<pid>/cmdline contains command line arguments separated by single
+// null characters. We tokenize it into a vector of strings using '\0' as a
+// delimiter.
+bool GetProcCmdline(pid_t pid, std::vector<std::string>* proc_cmd_line_args) {
+  FilePath cmd_line_file("/proc");
+  cmd_line_file = cmd_line_file.Append(base::IntToString(pid));
+  cmd_line_file = cmd_line_file.Append("cmdline");
+  std::string cmd_line;
+  if (!file_util::ReadFileToString(cmd_line_file, &cmd_line))
+    return false;
+  std::string delimiters;
+  delimiters.push_back('\0');
+  Tokenize(cmd_line, delimiters, proc_cmd_line_args);
+  return true;
 }
 
 }  // namespace
@@ -45,7 +67,7 @@ namespace base {
 
 ProcessId GetParentProcessId(ProcessHandle process) {
   FilePath stat_file("/proc");
-  stat_file = stat_file.Append(IntToString(process));
+  stat_file = stat_file.Append(base::IntToString(process));
   stat_file = stat_file.Append("status");
   std::string status;
   if (!file_util::ReadFileToString(stat_file, &status))
@@ -63,7 +85,8 @@ ProcessId GetParentProcessId(ProcessHandle process) {
       case KEY_VALUE:
         DCHECK(!last_key_name.empty());
         if (last_key_name == "PPid") {
-          pid_t ppid = StringToInt(tokenizer.token());
+          int ppid;
+          base::StringToInt(tokenizer.token(), &ppid);
           return ppid;
         }
         state = KEY_NAME;
@@ -76,7 +99,7 @@ ProcessId GetParentProcessId(ProcessHandle process) {
 
 FilePath GetProcessExecutablePath(ProcessHandle process) {
   FilePath stat_file("/proc");
-  stat_file = stat_file.Append(IntToString(process));
+  stat_file = stat_file.Append(base::IntToString(process));
   stat_file = stat_file.Append("exe");
   char exename[2048];
   ssize_t len = readlink(stat_file.value().c_str(), exename, sizeof(exename));
@@ -87,37 +110,25 @@ FilePath GetProcessExecutablePath(ProcessHandle process) {
   return FilePath(std::string(exename, len));
 }
 
-NamedProcessIterator::NamedProcessIterator(const std::wstring& executable_name,
-                                           const ProcessFilter* filter)
-    : executable_name_(executable_name), filter_(filter) {
+ProcessIterator::ProcessIterator(const ProcessFilter* filter)
+    : filter_(filter) {
   procfs_dir_ = opendir("/proc");
 }
 
-NamedProcessIterator::~NamedProcessIterator() {
+ProcessIterator::~ProcessIterator() {
   if (procfs_dir_) {
     closedir(procfs_dir_);
     procfs_dir_ = NULL;
   }
 }
 
-const ProcessEntry* NamedProcessIterator::NextProcessEntry() {
-  bool result = false;
-  do {
-    result = CheckForNextProcess();
-  } while (result && !IncludeEntry());
-
-  if (result)
-    return &entry_;
-
-  return NULL;
-}
-
-bool NamedProcessIterator::CheckForNextProcess() {
+bool ProcessIterator::CheckForNextProcess() {
   // TODO(port): skip processes owned by different UID
 
   dirent* slot = 0;
   const char* openparen;
   const char* closeparen;
+  std::vector<std::string> cmd_line_args;
 
   // Arbitrarily guess that there will never be more than 200 non-process
   // files in /proc.  Hardy has 53.
@@ -143,6 +154,12 @@ bool NamedProcessIterator::CheckForNextProcess() {
       continue;
     }
 
+    // Read the process's command line.
+    std::string pid_string(slot->d_name);
+    int pid;
+    if (StringToInt(pid_string, &pid) && !GetProcCmdline(pid, &cmd_line_args))
+      return false;
+
     // Read the process's status.
     char buf[NAME_MAX + 12];
     sprintf(buf, "/proc/%s/stat", slot->d_name);
@@ -155,8 +172,8 @@ bool NamedProcessIterator::CheckForNextProcess() {
       return false;
 
     // Parse the status.  It is formatted like this:
-    // %d (%s) %c %d ...
-    // pid (name) runstate ppid
+    // %d (%s) %c %d %d ...
+    // pid (name) runstate ppid gid
     // To avoid being fooled by names containing a closing paren, scan
     // backwards.
     openparen = strchr(buf, '(');
@@ -179,57 +196,79 @@ bool NamedProcessIterator::CheckForNextProcess() {
     return false;
   }
 
-  entry_.pid = atoi(slot->d_name);
-  entry_.ppid = atoi(closeparen + 3);
+  // This seems fragile.
+  entry_.pid_ = atoi(slot->d_name);
+  entry_.ppid_ = atoi(closeparen + 3);
+  entry_.gid_ = atoi(strchr(closeparen + 4, ' '));
+
+  entry_.cmd_line_args_.assign(cmd_line_args.begin(), cmd_line_args.end());
 
   // TODO(port): read pid's commandline's $0, like killall does.  Using the
   // short name between openparen and closeparen won't work for long names!
   int len = closeparen - openparen - 1;
-  if (len > NAME_MAX)
-    len = NAME_MAX;
-  memcpy(entry_.szExeFile, openparen + 1, len);
-  entry_.szExeFile[len] = 0;
-
+  entry_.exe_file_.assign(openparen + 1, len);
   return true;
 }
 
 bool NamedProcessIterator::IncludeEntry() {
   // TODO(port): make this also work for non-ASCII filenames
-  if (WideToASCII(executable_name_) != entry_.szExeFile)
+  if (WideToASCII(executable_name_) != entry().exe_file())
     return false;
-  if (!filter_)
-    return true;
-  return filter_->Includes(entry_.pid, entry_.ppid);
+  return ProcessIterator::IncludeEntry();
+}
+
+
+ProcessMetrics::ProcessMetrics(ProcessHandle process)
+    : process_(process),
+      last_time_(0),
+      last_system_time_(0),
+      last_cpu_(0) {
+  processor_count_ = base::SysInfo::NumberOfProcessors();
+}
+
+// static
+ProcessMetrics* ProcessMetrics::CreateProcessMetrics(ProcessHandle process) {
+  return new ProcessMetrics(process);
 }
 
 // On linux, we return vsize.
 size_t ProcessMetrics::GetPagefileUsage() const {
   std::vector<std::string> proc_stats;
-  GetProcStats(process_, &proc_stats);
+  if (!GetProcStats(process_, &proc_stats))
+    LOG(WARNING) << "Failed to get process stats.";
   const size_t kVmSize = 22;
-  if (proc_stats.size() > kVmSize)
-    return static_cast<size_t>(StringToInt(proc_stats[kVmSize]));
+  if (proc_stats.size() > kVmSize) {
+    int vm_size;
+    base::StringToInt(proc_stats[kVmSize], &vm_size);
+    return static_cast<size_t>(vm_size);
+  }
   return 0;
 }
 
 // On linux, we return the high water mark of vsize.
 size_t ProcessMetrics::GetPeakPagefileUsage() const {
   std::vector<std::string> proc_stats;
-  GetProcStats(process_, &proc_stats);
+  if (!GetProcStats(process_, &proc_stats))
+    LOG(WARNING) << "Failed to get process stats.";
   const size_t kVmPeak = 21;
-  if (proc_stats.size() > kVmPeak)
-    return static_cast<size_t>(StringToInt(proc_stats[kVmPeak]));
+  if (proc_stats.size() > kVmPeak) {
+    int vm_peak;
+    if (base::StringToInt(proc_stats[kVmPeak], &vm_peak))
+      return vm_peak;
+  }
   return 0;
 }
 
 // On linux, we return RSS.
 size_t ProcessMetrics::GetWorkingSetSize() const {
   std::vector<std::string> proc_stats;
-  GetProcStats(process_, &proc_stats);
+  if (!GetProcStats(process_, &proc_stats))
+    LOG(WARNING) << "Failed to get process stats.";
   const size_t kVmRss = 23;
   if (proc_stats.size() > kVmRss) {
-    size_t num_pages = static_cast<size_t>(StringToInt(proc_stats[kVmRss]));
-    return num_pages * getpagesize();
+    int num_pages;
+    if (base::StringToInt(proc_stats[kVmRss], &num_pages))
+      return static_cast<size_t>(num_pages) * getpagesize();
   }
   return 0;
 }
@@ -237,19 +276,30 @@ size_t ProcessMetrics::GetWorkingSetSize() const {
 // On linux, we return the high water mark of RSS.
 size_t ProcessMetrics::GetPeakWorkingSetSize() const {
   std::vector<std::string> proc_stats;
-  GetProcStats(process_, &proc_stats);
+  if (!GetProcStats(process_, &proc_stats))
+    LOG(WARNING) << "Failed to get process stats.";
   const size_t kVmHwm = 23;
   if (proc_stats.size() > kVmHwm) {
-    size_t num_pages = static_cast<size_t>(StringToInt(proc_stats[kVmHwm]));
-    return num_pages * getpagesize();
+    int num_pages;
+    base::StringToInt(proc_stats[kVmHwm], &num_pages);
+    return static_cast<size_t>(num_pages) * getpagesize();
   }
   return 0;
 }
 
-size_t ProcessMetrics::GetPrivateBytes() const {
+bool ProcessMetrics::GetMemoryBytes(size_t* private_bytes,
+                                    size_t* shared_bytes) {
   WorkingSetKBytes ws_usage;
-  GetWorkingSetKBytes(&ws_usage);
-  return ws_usage.priv << 10;
+  if (!GetWorkingSetKBytes(&ws_usage))
+    return false;
+
+  if (private_bytes)
+    *private_bytes = ws_usage.priv << 10;
+
+  if (shared_bytes)
+    *shared_bytes = ws_usage.shared * 1024;
+
+  return true;
 }
 
 // Private and Shared working set sizes are obtained from /proc/<pid>/smaps.
@@ -258,19 +308,21 @@ size_t ProcessMetrics::GetPrivateBytes() const {
 // See http://www.pixelbeat.org/scripts/ps_mem.py
 bool ProcessMetrics::GetWorkingSetKBytes(WorkingSetKBytes* ws_usage) const {
   FilePath stat_file =
-    FilePath("/proc").Append(IntToString(process_)).Append("smaps");
+      FilePath("/proc").Append(base::IntToString(process_)).Append("smaps");
   std::string smaps;
   int private_kb = 0;
   int pss_kb = 0;
   bool have_pss = false;
   if (file_util::ReadFileToString(stat_file, &smaps) && smaps.length() > 0) {
+    const std::string private_prefix = "Private_";
+    const std::string pss_prefix = "Pss";
     StringTokenizer tokenizer(smaps, ":\n");
+    StringPiece last_key_name;
     ParsingState state = KEY_NAME;
-    std::string last_key_name;
     while (tokenizer.GetNext()) {
       switch (state) {
         case KEY_NAME:
-          last_key_name = tokenizer.token();
+          last_key_name = tokenizer.token_piece();
           state = KEY_VALUE;
           break;
         case KEY_VALUE:
@@ -278,11 +330,15 @@ bool ProcessMetrics::GetWorkingSetKBytes(WorkingSetKBytes* ws_usage) const {
             NOTREACHED();
             return false;
           }
-          if (StartsWithASCII(last_key_name, "Private_", 1)) {
-            private_kb += StringToInt(tokenizer.token());
-          } else if (StartsWithASCII(last_key_name, "Pss", 1)) {
+          if (last_key_name.starts_with(private_prefix)) {
+            int cur;
+            base::StringToInt(tokenizer.token(), &cur);
+            private_kb += cur;
+          } else if (last_key_name.starts_with(pss_prefix)) {
             have_pss = true;
-            pss_kb += StringToInt(tokenizer.token());
+            int cur;
+            base::StringToInt(tokenizer.token(), &cur);
+            pss_kb += cur;
           }
           state = KEY_NAME;
           break;
@@ -296,7 +352,7 @@ bool ProcessMetrics::GetWorkingSetKBytes(WorkingSetKBytes* ws_usage) const {
       return false;
 
     stat_file =
-        FilePath("/proc").Append(IntToString(process_)).Append("statm");
+        FilePath("/proc").Append(base::IntToString(process_)).Append("statm");
     std::string statm;
     if (!file_util::ReadFileToString(stat_file, &statm) || statm.length() == 0)
       return false;
@@ -305,8 +361,11 @@ bool ProcessMetrics::GetWorkingSetKBytes(WorkingSetKBytes* ws_usage) const {
     SplitString(statm, ' ', &statm_vec);
     if (statm_vec.size() != 7)
       return false;  // Not the format we expect.
-    private_kb = StringToInt(statm_vec[1]) - StringToInt(statm_vec[2]);
-    private_kb *= page_size_kb;
+
+    int statm1, statm2;
+    base::StringToInt(statm_vec[1], &statm1);
+    base::StringToInt(statm_vec[2], &statm2);
+    private_kb = (statm1 - statm2) * page_size_kb;
   }
   ws_usage->priv = private_kb;
   // Sharable is not calculated, as it does not provide interesting data.
@@ -323,7 +382,7 @@ bool ProcessMetrics::GetWorkingSetKBytes(WorkingSetKBytes* ws_usage) const {
 bool ProcessMetrics::GetIOCounters(IoCounters* io_counters) const {
   std::string proc_io_contents;
   FilePath io_file("/proc");
-  io_file = io_file.Append(IntToString(process_));
+  io_file = io_file.Append(base::IntToString(process_));
   io_file = io_file.Append("io");
   if (!file_util::ReadFileToString(io_file, &proc_io_contents))
     return false;
@@ -343,13 +402,17 @@ bool ProcessMetrics::GetIOCounters(IoCounters* io_counters) const {
       case KEY_VALUE:
         DCHECK(!last_key_name.empty());
         if (last_key_name == "syscr") {
-          (*io_counters).ReadOperationCount = StringToInt64(tokenizer.token());
+          base::StringToInt64(tokenizer.token(),
+              reinterpret_cast<int64*>(&(*io_counters).ReadOperationCount));
         } else if (last_key_name == "syscw") {
-          (*io_counters).WriteOperationCount = StringToInt64(tokenizer.token());
+          base::StringToInt64(tokenizer.token(),
+              reinterpret_cast<int64*>(&(*io_counters).WriteOperationCount));
         } else if (last_key_name == "rchar") {
-          (*io_counters).ReadTransferCount = StringToInt64(tokenizer.token());
+          base::StringToInt64(tokenizer.token(),
+              reinterpret_cast<int64*>(&(*io_counters).ReadTransferCount));
         } else if (last_key_name == "wchar") {
-          (*io_counters).WriteTransferCount = StringToInt64(tokenizer.token());
+          base::StringToInt64(tokenizer.token(),
+              reinterpret_cast<int64*>(&(*io_counters).WriteTransferCount));
         }
         state = KEY_NAME;
         break;
@@ -375,7 +438,10 @@ int ParseProcStatCPU(const std::string& input) {
   if (fields.size() < 13)
     return -1;  // Output not in the format we expect.
 
-  return StringToInt(fields[11]) + StringToInt(fields[12]);
+  int fields11, fields12;
+  base::StringToInt(fields[11], &fields11);
+  base::StringToInt(fields[12], &fields12);
+  return fields11 + fields12;
 }
 
 // Get the total CPU of a single process.  Return value is number of jiffies
@@ -489,21 +555,21 @@ size_t GetSystemCommitCharge() {
   DCHECK_EQ(meminfo_fields[kMemBuffersIndex-1], "Buffers:");
   DCHECK_EQ(meminfo_fields[kMemCacheIndex-1], "Cached:");
 
-  size_t result_in_kb;
-  result_in_kb = StringToInt(meminfo_fields[kMemTotalIndex]);
-  result_in_kb -= StringToInt(meminfo_fields[kMemFreeIndex]);
-  result_in_kb -= StringToInt(meminfo_fields[kMemBuffersIndex]);
-  result_in_kb -= StringToInt(meminfo_fields[kMemCacheIndex]);
+  int mem_total, mem_free, mem_buffers, mem_cache;
+  base::StringToInt(meminfo_fields[kMemTotalIndex], &mem_total);
+  base::StringToInt(meminfo_fields[kMemFreeIndex], &mem_free);
+  base::StringToInt(meminfo_fields[kMemBuffersIndex], &mem_buffers);
+  base::StringToInt(meminfo_fields[kMemCacheIndex], &mem_cache);
 
-  return result_in_kb;
+  return mem_total - mem_free - mem_buffers - mem_cache;
 }
 
 namespace {
 
 void OnNoMemorySize(size_t size) {
   if (size != 0)
-    CHECK(false) << "Out of memory, size = " << size;
-  CHECK(false) << "Out of memory.";
+    LOG(FATAL) << "Out of memory, size = " << size;
+  LOG(FATAL) << "Out of memory.";
 }
 
 void OnNoMemory() {
@@ -604,13 +670,13 @@ bool AdjustOOMScore(ProcessId process, int score) {
     return false;
 
   FilePath oom_adj("/proc");
-  oom_adj = oom_adj.Append(Int64ToString(process));
+  oom_adj = oom_adj.Append(base::Int64ToString(process));
   oom_adj = oom_adj.AppendASCII("oom_adj");
 
   if (!file_util::PathExists(oom_adj))
     return false;
 
-  std::string score_str = IntToString(score);
+  std::string score_str = base::IntToString(score);
   return (static_cast<int>(score_str.length()) ==
           file_util::WriteFile(oom_adj, score_str.c_str(), score_str.length()));
 }

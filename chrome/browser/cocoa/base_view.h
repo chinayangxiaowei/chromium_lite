@@ -4,9 +4,11 @@
 
 #ifndef CHROME_BROWSER_COCOA_BASE_VIEW_H_
 #define CHROME_BROWSER_COCOA_BASE_VIEW_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
+#include "base/scoped_nsobject.h"
 #include "gfx/rect.h"
 
 // A view that provides common functionality that many views will need:
@@ -17,6 +19,8 @@
 @interface BaseView : NSView {
  @private
   NSTrackingArea *trackingArea_;
+  BOOL dragging_;
+  scoped_nsobject<NSEvent> pendingExitEvent_;
 }
 
 - (id)initWithFrame:(NSRect)frame;
@@ -26,8 +30,8 @@
 - (void)keyEvent:(NSEvent *)theEvent;
 
 // Useful rect conversions (doing coordinate flipping)
-- (gfx::Rect)NSRectToRect:(NSRect)rect;
-- (NSRect)RectToNSRect:(gfx::Rect)rect;
+- (gfx::Rect)flipNSRectToRect:(NSRect)rect;
+- (NSRect)flipRectToNSRect:(gfx::Rect)rect;
 
 @end
 

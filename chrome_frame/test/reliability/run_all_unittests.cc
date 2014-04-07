@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,11 @@
 
 #include "base/command_line.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome_frame/test/chrome_frame_test_utils.h"
 #include "chrome_frame/test_utils.h"
+#include "chrome_frame/utils.h"
 
-const wchar_t kRegisterDllFlag[] = L"register";
+static const char kRegisterDllFlag[] = "register";
 
 int main(int argc, char **argv) {
 
@@ -22,9 +24,12 @@ int main(int argc, char **argv) {
   // AtExitManager which some of the other stuff below relies on.
   ReliabilityTestSuite test_suite(argc, argv);
 
+  SetConfigBool(kChromeFrameHeadlessMode, true);
+  base::ProcessHandle crash_service = chrome_frame_test::StartCrashService();
+
   int result = -1;
   if (cmd_line->HasSwitch(kRegisterDllFlag)) {
-    std::wstring dll_path = cmd_line->GetSwitchValue(kRegisterDllFlag);
+    std::wstring dll_path = cmd_line->GetSwitchValueNative(kRegisterDllFlag);
 
     // Run() must be called within the scope of the ScopedChromeFrameRegistrar
     // to ensure that the correct DLL remains registered during the tests.
@@ -33,6 +38,10 @@ int main(int argc, char **argv) {
   } else {
     result = test_suite.Run();
   }
+
+  DeleteConfigValue(kChromeFrameHeadlessMode);
+  if (crash_service)
+    base::KillProcess(crash_service, 0, false);
 
   return result;
 }

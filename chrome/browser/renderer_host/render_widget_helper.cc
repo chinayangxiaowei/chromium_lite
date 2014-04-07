@@ -10,7 +10,7 @@
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
-#include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 
 // A Task used with InvokeLater that we hold a pointer to in pending_paints_.
 // Instances are deleted by MessageLoop after it calls their Run method.
@@ -78,8 +78,8 @@ void RenderWidgetHelper::CancelResourceRequests(int render_widget_id) {
   if (render_process_id_ == -1)
     return;
 
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(this,
                         &RenderWidgetHelper::OnCancelResourceRequests,
                         render_widget_id));
@@ -87,8 +87,8 @@ void RenderWidgetHelper::CancelResourceRequests(int render_widget_id) {
 
 void RenderWidgetHelper::CrossSiteClosePageACK(
     const ViewMsg_ClosePage_Params& params) {
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(this,
                         &RenderWidgetHelper::OnCrossSiteClosePageACK,
                         params));
@@ -161,7 +161,7 @@ void RenderWidgetHelper::DidReceiveUpdateMsg(const IPC::Message& msg) {
   event_.Signal();
 
   // The proxy will be deleted when it is run as a task.
-  ChromeThread::PostTask(ChromeThread::UI, FROM_HERE, proxy);
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE, proxy);
 }
 
 void RenderWidgetHelper::OnDiscardUpdateMsg(UpdateMsgProxy* proxy) {
@@ -199,29 +199,37 @@ void RenderWidgetHelper::OnCrossSiteClosePageACK(
   resource_dispatcher_host_->OnClosePageACK(params);
 }
 
-void RenderWidgetHelper::CreateNewWindow(int opener_id,
-                                         bool user_gesture,
-                                         base::ProcessHandle render_process,
-                                         int* route_id) {
+void RenderWidgetHelper::CreateNewWindow(
+    int opener_id,
+    bool user_gesture,
+    WindowContainerType window_container_type,
+    const string16& frame_name,
+    base::ProcessHandle render_process,
+    int* route_id) {
   *route_id = GetNextRoutingID();
   // Block resource requests until the view is created, since the HWND might be
   // needed if a response ends up creating a plugin.
   resource_dispatcher_host_->BlockRequestsForRoute(
       render_process_id_, *route_id);
 
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
-          this, &RenderWidgetHelper::OnCreateWindowOnUI, opener_id, *route_id));
+          this, &RenderWidgetHelper::OnCreateWindowOnUI, opener_id, *route_id,
+          window_container_type, frame_name));
 }
 
-void RenderWidgetHelper::OnCreateWindowOnUI(int opener_id, int route_id) {
+void RenderWidgetHelper::OnCreateWindowOnUI(
+    int opener_id,
+    int route_id,
+    WindowContainerType window_container_type,
+    string16 frame_name) {
   RenderViewHost* host = RenderViewHost::FromID(render_process_id_, opener_id);
   if (host)
-    host->CreateNewWindow(route_id);
+    host->CreateNewWindow(route_id, window_container_type, frame_name);
 
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(this, &RenderWidgetHelper::OnCreateWindowOnIO,
                         route_id));
 }
@@ -235,11 +243,21 @@ void RenderWidgetHelper::CreateNewWidget(int opener_id,
                                          WebKit::WebPopupType popup_type,
                                          int* route_id) {
   *route_id = GetNextRoutingID();
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
           this, &RenderWidgetHelper::OnCreateWidgetOnUI, opener_id, *route_id,
           popup_type));
+}
+
+void RenderWidgetHelper::CreateNewFullscreenWidget(
+    int opener_id, WebKit::WebPopupType popup_type, int* route_id) {
+  *route_id = GetNextRoutingID();
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(
+          this, &RenderWidgetHelper::OnCreateFullscreenWidgetOnUI,
+          opener_id, *route_id, popup_type));
 }
 
 void RenderWidgetHelper::OnCreateWidgetOnUI(
@@ -247,6 +265,13 @@ void RenderWidgetHelper::OnCreateWidgetOnUI(
   RenderViewHost* host = RenderViewHost::FromID(render_process_id_, opener_id);
   if (host)
     host->CreateNewWidget(route_id, popup_type);
+}
+
+void RenderWidgetHelper::OnCreateFullscreenWidgetOnUI(
+    int opener_id, int route_id, WebKit::WebPopupType popup_type) {
+  RenderViewHost* host = RenderViewHost::FromID(render_process_id_, opener_id);
+  if (host)
+    host->CreateNewFullscreenWidget(route_id, popup_type);
 }
 
 #if defined(OS_MACOSX)
@@ -265,7 +290,7 @@ TransportDIB* RenderWidgetHelper::MapTransportDIB(TransportDIB::Id dib_id) {
 void RenderWidgetHelper::AllocTransportDIB(
     size_t size, bool cache_in_browser, TransportDIB::Handle* result) {
   scoped_ptr<base::SharedMemory> shared_memory(new base::SharedMemory());
-  if (!shared_memory->Create(L"", false /* read write */,
+  if (!shared_memory->Create("", false /* read write */,
                              false /* do not open existing */, size)) {
     result->fd = -1;
     result->auto_close = false;
@@ -288,7 +313,8 @@ void RenderWidgetHelper::FreeTransportDIB(TransportDIB::Id dib_id) {
     i = allocated_dibs_.find(dib_id);
 
   if (i != allocated_dibs_.end()) {
-    HANDLE_EINTR(close(i->second));
+    if (HANDLE_EINTR(close(i->second)) < 0)
+      PLOG(ERROR) << "close";
     allocated_dibs_.erase(i);
   } else {
     DLOG(WARNING) << "Renderer asked us to free unknown transport DIB";
@@ -298,7 +324,8 @@ void RenderWidgetHelper::FreeTransportDIB(TransportDIB::Id dib_id) {
 void RenderWidgetHelper::ClearAllocatedDIBs() {
   for (std::map<TransportDIB::Id, int>::iterator
        i = allocated_dibs_.begin(); i != allocated_dibs_.end(); ++i) {
-    HANDLE_EINTR(close(i->second));
+    if (HANDLE_EINTR(close(i->second)) < 0)
+      PLOG(ERROR) << "close: " << i->first;
   }
 
   allocated_dibs_.clear();

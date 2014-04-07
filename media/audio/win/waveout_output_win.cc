@@ -10,7 +10,7 @@
 
 #include "base/basictypes.h"
 #include "base/logging.h"
-#include "media/audio/audio_output.h"
+#include "media/audio/audio_io.h"
 #include "media/audio/audio_util.h"
 #include "media/audio/win/audio_manager_win.h"
 
@@ -42,8 +42,8 @@ WAVEHDR* GetNextBuffer(WAVEHDR* current) {
 }  // namespace
 
 PCMWaveOutAudioOutputStream::PCMWaveOutAudioOutputStream(
-    AudioManagerWin* manager, int channels, int sampling_rate, int num_buffers,
-    char bits_per_sample, UINT device_id)
+    AudioManagerWin* manager, AudioParameters params, int num_buffers,
+    UINT device_id)
     : state_(PCMA_BRAND_NEW),
       manager_(manager),
       device_id_(device_id),
@@ -53,12 +53,12 @@ PCMWaveOutAudioOutputStream::PCMWaveOutAudioOutputStream(
       buffer_(NULL),
       buffer_size_(0),
       volume_(1),
-      channels_(channels),
+      channels_(params.channels),
       pending_bytes_(0) {
   format_.wFormatTag = WAVE_FORMAT_PCM;
-  format_.nChannels = channels > 2 ? 2 : channels;
-  format_.nSamplesPerSec = sampling_rate;
-  format_.wBitsPerSample = bits_per_sample;
+  format_.nChannels = params.channels > 2 ? 2 : params.channels;
+  format_.nSamplesPerSec = params.sample_rate;
+  format_.wBitsPerSample = params.bits_per_sample;
   format_.cbSize = 0;
   // The next are computed from above.
   format_.nBlockAlign = (format_.nChannels * format_.wBitsPerSample) / 8;
@@ -209,7 +209,7 @@ void PCMWaveOutAudioOutputStream::Close() {
   // Tell the audio manager that we have been released. This can result in
   // the manager destroying us in-place so this needs to be the last thing
   // we do on this function.
-  manager_->ReleaseStream(this);
+  manager_->ReleaseOutputStream(this);
 }
 
 void PCMWaveOutAudioOutputStream::SetVolume(double volume) {
@@ -236,8 +236,10 @@ void PCMWaveOutAudioOutputStream::QueueNextPacket(WAVEHDR *buffer) {
   // scale up the amount of pending bytes.
   // TODO(fbarchard): Handle used 0 by queueing more.
   uint32 scaled_pending_bytes = pending_bytes_ * channels_ / format_.nChannels;
-  uint32 used = callback_->OnMoreData(this, buffer->lpData, buffer_size_,
-                                      scaled_pending_bytes);
+  // TODO(sergeyu): Specify correct hardware delay for AudioBuffersState.
+  uint32 used = callback_->OnMoreData(
+      this, reinterpret_cast<uint8*>(buffer->lpData), buffer_size_,
+      AudioBuffersState(scaled_pending_bytes, 0));
   if (used <= buffer_size_) {
     buffer->dwBufferLength = used * format_.nChannels / channels_;
     if (channels_ > 2 && format_.nChannels == 2) {

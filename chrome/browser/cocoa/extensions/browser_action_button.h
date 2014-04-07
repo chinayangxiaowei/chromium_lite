@@ -4,12 +4,13 @@
 
 #ifndef CHROME_BROWSER_COCOA_EXTENSIONS_BROWSER_ACTION_BUTTON_H_
 #define CHROME_BROWSER_COCOA_EXTENSIONS_BROWSER_ACTION_BUTTON_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
 #import "base/scoped_nsobject.h"
 #include "base/scoped_ptr.h"
-#include "chrome/browser/cocoa/toolbar_button_cell.h"
+#import "chrome/browser/cocoa/gradient_button_cell.h"
 
 class Extension;
 class ExtensionAction;
@@ -18,14 +19,12 @@ class Profile;
 
 // Fired when the Browser Action's state has changed. Usually the image needs to
 // be updated.
-extern const NSString* kBrowserActionButtonUpdatedNotification;
+extern NSString* const kBrowserActionButtonUpdatedNotification;
 
 // Fired on each drag event while the user is moving the button.
-extern const NSString* kBrowserActionButtonDraggingNotification;
+extern NSString* const kBrowserActionButtonDraggingNotification;
 // Fired when the user drops the button.
-extern const NSString* kBrowserActionButtonDragEndNotification;
-
-extern const CGFloat kBrowserActionWidth;
+extern NSString* const kBrowserActionButtonDragEndNotification;
 
 @interface BrowserActionButton : NSButton {
  @private
@@ -40,7 +39,7 @@ extern const CGFloat kBrowserActionWidth;
   scoped_nsobject<NSImage> tabSpecificIcon_;
 
   // Used to move the button and query whether a button is currently animating.
-  scoped_nsobject<NSAnimation> moveAnimation_;
+  scoped_nsobject<NSViewAnimation> moveAnimation_;
 
   // The extension for this button. Weak.
   Extension* extension_;
@@ -57,9 +56,10 @@ extern const CGFloat kBrowserActionWidth;
   BOOL dragCouldStart_;
 }
 
-- (id)initWithExtension:(Extension*)extension
-                profile:(Profile*)profile
-                  tabId:(int)tabId;
+- (id)initWithFrame:(NSRect)frame
+          extension:(Extension*)extension
+            profile:(Profile*)profile
+              tabId:(int)tabId;
 
 - (void)setFrame:(NSRect)frameRect animate:(BOOL)animate;
 

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_TAB_STRIP_CONTROLLER_H_
 #define CHROME_BROWSER_COCOA_TAB_STRIP_CONTROLLER_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -13,6 +14,7 @@
 #import "chrome/browser/cocoa/url_drop_target.h"
 #import "third_party/GTM/AppKit/GTMWindowSheetController.h"
 
+@class NewTabButton;
 @class TabContentsController;
 @class TabView;
 @class TabStripView;
@@ -23,6 +25,29 @@ class TabStripModelObserverBridge;
 class TabStripModel;
 class TabContents;
 class ToolbarModel;
+
+// The interface for the tab strip controller's delegate. Currently, the
+// delegate is the BWC and is responsible for subviews layout and forwarding
+// these events to InfoBarContainerController.
+// Delegating TabStripModelObserverBridge's events (in lieu of subscrining
+// BWC and InfoBarContainerController to TabStripModelObserverBridge events)
+// is necessary to guarantee a proper order of subviews layout updates,
+// otherwise it might trigger unnesessary content relayout, UI flickering etc.
+@protocol TabStripControllerDelegate
+
+// Stripped down version of TabStripModelObserverBridge:selectTabWithContents.
+- (void)onSelectTabWithContents:(TabContents*)contents;
+
+// Stripped down version of TabStripModelObserverBridge:tabReplacedWithContents.
+- (void)onReplaceTabWithContents:(TabContents*)contents;
+
+// Stripped down version of TabStripModelObserverBridge:tabChangedWithContents.
+- (void)onSelectedTabChange:(TabStripModelObserver::TabChangeType)change;
+
+// Stripped down version of TabStripModelObserverBridge:tabDetachedWithContents.
+- (void)onTabDetachedWithContents:(TabContents*)contents;
+
+@end
 
 // A class that handles managing the tab strip in a browser window. It uses
 // a supporting C++ bridge object to register for notifications from the
@@ -35,18 +60,27 @@ class ToolbarModel;
   NSObject<TabControllerTarget,
            URLDropTargetController,
            GTMWindowSheetControllerDelegate> {
+ @protected
+  // YES if tabs are to be laid out vertically instead of horizontally.
+  BOOL verticalLayout_;
+
  @private
-  TabContents* currentTab_;   // weak, tab for which we're showing state
   scoped_nsobject<TabStripView> tabStripView_;
   NSView* switchView_;  // weak
   scoped_nsobject<NSView> dragBlockingView_;  // avoid bad window server drags
-  NSButton* newTabButton_;  // weak, obtained from the nib.
+  NewTabButton* newTabButton_;  // weak, obtained from the nib.
 
   // Tracks the newTabButton_ for rollovers.
   scoped_nsobject<NSTrackingArea> newTabTrackingArea_;
   scoped_ptr<TabStripModelObserverBridge> bridge_;
   Browser* browser_;  // weak
   TabStripModel* tabStripModel_;  // weak
+  // Delegate that is informed about tab state changes.
+  id<TabStripControllerDelegate> delegate_;  // weak
+
+  // YES if the new tab button is currently displaying the hover image (if the
+  // mouse is currently over the button).
+  BOOL newTabButtonShowingHoverImage_;
 
   // Access to the TabContentsControllers (which own the parent view
   // for the toolbar and associated tab contents) given an index. Call
@@ -117,9 +151,12 @@ class ToolbarModel;
 // "switched" every time the user switches tabs. The children of this view
 // will be released, so if you want them to stay around, make sure
 // you have retained them.
+// |delegate| is the one listening to filtered TabStripModelObserverBridge's
+// events (see TabStripControllerDelegate for more details).
 - (id)initWithView:(TabStripView*)view
         switchView:(NSView*)switchView
-           browser:(Browser*)browser;
+           browser:(Browser*)browser
+          delegate:(id<TabStripControllerDelegate>)delegate;
 
 // Return the view for the currently selected tab.
 - (NSView*)selectedTabView;
@@ -152,6 +189,11 @@ class ToolbarModel;
 
 // Return the view at a given index.
 - (NSView*)viewAtIndex:(NSUInteger)index;
+
+// Return the number of tab views in the tab strip. It's same as number of tabs
+// in the model, except when a tab is closing, which will be counted in views
+// count, but no longer in the model.
+- (NSUInteger)viewsCount;
 
 // Set the placeholder for a dragged tab, allowing the |frame| and |strechiness|
 // to be specified. This causes this tab to be rendered in an arbitrary position
@@ -207,7 +249,6 @@ class ToolbarModel;
   // functions.
 - (void)attachConstrainedWindow:(ConstrainedWindowMac*)window;
 - (void)removeConstrainedWindow:(ConstrainedWindowMac*)window;
-- (void)updateDevToolsForContents:(TabContents*)contents;
 
 @end
 

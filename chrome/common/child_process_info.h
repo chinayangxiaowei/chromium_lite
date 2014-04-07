@@ -1,13 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_COMMON_CHILD_PROCESS_INFO_H_
 #define CHROME_COMMON_CHILD_PROCESS_INFO_H_
+#pragma once
 
 #include <string>
 
 #include "base/process.h"
+#include "base/string16.h"
 
 // Holds information about a child process.
 class ChildProcessInfo {
@@ -41,6 +43,10 @@ class ChildProcessInfo {
   // for workers it might be the domain that it's from.
   std::wstring name() const { return name_; }
 
+  // Returns the version of the exe, this only appliest to plugins. Otherwise
+  // the string is empty.
+  std::wstring version() const { return version_; }
+
   // Getter to the process handle.
   base::ProcessHandle handle() const { return process_.handle(); }
 
@@ -53,11 +59,11 @@ class ChildProcessInfo {
 
   // Returns an English name of the process type, should only be used for non
   // user-visible strings, or debugging pages like about:memory.
-  static std::wstring GetTypeNameInEnglish(ProcessType type);
+  static std::string GetTypeNameInEnglish(ProcessType type);
 
   // Returns a localized title for the child process.  For example, a plugin
   // process would be "Plug-in: Flash" when name is "Flash".
-  std::wstring GetLocalizedTitle() const;
+  string16 GetLocalizedTitle() const;
 
   // We define the < operator so that the ChildProcessInfo can be used as a key
   // in a std::map.
@@ -93,11 +99,13 @@ class ChildProcessInfo {
 
   void set_type(ProcessType type) { type_ = type; }
   void set_name(const std::wstring& name) { name_ = name; }
+  void set_version(const std::wstring& ver) { version_ = ver; }
   void set_handle(base::ProcessHandle handle) { process_.set_handle(handle); }
 
  private:
   ProcessType type_;
   std::wstring name_;
+  std::wstring version_;
   int id_;
 
   // The handle to the process.

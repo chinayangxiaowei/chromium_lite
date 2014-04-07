@@ -4,21 +4,23 @@
 
 #ifndef NET_SOCKET_STREAM_SOCKET_STREAM_H_
 #define NET_SOCKET_STREAM_SOCKET_STREAM_H_
+#pragma once
 
 #include <deque>
 #include <map>
 #include <string>
-#include <vector>
 
 #include "base/linked_ptr.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
+#include "base/string16.h"
 #include "base/task.h"
 #include "net/base/address_list.h"
 #include "net/base/completion_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_log.h"
 #include "net/base/net_errors.h"
+#include "net/base/ssl_config_service.h"
 #include "net/http/http_auth.h"
 #include "net/http/http_auth_cache.h"
 #include "net/http/http_auth_handler.h"
@@ -132,8 +134,8 @@ class SocketStream : public base::RefCountedThreadSafe<SocketStream> {
   // Restarts with authentication info.
   // Should be used for response of OnAuthRequired.
   virtual void RestartWithAuth(
-      const std::wstring& username,
-      const std::wstring& password);
+      const string16& username,
+      const string16& password);
 
   // Detach delegate.  Call before delegate is deleted.
   // Once delegate is detached, close the socket stream and never call delegate
@@ -170,7 +172,7 @@ class SocketStream : public base::RefCountedThreadSafe<SocketStream> {
 
   class ResponseHeaders : public IOBuffer {
    public:
-    ResponseHeaders() : IOBuffer() {}
+    ResponseHeaders();
 
     void SetDataOffset(size_t offset) { data_ = headers_.get() + offset; }
     char* headers() const { return headers_.get(); }
@@ -178,7 +180,7 @@ class SocketStream : public base::RefCountedThreadSafe<SocketStream> {
     void Realloc(size_t new_size);
 
    private:
-     ~ResponseHeaders() { data_ = NULL; }
+     ~ResponseHeaders();
 
     scoped_ptr_malloc<char> headers_;
   };
@@ -218,6 +220,8 @@ class SocketStream : public base::RefCountedThreadSafe<SocketStream> {
   // Used for WebSocketThrottleTest.
   void CopyAddrInfo(struct addrinfo* head);
 
+  void DoClose();
+
   // Finishes the job.
   // Calls OnError and OnClose of delegate, and no more
   // notifications will be sent to delegate.
@@ -237,7 +241,7 @@ class SocketStream : public base::RefCountedThreadSafe<SocketStream> {
   int DoResolveProxyComplete(int result);
   int DoResolveHost();
   int DoResolveHostComplete(int result);
-  int DoTcpConnect();
+  int DoTcpConnect(int result);
   int DoTcpConnectComplete(int result);
   int DoWriteTunnelHeaders();
   int DoWriteTunnelHeadersComplete(int result);
@@ -269,7 +273,7 @@ class SocketStream : public base::RefCountedThreadSafe<SocketStream> {
   UserDataMap user_data_;
 
   State next_state_;
-  scoped_refptr<HostResolver> host_resolver_;
+  HostResolver* host_resolver_;
   HttpAuthHandlerFactory* http_auth_handler_factory_;
   ClientSocketFactory* factory_;
 
@@ -280,7 +284,7 @@ class SocketStream : public base::RefCountedThreadSafe<SocketStream> {
   ProxyInfo proxy_info_;
 
   HttpAuthCache auth_cache_;
-  scoped_refptr<HttpAuthHandler> auth_handler_;
+  scoped_ptr<HttpAuthHandler> auth_handler_;
   HttpAuth::Identity auth_identity_;
   scoped_refptr<AuthChallengeInfo> auth_info_;
 
@@ -317,6 +321,9 @@ class SocketStream : public base::RefCountedThreadSafe<SocketStream> {
   int write_buf_offset_;
   int write_buf_size_;
   PendingDataQueue pending_write_bufs_;
+
+  bool closing_;
+  bool server_closed_;
 
   scoped_ptr<SocketStreamMetrics> metrics_;
 

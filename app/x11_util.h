@@ -4,6 +4,7 @@
 
 #ifndef APP_X11_UTIL_H_
 #define APP_X11_UTIL_H_
+#pragma once
 
 // This file declares utility functions for X11 (Linux only).
 //
@@ -14,8 +15,7 @@
 #include <string>
 #include <vector>
 
-#include "base/task.h"
-#include "gfx/rect.h"
+#include "base/basictypes.h"
 
 typedef struct _GdkDrawable GdkWindow;
 typedef struct _GtkWidget GtkWidget;
@@ -24,12 +24,8 @@ typedef unsigned long XID;
 typedef unsigned long XSharedMemoryId;  // ShmSeg in the X headers.
 typedef struct _XDisplay Display;
 
-namespace base {
-class Thread;
-}
-
 namespace gfx {
-class Size;
+class Rect;
 }
 
 namespace x11_util {
@@ -66,6 +62,8 @@ int GetDefaultScreen(Display* display);
 
 // Get the X window id for the default root window
 XID GetX11RootWindow();
+// Returns the user's current desktop.
+bool GetCurrentDesktop(int* desktop);
 // Get the X window id for the given GTK widget.
 XID GetX11WindowFromGtkWidget(GtkWidget* widget);
 XID GetX11WindowFromGdkWindow(GdkWindow* window);
@@ -78,9 +76,11 @@ int BitsPerPixelForPixmapDepth(Display* display, int depth);
 bool IsWindowVisible(XID window);
 // Returns the bounds of |window|.
 bool GetWindowRect(XID window, gfx::Rect* rect);
-// Get the value of an int or string property.  On success, true is returned and
-// the value is stored in |value|.
+// Get the value of an int, int array, or string property.  On
+// success, true is returned and the value is stored in |value|.
 bool GetIntProperty(XID window, const std::string& property_name, int* value);
+bool GetIntArrayProperty(XID window, const std::string& property_name,
+                         std::vector<int>* value);
 bool GetStringProperty(
     XID window, const std::string& property_name, std::string* value);
 
@@ -89,6 +89,11 @@ XID GetParentWindow(XID window);
 
 // Walk up |window|'s hierarchy until we find a direct child of |root|.
 XID GetHighestAncestorWindow(XID window, XID root);
+
+static const int kAllDesktops = -1;
+// Queries the desktop |window| is on, kAllDesktops if sticky. Returns false if
+// property not found.
+bool GetWindowDesktop(XID window, int* desktop);
 
 // Implementers of this interface receive a notification for every X window of
 // the main display.
@@ -167,6 +172,11 @@ void GrabWindowSnapshot(GtkWindow* gdk_window,
 
 // Change desktop for |window| to the desktop of |destination| window.
 bool ChangeWindowDesktop(XID window, XID destination);
+
+// Enable the default X error handlers. These will log the error and abort
+// the process if called. Use SetX11ErrorHandlers() from x11_util_internal.h
+// to set your own error handlers.
+void SetDefaultX11ErrorHandlers();
 
 }  // namespace x11_util
 

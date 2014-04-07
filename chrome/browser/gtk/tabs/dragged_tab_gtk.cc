@@ -10,7 +10,6 @@
 
 #include "app/x11_util.h"
 #include "base/i18n/rtl.h"
-#include "chrome/browser/browser_theme_provider.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/gtk/tabs/tab_renderer_gtk.h"
 #include "chrome/browser/profile.h"
@@ -18,7 +17,7 @@
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
-#include "gfx/canvas_paint.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "gfx/gtk_util.h"
 #include "third_party/skia/include/core/SkShader.h"
 
@@ -55,7 +54,9 @@ DraggedTabGtk::DraggedTabGtk(TabContents* datasource,
       attached_tab_size_(TabRendererGtk::GetMinimumSelectedSize()),
       contents_size_(contents_size),
       close_animation_(this) {
-  renderer_->UpdateData(datasource, false, false);
+  renderer_->UpdateData(datasource,
+                        datasource->is_app(),
+                        false); // loading_only
   renderer_->set_mini(mini);
 
   container_ = gtk_window_new(GTK_WINDOW_POPUP);
@@ -125,7 +126,7 @@ void DraggedTabGtk::AnimateToBounds(const gfx::Rect& bounds,
   animation_end_bounds_ = bounds;
 
   close_animation_.SetSlideDuration(kAnimateToBoundsDurationMs);
-  close_animation_.SetTweenType(SlideAnimation::EASE_OUT);
+  close_animation_.SetTweenType(Tween::EASE_OUT);
   if (!close_animation_.IsShowing()) {
     close_animation_.Reset();
     close_animation_.Show();
@@ -156,8 +157,7 @@ void DraggedTabGtk::AnimationCanceled(const Animation* animation) {
 
 void DraggedTabGtk::Layout() {
   if (attached_) {
-    gfx::Size prefsize = GetPreferredSize();
-    renderer_->SetBounds(gfx::Rect(0, 0, prefsize.width(), prefsize.height()));
+    renderer_->SetBounds(gfx::Rect(GetPreferredSize()));
   } else {
     int left = 0;
     if (base::i18n::IsRTL())
@@ -248,7 +248,10 @@ void DraggedTabGtk::SetContainerShapeMask(cairo_surface_t* surface) {
     // Make the render area depiction opaque (leaving enough room for the
     // border).
     cairo_identity_matrix(cairo_context);
-    cairo_set_source_rgba(cairo_context, 1.0f, 1.0f, 1.0f, 1.0f);
+    // On Lucid running VNC, the X server will reject RGBA (1,1,1,1) as an
+    // invalid value below in gdk_window_shape_combine_mask(). Using (0,0,0,1)
+    // instead. The value doesn't really matter, as long as the alpha is not 0.
+    cairo_set_source_rgba(cairo_context, 0.0f, 0.0f, 0.0f, 1.0f);
     int tab_height = static_cast<int>(kScalingFactor *
                                       renderer_->height() -
                                       kDragFrameBorderSize);

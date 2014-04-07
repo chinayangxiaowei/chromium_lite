@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,11 @@
 
 #include "app/tree_node_iterator.h"
 #include "base/rand_util.h"
+#include "base/string_number_conversions.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
-#include "chrome/test/live_sync/live_sync_test.h"
+#include "chrome/test/live_sync/live_bookmarks_sync_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -28,19 +30,17 @@ void BookmarkModelVerifier::ExpectBookmarkInfoMatch(
             actual->GetParent()->IndexOfChild(actual));
 }
 
-BookmarkModelVerifier::BookmarkModelVerifier() {
-  verifier_profile_.reset(LiveSyncTest::MakeProfile(L"verifier"));
-  verifier_ = verifier_profile_->GetBookmarkModel();
-}
+BookmarkModelVerifier::BookmarkModelVerifier(BookmarkModel* model)
+    : model_(model) {}
 
-BookmarkModelVerifier* BookmarkModelVerifier::Create() {
-  BookmarkModelVerifier* v = new BookmarkModelVerifier();
-  LiveSyncTest::BlockUntilLoaded(v->verifier_);
+BookmarkModelVerifier* BookmarkModelVerifier::Create(BookmarkModel* model) {
+  BookmarkModelVerifier* v = new BookmarkModelVerifier(model);
+  ui_test_utils::WaitForBookmarkModelToLoad(v->model_);
   return v;
 }
 
 void BookmarkModelVerifier::ExpectMatch(BookmarkModel* actual) {
-  ExpectModelsMatch(verifier_, actual);
+  ExpectModelsMatch(model_, actual);
 }
 
 // static
@@ -114,7 +114,7 @@ void BookmarkModelVerifier::FindNodeInVerifier(BookmarkModel* foreign_model,
   }
 
   // Swing over to the other tree.
-  walker = verifier_->root_node();
+  walker = model_->root_node();
 
   // Climb down.
   while (!path.empty()) {
@@ -132,11 +132,13 @@ const BookmarkNode* BookmarkModelVerifier::AddGroup(BookmarkModel* model,
     const BookmarkNode* parent, int index, const wstring& title) {
   const BookmarkNode* v_parent = NULL;
   FindNodeInVerifier(model, parent, &v_parent);
-  const BookmarkNode* result = model->AddGroup(parent, index, title);
+  const BookmarkNode* result = model->AddGroup(parent, index,
+                                               WideToUTF16Hack(title));
   EXPECT_TRUE(result);
   if (!result)
     return NULL;
-  const BookmarkNode* v_node = verifier_->AddGroup(v_parent, index, title);
+  const BookmarkNode* v_node = model_->AddGroup(v_parent, index,
+                                                WideToUTF16Hack(title));
   EXPECT_TRUE(v_node);
   if (!v_node)
     return NULL;
@@ -155,20 +157,20 @@ const BookmarkNode* BookmarkModelVerifier::AddNonEmptyGroup(
     int random_int = base::RandInt(1, 100);
     // To create randomness in order, 60% of time add bookmarks
     if (random_int > 40) {
-      wstring child_bm_title(bm_folder->GetTitle());
+      wstring child_bm_title(UTF16ToWideHack(bm_folder->GetTitle()));
       child_bm_title.append(L"-ChildBM");
-      child_bm_title.append(IntToWString(index));
+      child_bm_title.append(UTF8ToWide(base::IntToString(index)));
       string url("http://www.nofaviconurl");
-      url.append(IntToString(index));
+      url.append(base::IntToString(index));
       url.append(".com");
       const BookmarkNode* child_nofavicon_bm =
          AddURL(model, bm_folder, child_index, child_bm_title, GURL(url));
       EXPECT_TRUE(child_nofavicon_bm != NULL);
     } else {
       // Remaining % of time - Add Bookmark folders
-      wstring child_bmfolder_title(bm_folder->GetTitle());
+      wstring child_bmfolder_title(UTF16ToWideHack(bm_folder->GetTitle()));
       child_bmfolder_title.append(L"-ChildBMFolder");
-      child_bmfolder_title.append(IntToWString(index));
+      child_bmfolder_title.append(UTF8ToWide(base::IntToString(index)));
       const BookmarkNode* child_bm_folder =
           AddGroup(model, bm_folder, child_index, child_bmfolder_title);
       EXPECT_TRUE(child_bm_folder != NULL);
@@ -182,11 +184,13 @@ const BookmarkNode* BookmarkModelVerifier::AddURL(BookmarkModel* model,
     const GURL& url) {
   const BookmarkNode* v_parent = NULL;
   FindNodeInVerifier(model, parent, &v_parent);
-  const BookmarkNode* result = model->AddURL(parent, index, title, url);
+  const BookmarkNode* result = model->AddURL(parent, index,
+                                             WideToUTF16Hack(title), url);
   EXPECT_TRUE(result);
   if (!result)
     return NULL;
-  const BookmarkNode* v_node = verifier_->AddURL(v_parent, index, title, url);
+  const BookmarkNode* v_node = model_->AddURL(v_parent, index,
+                                              WideToUTF16Hack(title), url);
   EXPECT_TRUE(v_node);
   if (!v_node)
     return NULL;
@@ -199,8 +203,8 @@ void BookmarkModelVerifier::SetTitle(BookmarkModel* model,
                                      const wstring& title) {
   const BookmarkNode* v_node = NULL;
   FindNodeInVerifier(model, node, &v_node);
-  model->SetTitle(node, title);
-  verifier_->SetTitle(v_node, title);
+  model->SetTitle(node, WideToUTF16Hack(title));
+  model_->SetTitle(v_node, WideToUTF16Hack(title));
 }
 
 void BookmarkModelVerifier::Move(BookmarkModel* model, const BookmarkNode* node,
@@ -210,7 +214,7 @@ void BookmarkModelVerifier::Move(BookmarkModel* model, const BookmarkNode* node,
   FindNodeInVerifier(model, new_parent, &v_new_parent);
   FindNodeInVerifier(model, node, &v_node);
   model->Move(node, new_parent, index);
-  verifier_->Move(v_node, v_new_parent, index);
+  model_->Move(v_node, v_new_parent, index);
 }
 
 void BookmarkModelVerifier::Remove(BookmarkModel* model,
@@ -220,7 +224,7 @@ void BookmarkModelVerifier::Remove(BookmarkModel* model,
   FindNodeInVerifier(model, parent, &v_parent);
   ExpectBookmarkInfoMatch(parent->GetChild(index), v_parent->GetChild(index));
   model->Remove(parent, index);
-  verifier_->Remove(v_parent, index);
+  model_->Remove(v_parent, index);
 }
 
 void BookmarkModelVerifier::SortChildren(BookmarkModel* model,
@@ -228,7 +232,7 @@ void BookmarkModelVerifier::SortChildren(BookmarkModel* model,
   const BookmarkNode* v_parent = NULL;
   FindNodeInVerifier(model, parent, &v_parent);
   model->SortChildren(parent);
-  verifier_->SortChildren(v_parent);
+  model_->SortChildren(v_parent);
 }
 
 void BookmarkModelVerifier::ReverseChildOrder(BookmarkModel* model,
@@ -247,8 +251,8 @@ const BookmarkNode* BookmarkModelVerifier::SetURL(BookmarkModel* model,
   FindNodeInVerifier(model, node, &v_node);
   const BookmarkNode* result = bookmark_utils::ApplyEditsWithNoGroupChange(
       model, node->GetParent(), BookmarkEditor::EditDetails(node),
-      node->GetTitle(), new_url, NULL);
-  bookmark_utils::ApplyEditsWithNoGroupChange(verifier_, v_node->GetParent(),
-      BookmarkEditor::EditDetails(v_node), v_node->GetTitle(), new_url, NULL);
+      node->GetTitle(), new_url);
+  bookmark_utils::ApplyEditsWithNoGroupChange(model_, v_node->GetParent(),
+      BookmarkEditor::EditDetails(v_node), v_node->GetTitle(), new_url);
   return result;
 }

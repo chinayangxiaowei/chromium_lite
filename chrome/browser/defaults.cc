@@ -8,10 +8,15 @@ namespace browser_defaults {
 
 #if defined(OS_CHROMEOS)
 
-const double kAutocompleteEditFontPixelSize = 12.0;
-const double kAutocompleteEditFontPixelSizeInPopup = kAutocompletePopupFontSize;
+// Make the regular omnibox text two points larger than the nine-point font
+// used in the tab strip (11pt / 72pt/in * 96px/in = 14.667px).
+const double kAutocompleteEditFontPixelSize = 14.7;
+const double kAutocompleteEditFontPixelSizeInPopup = 10.0;
 
+// This is only used by AutocompletePopupViewGtk which is unused
+// unless TOOLKIT_VIEWS is undefined:
 const int kAutocompletePopupFontSize = 7;
+
 const SessionStartupPref::Type kDefaultSessionStartupType =
     SessionStartupPref::LAST;
 const int kMiniTabWidth = 64;
@@ -21,10 +26,12 @@ const bool kShowImportOnBookmarkBar = false;
 const bool kShowExitMenuItem = true;
 const bool kShowAboutMenuItem = true;
 const bool kOSSupportsOtherBrowsers = false;
-const bool kDownloadPageHasShowInFolder = false;
+const bool kDownloadPageHasShowInFolder = true;
 const bool kSizeTabButtonToTopOfTabStrip = true;
 const bool kBootstrapSyncAuthentication = true;
 const bool kShowOtherBrowsersInAboutMemory = false;
+const bool kAlwaysOpenIncognitoWindow = true;
+const bool kShowCancelButtonInTaskManager = true;
 
 #elif defined(TOOLKIT_USES_GTK)
 
@@ -65,7 +72,8 @@ const bool kOSSupportsOtherBrowsers = true;
 const bool kSizeTabButtonToTopOfTabStrip = false;
 const bool kBootstrapSyncAuthentication = false;
 const bool kShowOtherBrowsersInAboutMemory = true;
-
+const bool kAlwaysOpenIncognitoWindow = false;
+const bool kShowCancelButtonInTaskManager = false;
 #endif
 
 #if defined(OS_MACOSX)
@@ -73,5 +81,9 @@ const bool kBrowserAliveWithNoWindows = true;
 #else
 const bool kBrowserAliveWithNoWindows = false;
 #endif
+
+bool bookmarks_enabled = true;
+
+bool skip_restore = false;
 
 }  // namespace browser_defaults

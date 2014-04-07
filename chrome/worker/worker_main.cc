@@ -23,8 +23,7 @@
 int WorkerMain(const MainFunctionParams& parameters) {
   // The main message loop of the worker process.
   MessageLoop main_message_loop;
-  std::wstring app_name = chrome::kBrowserAppName;
-  PlatformThread::SetName(WideToASCII(app_name + L"_WorkerMain").c_str());
+  PlatformThread::SetName("CrWorkerMain");
 
   SystemMonitor system_monitor;
   HighResolutionTimerManager hi_res_timer_manager;
@@ -36,6 +35,10 @@ int WorkerMain(const MainFunctionParams& parameters) {
       parameters.sandbox_info_.TargetServices();
   if (!target_services)
     return false;
+
+  // Cause advapi32 to load before the sandbox is turned on.
+  unsigned int dummy_rand;
+  rand_s(&dummy_rand);
 
   target_services->LowerToken();
 #endif

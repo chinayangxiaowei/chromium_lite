@@ -4,14 +4,25 @@
 
 #include "chrome/browser/js_modal_dialog.h"
 
+#include "base/string_util.h"
+#include "chrome/browser/browser_shutdown.h"
 #include "chrome/browser/extensions/extension_host.h"
+#include "chrome/browser/native_app_modal_dialog.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
 #include "ipc/ipc_message.h"
 
+namespace {
+
+// The maximum sizes of various texts passed to us from javascript.
+const int kMessageTextMaxSize = 3000;
+const int kDefaultPromptTextSize = 2000;
+
+}  // namespace
+
 JavaScriptAppModalDialog::JavaScriptAppModalDialog(
-    JavaScriptMessageBoxClient* client,
+    JavaScriptAppModalDialogDelegate* delegate,
     const std::wstring& title,
     int dialog_flags,
     const std::wstring& message_text,
@@ -19,23 +30,32 @@ JavaScriptAppModalDialog::JavaScriptAppModalDialog(
     bool display_suppress_checkbox,
     bool is_before_unload_dialog,
     IPC::Message* reply_msg)
-    : AppModalDialog(client->AsTabContents(), title),
-#if defined(OS_MACOSX)
-      dialog_(NULL),
-#endif
-      client_(client),
-      extension_host_(client->AsExtensionHost()),
+    : AppModalDialog(delegate->AsTabContents(), title),
+      delegate_(delegate),
+      extension_host_(delegate->AsExtensionHost()),
       dialog_flags_(dialog_flags),
-      message_text_(message_text),
-      default_prompt_text_(default_prompt_text),
       display_suppress_checkbox_(display_suppress_checkbox),
       is_before_unload_dialog_(is_before_unload_dialog),
       reply_msg_(reply_msg) {
+  // We trim the various parts of the message dialog because otherwise we can
+  // overflow the message dialog (and crash/hang the GTK+ version).
+  ElideString(message_text, kMessageTextMaxSize, &message_text_);
+  ElideString(default_prompt_text, kDefaultPromptTextSize,
+              &default_prompt_text_);
+
   DCHECK((tab_contents_ != NULL) != (extension_host_ != NULL));
   InitNotifications();
 }
 
 JavaScriptAppModalDialog::~JavaScriptAppModalDialog() {
+}
+
+NativeAppModalDialog* JavaScriptAppModalDialog::CreateNativeDialog() {
+  gfx::NativeWindow parent_window = tab_contents_ ?
+      tab_contents_->GetMessageBoxRootWindow() :
+      extension_host_->GetMessageBoxRootWindow();
+  return NativeAppModalDialog::CreateNativeJavaScriptPrompt(this,
+                                                            parent_window);
 }
 
 void JavaScriptAppModalDialog::Observe(NotificationType type,
@@ -51,10 +71,10 @@ void JavaScriptAppModalDialog::Observe(NotificationType type,
   // If we reach here, we know the notification is relevant to us, either
   // because we're only observing applicable sources or because we passed the
   // check above. Both of those indicate that we should ignore this dialog.
-  // Also clear the client, since it's now invalid.
+  // Also clear the delegate, since it's now invalid.
   skip_this_dialog_ = true;
-  client_ = NULL;
-  if (dialog_)
+  delegate_ = NULL;
+  if (native_dialog_)
     CloseModalDialog();
 }
 
@@ -77,6 +97,11 @@ void JavaScriptAppModalDialog::InitNotifications() {
 }
 
 void JavaScriptAppModalDialog::OnCancel() {
+  // If we are shutting down and this is an onbeforeunload dialog, cancel the
+  // shutdown.
+  if (is_before_unload_dialog_)
+    browser_shutdown::SetTryingToQuit(false);
+
   // We need to do this before WM_DESTROY (WindowClosing()) as any parent frame
   // will receive its activation messages before this dialog receives
   // WM_DESTROY. The parent frame would then try to activate any modal dialogs
@@ -86,7 +111,7 @@ void JavaScriptAppModalDialog::OnCancel() {
   CompleteDialog();
 
   if (!skip_this_dialog_) {
-    client_->OnMessageBoxClosed(reply_msg_, false, std::wstring());
+    delegate_->OnMessageBoxClosed(reply_msg_, false, std::wstring());
   }
 
   Cleanup();
@@ -97,9 +122,9 @@ void JavaScriptAppModalDialog::OnAccept(const std::wstring& prompt_text,
   CompleteDialog();
 
   if (!skip_this_dialog_) {
-    client_->OnMessageBoxClosed(reply_msg_, true, prompt_text);
+    delegate_->OnMessageBoxClosed(reply_msg_, true, prompt_text);
     if (suppress_js_messages)
-      client_->SetSuppressMessageBoxes(true);
+      delegate_->SetSuppressMessageBoxes(true);
   }
 
   Cleanup();
@@ -111,7 +136,7 @@ void JavaScriptAppModalDialog::OnClose() {
 
 void JavaScriptAppModalDialog::Cleanup() {
   if (skip_this_dialog_) {
-    // We can't use the client_, because we might be in the process of
+    // We can't use the |delegate_|, because we might be in the process of
     // destroying it.
     if (tab_contents_)
       tab_contents_->OnMessageBoxClosed(reply_msg_, false, L"");
@@ -125,5 +150,4 @@ void JavaScriptAppModalDialog::Cleanup() {
       NOTREACHED();
 #endif
   }
-  AppModalDialog::Cleanup();
 }

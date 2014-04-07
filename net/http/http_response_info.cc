@@ -7,6 +7,11 @@
 #include "base/logging.h"
 #include "base/pickle.h"
 #include "base/time.h"
+#include "net/base/auth.h"
+#include "net/base/io_buffer.h"
+#include "net/base/net_errors.h"
+#include "net/base/ssl_cert_request_info.h"
+#include "net/base/x509_certificate.h"
 #include "net/http/http_response_headers.h"
 
 using base::Time;
@@ -41,16 +46,62 @@ enum {
   // This bit is set if the response was received via SPDY.
   RESPONSE_INFO_WAS_SPDY = 1 << 13,
 
+  // This bit is set if the request has NPN negotiated.
+  RESPONSE_INFO_WAS_NPN = 1 << 14,
+
+  // This bit is set if the request was fetched via an explicit proxy.
+  RESPONSE_INFO_WAS_PROXY = 1 << 15,
+
+  // This bit is set if response could use alternate protocol. However, browser
+  // will ingore the alternate protocol if spdy is not enabled.
+  RESPONSE_INFO_WAS_ALTERNATE_PROTOCOL_AVAILABLE = 1 << 16,
+
   // TODO(darin): Add other bits to indicate alternate request methods.
   // For now, we don't support storing those.
 };
 
 HttpResponseInfo::HttpResponseInfo()
     : was_cached(false),
-      was_fetched_via_spdy(false) {
+      was_fetched_via_spdy(false),
+      was_npn_negotiated(false),
+      was_alternate_protocol_available(false),
+      was_fetched_via_proxy(false) {
+}
+
+HttpResponseInfo::HttpResponseInfo(const HttpResponseInfo& rhs)
+    : was_cached(rhs.was_cached),
+      was_fetched_via_spdy(rhs.was_fetched_via_spdy),
+      was_npn_negotiated(rhs.was_npn_negotiated),
+      was_alternate_protocol_available(rhs.was_alternate_protocol_available),
+      was_fetched_via_proxy(rhs.was_fetched_via_proxy),
+      request_time(rhs.request_time),
+      response_time(rhs.response_time),
+      auth_challenge(rhs.auth_challenge),
+      cert_request_info(rhs.cert_request_info),
+      ssl_info(rhs.ssl_info),
+      headers(rhs.headers),
+      vary_data(rhs.vary_data),
+      metadata(rhs.metadata) {
 }
 
 HttpResponseInfo::~HttpResponseInfo() {
+}
+
+HttpResponseInfo& HttpResponseInfo::operator=(const HttpResponseInfo& rhs) {
+  was_cached = rhs.was_cached;
+  was_fetched_via_spdy = rhs.was_fetched_via_spdy;
+  was_npn_negotiated = rhs.was_npn_negotiated;
+  was_alternate_protocol_available = rhs.was_alternate_protocol_available;
+  was_fetched_via_proxy = rhs.was_fetched_via_proxy;
+  request_time = rhs.request_time;
+  response_time = rhs.response_time;
+  auth_challenge = rhs.auth_challenge;
+  cert_request_info = rhs.cert_request_info;
+  ssl_info = rhs.ssl_info;
+  headers = rhs.headers;
+  vary_data = rhs.vary_data;
+  metadata = rhs.metadata;
+  return *this;
 }
 
 bool HttpResponseInfo::InitFromPickle(const Pickle& pickle,
@@ -109,6 +160,13 @@ bool HttpResponseInfo::InitFromPickle(const Pickle& pickle,
 
   was_fetched_via_spdy = (flags & RESPONSE_INFO_WAS_SPDY) != 0;
 
+  was_npn_negotiated = (flags & RESPONSE_INFO_WAS_NPN) != 0;
+
+  was_alternate_protocol_available =
+      (flags & RESPONSE_INFO_WAS_ALTERNATE_PROTOCOL_AVAILABLE) != 0;
+
+  was_fetched_via_proxy = (flags & RESPONSE_INFO_WAS_PROXY) != 0;
+
   *response_truncated = (flags & RESPONSE_INFO_TRUNCATED) ? true : false;
 
   return true;
@@ -130,6 +188,12 @@ void HttpResponseInfo::Persist(Pickle* pickle,
     flags |= RESPONSE_INFO_TRUNCATED;
   if (was_fetched_via_spdy)
     flags |= RESPONSE_INFO_WAS_SPDY;
+  if (was_npn_negotiated)
+    flags |= RESPONSE_INFO_WAS_NPN;
+  if (was_alternate_protocol_available)
+    flags |= RESPONSE_INFO_WAS_ALTERNATE_PROTOCOL_AVAILABLE;
+  if (was_fetched_via_proxy)
+    flags |= RESPONSE_INFO_WAS_PROXY;
 
   pickle->WriteInt(flags);
   pickle->WriteInt64(request_time.ToInternalValue());

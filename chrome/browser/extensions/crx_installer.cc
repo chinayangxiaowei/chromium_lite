@@ -4,32 +4,74 @@
 
 #include "chrome/browser/extensions/crx_installer.h"
 
+#include <set>
+
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/file_util.h"
+#include "base/path_service.h"
 #include "base/scoped_temp_dir.h"
+#include "base/singleton.h"
+#include "base/stl_util-inl.h"
+#include "base/stringprintf.h"
 #include "base/task.h"
 #include "base/utf_string_conversions.h"
+#include "base/version.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/extensions/convert_user_script.h"
+#include "chrome/browser/extensions/extensions_service.h"
+#include "chrome/browser/extensions/extension_error_reporter.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/web_applications/web_app.h"
-#include "chrome/common/extensions/extension_error_reporter.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension_file_util.h"
+#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
-#include "grit/browser_resources.h"
 #include "grit/chromium_strings.h"
+#include "grit/generated_resources.h"
+#include "grit/theme_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace {
-  // Helper function to delete files. This is used to avoid ugly casts which
-  // would be necessary with PostMessage since file_util::Delete is overloaded.
-  static void DeleteFileHelper(const FilePath& path, bool recursive) {
-    file_util::Delete(path, recursive);
+
+// Helper function to delete files. This is used to avoid ugly casts which
+// would be necessary with PostMessage since file_util::Delete is overloaded.
+static void DeleteFileHelper(const FilePath& path, bool recursive) {
+  file_util::Delete(path, recursive);
+}
+
+struct WhitelistedInstallData {
+  WhitelistedInstallData() {}
+  std::set<std::string> ids;
+};
+
+}  // namespace
+
+// static
+void CrxInstaller::SetWhitelistedInstallId(const std::string& id) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  Singleton<WhitelistedInstallData>::get()->ids.insert(id);
+}
+
+// static
+bool CrxInstaller::IsIdWhitelisted(const std::string& id) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  std::set<std::string>& ids = Singleton<WhitelistedInstallData>::get()->ids;
+  return ContainsKey(ids, id);
+}
+
+// static
+bool CrxInstaller::ClearWhitelistedInstallId(const std::string& id) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  std::set<std::string>& ids = Singleton<WhitelistedInstallData>::get()->ids;
+  if (ContainsKey(ids, id)) {
+    ids.erase(id);
+    return true;
   }
+  return false;
 }
 
 CrxInstaller::CrxInstaller(const FilePath& install_directory,
@@ -39,10 +81,12 @@ CrxInstaller::CrxInstaller(const FilePath& install_directory,
       install_source_(Extension::INTERNAL),
       delete_source_(false),
       allow_privilege_increase_(false),
-      force_web_origin_to_download_url_(false),
+      is_gallery_install_(false),
       create_app_shortcut_(false),
       frontend_(frontend),
-      client_(client) {
+      client_(client),
+      apps_require_extension_mime_type_(false),
+      allow_silent_install_(false) {
   extensions_enabled_ = frontend_->extensions_enabled();
 }
 
@@ -51,37 +95,37 @@ CrxInstaller::~CrxInstaller() {
   // destructor might be called on any thread, so we post a task to the file
   // thread to make sure the delete happens there.
   if (!temp_dir_.value().empty()) {
-    ChromeThread::PostTask(
-        ChromeThread::FILE, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::FILE, FROM_HERE,
         NewRunnableFunction(&DeleteFileHelper, temp_dir_, true));
   }
 
   if (delete_source_) {
-    ChromeThread::PostTask(
-        ChromeThread::FILE, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::FILE, FROM_HERE,
         NewRunnableFunction(&DeleteFileHelper, source_file_, false));
   }
 
   // Make sure the UI is deleted on the ui thread.
-  ChromeThread::DeleteSoon(ChromeThread::UI, FROM_HERE, client_);
+  BrowserThread::DeleteSoon(BrowserThread::UI, FROM_HERE, client_);
   client_ = NULL;
 }
 
 void CrxInstaller::InstallCrx(const FilePath& source_file) {
   source_file_ = source_file;
 
+  FilePath user_data_temp_dir;
+  CHECK(PathService::Get(chrome::DIR_USER_DATA_TEMP, &user_data_temp_dir));
+
   scoped_refptr<SandboxedExtensionUnpacker> unpacker(
       new SandboxedExtensionUnpacker(
           source_file,
+          user_data_temp_dir,
           g_browser_process->resource_dispatcher_host(),
           this));
 
-  if (force_web_origin_to_download_url_ && original_url_.is_valid()) {
-    unpacker->set_web_origin(original_url_.GetOrigin());
-  }
-
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(
           unpacker.get(), &SandboxedExtensionUnpacker::Start));
 }
@@ -93,8 +137,8 @@ void CrxInstaller::InstallUserScript(const FilePath& source_file,
   source_file_ = source_file;
   original_url_ = original_url;
 
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(this, &CrxInstaller::ConvertUserScriptOnFileThread));
 }
 
@@ -110,39 +154,102 @@ void CrxInstaller::ConvertUserScriptOnFileThread() {
   OnUnpackSuccess(extension->path(), extension->path(), extension);
 }
 
+bool CrxInstaller::AllowInstall(Extension* extension, std::string* error) {
+  DCHECK(error);
+
+  // We always allow themes and external installs.
+  if (extension->is_theme() || Extension::IsExternalLocation(install_source_))
+    return true;
+
+  if (!extensions_enabled_) {
+    *error = "Extensions are not enabled.";
+    return false;
+  }
+
+  // Make sure the expected id matches.
+  // TODO(aa): Also support expected version?
+  if (!expected_id_.empty() && expected_id_ != extension->id()) {
+    *error = base::StringPrintf(
+        "ID in new extension manifest (%s) does not match expected id (%s)",
+        extension->id().c_str(),
+        expected_id_.c_str());
+    return false;
+  }
+
+  if (extension_->is_app()) {
+    // If the app was downloaded, apps_require_extension_mime_type_
+    // will be set.  In this case, check that it was served with the
+    // right mime type.  Make an exception for file URLs, which come
+    // from the users computer and have no headers.
+    if (!original_url_.SchemeIsFile() &&
+        apps_require_extension_mime_type_ &&
+        original_mime_type_ != Extension::kMimeType) {
+      *error = base::StringPrintf(
+          "Apps must be served with content type %s.",
+          Extension::kMimeType);
+      return false;
+    }
+
+    // If the client_ is NULL, then the app is either being installed via
+    // an internal mechanism like sync, external_extensions, or default apps.
+    // In that case, we don't want to enforce things like the install origin.
+    if (!is_gallery_install_ && client_) {
+      // For apps with a gallery update URL, require that they be installed
+      // from the gallery.
+      // TODO(erikkay) Apply this rule for paid extensions and themes as well.
+      if ((extension->update_url() ==
+           GURL(extension_urls::kGalleryUpdateHttpsUrl)) ||
+          (extension->update_url() ==
+           GURL(extension_urls::kGalleryUpdateHttpUrl))) {
+        *error = l10n_util::GetStringFUTF8(
+            IDS_EXTENSION_DISALLOW_NON_DOWNLOADED_GALLERY_INSTALLS,
+            l10n_util::GetStringUTF16(IDS_EXTENSION_WEB_STORE_TITLE));
+        return false;
+      }
+
+      // For self-hosted apps, verify that the entire extent is on the same
+      // host (or a subdomain of the host) the download happened from.  There's
+      // no way for us to verify that the app controls any other hosts.
+      URLPattern pattern(UserScript::kValidUserScriptSchemes);
+      pattern.set_host(original_url_.host());
+      pattern.set_match_subdomains(true);
+
+      ExtensionExtent::PatternList patterns =
+          extension_->web_extent().patterns();
+      for (size_t i = 0; i < patterns.size(); ++i) {
+        if (!pattern.MatchesHost(patterns[i].host())) {
+          *error = base::StringPrintf(
+              "Apps must be served from the host that they affect.");
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
 void CrxInstaller::OnUnpackFailure(const std::string& error_message) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   ReportFailureFromFileThread(error_message);
 }
 
 void CrxInstaller::OnUnpackSuccess(const FilePath& temp_dir,
                                    const FilePath& extension_dir,
                                    Extension* extension) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   // Note: We take ownership of |extension| and |temp_dir|.
   extension_.reset(extension);
   temp_dir_ = temp_dir;
 
-  // The unpack dir we don't have to delete explicity since it is a child of
+  // We don't have to delete the unpack dir explicity since it is a child of
   // the temp dir.
   unpacked_extension_root_ = extension_dir;
 
-  // Determine whether to allow installation. We always allow themes and
-  // external installs.
-  if (!extensions_enabled_ && !extension->IsTheme() &&
-      !Extension::IsExternalLocation(install_source_)) {
-    ReportFailureFromFileThread("Extensions are not enabled.");
-    return;
-  }
-
-  // Make sure the expected id matches.
-  // TODO(aa): Also support expected version?
-  if (!expected_id_.empty() && expected_id_ != extension->id()) {
-    ReportFailureFromFileThread(StringPrintf(
-        "ID in new extension manifest (%s) does not match expected id (%s)",
-        extension->id().c_str(),
-        expected_id_.c_str()));
+  std::string error;
+  if (!AllowInstall(extension, &error)) {
+    ReportFailureFromFileThread(error);
     return;
   }
 
@@ -151,13 +258,13 @@ void CrxInstaller::OnUnpackSuccess(const FilePath& temp_dir,
                           &install_icon_);
   }
 
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &CrxInstaller::ConfirmInstall));
 }
 
 void CrxInstaller::ConfirmInstall() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   if (frontend_->extension_prefs()->IsExtensionBlacklisted(extension_->id())) {
     LOG(INFO) << "This extension: " << extension_->id()
       << " is blacklisted. Install failed.";
@@ -165,28 +272,43 @@ void CrxInstaller::ConfirmInstall() {
     return;
   }
 
+  if (!frontend_->extension_prefs()->IsExtensionAllowedByPolicy(
+      extension_->id())) {
+    ReportFailureFromUIThread("This extension is blacklisted by admin policy.");
+    return;
+  }
+
+  GURL overlapping_url;
+  Extension* overlapping_extension =
+      frontend_->GetExtensionByOverlappingWebExtent(extension_->web_extent());
+  if (overlapping_extension) {
+    ReportFailureFromUIThread(l10n_util::GetStringFUTF8(
+        IDS_EXTENSION_OVERLAPPING_WEB_EXTENT,
+        UTF8ToUTF16(overlapping_extension->name())));
+    return;
+  }
+
   current_version_ =
       frontend_->extension_prefs()->GetVersionString(extension_->id());
 
-  if (client_) {
+  bool whitelisted = ClearWhitelistedInstallId(extension_->id()) &&
+      extension_->plugins().empty() && is_gallery_install_;
+
+  if (client_ &&
+      (!allow_silent_install_ || !whitelisted)) {
     AddRef();  // Balanced in Proceed() and Abort().
     client_->ConfirmInstall(this, extension_.get());
   } else {
-    ChromeThread::PostTask(
-        ChromeThread::FILE, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::FILE, FROM_HERE,
         NewRunnableMethod(this, &CrxInstaller::CompleteInstall));
   }
   return;
 }
 
-void CrxInstaller::InstallUIProceed(bool create_app_shortcut) {
-  if (create_app_shortcut) {
-    DCHECK(extension_->GetFullLaunchURL().is_valid());
-    create_app_shortcut_ = true;
-  }
-
-  ChromeThread::PostTask(
-        ChromeThread::FILE, FROM_HERE,
+void CrxInstaller::InstallUIProceed() {
+  BrowserThread::PostTask(
+        BrowserThread::FILE, FROM_HERE,
         NewRunnableMethod(this, &CrxInstaller::CompleteInstall));
 
   Release();  // balanced in ConfirmInstall().
@@ -205,49 +327,27 @@ void CrxInstaller::InstallUIAbort() {
 }
 
 void CrxInstaller::CompleteInstall() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
-  FilePath version_dir;
-  Extension::InstallType install_type =
-      extension_file_util::CompareToInstalledVersion(
-          install_directory_, extension_->id(), current_version_,
-          extension_->VersionString(), &version_dir);
-
-  if (install_type == Extension::DOWNGRADE) {
-    ReportFailureFromFileThread("Attempted to downgrade extension.");
-    return;
+  if (!current_version_.empty()) {
+    scoped_ptr<Version> current_version(
+        Version::GetVersionFromString(current_version_));
+    if (current_version->CompareTo(*(extension_->version())) > 0) {
+      ReportFailureFromFileThread("Attempted to downgrade extension.");
+      return;
+    }
   }
 
-  if (install_type == Extension::REINSTALL) {
-    // We use this as a signal to switch themes.
-    ReportOverinstallFromFileThread();
+  FilePath version_dir = extension_file_util::InstallExtension(
+      unpacked_extension_root_,
+      extension_->id(),
+      extension_->VersionString(),
+      install_directory_);
+  if (version_dir.empty()) {
+    ReportFailureFromFileThread(
+        l10n_util::GetStringUTF8(
+            IDS_EXTENSION_MOVE_DIRECTORY_TO_PROFILE_FAILED));
     return;
-  }
-
-  std::string error_msg;
-  if (!extension_file_util::InstallExtension(unpacked_extension_root_,
-                                             version_dir, &error_msg)) {
-    ReportFailureFromFileThread(error_msg);
-    return;
-  }
-
-  if (create_app_shortcut_) {
-    SkBitmap icon = install_icon_.get() ? *install_icon_ :
-        *ResourceBundle::GetSharedInstance().GetBitmapNamed(
-            IDR_EXTENSION_DEFAULT_ICON);
-
-    ShellIntegration::ShortcutInfo shortcut_info;
-    shortcut_info.url = extension_->GetFullLaunchURL();
-    shortcut_info.extension_id = UTF8ToUTF16(extension_->id());
-    shortcut_info.title = UTF8ToUTF16(extension_->name());
-    shortcut_info.description = UTF8ToUTF16(extension_->description());
-    shortcut_info.favicon = icon;
-    shortcut_info.create_on_desktop = true;
-
-    // TODO(aa): Seems nasty to be reusing the old webapps code this way. What
-    // baggage am I inheriting?
-    web_app::CreateShortcut(frontend_->profile()->GetPath(), shortcut_info,
-                            NULL);
   }
 
   // This is lame, but we must reload the extension because absolute paths
@@ -265,14 +365,14 @@ void CrxInstaller::CompleteInstall() {
 }
 
 void CrxInstaller::ReportFailureFromFileThread(const std::string& error) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &CrxInstaller::ReportFailureFromUIThread, error));
 }
 
 void CrxInstaller::ReportFailureFromUIThread(const std::string& error) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   NotificationService* service = NotificationService::current();
   service->Notify(NotificationType::EXTENSION_INSTALL_ERROR,
@@ -290,36 +390,15 @@ void CrxInstaller::ReportFailureFromUIThread(const std::string& error) {
     client_->OnInstallFailure(error);
 }
 
-void CrxInstaller::ReportOverinstallFromFileThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
-      NewRunnableMethod(this, &CrxInstaller::ReportOverinstallFromUIThread));
-}
-
-void CrxInstaller::ReportOverinstallFromUIThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
-
-  NotificationService* service = NotificationService::current();
-  service->Notify(NotificationType::EXTENSION_OVERINSTALL_ERROR,
-                  Source<CrxInstaller>(this),
-                  Details<const FilePath>(&extension_->path()));
-
-  if (client_)
-    client_->OnOverinstallAttempted(extension_.get());
-
-  frontend_->OnExtensionOverinstallAttempted(extension_->id());
-}
-
 void CrxInstaller::ReportSuccessFromFileThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &CrxInstaller::ReportSuccessFromUIThread));
 }
 
 void CrxInstaller::ReportSuccessFromUIThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   // If there is a client, tell the client about installation.
   if (client_)

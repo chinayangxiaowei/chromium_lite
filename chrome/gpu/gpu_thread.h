@@ -4,6 +4,7 @@
 
 #ifndef CHROME_GPU_GPU_THREAD_H_
 #define CHROME_GPU_GPU_THREAD_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
@@ -30,6 +31,9 @@ class GpuThread : public ChildThread {
   Display* display() const { return display_; }
 #endif
 
+  // Remove the channel for a particular renderer.
+  void RemoveChannel(int renderer_id);
+
  private:
   // ChildThread overrides.
   virtual void OnControlMessageReceived(const IPC::Message& msg);
@@ -37,6 +41,9 @@ class GpuThread : public ChildThread {
   // Message handlers.
   void OnEstablishChannel(int renderer_id);
   void OnSynchronize();
+  void OnCollectGraphicsInfo();
+  void OnCrash();
+  void OnHang();
   void OnNewRenderWidgetHostView(GpuNativeWindowHandle parent_window,
                                  int32 routing_id);
 

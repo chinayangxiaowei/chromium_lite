@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_MENU_NATIVE_MENU_WIN_H_
 #define VIEWS_CONTROLS_MENU_NATIVE_MENU_WIN_H_
+#pragma once
 
 #include <vector>
 
@@ -32,6 +33,7 @@ class NativeMenuWin : public MenuWrapper {
   virtual MenuAction GetMenuAction() const;
   virtual void AddMenuListener(MenuListener* listener);
   virtual void RemoveMenuListener(MenuListener* listener);
+  virtual void SetMinimumWidth(int width);
 
  private:
   // IMPORTANT: Note about indices.

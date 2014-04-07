@@ -1,17 +1,19 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_HISTORY_STARRED_URL_DATABASE_H_
 #define CHROME_BROWSER_HISTORY_STARRED_URL_DATABASE_H_
+#pragma once
 
 #include <set>
 
 #include "app/tree_node_model.h"
 #include "base/basictypes.h"
+#include "base/gtest_prod_util.h"
+#include "base/string16.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/url_database.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 class FilePath;
 
@@ -35,7 +37,7 @@ class StarredURLDatabase : public URLDatabase {
   // The unit tests poke our innards.
   friend class HistoryTest;
   friend class StarredURLDatabaseTest;
-  FRIEND_TEST(HistoryTest, CreateStarGroup);
+  FRIEND_TEST_ALL_PREFIXES(HistoryTest, CreateStarGroup);
 
   // Writes bookmarks to the specified file.
   bool MigrateBookmarksToFile(const FilePath& path);
@@ -69,7 +71,7 @@ class StarredURLDatabase : public URLDatabase {
   //
   // WARNING: Does not update the visual order.
   bool UpdateStarredEntryRow(StarID star_id,
-                             const std::wstring& title,
+                             const string16& title,
                              UIStarID parent_group_id,
                              int visual_order,
                              base::Time date_modified);
@@ -89,7 +91,7 @@ class StarredURLDatabase : public URLDatabase {
   StarID CreateStarredEntryRow(URLID url_id,
                                UIStarID group_id,
                                UIStarID parent_group_id,
-                               const std::wstring& title,
+                               const string16& title,
                                const base::Time& date_added,
                                int visual_order,
                                StarredEntry::Type type);

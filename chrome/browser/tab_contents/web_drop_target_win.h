@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_TAB_CONTENTS_WEB_DROP_TARGET_WIN_H_
 #define CHROME_BROWSER_TAB_CONTENTS_WEB_DROP_TARGET_WIN_H_
+#pragma once
 
 #include "base/base_drop_target.h"
 #include "base/scoped_ptr.h"
@@ -68,7 +69,7 @@ class WebDropTarget : public BaseDropTarget {
   // page is showing.
   scoped_ptr<InterstitialDropTarget> interstitial_drop_target_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(WebDropTarget);
+  DISALLOW_COPY_AND_ASSIGN(WebDropTarget);
 };
 
 #endif  // CHROME_BROWSER_TAB_CONTENTS_WEB_DROP_TARGET_WIN_H_

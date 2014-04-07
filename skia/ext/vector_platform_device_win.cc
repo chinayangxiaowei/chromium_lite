@@ -140,7 +140,7 @@ void VectorPlatformDevice::drawRect(const SkDraw& draw,
 
     // Removes the path effect from the temporary SkPaint object.
     SkPaint paint_no_effet(paint);
-    paint_no_effet.setPathEffect(NULL)->safeUnref();
+    SkSafeUnref(paint_no_effet.setPathEffect(NULL));
 
     // Draw the calculated path.
     drawPath(draw, path_modified, paint_no_effet);
@@ -170,7 +170,7 @@ void VectorPlatformDevice::drawPath(const SkDraw& draw,
 
     // Removes the path effect from the temporary SkPaint object.
     SkPaint paint_no_effet(paint);
-    paint_no_effet.setPathEffect(NULL)->safeUnref();
+    SkSafeUnref(paint_no_effet.setPathEffect(NULL));
 
     // Draw the calculated path.
     drawPath(draw, path_modified, paint_no_effet);
@@ -491,8 +491,6 @@ HGDIOBJ VectorPlatformDevice::SelectObject(HGDIOBJ object) {
 bool VectorPlatformDevice::CreateBrush(bool use_brush, const SkPaint& paint) {
   // Make sure that for transparent color, no brush is used.
   if (paint.getAlpha() == 0) {
-    // Test if it ever happen.
-    SkASSERT(false);
     use_brush = false;
   }
 
@@ -502,8 +500,6 @@ bool VectorPlatformDevice::CreateBrush(bool use_brush, const SkPaint& paint) {
 bool VectorPlatformDevice::CreatePen(bool use_pen, const SkPaint& paint) {
   // Make sure that for transparent color, no pen is used.
   if (paint.getAlpha() == 0) {
-    // Test if it ever happen.
-    SkASSERT(false);
     use_pen = false;
   }
 
@@ -619,7 +615,20 @@ void VectorPlatformDevice::InternalDrawBitmap(const SkBitmap& bitmap,
     HBITMAP hbitmap = ::CreateDIBSection(
         bitmap_dc, reinterpret_cast<const BITMAPINFO*>(&hdr),
         DIB_RGB_COLORS, &bits, NULL, 0);
-    memcpy(bits, pixels, bitmap.getSize());
+
+    // static cast to a char so we can do byte ptr arithmatic to
+    // get the offset.
+    unsigned char* dest_buffer = static_cast<unsigned char *>(bits);
+
+    // We will copy row by row to avoid having to worry about
+    // the row strides being different.
+    const int dest_row_size = hdr.biBitCount / 8 * hdr.biWidth;
+    for (int row = 0; row < bitmap.height(); ++row) {
+      int dest_offset = row * dest_row_size;
+      // pixels_offset in terms of pixel count.
+      int src_offset = row * bitmap.rowBytesAsPixels();
+      memcpy(dest_buffer + dest_offset, pixels + src_offset, dest_row_size);
+    }
     SkASSERT(hbitmap);
     HGDIOBJ old_bitmap = ::SelectObject(bitmap_dc, hbitmap);
 

@@ -88,39 +88,74 @@ bool ReverifyEntry(syncable::WriteTransaction* trans, const SyncEntity& entry,
 }
 }  // namespace
 
-// TODO(sync): Refactor this code.
 // Process a single update. Will avoid touching global state.
 ServerUpdateProcessingResult ProcessUpdatesCommand::ProcessUpdate(
-    const syncable::ScopedDirLookup& dir, const sync_pb::SyncEntity& pb_entry) {
+    const syncable::ScopedDirLookup& dir,
+    const sync_pb::SyncEntity& proto_update) {
 
-  const SyncEntity& entry = *static_cast<const SyncEntity*>(&pb_entry);
+  const SyncEntity& update = *static_cast<const SyncEntity*>(&proto_update);
   using namespace syncable;
-  syncable::Id id = entry.id();
-  const std::string name = SyncerProtoUtil::NameFromSyncEntity(entry);
+  syncable::Id server_id = update.id();
+  const std::string name = SyncerProtoUtil::NameFromSyncEntity(update);
 
   WriteTransaction trans(dir, SYNCER, __FILE__, __LINE__);
 
-  SyncerUtil::CreateNewEntry(&trans, id);
+  // Look to see if there's a local item that should recieve this update,
+  // maybe due to a duplicate client tag or a lost commit response.
+  syncable::Id local_id = SyncerUtil::FindLocalIdToUpdate(&trans, update);
+
+  // FindLocalEntryToUpdate has veto power.
+  if (local_id.IsNull()) {
+    return SUCCESS_PROCESSED;  // The entry has become irrelevant.
+  }
+
+  SyncerUtil::CreateNewEntry(&trans, local_id);
 
   // We take a two step approach. First we store the entries data in the
   // server fields of a local entry and then move the data to the local fields
-  MutableEntry update_entry(&trans, GET_BY_ID, id);
-  // TODO(sync): do we need to run ALL these checks, or is a mere version check
-  // good enough?
-  if (!ReverifyEntry(&trans, entry, &update_entry)) {
-    return SUCCESS_PROCESSED;  // the entry has become irrelevant
+  MutableEntry target_entry(&trans, GET_BY_ID, local_id);
+
+  // We need to run the Verify checks again; the world could have changed
+  // since VerifyUpdatesCommand.
+  if (!ReverifyEntry(&trans, update, &target_entry)) {
+    return SUCCESS_PROCESSED;  // The entry has become irrelevant.
   }
 
-  SyncerUtil::UpdateServerFieldsFromUpdate(&update_entry, entry, name);
+  // If we're repurposing an existing local entry with a new server ID,
+  // change the ID now, after we're sure that the update can succeed.
+  if (local_id != server_id) {
+    DCHECK(!update.deleted());
+    SyncerUtil::ChangeEntryIDAndUpdateChildren(&trans, &target_entry,
+        server_id);
+    // When IDs change, versions become irrelevant.  Forcing BASE_VERSION
+    // to zero would ensure that this update gets applied, but would indicate
+    // creation or undeletion if it were committed that way.  Instead, prefer
+    // forcing BASE_VERSION to entry.version() while also forcing
+    // IS_UNAPPLIED_UPDATE to true.  If the item is UNSYNCED, it's committable
+    // from the new state; it may commit before the conflict resolver gets
+    // a crack at it.
+    if (target_entry.Get(IS_UNSYNCED) || target_entry.Get(BASE_VERSION) > 0) {
+      // If either of these conditions are met, then we can expect valid client
+      // fields for this entry.  When BASE_VERSION is positive, consistency is
+      // enforced on the client fields at update-application time.  Otherwise,
+      // we leave the BASE_VERSION field alone; it'll get updated the first time
+      // we successfully apply this update.
+      target_entry.Put(BASE_VERSION, update.version());
+    }
+    // Force application of this update, no matter what.
+    target_entry.Put(IS_UNAPPLIED_UPDATE, true);
+  }
 
-  if (update_entry.Get(SERVER_VERSION) == update_entry.Get(BASE_VERSION) &&
-      !update_entry.Get(IS_UNSYNCED)) {
-      // It's largely OK if data doesn't match exactly since a future update
-      // will just clobber the data. Conflict resolution will overwrite and
-      // take one side as the winner and does not try to merge, so strict
-      // equality isn't necessary.
-      LOG_IF(ERROR, !SyncerUtil::ServerAndLocalEntriesMatch(&update_entry))
-          << update_entry;
+  SyncerUtil::UpdateServerFieldsFromUpdate(&target_entry, update, name);
+
+  if (target_entry.Get(SERVER_VERSION) == target_entry.Get(BASE_VERSION) &&
+      !target_entry.Get(IS_UNSYNCED) &&
+      !target_entry.Get(IS_UNAPPLIED_UPDATE)) {
+    // If these don't match, it means that we have a different view of the
+    // truth from other clients.  That's a sync bug, though we may be able
+    // to recover the next time this item commits.
+    LOG_IF(ERROR, !SyncerUtil::ServerAndLocalEntriesMatch(&target_entry))
+        << target_entry;
   }
   return SUCCESS_PROCESSED;
 }

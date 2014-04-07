@@ -4,17 +4,23 @@
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_VIEW_WIN_H_
 #define CHROME_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_VIEW_WIN_H_
+#pragma once
 
 #include <atlbase.h>
 #include <atlapp.h>
 #include <atlcrack.h>
 #include <atlmisc.h>
 
+#include <vector>
+
 #include "base/scoped_comptr_win.h"
 #include "base/scoped_ptr.h"
 #include "base/task.h"
+#include "chrome/browser/accessibility/browser_accessibility_manager.h"
 #include "chrome/browser/ime_input.h"
 #include "chrome/browser/renderer_host/render_widget_host_view.h"
+#include "chrome/common/notification_observer.h"
+#include "chrome/common/notification_registrar.h"
 #include "webkit/glue/webcursor.h"
 
 namespace gfx {
@@ -55,7 +61,9 @@ class RenderWidgetHostViewWin
     : public CWindowImpl<RenderWidgetHostViewWin,
                          CWindow,
                          RenderWidgetHostHWNDTraits>,
-      public RenderWidgetHostView {
+      public RenderWidgetHostView,
+      public NotificationObserver,
+      public BrowserAccessibilityDelegate {
  public:
   // The view will associate itself with the given widget.
   explicit RenderWidgetHostViewWin(RenderWidgetHost* widget);
@@ -113,6 +121,7 @@ class RenderWidgetHostViewWin
   // Implementation of RenderWidgetHostView:
   virtual void InitAsPopup(RenderWidgetHostView* parent_host_view,
                            const gfx::Rect& pos);
+  virtual void InitAsFullscreen(RenderWidgetHostView* parent_host_view);
   virtual RenderWidgetHost* GetRenderWidgetHost() const;
   virtual void DidBecomeSelected();
   virtual void WasHidden();
@@ -129,9 +138,12 @@ class RenderWidgetHostViewWin
   virtual gfx::Rect GetViewBounds() const;
   virtual void UpdateCursor(const WebCursor& cursor);
   virtual void SetIsLoading(bool is_loading);
-  virtual void IMEUpdateStatus(int control, const gfx::Rect& caret_rect);
-  virtual void DidPaintBackingStoreRects(const std::vector<gfx::Rect>& rects);
-  virtual void DidScrollBackingStoreRect(const gfx::Rect& rect, int dx, int dy);
+  virtual void ImeUpdateTextInputState(WebKit::WebTextInputType type,
+                                       const gfx::Rect& caret_rect);
+  virtual void ImeCancelComposition();
+  virtual void DidUpdateBackingStore(
+      const gfx::Rect& scroll_rect, int scroll_dx, int scroll_dy,
+      const std::vector<gfx::Rect>& copy_rects);
   virtual void RenderViewGone();
   virtual void WillDestroyRenderWidget(RenderWidgetHost* rwh);
   virtual void Destroy();
@@ -141,6 +153,17 @@ class RenderWidgetHostViewWin
   virtual void SetBackground(const SkBitmap& background);
   virtual bool ContainsNativeView(gfx::NativeView native_view) const;
   virtual void SetVisuallyDeemphasized(bool deemphasized);
+  virtual void OnAccessibilityNotifications(
+      const std::vector<ViewHostMsg_AccessibilityNotification_Params>& params);
+
+  // Implementation of NotificationObserver:
+  virtual void Observe(NotificationType type,
+                       const NotificationSource& source,
+                       const NotificationDetails& details);
+
+  // Implementation of BrowserAccessibilityDelegate:
+  virtual void SetAccessibilityFocus(int acc_obj_id);
+  virtual void AccessibilityDoDefaultAction(int acc_obj_id);
 
  protected:
   // Windows Message Handlers
@@ -172,7 +195,10 @@ class RenderWidgetHostViewWin
       UINT message, WPARAM wparam, LPARAM lparam, BOOL& handled);
   LRESULT OnWheelEvent(
       UINT message, WPARAM wparam, LPARAM lparam, BOOL& handled);
-  LRESULT OnMouseActivate(UINT, WPARAM, LPARAM, BOOL& handled);
+  LRESULT OnMouseActivate(UINT message,
+                          WPARAM wparam,
+                          LPARAM lparam,
+                          BOOL& handled);
   // Handle MSAA requests for accessibility information.
   LRESULT OnGetObject(UINT message, WPARAM wparam, LPARAM lparam,
                       BOOL& handled);
@@ -296,17 +322,12 @@ class RenderWidgetHostViewWin
 
   // Instance of accessibility information for the root of the MSAA
   // tree representation of the WebKit render tree.
-  ScopedComPtr<IAccessible> browser_accessibility_root_;
+  scoped_ptr<BrowserAccessibilityManager> browser_accessibility_manager_;
 
   // The time at which this view started displaying white pixels as a result of
   // not having anything to paint (empty backing store from renderer). This
   // value returns true for is_null() if we are not recording whiteout times.
   base::TimeTicks whiteout_start_time_;
-
-  // Whether the renderer is made accessible.
-  // TODO(jcampan): http://b/issue?id=1432077 This is a temporary work-around
-  // until that bug is fixed.
-  bool renderer_accessible_;
 
   // The time it took after this view was selected for it to be fully painted.
   base::TimeTicks tab_switch_paint_time_;
@@ -314,6 +335,13 @@ class RenderWidgetHostViewWin
   // True if we are showing a constrained window. We will grey out the view
   // whenever we paint.
   bool visually_deemphasized_;
+
+  // Registrar so we can listen to RENDERER_PROCESS_TERMINATED events.
+  NotificationRegistrar registrar_;
+
+  // Stores the current text input type received by ImeUpdateTextInputState()
+  // method.
+  WebKit::WebTextInputType text_input_type_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostViewWin);
 };

@@ -4,7 +4,29 @@
 
 #include "media/base/video_frame.h"
 
+#include "base/logging.h"
+
 namespace media {
+
+// static
+size_t VideoFrame::GetNumberOfPlanes(VideoFrame::Format format) {
+  switch (format) {
+    case VideoFrame::RGB555:
+    case VideoFrame::RGB565:
+    case VideoFrame::RGB24:
+    case VideoFrame::RGB32:
+    case VideoFrame::RGBA:
+    case VideoFrame::ASCII:
+      return VideoFrame::kNumRGBPlanes;
+    case VideoFrame::YV12:
+    case VideoFrame::YV16:
+      return VideoFrame::kNumYUVPlanes;
+    case VideoFrame::NV12:
+      return VideoFrame::kNumNV12Planes;
+    default:
+      return 0;
+  }
+}
 
 // static
 void VideoFrame::CreateFrame(VideoFrame::Format format,
@@ -18,7 +40,7 @@ void VideoFrame::CreateFrame(VideoFrame::Format format,
   DCHECK(frame_out);
   bool alloc_worked = false;
   scoped_refptr<VideoFrame> frame =
-      new VideoFrame(format, width, height);
+      new VideoFrame(VideoFrame::TYPE_SYSTEM_MEMORY, format, width, height);
   if (frame) {
     frame->SetTimestamp(timestamp);
     frame->SetDuration(duration);
@@ -38,6 +60,9 @@ void VideoFrame::CreateFrame(VideoFrame::Format format,
       case VideoFrame::YV16:
         alloc_worked = frame->AllocateYUV();
         break;
+      case VideoFrame::ASCII:
+        alloc_worked = frame->AllocateRGB(1u);
+        break;
       default:
         NOTREACHED();
         alloc_worked = false;
@@ -48,8 +73,59 @@ void VideoFrame::CreateFrame(VideoFrame::Format format,
 }
 
 // static
+void VideoFrame::CreateFrameExternal(SurfaceType type,
+                                     Format format,
+                                     size_t width,
+                                     size_t height,
+                                     size_t planes,
+                                     uint8* const data[kMaxPlanes],
+                                     const int32 strides[kMaxPlanes],
+                                     base::TimeDelta timestamp,
+                                     base::TimeDelta duration,
+                                     void* private_buffer,
+                                     scoped_refptr<VideoFrame>* frame_out) {
+  DCHECK(frame_out);
+  scoped_refptr<VideoFrame> frame =
+      new VideoFrame(type, format, width, height);
+  if (frame) {
+    frame->SetTimestamp(timestamp);
+    frame->SetDuration(duration);
+    frame->external_memory_ = true;
+    frame->planes_ = planes;
+    frame->private_buffer_ = private_buffer;
+    for (size_t i = 0; i < kMaxPlanes; ++i) {
+      frame->data_[i] = data[i];
+      frame->strides_[i] = strides[i];
+    }
+  }
+  *frame_out = frame;
+}
+
+// static
+void VideoFrame::CreateFrameGlTexture(Format format,
+                                      size_t width,
+                                      size_t height,
+                                      GlTexture const textures[kMaxPlanes],
+                                      scoped_refptr<VideoFrame>* frame_out) {
+  DCHECK(frame_out);
+  scoped_refptr<VideoFrame> frame =
+      new VideoFrame(TYPE_GL_TEXTURE, format, width, height);
+  if (frame) {
+    frame->external_memory_ = true;
+    frame->planes_ = GetNumberOfPlanes(format);
+    for (size_t i = 0; i < kMaxPlanes; ++i) {
+      frame->gl_textures_[i] = textures[i];
+      // TODO(hclam): Fix me for color format other than RGBA.
+      frame->strides_[i] = width;
+    }
+  }
+  *frame_out = frame;
+}
+
+// static
 void VideoFrame::CreateEmptyFrame(scoped_refptr<VideoFrame>* frame_out) {
-  *frame_out = new VideoFrame(VideoFrame::EMPTY, 0, 0);
+  *frame_out = new VideoFrame(VideoFrame::TYPE_SYSTEM_MEMORY,
+                              VideoFrame::EMPTY, 0, 0);
 }
 
 // static
@@ -147,22 +223,28 @@ bool VideoFrame::AllocateYUV() {
   return false;
 }
 
-VideoFrame::VideoFrame(VideoFrame::Format format,
+VideoFrame::VideoFrame(VideoFrame::SurfaceType type,
+                       VideoFrame::Format format,
                        size_t width,
                        size_t height) {
+  type_ = type;
   format_ = format;
   width_ = width;
   height_ = height;
   planes_ = 0;
   memset(&strides_, 0, sizeof(strides_));
   memset(&data_, 0, sizeof(data_));
+  memset(&gl_textures_, 0, sizeof(gl_textures_));
+  external_memory_ = false;
+  private_buffer_ = NULL;
 }
 
 VideoFrame::~VideoFrame() {
   // In multi-plane allocations, only a single block of memory is allocated
   // on the heap, and other |data| pointers point inside the same, single block
   // so just delete index 0.
-  delete[] data_[0];
+  if (!external_memory_)
+    delete[] data_[0];
 }
 
 bool VideoFrame::IsEndOfStream() const {

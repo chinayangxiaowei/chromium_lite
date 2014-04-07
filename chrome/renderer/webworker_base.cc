@@ -6,6 +6,7 @@
 
 #include "chrome/common/child_thread.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "chrome/common/webmessageportchannel_impl.h"
 #include "chrome/common/worker_messages.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
@@ -21,11 +22,13 @@ WebWorkerBase::WebWorkerBase(
     ChildThread* child_thread,
     unsigned long long document_id,
     int route_id,
-    int render_view_route_id)
+    int render_view_route_id,
+    int parent_appcache_host_id)
     : route_id_(route_id),
       render_view_route_id_(render_view_route_id),
       child_thread_(child_thread),
-      document_id_(document_id) {
+      document_id_(document_id),
+      parent_appcache_host_id_(parent_appcache_host_id) {
   if (route_id_ != MSG_ROUTING_NONE)
     child_thread_->AddRoute(route_id_, this);
 }
@@ -55,7 +58,8 @@ void WebWorkerBase::CreateWorkerContext(const GURL& script_url,
                                         const string16& name,
                                         const string16& user_agent,
                                         const string16& source_code,
-                                        int pending_route_id) {
+                                        int pending_route_id,
+                                        int64 script_resource_appcache_id) {
   DCHECK(route_id_ == MSG_ROUTING_NONE);
   ViewHostMsg_CreateWorker_Params params;
   params.url = script_url;
@@ -64,6 +68,8 @@ void WebWorkerBase::CreateWorkerContext(const GURL& script_url,
   params.document_id = document_id_;
   params.render_view_route_id = render_view_route_id_;
   params.route_id = pending_route_id;
+  params.parent_appcache_host_id = parent_appcache_host_id_;
+  params.script_resource_appcache_id = script_resource_appcache_id;
   IPC::Message* create_message = new ViewHostMsg_CreateWorker(
       params, &route_id_);
   child_thread_->Send(create_message);

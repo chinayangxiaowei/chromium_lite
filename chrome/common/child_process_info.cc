@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,11 +13,13 @@
 #include "base/process_util.h"
 #include "base/rand_util.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "grit/generated_resources.h"
 
 ChildProcessInfo::ChildProcessInfo(const ChildProcessInfo& original)
     : type_(original.type_),
       name_(original.name_),
+      version_(original.version_),
       id_(original.id_),
       process_(original.process_) {
 }
@@ -30,71 +32,93 @@ ChildProcessInfo& ChildProcessInfo::operator=(
   if (&original != this) {
     type_ = original.type_;
     name_ = original.name_;
+    version_ = original.version_;
     id_ = original.id_;
     process_ = original.process_;
   }
   return *this;
 }
 
-std::wstring ChildProcessInfo::GetTypeNameInEnglish(
+std::string ChildProcessInfo::GetTypeNameInEnglish(
     ChildProcessInfo::ProcessType type) {
   switch (type) {
     case BROWSER_PROCESS:
-      return L"Browser";
+      return "Browser";
     case RENDER_PROCESS:
-      return L"Tab";
+      return "Tab";
     case PLUGIN_PROCESS:
-      return L"Plug-in";
+      return "Plug-in";
     case WORKER_PROCESS:
-      return L"Web Worker";
+      return "Web Worker";
     case UTILITY_PROCESS:
-      return L"Utility";
+      return "Utility";
     case PROFILE_IMPORT_PROCESS:
-      return L"Profile Import helper";
+      return "Profile Import helper";
     case ZYGOTE_PROCESS:
-      return L"Zygote";
+      return "Zygote";
     case SANDBOX_HELPER_PROCESS:
-      return L"Sandbox helper";
+      return "Sandbox helper";
     case NACL_LOADER_PROCESS:
-      return L"Native Client module";
+      return "Native Client module";
     case NACL_BROKER_PROCESS:
-      return L"Native Client broker";
+      return "Native Client broker";
+    case GPU_PROCESS:
+      return "GPU";
     case UNKNOWN_PROCESS:
-      default:
+    default:
       DCHECK(false) << "Unknown child process type!";
-      return L"Unknown";
-    }
+      return "Unknown";
+  }
 }
 
-std::wstring ChildProcessInfo::GetLocalizedTitle() const {
-  std::wstring title = name_;
+string16 ChildProcessInfo::GetLocalizedTitle() const {
+  string16 title = WideToUTF16Hack(name_);
   if (type_ == ChildProcessInfo::PLUGIN_PROCESS && title.empty())
-    title = l10n_util::GetString(IDS_TASK_MANAGER_UNKNOWN_PLUGIN_NAME);
-
-  int message_id;
-  if (type_ == ChildProcessInfo::PLUGIN_PROCESS) {
-    message_id = IDS_TASK_MANAGER_PLUGIN_PREFIX;
-  } else if (type_ == ChildProcessInfo::WORKER_PROCESS) {
-    message_id = IDS_TASK_MANAGER_WORKER_PREFIX;
-  } else if (type_ == ChildProcessInfo::UTILITY_PROCESS) {
-    message_id = IDS_TASK_MANAGER_UTILITY_PREFIX;
-  } else if (type_ == ChildProcessInfo::PROFILE_IMPORT_PROCESS) {
-    message_id = IDS_TASK_MANAGER_PROFILE_IMPORT_PREFIX;
-  } else if (type_ == ChildProcessInfo::NACL_LOADER_PROCESS) {
-    message_id = IDS_TASK_MANAGER_NACL_PREFIX;
-  } else if (type_ == ChildProcessInfo::NACL_BROKER_PROCESS) {
-    message_id = IDS_TASK_MANAGER_NACL_BROKER_PREFIX;
-  } else {
-    DCHECK(false) << "Need localized name for child process type.";
-    return title;
-  }
+    title = l10n_util::GetStringUTF16(IDS_TASK_MANAGER_UNKNOWN_PLUGIN_NAME);
 
   // Explicitly mark name as LTR if there is no strong RTL character,
   // to avoid the wrong concatenation result similar to "!Yahoo! Mail: the
   // best web-based Email: NIGULP", in which "NIGULP" stands for the Hebrew
   // or Arabic word for "plugin".
   base::i18n::AdjustStringForLocaleDirection(title, &title);
-  return l10n_util::GetStringF(message_id, title);
+
+  switch (type_) {
+    case ChildProcessInfo::UTILITY_PROCESS:
+      return l10n_util::GetStringUTF16(IDS_TASK_MANAGER_UTILITY_PREFIX);
+
+    case ChildProcessInfo::PROFILE_IMPORT_PROCESS:
+      return l10n_util::GetStringUTF16(IDS_TASK_MANAGER_UTILITY_PREFIX);
+
+    case ChildProcessInfo::GPU_PROCESS:
+      return l10n_util::GetStringUTF16(IDS_TASK_MANAGER_GPU_PREFIX);
+
+    case ChildProcessInfo::NACL_BROKER_PROCESS:
+      return l10n_util::GetStringUTF16(IDS_TASK_MANAGER_NACL_BROKER_PREFIX);
+
+    case ChildProcessInfo::PLUGIN_PROCESS:
+      return l10n_util::GetStringFUTF16(IDS_TASK_MANAGER_PLUGIN_PREFIX,
+                                        title,
+                                        WideToUTF16Hack(version_));
+
+    case ChildProcessInfo::NACL_LOADER_PROCESS:
+      return l10n_util::GetStringFUTF16(IDS_TASK_MANAGER_NACL_PREFIX, title);
+
+    case ChildProcessInfo::WORKER_PROCESS:
+      return l10n_util::GetStringFUTF16(IDS_TASK_MANAGER_WORKER_PREFIX, title);
+
+    // These types don't need display names or get them from elsewhere.
+    case BROWSER_PROCESS:
+    case RENDER_PROCESS:
+    case ZYGOTE_PROCESS:
+    case SANDBOX_HELPER_PROCESS:
+      NOTREACHED();
+      break;
+
+    case UNKNOWN_PROCESS:
+      NOTREACHED() << "Need localized name for child process type.";
+  }
+
+  return title;
 }
 
 ChildProcessInfo::ChildProcessInfo(ProcessType type, int id) : type_(type) {

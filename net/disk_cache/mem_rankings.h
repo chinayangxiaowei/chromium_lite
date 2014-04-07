@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #ifndef NET_DISK_CACHE_MEM_RANKINGS_H__
 #define NET_DISK_CACHE_MEM_RANKINGS_H__
+#pragma once
 
 #include "base/basictypes.h"
 
@@ -36,7 +37,7 @@ class MemRankings {
   MemEntryImpl* head_;
   MemEntryImpl* tail_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(MemRankings);
+  DISALLOW_COPY_AND_ASSIGN(MemRankings);
 };
 
 }  // namespace disk_cache

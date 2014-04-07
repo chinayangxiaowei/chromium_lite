@@ -13,9 +13,6 @@
 
 #include <algorithm>
 
-#if defined(OS_WIN)
-#include "app/win_util.h"
-#endif
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
@@ -532,8 +529,8 @@ bool VisitedLinkMaster::WriteFullTable() {
               hash_table_, table_length_ * sizeof(Fingerprint));
 
   // The hash table may have shrunk, so make sure this is the end.
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE, new AsyncSetEndOfFile(file_));
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE, new AsyncSetEndOfFile(file_));
   return true;
 }
 
@@ -673,7 +670,7 @@ bool VisitedLinkMaster::CreateURLTable(int32 num_entries, bool init_to_empty) {
   if (!shared_memory_)
     return false;
 
-  if (!shared_memory_->Create(std::wstring() /* anonymous */,
+  if (!shared_memory_->Create(std::string() /* anonymous */,
                               false /* read-write */, false /* create */,
                               alloc_size)) {
     return false;
@@ -731,8 +728,8 @@ void VisitedLinkMaster::FreeURLTable() {
   if (!file_)
     return;
 
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE, new AsyncCloseHandle(file_));
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE, new AsyncCloseHandle(file_));
 }
 
 bool VisitedLinkMaster::ResizeTableIfNecessary() {
@@ -912,8 +909,8 @@ void VisitedLinkMaster::WriteToFile(FILE* file,
   posted_asynchronous_operation_ = true;
 #endif
 
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
       new AsyncWriter(file, offset, data, data_size));
 }
 
@@ -989,8 +986,8 @@ void VisitedLinkMaster::TableBuilder::OnComplete(bool success) {
 
   // Marshal to the main thread to notify the VisitedLinkMaster that the
   // rebuild is complete.
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &TableBuilder::OnCompleteMainThread));
 }
 

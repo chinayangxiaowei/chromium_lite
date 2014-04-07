@@ -14,6 +14,7 @@
 #include <glib.h>
 
 #include "base/scoped_ptr.h"
+#include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 
 namespace {
@@ -21,6 +22,7 @@ namespace {
 const int kDefaultPollingIntervalMilliseconds = 10 * 1000;  // 10s
 const int kNoChangePollingIntervalMilliseconds = 2 * 60 * 1000;  // 2 mins
 const int kTwoNoChangePollingIntervalMilliseconds = 10 * 60 * 1000;  // 10 mins
+const int kNoWifiPollingIntervalMilliseconds = 20 * 1000; // 20s
 
 const char kNetworkManagerServiceName[] = "org.freedesktop.NetworkManager";
 const char kNetworkManagerPath[] = "/org/freedesktop/NetworkManager";
@@ -148,10 +150,6 @@ bool NetworkManagerWlanApi::Init() {
   // Chrome DLL init code handles initializing the thread system, so rather than
   // get caught up with that nonsense here, lets just assert our requirement.
   CHECK(g_thread_supported());
-
-  // We should likely do this higher up too, the docs say it must only be done
-  // once but there's no way to know if it already was or not.
-  dbus_g_thread_init();
 
   // Get a connection to the session bus.
   connection_ = dbus_g_bus_get(DBUS_BUS_SYSTEM, &error_);
@@ -297,7 +295,7 @@ bool NetworkManagerWlanApi::GetAccessPointsForAdapter(
       std::string mac = g_value_get_string(&mac_g_value.v);
       ReplaceSubstringsAfterOffset(&mac, 0U, ":", "");
       std::vector<uint8> mac_bytes;
-      if (!HexStringToBytes(mac, &mac_bytes) || mac_bytes.size() != 6) {
+      if (!base::HexStringToBytes(mac, &mac_bytes) || mac_bytes.size() != 6) {
         DLOG(WARNING) << "Can't parse mac address (found " << mac_bytes.size()
                       << " bytes) so using raw string: " << mac;
         access_point_data.mac_address = UTF8ToUTF16(mac);
@@ -375,6 +373,7 @@ WifiDataProviderLinux::NewWlanApi() {
 PollingPolicyInterface* WifiDataProviderLinux::NewPollingPolicy() {
   return new GenericPollingPolicy<kDefaultPollingIntervalMilliseconds,
                                   kNoChangePollingIntervalMilliseconds,
-                                  kTwoNoChangePollingIntervalMilliseconds>;
+                                  kTwoNoChangePollingIntervalMilliseconds,
+                                  kNoWifiPollingIntervalMilliseconds>;
 }
 

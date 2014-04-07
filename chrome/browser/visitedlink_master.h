@@ -1,26 +1,25 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VISITEDLINK_MASTER_H__
 #define CHROME_BROWSER_VISITEDLINK_MASTER_H__
+#pragma once
 
 #if defined(OS_WIN)
 #include <windows.h>
 #endif
 #include <set>
-#include <string>
 #include <vector>
 
 #include "base/file_path.h"
+#include "base/gtest_prod_util.h"
 #include "base/ref_counted.h"
 #include "base/shared_memory.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/common/visitedlink_common.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 class GURL;
-class MessageLoop;
 class Profile;
 
 // Controls the link coloring database. The master controls all writing to the
@@ -121,9 +120,9 @@ class VisitedLinkMaster : public VisitedLinkCommon {
 #endif
 
  private:
-  FRIEND_TEST(VisitedLinkTest, Delete);
-  FRIEND_TEST(VisitedLinkTest, BigDelete);
-  FRIEND_TEST(VisitedLinkTest, BigImport);
+  FRIEND_TEST_ALL_PREFIXES(VisitedLinkTest, Delete);
+  FRIEND_TEST_ALL_PREFIXES(VisitedLinkTest, BigDelete);
+  FRIEND_TEST_ALL_PREFIXES(VisitedLinkTest, BigImport);
 
   // Object to rebuild the table on the history thread (see the .cc file).
   class TableBuilder;
@@ -369,7 +368,7 @@ class VisitedLinkMaster : public VisitedLinkCommon {
   // will be false in production.
   bool suppress_rebuild_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(VisitedLinkMaster);
+  DISALLOW_COPY_AND_ASSIGN(VisitedLinkMaster);
 };
 
 // NOTE: These methods are defined inline here, so we can share the compilation

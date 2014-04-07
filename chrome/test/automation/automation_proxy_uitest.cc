@@ -5,15 +5,14 @@
 #include <string>
 
 #include "app/app_switches.h"
-#include "app/l10n_util.h"
 #include "app/message_box_flags.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/i18n/rtl.h"
-#include "base/keyboard_codes.h"
 #include "base/string_util.h"
 #include "base/sys_info.h"
+#include "base/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/net/url_request_slow_http_job.h"
@@ -31,7 +30,7 @@
 #include "chrome/test/ui/ui_test.h"
 #include "gfx/rect.h"
 #include "net/base/net_util.h"
-#include "net/url_request/url_request_unittest.h"
+#include "net/test/test_server.h"
 #define GMOCK_MUTANT_INCLUDE_LATE_OBJECT_BINDING
 #include "testing/gmock_mutant.h"
 #include "views/event.h"
@@ -41,18 +40,11 @@ using testing::CreateFunctor;
 using testing::StrEq;
 using testing::_;
 
-#if defined(OS_MACOSX)
-#define MAYBE_WindowGetViewBounds DISABLED_WindowGetViewBounds
-#else
-#define MAYBE_WindowGetViewBounds WindowGetViewBounds
-#endif
-
 class AutomationProxyTest : public UITest {
  protected:
   AutomationProxyTest() {
     dom_automation_enabled_ = true;
-    launch_arguments_.AppendSwitchWithValue(switches::kLang,
-                                            L"en-US");
+    launch_arguments_.AppendSwitchASCII(switches::kLang, "en-US");
   }
 };
 
@@ -82,7 +74,12 @@ TEST_F(AutomationProxyTest, GetBrowserWindow) {
   }
 };
 
-// TODO(estade): port automation provider for this test to mac.
+#if defined(OS_MACOSX)
+// Missing automation provider support: http://crbug.com/45892
+#define MAYBE_WindowGetViewBounds FAILS_WindowGetViewBounds
+#else
+#define MAYBE_WindowGetViewBounds WindowGetViewBounds
+#endif
 TEST_F(AutomationProxyVisibleTest, MAYBE_WindowGetViewBounds) {
   {
     scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
@@ -107,12 +104,12 @@ TEST_F(AutomationProxyVisibleTest, MAYBE_WindowGetViewBounds) {
 
     gfx::Rect bounds;
     ASSERT_TRUE(window->GetViewBounds(VIEW_ID_TAB_0, &bounds, false));
-    EXPECT_GT(bounds.x(), 0);
     EXPECT_GT(bounds.width(), 0);
     EXPECT_GT(bounds.height(), 0);
 
     gfx::Rect bounds2;
     ASSERT_TRUE(window->GetViewBounds(VIEW_ID_TAB_LAST, &bounds2, false));
+    EXPECT_GT(bounds2.x(), 0);
     EXPECT_GT(bounds2.width(), 0);
     EXPECT_GT(bounds2.height(), 0);
 
@@ -347,8 +344,8 @@ class AutomationProxyTest2 : public AutomationProxyVisibleTest {
 
     document2_ = test_data_directory_.AppendASCII("title2.html");
     launch_arguments_ = CommandLine(CommandLine::ARGUMENTS_ONLY);
-    launch_arguments_.AppendLooseValue(document1_.ToWStringHack());
-    launch_arguments_.AppendLooseValue(document2_.ToWStringHack());
+    launch_arguments_.AppendArgPath(document1_);
+    launch_arguments_.AppendArgPath(document2_);
   }
 
   FilePath document1_;
@@ -414,6 +411,15 @@ TEST_F(AutomationProxyTest, Cookies) {
   ASSERT_FALSE(value_result.empty());
   EXPECT_TRUE(value_result.find("foo1=baz1") != std::string::npos);
   EXPECT_TRUE(value_result.find("foo2=baz2") != std::string::npos);
+
+  // test deleting cookie
+  ASSERT_TRUE(tab->SetCookie(url, "foo3=deleteme"));
+
+  ASSERT_TRUE(tab->GetCookieByName(url, "foo3", &value_result));
+  ASSERT_FALSE(value_result.empty());
+  ASSERT_STREQ("deleteme", value_result.c_str());
+
+  ASSERT_TRUE(tab->DeleteCookie(url, "foo3"));
 }
 
 TEST_F(AutomationProxyTest, NavigateToURLAsync) {
@@ -435,6 +441,7 @@ TEST_F(AutomationProxyTest, NavigateToURLAsync) {
 
 TEST_F(AutomationProxyTest, AcceleratorNewTab) {
   scoped_refptr<BrowserProxy> window(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(window.get());
 
   int tab_count = -1;
   ASSERT_TRUE(window->RunCommand(IDC_NEW_TAB));
@@ -443,6 +450,36 @@ TEST_F(AutomationProxyTest, AcceleratorNewTab) {
 
   scoped_refptr<TabProxy> tab(window->GetTab(1));
   ASSERT_TRUE(tab.get());
+}
+
+TEST_F(AutomationProxyTest, AcceleratorDownloads) {
+  scoped_refptr<BrowserProxy> window(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(window.get());
+
+  ASSERT_TRUE(window->RunCommand(IDC_SHOW_DOWNLOADS));
+
+  // We expect the RunCommand above to wait until the title is updated.
+  EXPECT_EQ(L"Downloads", GetActiveTabTitle());
+}
+
+TEST_F(AutomationProxyTest, AcceleratorExtensions) {
+  scoped_refptr<BrowserProxy> window(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(window.get());
+
+  ASSERT_TRUE(window->RunCommand(IDC_MANAGE_EXTENSIONS));
+
+  // We expect the RunCommand above to wait until the title is updated.
+  EXPECT_EQ(L"Extensions", GetActiveTabTitle());
+}
+
+TEST_F(AutomationProxyTest, AcceleratorHistory) {
+  scoped_refptr<BrowserProxy> window(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(window.get());
+
+  ASSERT_TRUE(window->RunCommand(IDC_SHOW_HISTORY));
+
+  // We expect the RunCommand above to wait until the title is updated.
+  EXPECT_EQ(L"History", GetActiveTabTitle());
 }
 
 class AutomationProxyTest4 : public UITest {
@@ -524,7 +561,7 @@ class AutomationProxyTest3 : public UITest {
 
     dom_automation_enabled_ = true;
     launch_arguments_ = CommandLine(CommandLine::ARGUMENTS_ONLY);
-    launch_arguments_.AppendLooseValue(document1_.ToWStringHack());
+    launch_arguments_.AppendArgPath(document1_);
   }
 
   FilePath document1_;
@@ -587,7 +624,7 @@ const char simple_data_url[] =
     "</body></html>";
 
 ExternalTabUITestMockClient::ExternalTabUITestMockClient(int execution_timeout)
-    : AutomationProxy(execution_timeout),
+    : AutomationProxy(execution_timeout, false),
       host_window_style_(WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE),
       host_window_(NULL) {
 }
@@ -739,7 +776,8 @@ void ExternalTabUITestMockClient::ConnectToExternalTab(gfx::NativeWindow parent,
   int tab_handle = 0;
 
   IPC::SyncMessage* message = new AutomationMsg_ConnectExternalTab(0,
-      attach_params.cookie, true, &tab_container, &tab_window, &tab_handle);
+      attach_params.cookie, true, NULL, &tab_container, &tab_window,
+      &tab_handle);
   channel_->Send(message);
 
   RECT rect;
@@ -800,7 +838,8 @@ AutomationProxy* ExternalTabUITest::CreateAutomationProxy(int exec_timeout) {
 }
 
 // Create with specifying a url
-TEST_F(ExternalTabUITest, CreateExternalTab1) {
+// Flaky, http://crbug.com/32293.
+TEST_F(ExternalTabUITest, FLAKY_CreateExternalTab1) {
   scoped_refptr<TabProxy> tab;
   TimedMessageLoopRunner loop(MessageLoop::current());
   ASSERT_THAT(mock_, testing::NotNull());
@@ -885,7 +924,8 @@ TEST_F(ExternalTabUITest, IncognitoMode) {
   tab = NULL;
 }
 
-TEST_F(ExternalTabUITest, TabPostMessage) {
+// FLAKY: http://crbug.com/44617
+TEST_F(ExternalTabUITest, FLAKY_TabPostMessage) {
   scoped_refptr<TabProxy> tab;
   TimedMessageLoopRunner loop(MessageLoop::current());
   ASSERT_THAT(mock_, testing::NotNull());
@@ -929,10 +969,10 @@ TEST_F(ExternalTabUITest, TabPostMessage) {
 }
 
 TEST_F(ExternalTabUITest, FLAKY_PostMessageTarget)  {
-  const wchar_t kDocRoot[] = L"chrome/test/data/external_tab";
-  scoped_refptr<HTTPTestServer> server(
-      HTTPTestServer::CreateServer(kDocRoot, NULL));
-  ASSERT_THAT(server.get(), testing::NotNull());
+  net::TestServer test_server(
+      net::TestServer::TYPE_HTTP,
+      FilePath(FILE_PATH_LITERAL("chrome/test/data/external_tab")));
+  ASSERT_TRUE(test_server.Start());
 
   scoped_refptr<TabProxy> tab;
   TimedMessageLoopRunner loop(MessageLoop::current());
@@ -970,7 +1010,8 @@ TEST_F(ExternalTabUITest, FLAKY_PostMessageTarget)  {
   loop.RunFor(action_max_timeout_ms());
 }
 
-TEST_F(ExternalTabUITest, HostNetworkStack) {
+// Flaky, http://crbug.com/42545.
+TEST_F(ExternalTabUITest, FLAKY_HostNetworkStack) {
   scoped_refptr<TabProxy> tab;
   TimedMessageLoopRunner loop(MessageLoop::current());
   ASSERT_THAT(mock_, testing::NotNull());
@@ -1239,10 +1280,6 @@ TEST_F(ExternalTabUITestPopupEnabled, UserGestureTargetBlank) {
       "<a href='http://foo.com/' target='_blank'>Link</a>";
   mock_->ServeHTMLData(1, main_url, main_html);
 
-  GURL foo_url("http://foo.com/");
-  std::string foo_html = "<!DOCTYPE html>Foo lives here";
-  mock_->ServeHTMLData(2, foo_url, foo_html);
-
   HWND foo_host = CreateWindowW(L"Button", L"foo_host",
       WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
       CW_USEDEFAULT,  CW_USEDEFAULT, NULL, NULL, NULL, NULL);
@@ -1254,15 +1291,11 @@ TEST_F(ExternalTabUITestPopupEnabled, UserGestureTargetBlank) {
 
   EXPECT_CALL(*mock_, OnAttachExternalTab(1, _))
       .Times(1)
-      .WillOnce(testing::WithArgs<1>(testing::Invoke(CreateFunctor(mock_,
-          &ExternalTabUITestMockClient::ConnectToExternalTab, foo_host))));
-
-  EXPECT_CALL(*mock_, OnLoad(2, _)).WillOnce(QUIT_LOOP_SOON(&loop, 500));
+      .WillOnce(QUIT_LOOP_SOON(&loop, 500));
 
   mock_->CreateTabWithUrl(main_url);
   loop.RunFor(action_max_timeout_ms());
 
-  EXPECT_CALL(*mock_, HandleClosed(2));
   EXPECT_CALL(*mock_, HandleClosed(1));
   ::DestroyWindow(foo_host);
   mock_->DestroyHostWindow();
@@ -1320,9 +1353,6 @@ TEST_F(AutomationProxyTest, AutocompleteParallelProxy) {
 #if defined(OS_MACOSX)
 // TODO(port): Implement AutocompleteEditProxy on Mac.
 #define AutocompleteMatchesTest DISABLED_AutocompleteMatchesTest
-#else
-// So flaky, http://crbug.com/19876.
-#define AutocompleteMatchesTest FLAKY_AutocompleteMatchesTest
 #endif
 TEST_F(AutomationProxyVisibleTest, AutocompleteMatchesTest) {
   scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
@@ -1330,8 +1360,9 @@ TEST_F(AutomationProxyVisibleTest, AutocompleteMatchesTest) {
   scoped_refptr<AutocompleteEditProxy> edit(
       browser->GetAutocompleteEdit());
   ASSERT_TRUE(edit.get());
-  EXPECT_TRUE(browser->ApplyAccelerator(IDC_FOCUS_LOCATION));
   EXPECT_TRUE(edit->is_valid());
+  EXPECT_TRUE(browser->ApplyAccelerator(IDC_FOCUS_LOCATION));
+  ASSERT_TRUE(edit->WaitForFocus());
   EXPECT_TRUE(edit->SetText(L"Roflcopter"));
   EXPECT_TRUE(edit->WaitForQuery(action_max_timeout_ms()));
   bool query_in_progress;
@@ -1342,14 +1373,8 @@ TEST_F(AutomationProxyVisibleTest, AutocompleteMatchesTest) {
   EXPECT_FALSE(matches.empty());
 }
 
-#if defined(OS_MACOSX)
-// Hangs on Mac, http://crbug.com/25039.
-#define AppModalDialogTest DISABLED_AppModalDialogTest
-#else
-// Flaky, http://crbug.com/5314.
-#define AppModalDialogTest FLAKY_AppModalDialogTest
-#endif
-TEST_F(AutomationProxyTest, AppModalDialogTest) {
+// Flaky, see http://crbug.com/25039.
+TEST_F(AutomationProxyTest, FLAKY_AppModalDialogTest) {
   scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(browser.get());
   scoped_refptr<TabProxy> tab(browser->GetTab(0));

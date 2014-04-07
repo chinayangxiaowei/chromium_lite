@@ -15,8 +15,9 @@
 #include "base/string_util.h"
 #include "base/process_util.h"
 #include "base/thread.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/browser_child_process_host.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/child_process_host.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/process_info_snapshot.h"
 #include "chrome/browser/renderer_host/backing_store_manager.h"
@@ -24,6 +25,7 @@
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
 #include "grit/chromium_strings.h"
 
@@ -84,7 +86,7 @@ void MemoryDetails::CollectProcessData(
     std::vector<ProcessMemoryInformation> child_info) {
   // This must be run on the file thread to avoid jank (|ProcessInfoSnapshot|
   // runs /bin/ps, which isn't instantaneous).
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   // Clear old data.
   for (size_t index = 0; index < MAX_BROWSERS; index++)
@@ -105,8 +107,8 @@ void MemoryDetails::CollectProcessData(
                                           NULL);
 
     while (const base::ProcessEntry* entry = process_it.NextProcessEntry()) {
-      pids_by_browser[index].push_back(entry->pid);
-      all_pids.push_back(entry->pid);
+      pids_by_browser[index].push_back(entry->pid());
+      all_pids.push_back(entry->pid());
     }
   }
 
@@ -116,8 +118,8 @@ void MemoryDetails::CollectProcessData(
     base::NamedProcessIterator helper_it(chrome::kHelperProcessExecutableName,
                                          NULL);
     while (const base::ProcessEntry* entry = helper_it.NextProcessEntry()) {
-      helper_pids.push_back(entry->pid);
-      all_pids.push_back(entry->pid);
+      helper_pids.push_back(entry->pid());
+      all_pids.push_back(entry->pid());
     }
   }
 
@@ -181,8 +183,8 @@ void MemoryDetails::CollectProcessData(
   }
 
   // Finally return to the browser thread.
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &MemoryDetails::CollectChildInfoOnUIThread));
 }
 
@@ -197,11 +199,10 @@ void MemoryDetails::CollectProcessDataChrome(
   else
     info.type = ChildProcessInfo::UNKNOWN_PROCESS;
 
-  scoped_ptr<FileVersionInfo> version_info(
-      FileVersionInfo::CreateFileVersionInfoForCurrentModule());
-  if (version_info.get()) {
-    info.product_name = version_info->product_name();
-    info.version = version_info->product_version();
+  chrome::VersionInfo version_info;
+  if (version_info.is_valid()) {
+    info.product_name = ASCIIToWide(version_info.Name());
+    info.version = ASCIIToWide(version_info.Version());
   } else {
     info.product_name = process_data_[CHROME_BROWSER].name;
     info.version = L"";

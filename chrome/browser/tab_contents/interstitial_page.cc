@@ -8,6 +8,7 @@
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "base/thread.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_thread.h"
@@ -28,6 +29,7 @@
 #if defined(TOOLKIT_GTK)
 #include "chrome/browser/gtk/gtk_theme_provider.h"
 #endif
+#include "chrome/common/net/url_request_context_getter.h"
 #include "chrome/common/notification_service.h"
 #include "grit/browser_resources.h"
 #include "net/base/escape.h"
@@ -86,15 +88,21 @@ class InterstitialPage::InterstitialPageRVHViewDelegate
   explicit InterstitialPageRVHViewDelegate(InterstitialPage* page);
 
   // RenderViewHostDelegate::View implementation:
-  virtual void CreateNewWindow(int route_id);
+  virtual void CreateNewWindow(
+      int route_id,
+      WindowContainerType window_container_type,
+      const string16& frame_name);
   virtual void CreateNewWidget(int route_id,
                                WebKit::WebPopupType popup_type);
+  virtual void CreateNewFullscreenWidget(int route_id,
+                                         WebKit::WebPopupType popup_type);
   virtual void ShowCreatedWindow(int route_id,
                                  WindowOpenDisposition disposition,
                                  const gfx::Rect& initial_pos,
                                  bool user_gesture);
   virtual void ShowCreatedWidget(int route_id,
                                  const gfx::Rect& initial_pos);
+  virtual void ShowCreatedFullscreenWidget(int route_id);
   virtual void ShowContextMenu(const ContextMenuParams& params);
   virtual void StartDragging(const WebDropData& drop_data,
                              WebDragOperationsMask operations_allowed,
@@ -103,11 +111,17 @@ class InterstitialPage::InterstitialPageRVHViewDelegate
   virtual void UpdateDragCursor(WebDragOperation operation);
   virtual void GotFocus();
   virtual void TakeFocus(bool reverse);
+  virtual void LostCapture();
+  virtual void Activate();
+  virtual void Deactivate();
   virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
                                       bool* is_keyboard_shortcut);
   virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
-  virtual void HandleMouseEvent();
+  virtual void HandleMouseMove();
+  virtual void HandleMouseDown();
   virtual void HandleMouseLeave();
+  virtual void HandleMouseUp();
+  virtual void HandleMouseActivate();
   virtual void OnFindReply(int request_id,
                            int number_of_matches,
                            const gfx::Rect& selection_rect,
@@ -132,6 +146,7 @@ InterstitialPage::InterstitialPage(TabContents* tab,
       url_(url),
       new_navigation_(new_navigation),
       should_discard_pending_nav_entry_(new_navigation),
+      reload_on_dont_proceed_(false),
       enabled_(true),
       action_taken_(NO_ACTION),
       render_view_host_(NULL),
@@ -154,20 +169,22 @@ InterstitialPage::InterstitialPage(TabContents* tab,
 
 InterstitialPage::~InterstitialPage() {
   InterstitialPageMap::iterator iter = tab_to_interstitial_page_->find(tab_);
-  DCHECK(iter != tab_to_interstitial_page_->end()) <<
-      "InterstitialPage missing from map. Please add a comment to the bug "
-      "http://crbug.com/9442 with the URL you were visiting";
+  DCHECK(iter != tab_to_interstitial_page_->end());
   if (iter != tab_to_interstitial_page_->end())
     tab_to_interstitial_page_->erase(iter);
   DCHECK(!render_view_host_);
 }
 
 void InterstitialPage::Show() {
-  // If an interstitial is already showing, close it before showing the new one.
+  // If an interstitial is already showing or about to be shown, close it before
+  // showing the new one.
   // Be careful not to take an action on the old interstitial more than once.
-  if (tab_->interstitial_page()) {
-    if (tab_->interstitial_page()->action_taken_ != NO_ACTION) {
-      tab_->interstitial_page()->Hide();
+  InterstitialPageMap::const_iterator iter =
+      tab_to_interstitial_page_->find(tab_);
+  if (iter != tab_to_interstitial_page_->end()) {
+    InterstitialPage* interstitial = iter->second;
+    if (interstitial->action_taken_ != NO_ACTION) {
+      interstitial->Hide();
     } else {
       // If we are currently showing an interstitial page for which we created
       // a transient entry and a new interstitial is shown as the result of a
@@ -175,9 +192,9 @@ void InterstitialPage::Show() {
       // been discarded and a new pending navigation entry created.
       // So we should not discard that new pending navigation entry.
       // See http://crbug.com/9791
-      if (new_navigation_ && tab_->interstitial_page()->new_navigation_)
-        tab_->interstitial_page()->should_discard_pending_nav_entry_= false;
-      tab_->interstitial_page()->DontProceed();
+      if (new_navigation_ && interstitial->new_navigation_)
+        interstitial->should_discard_pending_nav_entry_= false;
+      interstitial->DontProceed();
     }
   }
 
@@ -192,8 +209,7 @@ void InterstitialPage::Show() {
       Source<RenderWidgetHost>(tab_->render_view_host()));
 
   // Update the tab_to_interstitial_page_ map.
-  InterstitialPageMap::const_iterator iter =
-      tab_to_interstitial_page_->find(tab_);
+  iter = tab_to_interstitial_page_->find(tab_);
   DCHECK(iter == tab_to_interstitial_page_->end());
   (*tab_to_interstitial_page_)[tab_] = this;
 
@@ -386,6 +402,10 @@ void InterstitialPage::DomOperationResponse(const std::string& json_string,
     CommandReceived(json_string);
 }
 
+RendererPreferences InterstitialPage::GetRendererPrefs(Profile* profile) const {
+  return renderer_preferences_;
+}
+
 RenderViewHost* InterstitialPage::CreateRenderViewHost() {
   RenderViewHost* render_view_host = new RenderViewHost(
       SiteInstance::CreateSiteInstance(tab()->profile()),
@@ -400,12 +420,7 @@ TabContentsView* InterstitialPage::CreateTabContentsView() {
   render_view_host_->set_view(view);
   render_view_host_->AllowBindings(BindingsPolicy::DOM_AUTOMATION);
 
-  scoped_refptr<URLRequestContextGetter> request_context =
-      tab()->request_context();
-  if (!request_context.get())
-    request_context = tab()->profile()->GetRequestContext();
-
-  render_view_host_->CreateRenderView(request_context.get());
+  render_view_host_->CreateRenderView(string16());
   view->SetSize(tab_contents_view->GetContainerSize());
   // Don't show the interstitial until we have navigated to it.
   view->Hide();
@@ -464,6 +479,9 @@ void InterstitialPage::DontProceed() {
     tab_->controller().DiscardNonCommittedEntries();
   }
 
+  if (reload_on_dont_proceed_)
+    tab_->controller().Reload(true);
+
   Hide();
   // WARNING: we are now deleted!
 }
@@ -483,7 +501,7 @@ void InterstitialPage::CancelForNavigation() {
 }
 
 void InterstitialPage::SetSize(const gfx::Size& size) {
-#if defined(OS_WIN) || defined(OS_LINUX)
+#if !defined(OS_MACOSX)
   // When a tab is closed, we might be resized after our view was NULLed
   // (typically if there was an info-bar).
   if (render_view_host_->view())
@@ -509,7 +527,7 @@ void InterstitialPage::Disable() {
 
 void InterstitialPage::TakeActionOnResourceDispatcher(
     ResourceRequestAction action) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI)) <<
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI)) <<
       "TakeActionOnResourceDispatcher should be called on the main thread.";
 
   if (action == CANCEL || action == RESUME) {
@@ -528,8 +546,8 @@ void InterstitialPage::TakeActionOnResourceDispatcher(
   if (!rvh || !g_browser_process->resource_dispatcher_host())
     return;
 
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       new ResourceRequestTask(original_child_id_, original_rvh_id_, action));
 }
 
@@ -557,13 +575,22 @@ InterstitialPage::InterstitialPageRVHViewDelegate::
 }
 
 void InterstitialPage::InterstitialPageRVHViewDelegate::CreateNewWindow(
-    int route_id) {
+    int route_id,
+    WindowContainerType window_container_type,
+    const string16& frame_name) {
   NOTREACHED() << "InterstitialPage does not support showing popups yet.";
 }
 
 void InterstitialPage::InterstitialPageRVHViewDelegate::CreateNewWidget(
     int route_id, WebKit::WebPopupType popup_type) {
   NOTREACHED() << "InterstitialPage does not support showing drop-downs yet.";
+}
+
+void
+InterstitialPage::InterstitialPageRVHViewDelegate::CreateNewFullscreenWidget(
+    int route_id, WebKit::WebPopupType popup_type) {
+  NOTREACHED()
+      << "InterstitialPage does not support showing full screen popups.";
 }
 
 void InterstitialPage::InterstitialPageRVHViewDelegate::ShowCreatedWindow(
@@ -575,6 +602,13 @@ void InterstitialPage::InterstitialPageRVHViewDelegate::ShowCreatedWindow(
 void InterstitialPage::InterstitialPageRVHViewDelegate::ShowCreatedWidget(
     int route_id, const gfx::Rect& initial_pos) {
   NOTREACHED() << "InterstitialPage does not support showing drop-downs yet.";
+}
+
+void
+InterstitialPage::InterstitialPageRVHViewDelegate::ShowCreatedFullscreenWidget(
+    int route_id) {
+  NOTREACHED()
+      << "InterstitialPage does not support showing full screen popups.";
 }
 
 void InterstitialPage::InterstitialPageRVHViewDelegate::ShowContextMenu(
@@ -607,6 +641,19 @@ void InterstitialPage::InterstitialPageRVHViewDelegate::TakeFocus(
     interstitial_page_->tab()->GetViewDelegate()->TakeFocus(reverse);
 }
 
+void InterstitialPage::InterstitialPageRVHViewDelegate::LostCapture() {
+}
+
+void InterstitialPage::InterstitialPageRVHViewDelegate::Activate() {
+  if (interstitial_page_->tab() && interstitial_page_->tab()->GetViewDelegate())
+    interstitial_page_->tab()->GetViewDelegate()->Activate();
+}
+
+void InterstitialPage::InterstitialPageRVHViewDelegate::Deactivate() {
+  if (interstitial_page_->tab() && interstitial_page_->tab()->GetViewDelegate())
+    interstitial_page_->tab()->GetViewDelegate()->Deactivate();
+}
+
 bool InterstitialPage::InterstitialPageRVHViewDelegate::PreHandleKeyboardEvent(
     const NativeWebKeyboardEvent& event, bool* is_keyboard_shortcut) {
   if (interstitial_page_->tab() && interstitial_page_->tab()->GetViewDelegate())
@@ -621,14 +668,25 @@ void InterstitialPage::InterstitialPageRVHViewDelegate::HandleKeyboardEvent(
     interstitial_page_->tab()->GetViewDelegate()->HandleKeyboardEvent(event);
 }
 
-void InterstitialPage::InterstitialPageRVHViewDelegate::HandleMouseEvent() {
+void InterstitialPage::InterstitialPageRVHViewDelegate::HandleMouseMove() {
   if (interstitial_page_->tab() && interstitial_page_->tab()->GetViewDelegate())
-    interstitial_page_->tab()->GetViewDelegate()->HandleMouseEvent();
+    interstitial_page_->tab()->GetViewDelegate()->HandleMouseMove();
+}
+
+void InterstitialPage::InterstitialPageRVHViewDelegate::HandleMouseDown() {
+  if (interstitial_page_->tab() && interstitial_page_->tab()->GetViewDelegate())
+    interstitial_page_->tab()->GetViewDelegate()->HandleMouseDown();
 }
 
 void InterstitialPage::InterstitialPageRVHViewDelegate::HandleMouseLeave() {
   if (interstitial_page_->tab() && interstitial_page_->tab()->GetViewDelegate())
     interstitial_page_->tab()->GetViewDelegate()->HandleMouseLeave();
+}
+
+void InterstitialPage::InterstitialPageRVHViewDelegate::HandleMouseUp() {
+}
+
+void InterstitialPage::InterstitialPageRVHViewDelegate::HandleMouseActivate() {
 }
 
 void InterstitialPage::InterstitialPageRVHViewDelegate::OnFindReply(

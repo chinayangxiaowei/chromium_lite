@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 #include <atlbase.h>
 #include <atlcom.h>
+
 #include "app/win_util.h"
+#include "chrome_frame/test/test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gmock_mutant.h"
@@ -12,6 +14,8 @@
 #include "chrome_frame/urlmon_url_request_private.h"
 #include "chrome_frame/test/chrome_frame_test_utils.h"
 #include "chrome_frame/test/http_server.h"
+#include "chrome_frame/test/test_with_web_server.h"
+
 using testing::CreateFunctor;
 
 const int kChromeFrameLongNavigationTimeoutInSeconds = 10;
@@ -30,63 +34,6 @@ static void AppendToStream(IStream* s, void* buffer, ULONG cb) {
   // Seek to original position.
   ASSERT_HRESULT_SUCCEEDED(s->Seek(current_pos, STREAM_SEEK_SET, NULL));
 }
-
-TEST(UrlmonUrlRequestCache, ReadWrite) {
-  UrlmonUrlRequest::Cache cache;
-  ScopedComPtr<IStream> stream;
-  ASSERT_HRESULT_SUCCEEDED(::CreateStreamOnHGlobal(0, TRUE, stream.Receive()));
-  cache.Append(stream);
-  ASSERT_EQ(0, cache.size());
-  size_t bytes_read;
-  const size_t BUF_SIZE = UrlmonUrlRequest::Cache::BUF_SIZE;
-  scoped_array<uint8> buffer(new uint8[BUF_SIZE * 2]);
-
-  AppendToStream(stream, "hello", 5u);
-  ASSERT_TRUE(cache.Append(stream));
-  ASSERT_HRESULT_SUCCEEDED(cache.Read(buffer.get(), 2u, &bytes_read));
-  ASSERT_EQ(2, bytes_read);
-  ASSERT_EQ('h', buffer[0]);
-  ASSERT_EQ('e', buffer[1]);
-
-  AppendToStream(stream, "world\0", 6u);
-  ASSERT_TRUE(cache.Append(stream));
-  ASSERT_HRESULT_SUCCEEDED(cache.Read(buffer.get(), 1u, &bytes_read));
-  ASSERT_EQ(1, bytes_read);
-  ASSERT_EQ('l', buffer[0]);
-  ASSERT_HRESULT_SUCCEEDED(cache.Read(buffer.get(), 100u, &bytes_read));
-  ASSERT_EQ(8, bytes_read);
-  ASSERT_STREQ("loworld", (const char*)buffer.get());
-
-  memset(buffer.get(), '1', BUF_SIZE / 2);
-  AppendToStream(stream, buffer.get(), BUF_SIZE / 2);
-  cache.Append(stream);
-  memset(buffer.get(), '2', BUF_SIZE);
-  AppendToStream(stream, buffer.get(), BUF_SIZE);
-  memset(buffer.get(), '3', BUF_SIZE * 3 / 4);
-  AppendToStream(stream, buffer.get(), BUF_SIZE * 3 / 4);
-  cache.Append(stream);
-
-  cache.Read(buffer.get(), BUF_SIZE / 2, &bytes_read);
-  ASSERT_EQ(BUF_SIZE / 2, bytes_read);
-  ASSERT_EQ('1', buffer[0]);
-  ASSERT_EQ('1', buffer[BUF_SIZE / 4]);
-  ASSERT_EQ('1', buffer[BUF_SIZE /2 - 1]);
-
-  cache.Read(buffer.get(), BUF_SIZE, &bytes_read);
-  ASSERT_EQ(BUF_SIZE, bytes_read);
-  ASSERT_EQ('2', buffer[0]);
-  ASSERT_EQ('2', buffer[BUF_SIZE /2]);
-  ASSERT_EQ('2', buffer[BUF_SIZE - 1]);
-
-  cache.Read(buffer.get(), BUF_SIZE * 3 / 4, &bytes_read);
-  ASSERT_EQ(BUF_SIZE * 3 / 4, bytes_read);
-  ASSERT_EQ('3', buffer[0]);
-  ASSERT_EQ('3', buffer[BUF_SIZE / 2]);
-  ASSERT_EQ('3', buffer[BUF_SIZE * 3 / 4 - 1]);
-  cache.Read(buffer.get(), 11, &bytes_read);
-  ASSERT_EQ(0, bytes_read);
-}
-
 
 class MockUrlDelegate : public PluginUrlRequestDelegate {
  public:
@@ -120,19 +67,23 @@ class MockUrlDelegate : public PluginUrlRequestDelegate {
 // Simplest UrlmonUrlRequest. Retrieve a file from local web server.
 TEST(UrlmonUrlRequestTest, Simple1) {
   MockUrlDelegate mock;
-  ChromeFrameHTTPServer server;
   chrome_frame_test::TimedMsgLoop loop;
+
+  testing::StrictMock<MockWebServer> mock_server(1337, L"127.0.0.1",
+      chrome_frame_test::GetTestDataFolder());
+  mock_server.ExpectAndServeAnyRequests(CFInvocation(CFInvocation::NONE));
+
   win_util::ScopedCOMInitializer init_com;
   CComObjectStackEx<UrlmonUrlRequest> request;
 
-  server.SetUp();
   request.AddRef();
   request.Initialize(&mock, 1,  // request_id
-      server.Resolve(L"files/chrome_frame_window_open.html").spec(),
+      WideToUTF8(mock_server.Resolve(L"chrome_frame_window_open.html")),
       "get",
       "",      // referrer
       "",      // extra request
       NULL,    // upload data
+      ResourceType::MAIN_FRAME,  // resource type
       true);   // frame busting
 
   testing::InSequence s;
@@ -156,26 +107,30 @@ TEST(UrlmonUrlRequestTest, Simple1) {
   request.Start();
   loop.RunFor(kChromeFrameLongNavigationTimeoutInSeconds);
   request.Release();
-  server.TearDown();
 }
 
 // Same as Simple1 except we use the HEAD verb to fetch only the headers
 // from the server.
 TEST(UrlmonUrlRequestTest, Head) {
   MockUrlDelegate mock;
-  ChromeFrameHTTPServer server;
   chrome_frame_test::TimedMsgLoop loop;
+  // Use SimpleWebServer instead of the python server to support HEAD
+  // requests.
+  test_server::SimpleWebServer server(13337);
+  test_server::SimpleResponse head_response("/head", "");
+  server.AddResponse(&head_response);
+
   win_util::ScopedCOMInitializer init_com;
   CComObjectStackEx<UrlmonUrlRequest> request;
 
-  server.SetUp();
   request.AddRef();
   request.Initialize(&mock, 1,  // request_id
-      server.Resolve(L"files/chrome_frame_window_open.html").spec(),
+      "http://localhost:13337/head",
       "head",
       "",      // referrer
       "",      // extra request
       NULL,    // upload data
+      ResourceType::MAIN_FRAME,  // resource type
       true);   // frame busting
 
   testing::InSequence s;
@@ -184,7 +139,6 @@ TEST(UrlmonUrlRequestTest, Head) {
     .Times(1)
     .WillOnce(testing::IgnoreResult(testing::InvokeWithoutArgs(CreateFunctor(
         &request, &UrlmonUrlRequest::Read, 512))));
-
 
   // For HEAD requests we don't expect content reads.
   EXPECT_CALL(mock, OnReadComplete(1, testing::_)).Times(0);
@@ -196,7 +150,6 @@ TEST(UrlmonUrlRequestTest, Head) {
   request.Start();
   loop.RunFor(kChromeFrameLongNavigationTimeoutInSeconds);
   request.Release();
-  server.TearDown();
 }
 
 TEST(UrlmonUrlRequestTest, UnreachableUrl) {
@@ -204,10 +157,13 @@ TEST(UrlmonUrlRequestTest, UnreachableUrl) {
   chrome_frame_test::TimedMsgLoop loop;
   win_util::ScopedCOMInitializer init_com;
   CComObjectStackEx<UrlmonUrlRequest> request;
-  ChromeFrameHTTPServer server;
-  server.SetUp();
-  GURL unreachable = server.Resolve(L"files/non_existing.html");
-  server.TearDown();
+
+  testing::StrictMock<MockWebServer> mock_server(1337, L"127.0.0.1",
+      chrome_frame_test::GetTestDataFolder());
+  mock_server.ExpectAndServeAnyRequests(CFInvocation(CFInvocation::NONE));
+
+  GURL unreachable(WideToUTF8(mock_server.Resolve(
+      L"non_existing.html")));
 
   request.AddRef();
   request.Initialize(&mock, 1,  // request_id
@@ -215,12 +171,20 @@ TEST(UrlmonUrlRequestTest, UnreachableUrl) {
       "",      // referrer
       "",      // extra request
       NULL,    // upload data
+      ResourceType::MAIN_FRAME,  // resource type
       true);   // frame busting
+
+  // Expect headers
+  EXPECT_CALL(mock, OnResponseStarted(1, testing::_,
+                                      testing::StartsWith("HTTP/1.1 404"),
+                                      testing::_, testing::_, testing::_,
+                                      testing::_))
+    .Times(1)
+    .WillOnce(QUIT_LOOP_SOON(loop, 2));
 
   EXPECT_CALL(mock, OnResponseEnd(1, testing::Property(
               &URLRequestStatus::os_error, net::ERR_TUNNEL_CONNECTION_FAILED)))
-    .Times(1)
-    .WillOnce(QUIT_LOOP_SOON(loop, 2));
+    .Times(testing::AtMost(1));
 
   request.Start();
   loop.RunFor(kChromeFrameLongNavigationTimeoutInSeconds);
@@ -229,18 +193,22 @@ TEST(UrlmonUrlRequestTest, UnreachableUrl) {
 
 TEST(UrlmonUrlRequestTest, ZeroLengthResponse) {
   MockUrlDelegate mock;
-  ChromeFrameHTTPServer server;
   chrome_frame_test::TimedMsgLoop loop;
+
+  testing::StrictMock<MockWebServer> mock_server(1337, L"127.0.0.1",
+      chrome_frame_test::GetTestDataFolder());
+  mock_server.ExpectAndServeAnyRequests(CFInvocation(CFInvocation::NONE));
+
   win_util::ScopedCOMInitializer init_com;
   CComObjectStackEx<UrlmonUrlRequest> request;
 
-  server.SetUp();
   request.AddRef();
   request.Initialize(&mock, 1,  // request_id
-      server.Resolve(L"files/empty.html").spec(), "get",
+      WideToUTF8(mock_server.Resolve(L"empty.html")), "get",
       "",      // referrer
       "",      // extra request
       NULL,    // upload data
+      ResourceType::MAIN_FRAME,  // resource type
       true);   // frame busting
 
   // Expect headers
@@ -264,7 +232,6 @@ TEST(UrlmonUrlRequestTest, ZeroLengthResponse) {
       .Times(1);
   request.Read(512);
   request.Release();
-  server.TearDown();
 }
 
 ACTION_P4(ManagerRead, loop, mgr, request_id, bytes_to_read) {
@@ -281,13 +248,17 @@ ACTION_P3(ManagerEndRequest, loop, mgr, request_id) {
 // Simplest test - retrieve file from local web server.
 TEST(UrlmonUrlRequestManagerTest, Simple1) {
   MockUrlDelegate mock;
-  ChromeFrameHTTPServer server;
   chrome_frame_test::TimedMsgLoop loop;
-  server.SetUp();
+
+  testing::StrictMock<MockWebServer> mock_server(1337, L"127.0.0.1",
+      chrome_frame_test::GetTestDataFolder());
+  mock_server.ExpectAndServeAnyRequests(CFInvocation(CFInvocation::NONE));
+
   scoped_ptr<UrlmonUrlRequestManager> mgr(new UrlmonUrlRequestManager());
   mgr->set_delegate(&mock);
   IPC::AutomationURLRequest r1 = {
-      server.Resolve(L"files/chrome_frame_window_open.html").spec(), "get" };
+      WideToUTF8(mock_server.Resolve(L"chrome_frame_window_open.html")),
+      "get" };
 
   EXPECT_CALL(mock, OnResponseStarted(1, testing::_, testing::_, testing::_,
                              testing::_, testing::_, testing::_))
@@ -306,18 +277,21 @@ TEST(UrlmonUrlRequestManagerTest, Simple1) {
   mgr->StartUrlRequest(0, 1, r1);
   loop.RunFor(kChromeFrameLongNavigationTimeoutInSeconds);
   mgr.reset();
-  server.TearDown();
 }
 
 TEST(UrlmonUrlRequestManagerTest, Abort1) {
   MockUrlDelegate mock;
-  ChromeFrameHTTPServer server;
   chrome_frame_test::TimedMsgLoop loop;
-  server.SetUp();
+
+  testing::StrictMock<MockWebServer> mock_server(1337, L"127.0.0.1",
+      chrome_frame_test::GetTestDataFolder());
+  mock_server.ExpectAndServeAnyRequests(CFInvocation(CFInvocation::NONE));
+
   scoped_ptr<UrlmonUrlRequestManager> mgr(new UrlmonUrlRequestManager());
   mgr->set_delegate(&mock);
   IPC::AutomationURLRequest r1 = {
-      server.Resolve(L"files/chrome_frame_window_open.html").spec(), "get" };
+      WideToUTF8(mock_server.Resolve(L"chrome_frame_window_open.html")),
+      "get" };
 
   EXPECT_CALL(mock, OnResponseStarted(1, testing::_, testing::_, testing::_,
                                testing::_, testing::_, testing::_))
@@ -335,6 +309,5 @@ TEST(UrlmonUrlRequestManagerTest, Abort1) {
   mgr->StartUrlRequest(0, 1, r1);
   loop.RunFor(kChromeFrameLongNavigationTimeoutInSeconds);
   mgr.reset();
-  server.TearDown();
 }
 

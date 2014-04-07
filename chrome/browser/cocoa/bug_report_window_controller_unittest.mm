@@ -5,11 +5,14 @@
 #import <Cocoa/Cocoa.h>
 
 #include "base/ref_counted.h"
+#include "chrome/browser/browser_thread.h"
 #import "chrome/browser/cocoa/bug_report_window_controller.h"
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/renderer_host/test/test_render_view_host.h"
 #include "chrome/browser/tab_contents/test_tab_contents.h"
 #include "chrome/browser/profile.h"
+#include "chrome/test/testing_profile.h"
+#import "testing/gtest_mac.h"
 
 namespace {
 
@@ -18,7 +21,7 @@ class BugReportWindowControllerUnittest : public RenderViewHostTestHarness {
 
 // See http://crbug.com/29019 for why it's disabled.
 TEST_F(BugReportWindowControllerUnittest, DISABLED_ReportBugWithNewTabPageOpen) {
-  ChromeThread ui_thread(ChromeThread::UI, MessageLoop::current());
+  BrowserThread ui_thread(BrowserThread::UI, MessageLoop::current());
   // Create a "chrome://newtab" test tab.  SiteInstance will be deleted when
   // tabContents is deleted.
   SiteInstance* instance =
@@ -39,8 +42,8 @@ TEST_F(BugReportWindowControllerUnittest, DISABLED_ReportBugWithNewTabPageOpen) 
   EXPECT_FALSE([controller isPhishingReport]);
 
   // Make sure that the tab was correctly recorded.
-  EXPECT_TRUE([[controller pageURL] isEqualToString:@"chrome://newtab/"]);
-  EXPECT_TRUE([[controller pageTitle] isEqualToString:@"New Tab"]);
+  EXPECT_NSEQ(@"chrome://newtab/", [controller pageURL]);
+  EXPECT_NSEQ(@"New Tab", [controller pageTitle]);
 
   // When we call "report bug" with non-empty tab contents, all menu options
   // should be available, and we should send screenshot by default.

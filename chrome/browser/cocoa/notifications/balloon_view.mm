@@ -6,67 +6,79 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/logging.h"
+#include "base/basictypes.h"
 #include "base/scoped_nsobject.h"
+#import "chrome/browser/cocoa/notifications/balloon_controller.h"
+#import "third_party/GTM/AppKit/GTMNSBezierPath+RoundRect.h"
 
 namespace {
 
-const int kRoundedCornerSize = 4;
+const int kRoundedCornerSize = 6;
 
 }  // namespace
 
+@implementation BalloonWindow
+- (id)initWithContentRect:(NSRect)contentRect
+                styleMask:(unsigned int)aStyle
+                  backing:(NSBackingStoreType)bufferingType
+                    defer:(BOOL)flag {
+  self = [super initWithContentRect:contentRect
+                          styleMask:NSBorderlessWindowMask
+                            backing:NSBackingStoreBuffered
+                              defer:NO];
+  if (self) {
+    [self setLevel:NSStatusWindowLevel];
+    [self setOpaque:NO];
+    [self setBackgroundColor:[NSColor clearColor]];
+  }
+  return self;
+}
 
-@implementation BalloonViewCocoa
-- (void)drawRect:(NSRect)rect {
-  NSRect bounds = [self bounds];
-  NSBezierPath* path =
-    [NSBezierPath bezierPathWithRoundedRect:bounds
-                                    xRadius:kRoundedCornerSize
-                                    yRadius:kRoundedCornerSize];
-  [[NSColor lightGrayColor] set];
-  [path fill];
-  [[NSColor blackColor] set];
-  [path stroke];
+- (BOOL)canBecomeMainWindow {
+  return NO;
+}
+
+- (void)sendEvent:(NSEvent*)event {
+  // We do not want to bring chrome window to foreground when we click on close
+  // or option button. To do this, we have to intercept the event.
+  BalloonController* delegate =
+      static_cast<BalloonController*>([self delegate]);
+  if (![delegate handleEvent:event]) {
+    [super sendEvent:event];
+  }
 }
 @end
 
 @implementation BalloonShelfViewCocoa
 - (void)drawRect:(NSRect)rect {
-  NSRect bounds = [self bounds];
   NSBezierPath* path =
-    [NSBezierPath bezierPathWithRoundedRect:bounds
-                                    xRadius:kRoundedCornerSize
-                                    yRadius:kRoundedCornerSize];
-  [[NSColor colorWithCalibratedRed:0.304 green:0.549 blue:0.85 alpha:1.0] set];
+      [NSBezierPath gtm_bezierPathWithRoundRect:[self bounds]
+                            topLeftCornerRadius:kRoundedCornerSize
+                           topRightCornerRadius:kRoundedCornerSize
+                         bottomLeftCornerRadius:0.0
+                        bottomRightCornerRadius:0.0];
+
+  [[NSColor colorWithCalibratedWhite:0.957 alpha:1.0] set];
   [path fill];
-  [[NSColor blackColor] set];
-  [path stroke];
+
+  [[NSColor colorWithCalibratedWhite:0.8 alpha:1.0] set];
+  NSPoint origin = [self bounds].origin;
+  [NSBezierPath strokeLineFromPoint:origin
+      toPoint:NSMakePoint(origin.x + NSWidth([self bounds]), origin.y)];
 }
 @end
 
-@implementation BalloonButtonCell
-
-- (id)initTextCell:(NSString*)string {
-  if ((self = [super initTextCell:string])) {
-    [self setButtonType:NSMomentaryPushInButton];
-    [self setShowsBorderOnlyWhileMouseInside:YES];
-    [self setBezelStyle:NSShadowlessSquareBezelStyle];
-    [self setControlSize:NSSmallControlSize];
-    [self setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
-  }
-
-  return self;
-}
-
-- (void)setTextColor:(NSColor*)color {
-  NSDictionary* dict = [NSDictionary dictionaryWithObjectsAndKeys:
-      color, NSForegroundColorAttributeName,
-      [self font], NSFontAttributeName, nil];
-  scoped_nsobject<NSAttributedString> title(
-      [[NSAttributedString alloc] initWithString:[self title] attributes:dict]);
-
-  NSButton* button = static_cast<NSButton*>([self controlView]);
-  DCHECK([button isKindOfClass:[NSButton class]]);
-  [button setAttributedTitle:title.get()];
+@implementation BalloonContentViewCocoa
+- (void)drawRect:(NSRect)rect {
+  rect = NSInsetRect([self bounds], 0.5, 0.5);
+  NSBezierPath* path =
+      [NSBezierPath gtm_bezierPathWithRoundRect:rect
+                            topLeftCornerRadius:0.0
+                           topRightCornerRadius:0.0
+                         bottomLeftCornerRadius:kRoundedCornerSize
+                        bottomRightCornerRadius:kRoundedCornerSize];
+  [[NSColor whiteColor] set];
+  [path setLineWidth:3];
+  [path stroke];
 }
 @end

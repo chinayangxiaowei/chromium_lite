@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include "chrome/browser/download/download_util.h"
 
-#include "base/logging.h"
 #include "base/string_util.h"
+#include "net/base/mime_util.h"
+#include "net/base/net_util.h"
 
 namespace download_util {
 
@@ -56,6 +57,30 @@ namespace download_util {
  * ***** END LICENSE BLOCK ***** */
 
 static const char* const g_executables[] = {
+  "class",
+  "htm",
+  "html",
+  "jar",
+  "pdf",
+  "pdfxml",
+  "mars",
+  "fdf",
+  "xfdf",
+  "xdp",
+  "xfd",
+  "pl",
+  "py",
+  "rb",
+  "shtm",
+  "shtml",
+  "svg",
+  "swf",
+  "xht",
+  "xhtm",
+  "xhtml",
+  "xml",
+  "xsl",
+  "xslt",
 #if defined(OS_WIN)
   "ad",
   "ade",
@@ -76,13 +101,10 @@ static const char* const g_executables[] = {
   "fxp",
   "hlp",
   "hta",
-  "htm",
-  "html",
   "htt",
   "inf",
   "ins",
   "isp",
-  "jar",
   "js",
   "jse",
   "lnk",
@@ -125,9 +147,6 @@ static const char* const g_executables[] = {
   "sct",
   "shb",
   "shs",
-  "shtm",
-  "shtml",
-  "svg",
   "url",
   "vb",
   "vbe",
@@ -142,33 +161,81 @@ static const char* const g_executables[] = {
   "wsf",
   "wsh",
   "xbap",
-  "xht",
-  "xhtm",
-  "xhtml",
-  "xml",
-  "xsl",
-  "xslt",
 #elif defined(OS_MACOSX)
   // TODO(thakis): Figure out what makes sense here -- crbug.com/19096
+  "app",
   "dmg",
 #elif defined(OS_POSIX)
   // TODO(estade): lengthen this list.
-  "exe",
-  "pl",
-  "py",
-  "rb",
-  "sh",
+  "bash",
+  "csh",
   "deb",
+  "exe",
+  "ksh",
   "rpm",
+  "sh",
+  "tcsh",
 #endif
 };
 
-bool IsExecutableExtension(const std::string& extension) {
+bool IsExecutableFile(const FilePath& path) {
+  return IsExecutableExtension(path.Extension());
+}
+
+bool IsExecutableExtension(const FilePath::StringType& extension) {
+  if (extension.empty())
+    return false;
+  if (!IsStringASCII(extension))
+    return false;
+#if defined(OS_WIN)
+  std::string ascii_extension = WideToASCII(extension);
+#elif defined(OS_POSIX)
+  std::string ascii_extension = extension;
+#endif
+
+  // Strip out leading dot if it's still there
+  if (ascii_extension[0] == FilePath::kExtensionSeparator)
+    ascii_extension.erase(0, 1);
+
   for (size_t i = 0; i < arraysize(g_executables); ++i) {
-    if (LowerCaseEqualsASCII(extension, g_executables[i]))
+    if (LowerCaseEqualsASCII(ascii_extension, g_executables[i]))
       return true;
   }
   return false;
 }
+
+static const char* kExecutableWhiteList[] = {
+  // JavaScript is just as powerful as EXE.
+  "text/javascript",
+  "text/javascript;version=*",
+  "text/html",
+  // Registry files can cause critical changes to the MS OS behavior.
+  // Addition of this mimetype also addresses bug 7337.
+  "text/x-registry",
+  "text/x-sh",
+  // Some sites use binary/octet-stream to mean application/octet-stream.
+  // See http://code.google.com/p/chromium/issues/detail?id=1573
+  "binary/octet-stream"
+};
+
+static const char* kExecutableBlackList[] = {
+  // These application types are not executable.
+  "application/*+xml",
+  "application/xml"
+};
+
+bool IsExecutableMimeType(const std::string& mime_type) {
+  for (size_t i = 0; i < arraysize(kExecutableWhiteList); ++i) {
+    if (net::MatchesMimeType(kExecutableWhiteList[i], mime_type))
+      return true;
+  }
+  for (size_t i = 0; i < arraysize(kExecutableBlackList); ++i) {
+    if (net::MatchesMimeType(kExecutableBlackList[i], mime_type))
+      return false;
+  }
+  // We consider only other application types to be executable.
+  return net::MatchesMimeType("application/*", mime_type);
+}
+
 
 }  // namespace download_util

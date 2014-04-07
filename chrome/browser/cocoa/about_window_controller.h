@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_ABOUT_WINDOW_CONTROLLER_H_
 #define CHROME_BROWSER_COCOA_ABOUT_WINDOW_CONTROLLER_H_
+#pragma once
 
 #import <AppKit/AppKit.h>
 
@@ -27,9 +28,6 @@ class Profile;
   // updateBlock_ holds the update image or throbber, update text, and update
   // button.
   IBOutlet NSView* updateBlock_;
-
-  // promotionBlock_ holds the Keystone ticket promotion text and button.
-  IBOutlet NSView* promotionBlock_;
 
   IBOutlet NSProgressIndicator* spinner_;
   IBOutlet NSImageView* updateStatusIndicator_;

@@ -1,28 +1,28 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // This is the browser side of the resource dispatcher, it receives requests
 // from the child process (i.e. [Renderer, Plugin, Worker]ProcessHost), and
-// dispatches them to URLRequests. It then fowards the messages from the
+// dispatches them to URLRequests. It then forwards the messages from the
 // URLRequests back to the correct process for handling.
 //
 // See http://dev.chromium.org/developers/design-documents/multi-process-resource-loading
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_RESOURCE_DISPATCHER_HOST_H_
 #define CHROME_BROWSER_RENDERER_HOST_RESOURCE_DISPATCHER_HOST_H_
+#pragma once
 
 #include <map>
 #include <string>
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/logging.h"
+#include "base/gtest_prod_util.h"
 #include "base/observer_list.h"
-#include "base/process.h"
+#include "base/scoped_ptr.h"
 #include "base/timer.h"
 #include "chrome/common/child_process_info.h"
-#include "chrome/browser/privacy_blacklist/blacklist_interceptor.h"
 #include "chrome/browser/renderer_host/resource_queue.h"
 #include "ipc/ipc_message.h"
 #include "net/url_request/url_request.h"
@@ -30,7 +30,7 @@
 
 class CrossSiteResourceHandler;
 class DownloadFileManager;
-class DownloadRequestManager;
+class DownloadRequestLimiter;
 class LoginHandler;
 class PluginService;
 class ResourceDispatcherHostRequestInfo;
@@ -46,6 +46,10 @@ struct DownloadSaveInfo;
 struct GlobalRequestID;
 struct ViewHostMsg_Resource_Request;
 struct ViewMsg_ClosePage_Params;
+
+namespace webkit_blob {
+class DeletableFileReference;
+}
 
 class ResourceDispatcherHost : public URLRequest::Delegate {
  public:
@@ -71,9 +75,8 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
         const ViewHostMsg_Resource_Request& request_data) = 0;
 
    protected:
-    explicit Receiver(ChildProcessInfo::ProcessType type, int child_id)
-        : ChildProcessInfo(type, child_id) {}
-    virtual ~Receiver() {}
+    explicit Receiver(ChildProcessInfo::ProcessType type, int child_id);
+    virtual ~Receiver();
   };
 
   class Observer {
@@ -109,6 +112,7 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   void BeginDownload(const GURL& url,
                      const GURL& referrer,
                      const DownloadSaveInfo& save_info,
+                     bool prompt_for_save_location,
                      int process_unique_id,
                      int route_id,
                      URLRequestContext* request_context);
@@ -172,8 +176,8 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
     return download_file_manager_;
   }
 
-  DownloadRequestManager* download_request_manager() const {
-    return download_request_manager_.get();
+  DownloadRequestLimiter* download_request_limiter() const {
+    return download_request_limiter_.get();
   }
 
   SaveFileManager* save_file_manager() const {
@@ -210,7 +214,9 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   virtual void OnSSLCertificateError(URLRequest* request,
                                      int cert_error,
                                      net::X509Certificate* cert);
-  virtual void OnSetCookieBlocked(URLRequest* request);
+  virtual void OnSetCookie(URLRequest* request,
+                           const std::string& cookie_line,
+                           bool blocked_by_policy);
   virtual void OnResponseStarted(URLRequest* request);
   virtual void OnReadCompleted(URLRequest* request, int bytes_read);
   void OnResponseCompleted(URLRequest* request);
@@ -262,26 +268,34 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   // messages sent.
   void DataReceivedACK(int process_unique_id, int request_id);
 
+  // Maintains a collection of temp files created in support of
+  // the download_to_file capability. Used to grant access to the
+  // child process and to defer deletion of the file until it's
+  // no longer needed.
+  void RegisterDownloadedTempFile(
+      int receiver_id, int request_id,
+      webkit_blob::DeletableFileReference* reference);
+  void UnregisterDownloadedTempFile(int receiver_id, int request_id);
+
   // Needed for the sync IPC message dispatcher macros.
-  bool Send(IPC::Message* message) {
-    delete message;
-    return false;
-  }
+  bool Send(IPC::Message* message);
+
+  // Controls if we launch or squash prefetch requests as they arrive
+  // from renderers.
+  static bool is_prefetch_enabled();
+  static void set_is_prefetch_enabled(bool value);
 
  private:
-  FRIEND_TEST(ResourceDispatcherHostTest, TestBlockedRequestsProcessDies);
-  FRIEND_TEST(ResourceDispatcherHostTest,
-              IncrementOutstandingRequestsMemoryCost);
-  FRIEND_TEST(ResourceDispatcherHostTest,
-              CalculateApproximateMemoryCost);
-  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest, WrongScheme);
-  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest, GoodScheme);
-  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest,
-              GoodSchemeWithSecurityFilter);
-  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest,
-              GoodSchemeWrongResourceType);
-  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest,
-              WrongSchemeResourceAndFilter);
+  FRIEND_TEST_ALL_PREFIXES(ResourceDispatcherHostTest,
+                           TestBlockedRequestsProcessDies);
+  FRIEND_TEST_ALL_PREFIXES(ResourceDispatcherHostTest,
+                           IncrementOutstandingRequestsMemoryCost);
+  FRIEND_TEST_ALL_PREFIXES(ResourceDispatcherHostTest,
+                           CalculateApproximateMemoryCost);
+  FRIEND_TEST_ALL_PREFIXES(ApplyExtensionLocalizationFilterTest, WrongScheme);
+  FRIEND_TEST_ALL_PREFIXES(ApplyExtensionLocalizationFilterTest, GoodScheme);
+  FRIEND_TEST_ALL_PREFIXES(ApplyExtensionLocalizationFilterTest,
+                           GoodSchemeWrongResourceType);
 
   class ShutdownTask;
 
@@ -320,6 +334,9 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
 
   // Helper function for regular and download requests.
   void BeginRequestInternal(URLRequest* request);
+
+  // Helper function that cancels |request|.
+  void CancelRequestInternal(URLRequest* request, bool from_renderer);
 
   // Helper function that inserts |request| into the resource queue.
   void InsertIntoResourceQueue(
@@ -393,18 +410,33 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
                     IPC::Message* sync_result,  // only valid for sync
                     int route_id);  // only valid for async
   void OnDataReceivedACK(int request_id);
+  void OnDataDownloadedACK(int request_id);
   void OnUploadProgressACK(int request_id);
   void OnCancelRequest(int request_id);
   void OnFollowRedirect(int request_id,
                         bool has_new_first_party_for_cookies,
                         const GURL& new_first_party_for_cookies);
+  void OnReleaseDownloadedFile(int request_id);
+
+  ResourceHandler* CreateSafeBrowsingResourceHandler(
+      ResourceHandler* handler, int child_id, int route_id,
+      ResourceType::Type resource_type);
+
+  // Creates ResourceDispatcherHostRequestInfo for a browser-initiated request
+  // (a download or a page save). |download| should be true if the request
+  // is a file download.
+  ResourceDispatcherHostRequestInfo* CreateRequestInfoForBrowserRequest(
+      ResourceHandler* handler, int child_id, int route_id, bool download);
+
+  // Returns true if |request| is in |pending_requests_|.
+  bool IsValidRequest(URLRequest* request);
 
   // Returns true if the message passed in is a resource related message.
   static bool IsResourceDispatcherHostMessage(const IPC::Message&);
 
-  // Applies FilterPolicy::FILTER_EXTENSION_MESSAGES to all text/css requests
-  // that have "chrome-extension://" scheme.
-  static void ApplyExtensionMessageFilterPolicy(
+  // Sets replace_extension_localization_templates on all text/css requests that
+  // have "chrome-extension://" scheme.
+  static void ApplyExtensionLocalizationFilter(
       const GURL& url,
       const ResourceType::Type& resource_type,
       ResourceDispatcherHostRequestInfo* request_info);
@@ -414,6 +446,15 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   static net::RequestPriority DetermineRequestPriority(ResourceType::Type type);
 
   PendingRequestList pending_requests_;
+
+  // Collection of temp files downloaded for child processes via
+  // the download_to_file mechanism. We avoid deleting them until
+  // the client no longer needs them.
+  typedef std::map<int, scoped_refptr<webkit_blob::DeletableFileReference> >
+      DeletableFilesMap;  // key is request id
+  typedef std::map<int, DeletableFilesMap>
+      RegisteredTempFiles;  // key is child process id
+  RegisteredTempFiles registered_temp_files_;
 
   // A timer that periodically calls UpdateLoadStates while pending_requests_
   // is not empty.
@@ -426,13 +467,10 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   scoped_refptr<DownloadFileManager> download_file_manager_;
 
   // Determines whether a download is allowed.
-  scoped_refptr<DownloadRequestManager> download_request_manager_;
+  scoped_refptr<DownloadRequestLimiter> download_request_limiter_;
 
   // We own the save file manager.
   scoped_refptr<SaveFileManager> save_file_manager_;
-
-  // Handles requests blocked by privacy blacklists.
-  BlacklistInterceptor blacklist_interceptor_;
 
   scoped_refptr<UserScriptListener> user_script_listener_;
 
@@ -483,6 +521,8 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   // Used during IPC message dispatching so that the handlers can get a pointer
   // to the source of the message.
   Receiver* receiver_;
+
+  static bool is_prefetch_enabled_;
 
   DISALLOW_COPY_AND_ASSIGN(ResourceDispatcherHost);
 };

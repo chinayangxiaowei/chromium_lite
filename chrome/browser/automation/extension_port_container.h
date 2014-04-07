@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_AUTOMATION_EXTENSION_PORT_CONTAINER_H_
 #define CHROME_BROWSER_AUTOMATION_EXTENSION_PORT_CONTAINER_H_
+#pragma once
 
 #include <string>
 
@@ -13,8 +14,8 @@
 
 class AutomationProvider;
 class ExtensionMessageService;
+class GURL;
 class ListValue;
-class MessageLoop;
 class RenderViewHost;
 
 // This class represents an external port to an extension, opened
@@ -64,7 +65,8 @@ class ExtensionPortContainer : public IPC::Message::Sender {
 
   void OnExtensionMessageInvoke(const std::string& function_name,
                                 const ListValue& args,
-                                bool requires_incognito_access);
+                                bool requires_incognito_access,
+                                const GURL& event_url);
   void OnExtensionHandleMessage(const std::string& message, int source_port_id);
   void OnExtensionPortDisconnected(int source_port_id);
 

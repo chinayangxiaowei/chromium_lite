@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VIEWS_CONTROLS_TABBED_PANE_NATIVE_TABBED_PANE_GTK_H_
 #define VIEWS_CONTROLS_TABBED_PANE_NATIVE_TABBED_PANE_GTK_H_
+#pragma once
 
 #include "views/controls/native_control_gtk.h"
 #include "views/controls/tabbed_pane/native_tabbed_pane_wrapper.h"
@@ -31,6 +32,7 @@ class NativeTabbedPaneGtk : public NativeControlGtk,
   virtual View* GetSelectedTab();
   virtual View* GetView();
   virtual void SetFocus();
+  virtual gfx::Size GetPreferredSize();
   virtual gfx::NativeView GetTestingHandle() const;
 
   // NativeControlGtk overrides.

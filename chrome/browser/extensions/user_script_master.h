@@ -1,23 +1,24 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_USER_SCRIPT_MASTER_H_
 #define CHROME_BROWSER_EXTENSIONS_USER_SCRIPT_MASTER_H_
+#pragma once
 
 #include "base/file_path.h"
+#include "base/gtest_prod_util.h"
 #include "base/scoped_ptr.h"
 #include "base/shared_memory.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/common/extensions/user_script.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 namespace base {
 class StringPiece;
 }
 
-class Extension;
 class Profile;
 
 // Manages a segment of shared memory that contains the user scripts the user
@@ -53,12 +54,12 @@ class UserScriptMaster : public base::RefCountedThreadSafe<UserScriptMaster>,
   virtual ~UserScriptMaster();
 
  private:
-  FRIEND_TEST(UserScriptMasterTest, Parse1);
-  FRIEND_TEST(UserScriptMasterTest, Parse2);
-  FRIEND_TEST(UserScriptMasterTest, Parse3);
-  FRIEND_TEST(UserScriptMasterTest, Parse4);
-  FRIEND_TEST(UserScriptMasterTest, Parse5);
-  FRIEND_TEST(UserScriptMasterTest, Parse6);
+  FRIEND_TEST_ALL_PREFIXES(UserScriptMasterTest, Parse1);
+  FRIEND_TEST_ALL_PREFIXES(UserScriptMasterTest, Parse2);
+  FRIEND_TEST_ALL_PREFIXES(UserScriptMasterTest, Parse3);
+  FRIEND_TEST_ALL_PREFIXES(UserScriptMasterTest, Parse4);
+  FRIEND_TEST_ALL_PREFIXES(UserScriptMasterTest, Parse5);
+  FRIEND_TEST_ALL_PREFIXES(UserScriptMasterTest, Parse6);
 
  public:
   // We reload user scripts on the file thread to prevent blocking the UI.
@@ -117,7 +118,7 @@ class UserScriptMaster : public base::RefCountedThreadSafe<UserScriptMaster>,
 
     // The message loop to call our master back on.
     // Expected to always outlive us.
-    ChromeThread::ID master_thread_id_;
+    BrowserThread::ID master_thread_id_;
 
     DISALLOW_COPY_AND_ASSIGN(ScriptReloader);
   };

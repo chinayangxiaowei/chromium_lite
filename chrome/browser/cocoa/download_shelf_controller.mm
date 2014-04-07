@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,17 @@
 #include "base/mac_util.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/browser.h"
-#include "chrome/browser/browser_theme_provider.h"
 #import "chrome/browser/cocoa/animatable_view.h"
-#import "chrome/browser/cocoa/browser_window_controller.h"
 #include "chrome/browser/cocoa/browser_window_cocoa.h"
+#import "chrome/browser/cocoa/browser_window_controller.h"
 #include "chrome/browser/cocoa/download_item_controller.h"
 #include "chrome/browser/cocoa/download_shelf_mac.h"
 #import "chrome/browser/cocoa/download_shelf_view.h"
 #import "chrome/browser/cocoa/hyperlink_button_cell.h"
+#include "chrome/browser/download/download_item.h"
 #include "chrome/browser/download/download_manager.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
@@ -47,6 +48,7 @@ const NSTimeInterval kDownloadShelfCloseDuration = 0.12;
 
 - (void)updateTheme;
 - (void)themeDidChangeNotification:(NSNotification*)notification;
+- (void)viewFrameDidChange:(NSNotification*)notification;
 @end
 
 
@@ -57,7 +59,8 @@ const NSTimeInterval kDownloadShelfCloseDuration = 0.12;
   if ((self = [super initWithNibName:@"DownloadShelf"
                               bundle:mac_util::MainAppBundle()])) {
     resizeDelegate_ = resizeDelegate;
-    shelfHeight_ = [[self view] bounds].size.height;
+    maxShelfHeight_ = NSHeight([[self view] bounds]);
+    currentShelfHeight_ = maxShelfHeight_;
 
     // Reset the download shelf's frame height to zero.  It will be properly
     // positioned and sized the first time we try to set its height. (Just
@@ -83,6 +86,11 @@ const NSTimeInterval kDownloadShelfCloseDuration = 0.12;
                       object:nil];
 
   [[self animatableView] setResizeDelegate:resizeDelegate_];
+  [[self view] setPostsFrameChangedNotifications:YES];
+  [defaultCenter addObserver:self
+                    selector:@selector(viewFrameDidChange:)
+                        name:NSViewFrameDidChangeNotification
+                      object:[self view]];
 
   ResourceBundle& rb = ResourceBundle::GetSharedInstance();
   NSImage* favicon = rb.GetNSImageNamed(IDR_DOWNLOADS_FAVICON);
@@ -101,6 +109,23 @@ const NSTimeInterval kDownloadShelfCloseDuration = 0.12;
 // Called after the current theme has changed.
 - (void)themeDidChangeNotification:(NSNotification*)notification {
   [self updateTheme];
+}
+
+// Called after the frame's rect has changed; usually when the height is
+// animated.
+- (void)viewFrameDidChange:(NSNotification*)notification {
+  // Anchor subviews at the top of |view|, so that it looks like the shelf
+  // is sliding out.
+  CGFloat newShelfHeight = NSHeight([[self view] frame]);
+  if (newShelfHeight == currentShelfHeight_)
+    return;
+
+  for (NSView* view in [[self view] subviews]) {
+    NSRect frame = [view frame];
+    frame.origin.y -= currentShelfHeight_ - newShelfHeight;
+    [view setFrame:frame];
+  }
+  currentShelfHeight_ = newShelfHeight;
 }
 
 // Adapt appearance to the current theme. Called after theme changes and before
@@ -171,7 +196,7 @@ const NSTimeInterval kDownloadShelfCloseDuration = 0.12;
   // smoother.
   AnimatableView* view = [self animatableView];
   if (enable)
-    [view setHeight:shelfHeight_];
+    [view setHeight:maxShelfHeight_];
   else
     [view animateToNewHeight:0 duration:kDownloadShelfCloseDuration];
 
@@ -206,7 +231,7 @@ const NSTimeInterval kDownloadShelfCloseDuration = 0.12;
 }
 
 - (float)height {
-  return shelfHeight_;
+  return maxShelfHeight_;
 }
 
 // If |skipFirst| is true, the frame of the leftmost item is not set.

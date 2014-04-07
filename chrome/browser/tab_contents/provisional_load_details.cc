@@ -11,17 +11,22 @@ ProvisionalLoadDetails::ProvisionalLoadDetails(bool is_main_frame,
                                                bool is_in_page_navigation,
                                                const GURL& url,
                                                const std::string& security_info,
-                                               bool is_content_filtered)
+                                               bool is_content_filtered,
+                                               long long frame_id)
       : error_code_(net::OK),
+        transition_type_(PageTransition::LINK),
         url_(url),
         is_main_frame_(is_main_frame),
         is_in_page_navigation_(is_in_page_navigation),
         ssl_cert_id_(0),
         ssl_cert_status_(0),
         ssl_security_bits_(-1),
-        is_content_filtered_(is_content_filtered) {
+        ssl_connection_status_(0),
+        is_content_filtered_(is_content_filtered),
+        frame_id_(frame_id) {
   SSLManager::DeserializeSecurityInfo(security_info,
                                       &ssl_cert_id_,
                                       &ssl_cert_status_,
-                                      &ssl_security_bits_);
+                                      &ssl_security_bits_,
+                                      &ssl_connection_status_);
 }

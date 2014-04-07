@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SESSIONS_SESSION_SERVICE_TEST_HELPER_H_
 #define CHROME_BROWSER_SESSIONS_SESSION_SERVICE_TEST_HELPER_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -35,9 +36,9 @@ class SessionServiceTestHelper {
                           int visual_index,
                           bool select);
 
-  void SetTabAppExtensionID(const SessionID& window_id,
+  void SetTabExtensionAppID(const SessionID& window_id,
                             const SessionID& tab_id,
-                            const std::string& app_extension_id);
+                            const std::string& extension_app_id);
 
   // Reads the contents of the last session.
   void ReadWindows(std::vector<SessionWindow*>* windows);

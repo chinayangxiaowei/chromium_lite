@@ -78,11 +78,15 @@
 #include <algorithm>
 
 #include "base/logging.h"
+#include "base/message_loop.h"
 #include "base/stl_util-inl.h"
 #include "base/time.h"
 #include "media/audio/audio_util.h"
+#include "media/audio/linux/alsa_util.h"
 #include "media/audio/linux/alsa_wrapper.h"
 #include "media/audio/linux/audio_manager_linux.h"
+#include "media/base/data_buffer.h"
+#include "media/base/seekable_buffer.h"
 
 // Amount of time to wait if we've exhausted the data source.  This is to avoid
 // busy looping.
@@ -114,26 +118,7 @@ namespace {
 
 // ALSA is currently limited to 48Khz.
 // TODO(fbarchard): Resample audio from higher frequency to 48000.
-const uint32 kMaxSampleRate = 48000;
-
-snd_pcm_format_t BitsToFormat(char bits_per_sample) {
-  switch (bits_per_sample) {
-    case 8:
-      return SND_PCM_FORMAT_U8;
-
-    case 16:
-      return SND_PCM_FORMAT_S16;
-
-    case 24:
-      return SND_PCM_FORMAT_S24;
-
-    case 32:
-      return SND_PCM_FORMAT_S32;
-
-    default:
-      return SND_PCM_FORMAT_UNKNOWN;
-  }
-}
+const int kAlsaMaxSampleRate = 48000;
 
 // While the "default" device may support multi-channel audio, in Alsa, only
 // the device names surround40, surround41, surround50, etc, have a defined
@@ -207,7 +192,8 @@ static void Swizzle51Layout(Format* b, uint32 filled) {
 
 }  // namespace
 
-// Not in an anonymous so that it can be a friend to AlsaPcmOutputStream.
+// Not in an anonymous namespace so that it can be a friend to
+// AlsaPcmOutputStream.
 std::ostream& operator<<(std::ostream& os,
                          AlsaPcmOutputStream::InternalState state) {
   switch (state) {
@@ -234,24 +220,22 @@ std::ostream& operator<<(std::ostream& os,
 }
 
 AlsaPcmOutputStream::AlsaPcmOutputStream(const std::string& device_name,
-                                         AudioManager::Format format,
-                                         uint32 channels,
-                                         uint32 sample_rate,
-                                         uint32 bits_per_sample,
+                                         AudioParameters params,
                                          AlsaWrapper* wrapper,
                                          AudioManagerLinux* manager,
                                          MessageLoop* message_loop)
     : shared_data_(MessageLoop::current()),
       requested_device_name_(device_name),
-      pcm_format_(BitsToFormat(bits_per_sample)),
-      channels_(channels),
-      sample_rate_(sample_rate),
-      bytes_per_sample_(bits_per_sample / 8),
-      bytes_per_frame_(channels_ * bits_per_sample / 8),
+      pcm_format_(alsa_util::BitsToFormat(params.bits_per_sample)),
+      channels_(params.channels),
+      sample_rate_(params.sample_rate),
+      bytes_per_sample_(params.bits_per_sample / 8),
+      bytes_per_frame_(channels_ * params.bits_per_sample / 8),
       should_downmix_(false),
       latency_micros_(0),
       micros_per_packet_(0),
       bytes_per_output_frame_(bytes_per_frame_),
+      alsa_buffer_frames_(0),
       stop_stream_(false),
       wrapper_(wrapper),
       manager_(manager),
@@ -261,18 +245,18 @@ AlsaPcmOutputStream::AlsaPcmOutputStream(const std::string& device_name,
       message_loop_(message_loop) {
 
   // Sanity check input values.
-  if ((sample_rate > kMaxSampleRate) || (sample_rate <= 0)) {
+  if ((params.sample_rate > kAlsaMaxSampleRate) || (params.sample_rate <= 0)) {
     LOG(WARNING) << "Unsupported audio frequency.";
     shared_data_.TransitionTo(kInError);
   }
 
-  if (AudioManager::AUDIO_PCM_LINEAR != format) {
+  if (AudioParameters::AUDIO_PCM_LINEAR != params.format) {
     LOG(WARNING) << "Only linear PCM supported.";
     shared_data_.TransitionTo(kInError);
   }
 
   if (pcm_format_ == SND_PCM_FORMAT_UNKNOWN) {
-    LOG(WARNING) << "Unsupported bits per sample: " << bits_per_sample;
+    LOG(WARNING) << "Unsupported bits per sample: " << params.bits_per_sample;
     shared_data_.TransitionTo(kInError);
   }
 }
@@ -335,7 +319,7 @@ void AlsaPcmOutputStream::Close() {
   // Signal to the manager that we're closed and can be removed.  Since
   // we just posted a CloseTask to the message loop, we won't be deleted
   // immediately, but it will happen soon afterwards.
-  manager()->ReleaseStream(this);
+  manager()->ReleaseOutputStream(this);
 }
 
 void AlsaPcmOutputStream::Start(AudioSourceCallback* callback) {
@@ -372,10 +356,11 @@ void AlsaPcmOutputStream::GetVolume(double* volume) {
 }
 
 void AlsaPcmOutputStream::OpenTask(uint32 packet_size) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(message_loop_, MessageLoop::current());
 
   // Initialize the configuration variables.
-  frames_per_packet_ = packet_size / bytes_per_frame_;
+  packet_size_ = packet_size;
+  frames_per_packet_ = packet_size_ / bytes_per_frame_;
 
   // Try to open the device.
   micros_per_packet_ =
@@ -389,22 +374,39 @@ void AlsaPcmOutputStream::OpenTask(uint32 packet_size) {
     }
   } else {
     device_name_ = requested_device_name_;
-    playback_handle_ = OpenDevice(device_name_, channels_, latency_micros_);
+    playback_handle_ = alsa_util::OpenPlaybackDevice(wrapper_,
+                                                     device_name_.c_str(),
+                                                     channels_, sample_rate_,
+                                                     pcm_format_,
+                                                     latency_micros_);
   }
 
   // Finish initializing the stream if the device was opened successfully.
   if (playback_handle_ == NULL) {
     stop_stream_ = true;
   } else {
-    packet_.reset(new Packet(packet_size));
-    if (should_downmix_) {
-      bytes_per_output_frame_ = 2 * bytes_per_sample_;
+    bytes_per_output_frame_ = should_downmix_ ? 2 * bytes_per_sample_ :
+        bytes_per_frame_;
+    uint32 output_packet_size = frames_per_packet_ * bytes_per_output_frame_;
+    buffer_.reset(new media::SeekableBuffer(0, output_packet_size));
+
+    // Get alsa buffer size.
+    snd_pcm_uframes_t buffer_size;
+    snd_pcm_uframes_t period_size;
+    int error = wrapper_->PcmGetParams(playback_handle_, &buffer_size,
+                                       &period_size);
+    if (error < 0) {
+      LOG(ERROR) << "Failed to get playback buffer size from ALSA: "
+                 << wrapper_->StrError(error);
+      alsa_buffer_frames_ = frames_per_packet_;
+    } else {
+      alsa_buffer_frames_ = buffer_size;
     }
   }
 }
 
 void AlsaPcmOutputStream::StartTask() {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(message_loop_, MessageLoop::current());
 
   if (stop_stream_) {
     return;
@@ -430,92 +432,75 @@ void AlsaPcmOutputStream::StartTask() {
     return;
   }
 
-  // Do a best-effort pre-roll to fill the buffer.  Use integer rounding to find
-  // the maximum number of full packets that can fit into the buffer.
-  //
-  // TODO(ajwong): Handle EAGAIN.
-  const uint32 num_preroll = latency_micros_ / micros_per_packet_;
-  for (uint32 i = 0; i < num_preroll; ++i) {
-    BufferPacket(packet_.get());
-    WritePacket(packet_.get());
-  }
-
-  ScheduleNextWrite(packet_.get());
+  ScheduleNextWrite(false);
 }
 
 void AlsaPcmOutputStream::CloseTask() {
   // NOTE: Keep this function idempotent to handle errors that might cause
   // multiple CloseTasks to be posted.
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(message_loop_, MessageLoop::current());
 
   // Shutdown the audio device.
-  if (playback_handle_ && !CloseDevice(playback_handle_)) {
+  if (playback_handle_ &&
+      alsa_util::CloseDevice(wrapper_, playback_handle_) < 0) {
     LOG(WARNING) << "Unable to close audio device. Leaking handle.";
   }
   playback_handle_ = NULL;
 
   // Release the buffer.
-  packet_.reset();
+  buffer_.reset();
 
   // Signal anything that might already be scheduled to stop.
   stop_stream_ = true;
 }
 
-void AlsaPcmOutputStream::BufferPacket(Packet* packet) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+void AlsaPcmOutputStream::BufferPacket(bool* source_exhausted) {
+  DCHECK_EQ(message_loop_, MessageLoop::current());
 
   // If stopped, simulate a 0-lengthed packet.
   if (stop_stream_) {
-    packet->used = packet->size = 0;
+    buffer_->Clear();
+    *source_exhausted = true;
     return;
   }
 
-  // Request more data if we don't have any cached.
-  if (packet->used >= packet->size) {
-    // Before making a request to source for data. We need to determine the
+  *source_exhausted = false;
+
+  // Request more data if we have capacity.
+  if (buffer_->forward_capacity() > buffer_->forward_bytes()) {
+    // Before making a request to source for data we need to determine the
     // delay (in bytes) for the requested data to be played.
-    snd_pcm_sframes_t delay = 0;
 
-    // Don't query ALSA's delay if we have underrun since it'll be jammed at
-    // some non-zero value and potentially even negative!
-    if (wrapper_->PcmState(playback_handle_) != SND_PCM_STATE_XRUN) {
-      int error = wrapper_->PcmDelay(playback_handle_, &delay);
-      if (error >= 0) {
-        // Convert frames to bytes, but watch out for those negatives!
-        delay = (delay < 0 ? 0 : delay) * bytes_per_output_frame_;
-      } else {
-        // Assume a delay of zero and attempt to recover the device.
-        delay = 0;
-        error = wrapper_->PcmRecover(playback_handle_,
-                                     error,
-                                     kPcmRecoverIsSilent);
-        if (error < 0) {
-          LOG(ERROR) << "Failed querying delay: " << wrapper_->StrError(error);
-        }
-      }
-    }
+    uint32 buffer_delay = buffer_->forward_bytes() * bytes_per_frame_ /
+        bytes_per_output_frame_;
 
-    packet->used = 0;
-    packet->size = shared_data_.OnMoreData(this, packet->buffer.get(),
-                                           packet->capacity, delay);
-    CHECK(packet->size <= packet->capacity) << "Data source overran buffer.";
+    uint32 hardware_delay = GetCurrentDelay() * bytes_per_frame_;
 
-    // This should not happen, but incase it does, drop any trailing bytes
+    scoped_refptr<media::DataBuffer> packet =
+        new media::DataBuffer(packet_size_);
+    size_t packet_size =
+        shared_data_.OnMoreData(
+            this, packet->GetWritableData(), packet->GetBufferSize(),
+            AudioBuffersState(buffer_delay, hardware_delay));
+    CHECK(packet_size <= packet->GetBufferSize()) <<
+        "Data source overran buffer.";
+
+    // This should not happen, but in case it does, drop any trailing bytes
     // that aren't large enough to make a frame.  Without this, packet writing
     // may stall because the last few bytes in the packet may never get used by
     // WritePacket.
-    DCHECK(packet->size % bytes_per_frame_ == 0);
-    packet->size = (packet->size / bytes_per_frame_) * bytes_per_frame_;
+    DCHECK(packet_size % bytes_per_frame_ == 0);
+    packet_size = (packet_size / bytes_per_frame_) * bytes_per_frame_;
 
     if (should_downmix_) {
-      if (media::FoldChannels(packet->buffer.get(),
-                              packet->size,
+      if (media::FoldChannels(packet->GetWritableData(),
+                              packet_size,
                               channels_,
                               bytes_per_sample_,
                               shared_data_.volume())) {
         // Adjust packet size for downmix.
-        packet->size =
-            packet->size / bytes_per_frame_ * bytes_per_output_frame_;
+        packet_size =
+            packet_size / bytes_per_frame_ * bytes_per_output_frame_;
       } else {
         LOG(ERROR) << "Folding failed";
       }
@@ -525,59 +510,63 @@ void AlsaPcmOutputStream::BufferPacket(Packet* packet) {
       // Handle channel order for 5.0 audio.
       if (channels_ == 5) {
         if (bytes_per_sample_ == 1) {
-          Swizzle50Layout(reinterpret_cast<uint8*>(packet->buffer.get()),
-                          packet->size);
+          Swizzle50Layout(packet->GetWritableData(), packet_size);
         } else if (bytes_per_sample_ == 2) {
-          Swizzle50Layout(reinterpret_cast<int16*>(packet->buffer.get()),
-                          packet->size);
+          Swizzle50Layout(packet->GetWritableData(), packet_size);
         } else if (bytes_per_sample_ == 4) {
-          Swizzle50Layout(reinterpret_cast<int32*>(packet->buffer.get()),
-                          packet->size);
+          Swizzle50Layout(packet->GetWritableData(), packet_size);
         }
       }
 
       // Handle channel order for 5.1 audio.
       if (channels_ == 6) {
         if (bytes_per_sample_ == 1) {
-          Swizzle51Layout(reinterpret_cast<uint8*>(packet->buffer.get()),
-                          packet->size);
+          Swizzle51Layout(packet->GetWritableData(), packet_size);
         } else if (bytes_per_sample_ == 2) {
-          Swizzle51Layout(reinterpret_cast<int16*>(packet->buffer.get()),
-                          packet->size);
+          Swizzle51Layout(packet->GetWritableData(), packet_size);
         } else if (bytes_per_sample_ == 4) {
-          Swizzle51Layout(reinterpret_cast<int32*>(packet->buffer.get()),
-                          packet->size);
+          Swizzle51Layout(packet->GetWritableData(), packet_size);
         }
       }
 
-      media::AdjustVolume(packet->buffer.get(),
-                          packet->size,
+      media::AdjustVolume(packet->GetWritableData(),
+                          packet_size,
                           channels_,
                           bytes_per_sample_,
                           shared_data_.volume());
     }
+
+    if (packet_size > 0) {
+      packet->SetDataSize(packet_size);
+      // Add the packet to the buffer.
+      buffer_->Append(packet);
+    } else {
+      *source_exhausted = true;
+    }
   }
 }
 
-void AlsaPcmOutputStream::WritePacket(Packet* packet) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
-
-  CHECK(packet->size % bytes_per_output_frame_ == 0);
+void AlsaPcmOutputStream::WritePacket() {
+  DCHECK_EQ(message_loop_, MessageLoop::current());
 
   // If the device is in error, just eat the bytes.
   if (stop_stream_) {
-    packet->used = packet->size;
+    buffer_->Clear();
     return;
   }
 
-  if (packet->used < packet->size) {
-    char* buffer_pos = packet->buffer.get() + packet->used;
-    snd_pcm_sframes_t frames = FramesInPacket(*packet, bytes_per_output_frame_);
+  CHECK_EQ(buffer_->forward_bytes() % bytes_per_output_frame_, 0u);
+
+  const uint8* buffer_data;
+  size_t buffer_size;
+  if (buffer_->GetCurrentChunk(&buffer_data, &buffer_size)) {
+    buffer_size = buffer_size - (buffer_size % bytes_per_output_frame_);
+    snd_pcm_sframes_t frames = buffer_size / bytes_per_output_frame_;
 
     DCHECK_GT(frames, 0);
 
     snd_pcm_sframes_t frames_written =
-        wrapper_->PcmWritei(playback_handle_, buffer_pos, frames);
+        wrapper_->PcmWritei(playback_handle_, buffer_data, frames);
     if (frames_written < 0) {
       // Attempt once to immediately recover from EINTR,
       // EPIPE (overrun/underrun), ESTRPIPE (stream suspended).  WritePacket
@@ -598,37 +587,42 @@ void AlsaPcmOutputStream::WritePacket(Packet* packet) {
         stop_stream_ = true;
       }
     } else {
-      packet->used += frames_written * bytes_per_output_frame_;
+      if (frames_written > frames) {
+        LOG(WARNING)
+            << "snd_pcm_writei() has written more frame that we asked.";
+        frames_written = frames;
+      }
+
+      // Seek forward in the buffer after we've written some data to ALSA.
+      buffer_->Seek(frames_written * bytes_per_output_frame_);
     }
   }
 }
 
 void AlsaPcmOutputStream::WriteTask() {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(message_loop_, MessageLoop::current());
 
   if (stop_stream_) {
     return;
   }
 
-  BufferPacket(packet_.get());
-  WritePacket(packet_.get());
+  bool source_exhausted;
+  BufferPacket(&source_exhausted);
+  WritePacket();
 
-  ScheduleNextWrite(packet_.get());
+  ScheduleNextWrite(source_exhausted);
 }
 
-void AlsaPcmOutputStream::ScheduleNextWrite(Packet* current_packet) {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+void AlsaPcmOutputStream::ScheduleNextWrite(bool source_exhausted) {
+  DCHECK_EQ(message_loop_, MessageLoop::current());
 
   if (stop_stream_) {
     return;
   }
 
-  // Calculate when we should have enough buffer for another packet of data.
-  // Make sure to take into consideration down-mixing.
-  uint32 frames_leftover =
-      FramesInPacket(*current_packet, bytes_per_output_frame_);
-  uint32 frames_avail_wanted =
-      (frames_leftover > 0) ? frames_leftover : frames_per_packet_;
+  // Next write is scheduled for the moment when half of the buffer is
+  // available.
+  uint32 frames_avail_wanted = alsa_buffer_frames_ / 2;
   uint32 available_frames = GetAvailableFrames();
   uint32 next_fill_time_ms = 0;
 
@@ -648,12 +642,9 @@ void AlsaPcmOutputStream::ScheduleNextWrite(Packet* current_packet) {
   }
 
   // Avoid busy looping if the data source is exhausted.
-  if (current_packet->size == 0) {
+  if (source_exhausted) {
     next_fill_time_ms = std::max(next_fill_time_ms, kNoDataSleepMilliseconds);
   }
-
-  // Wake up sooner than should be necessary to avoid stutter.
-  next_fill_time_ms /= 2;  // TODO(fbarchard): Remove this hack.
 
   // Only schedule more reads/writes if we are still in the playing state.
   if (shared_data_.state() == kIsPlaying) {
@@ -670,11 +661,6 @@ void AlsaPcmOutputStream::ScheduleNextWrite(Packet* current_packet) {
           next_fill_time_ms);
     }
   }
-}
-
-uint32 AlsaPcmOutputStream::FramesInPacket(const Packet& packet,
-                                           uint32 bytes_per_frame) {
-  return (packet.size - packet.used) / bytes_per_frame;
 }
 
 uint32 AlsaPcmOutputStream::FramesToMicros(uint32 frames, uint32 sample_rate) {
@@ -733,55 +719,35 @@ std::string AlsaPcmOutputStream::FindDeviceForChannels(uint32 channels) {
   return guessed_device;
 }
 
-snd_pcm_t* AlsaPcmOutputStream::OpenDevice(const std::string& device_name,
-                                           uint32 channels,
-                                           unsigned int latency) {
-  snd_pcm_t* handle = NULL;
-  int error = wrapper_->PcmOpen(&handle, device_name.c_str(),
-                                SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
-  if (error < 0) {
-    LOG(ERROR) << "Cannot open audio device (" << device_name << "): "
-               << wrapper_->StrError(error);
-    return NULL;
-  }
+snd_pcm_sframes_t AlsaPcmOutputStream::GetCurrentDelay() {
+  snd_pcm_sframes_t delay = -1;
 
-  // Configure the device for software resampling.
-  if ((error = wrapper_->PcmSetParams(handle,
-                                      pcm_format_,
-                                      SND_PCM_ACCESS_RW_INTERLEAVED,
-                                      channels,
-                                      sample_rate_,
-                                      1,  // soft_resample -- let ALSA resample
-                                      latency)) < 0) {
-    LOG(ERROR) << "Unable to set PCM parameters for (" << device_name
-               << "): " << wrapper_->StrError(error)
-               << " -- Format: " << pcm_format_
-               << " Channels: " << channels
-               << " Latency (us): " << latency;
-    if (!CloseDevice(handle)) {
-      // TODO(ajwong): Retry on certain errors?
-      LOG(WARNING) << "Unable to close audio device. Leaking handle.";
+  // Don't query ALSA's delay if we have underrun since it'll be jammed at
+  // some non-zero value and potentially even negative!
+  if (wrapper_->PcmState(playback_handle_) != SND_PCM_STATE_XRUN) {
+    int error = wrapper_->PcmDelay(playback_handle_, &delay);
+    if (error < 0) {
+      // Assume a delay of zero and attempt to recover the device.
+      delay = -1;
+      error = wrapper_->PcmRecover(playback_handle_,
+                                   error,
+                                   kPcmRecoverIsSilent);
+      if (error < 0) {
+        LOG(ERROR) << "Failed querying delay: " << wrapper_->StrError(error);
+      }
     }
-    return NULL;
   }
 
-  return handle;
-}
+  // snd_pcm_delay() may not work in the beginning of the stream. In this case
+  // return delay of data we know currently is in the ALSA's buffer.
+  if (delay < 0)
+    delay = alsa_buffer_frames_ - GetAvailableFrames();
 
-bool AlsaPcmOutputStream::CloseDevice(snd_pcm_t* handle) {
-  std::string name = wrapper_->PcmName(handle);
-  int error = wrapper_->PcmClose(handle);
-  if (error < 0) {
-    LOG(ERROR) << "Error closing audio device (" << name << "): "
-               << wrapper_->StrError(error);
-    return false;
-  }
-
-  return true;
+  return delay;
 }
 
 snd_pcm_sframes_t AlsaPcmOutputStream::GetAvailableFrames() {
-  DCHECK_EQ(MessageLoop::current(), message_loop_);
+  DCHECK_EQ(message_loop_, MessageLoop::current());
 
   if (stop_stream_) {
     return 0;
@@ -818,38 +784,48 @@ snd_pcm_t* AlsaPcmOutputStream::AutoSelectDevice(unsigned int latency) {
 
   // Step 1.
   if (!device_name_.empty()) {
-    if ((handle = OpenDevice(device_name_, channels_, latency)) != NULL) {
+    if ((handle = alsa_util::OpenPlaybackDevice(wrapper_, device_name_.c_str(),
+                                                channels_, sample_rate_,
+                                                pcm_format_,
+                                                latency)) != NULL) {
       return handle;
     }
 
     // Step 2.
     device_name_ = kPlugPrefix + device_name_;
-    if ((handle = OpenDevice(device_name_, channels_, latency)) != NULL) {
+    if ((handle = alsa_util::OpenPlaybackDevice(wrapper_, device_name_.c_str(),
+                                                channels_, sample_rate_,
+                                                pcm_format_,
+                                                latency)) != NULL) {
       return handle;
     }
   }
 
   // For the kDefaultDevice device, we can only reliably depend on 2-channel
   // output to have the correct ordering according to Lennart.  For the channel
-  // formats that we know how to downmix from (5 channel to 6 channel), setup
+  // formats that we know how to downmix from (3 channel to 8 channel), setup
   // downmixing.
   //
   // TODO(ajwong): We need a SupportsFolding() function.
   uint32 default_channels = channels_;
-  if (default_channels >= 5 && default_channels <= 6) {
+  if (default_channels > 2 && default_channels <= 8) {
     should_downmix_ = true;
     default_channels = 2;
   }
 
   // Step 3.
   device_name_ = kDefaultDevice;
-  if ((handle = OpenDevice(device_name_, default_channels, latency)) != NULL) {
+  if ((handle = alsa_util::OpenPlaybackDevice(wrapper_, device_name_.c_str(),
+                                              default_channels, sample_rate_,
+                                              pcm_format_, latency)) != NULL) {
     return handle;
   }
 
   // Step 4.
   device_name_ = kPlugPrefix + device_name_;
-  if ((handle = OpenDevice(device_name_, default_channels, latency)) != NULL) {
+  if ((handle = alsa_util::OpenPlaybackDevice(wrapper_, device_name_.c_str(),
+                                              default_channels, sample_rate_,
+                                              pcm_format_, latency)) != NULL) {
     return handle;
   }
 
@@ -934,13 +910,12 @@ void AlsaPcmOutputStream::SharedData::set_volume(float v) {
   volume_ = v;
 }
 
-uint32 AlsaPcmOutputStream::SharedData::OnMoreData(AudioOutputStream* stream,
-                                                   void* dest,
-                                                   uint32 max_size,
-                                                   uint32 pending_bytes) {
+uint32 AlsaPcmOutputStream::SharedData::OnMoreData(
+    AudioOutputStream* stream, uint8* dest, uint32 max_size,
+    AudioBuffersState buffers_state) {
   AutoLock l(lock_);
   if (source_callback_) {
-    return source_callback_->OnMoreData(stream, dest, max_size, pending_bytes);
+    return source_callback_->OnMoreData(stream, dest, max_size, buffers_state);
   }
 
   return 0;

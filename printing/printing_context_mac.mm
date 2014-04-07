@@ -2,33 +2,36 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "printing/printing_context.h"
+#include "printing/printing_context_mac.h"
 
 #import <ApplicationServices/ApplicationServices.h>
 #import <AppKit/AppKit.h>
 
 #include "base/logging.h"
+#include "base/scoped_cftyperef.h"
+#include "base/sys_string_conversions.h"
 
 namespace printing {
 
-PrintingContext::PrintingContext()
-    : context_(NULL),
-      print_info_(nil),
-#ifndef NDEBUG
-      page_number_(-1),
-#endif
-      dialog_box_dismissed_(false),
-      in_print_job_(false),
-      abort_printing_(false) {
+// static
+PrintingContext* PrintingContext::Create() {
+  return static_cast<PrintingContext*>(new PrintingContextMac);
 }
 
-PrintingContext::~PrintingContext() {
-  ResetSettings();
+PrintingContextMac::PrintingContextMac()
+    : PrintingContext(),
+      print_info_(NULL),
+      context_(NULL) {
 }
 
+PrintingContextMac::~PrintingContextMac() {
+  ReleaseContext();
+}
 
-PrintingContext::Result PrintingContext::AskUserForSettings(
-    gfx::NativeWindow window, int max_pages, bool has_selection) {
+void PrintingContextMac::AskUserForSettings(gfx::NativeView parent_view,
+                                            int max_pages,
+                                            bool has_selection,
+                                            PrintSettingsCallback* callback) {
   DCHECK([NSThread isMainThread]);
 
   // We deliberately don't feed max_pages into the dialog, because setting
@@ -39,19 +42,36 @@ PrintingContext::Result PrintingContext::AskUserForSettings(
   // adding a new custom view to the panel on 10.5; 10.6 has
   // NSPrintPanelShowsPrintSelection).
   NSPrintPanel* panel = [NSPrintPanel printPanel];
-  // TODO(stuartmorgan): We really want a tab sheet here, not a modal window.
-  // Will require restructuring the PrintingContext API to use a callback.
-  NSInteger selection =
-      [panel runModalWithPrintInfo:[NSPrintInfo sharedPrintInfo]];
-  if (selection != NSOKButton) {
-    return CANCEL;
+  NSPrintInfo* printInfo = [NSPrintInfo sharedPrintInfo];
+
+  NSPrintPanelOptions options = [panel options];
+  options |= NSPrintPanelShowsPaperSize;
+  options |= NSPrintPanelShowsOrientation;
+  options |= NSPrintPanelShowsScaling;
+  [panel setOptions:options];
+
+  if (parent_view) {
+    NSString* job_title = [[parent_view window] title];
+    if (job_title) {
+      PMPrintSettings printSettings =
+          (PMPrintSettings)[printInfo PMPrintSettings];
+      PMPrintSettingsSetJobName(printSettings, (CFStringRef)job_title);
+      [printInfo updateFromPMPrintSettings];
+    }
   }
 
-  ParsePrintInfo([panel printInfo]);
-  return OK;
+  // TODO(stuartmorgan): We really want a tab sheet here, not a modal window.
+  // Will require restructuring the PrintingContext API to use a callback.
+  NSInteger selection = [panel runModalWithPrintInfo:printInfo];
+  if (selection == NSOKButton) {
+    ParsePrintInfo([panel printInfo]);
+    callback->Run(OK);
+  } else {
+    callback->Run(CANCEL);
+  }
 }
 
-PrintingContext::Result PrintingContext::UseDefaultSettings() {
+PrintingContext::Result PrintingContextMac::UseDefaultSettings() {
   DCHECK(!in_print_job_);
 
   ParsePrintInfo([NSPrintInfo sharedPrintInfo]);
@@ -59,7 +79,7 @@ PrintingContext::Result PrintingContext::UseDefaultSettings() {
   return OK;
 }
 
-void PrintingContext::ParsePrintInfo(NSPrintInfo* print_info) {
+void PrintingContextMac::ParsePrintInfo(NSPrintInfo* print_info) {
   ResetSettings();
   print_info_ = [print_info retain];
   PageRanges page_ranges;
@@ -80,7 +100,7 @@ void PrintingContext::ParsePrintInfo(NSPrintInfo* print_info) {
   settings_.Init(printer, page_format, page_ranges, false);
 }
 
-PrintingContext::Result PrintingContext::InitWithSettings(
+PrintingContext::Result PrintingContextMac::InitWithSettings(
     const PrintSettings& settings) {
   DCHECK(!in_print_job_);
   settings_ = settings;
@@ -90,21 +110,8 @@ PrintingContext::Result PrintingContext::InitWithSettings(
   return FAILED;
 }
 
-void PrintingContext::ResetSettings() {
-  [print_info_ autorelease];
-  print_info_ = nil;
-  settings_.Clear();
-#ifndef NDEBUG
-  page_number_ = -1;
-#endif
-  dialog_box_dismissed_ = false;
-  abort_printing_ = false;
-  in_print_job_ = false;
-  context_ = NULL;
-}
-
-PrintingContext::Result PrintingContext::NewDocument(
-    const std::wstring& document_name) {
+PrintingContext::Result PrintingContextMac::NewDocument(
+    const string16& document_name) {
   DCHECK(!in_print_job_);
 
   in_print_job_ = true;
@@ -115,20 +122,21 @@ PrintingContext::Result PrintingContext::NewDocument(
       static_cast<PMPrintSettings>([print_info_ PMPrintSettings]);
   PMPageFormat page_format =
       static_cast<PMPageFormat>([print_info_ PMPageFormat]);
+
+  scoped_cftyperef<CFStringRef> job_title(
+      base::SysUTF16ToCFStringRef(document_name));
+  PMPrintSettingsSetJobName(print_settings, job_title.get());
+
   OSStatus status = PMSessionBeginCGDocumentNoDialog(print_session,
                                                      print_settings,
                                                      page_format);
   if (status != noErr)
     return OnError();
 
-#ifndef NDEBUG
-  page_number_ = 0;
-#endif
-
   return OK;
 }
 
-PrintingContext::Result PrintingContext::NewPage() {
+PrintingContext::Result PrintingContextMac::NewPage() {
   if (abort_printing_)
     return CANCEL;
   DCHECK(in_print_job_);
@@ -146,14 +154,10 @@ PrintingContext::Result PrintingContext::NewPage() {
   if (status != noErr)
     return OnError();
 
-#ifndef NDEBUG
-  ++page_number_;
-#endif
-
   return OK;
 }
 
-PrintingContext::Result PrintingContext::PageDone() {
+PrintingContext::Result PrintingContextMac::PageDone() {
   if (abort_printing_)
     return CANCEL;
   DCHECK(in_print_job_);
@@ -169,7 +173,7 @@ PrintingContext::Result PrintingContext::PageDone() {
   return OK;
 }
 
-PrintingContext::Result PrintingContext::DocumentDone() {
+PrintingContext::Result PrintingContextMac::DocumentDone() {
   if (abort_printing_)
     return CANCEL;
   DCHECK(in_print_job_);
@@ -184,7 +188,7 @@ PrintingContext::Result PrintingContext::DocumentDone() {
   return OK;
 }
 
-void PrintingContext::Cancel() {
+void PrintingContextMac::Cancel() {
   abort_printing_ = true;
   in_print_job_ = false;
   context_ = NULL;
@@ -194,13 +198,20 @@ void PrintingContext::Cancel() {
   PMSessionEndPageNoDialog(print_session);
 }
 
-void PrintingContext::DismissDialog() {
+void PrintingContextMac::DismissDialog() {
   NOTIMPLEMENTED();
 }
 
-PrintingContext::Result PrintingContext::OnError() {
-  ResetSettings();
-  return abort_printing_ ? CANCEL : FAILED;
+void PrintingContextMac::ReleaseContext() {
+  if (print_info_) {
+    [print_info_ autorelease];
+    print_info_ = nil;
+    context_ = NULL;
+  }
+}
+
+gfx::NativeDrawingContext PrintingContextMac::context() const {
+  return context_;
 }
 
 }  // namespace printing

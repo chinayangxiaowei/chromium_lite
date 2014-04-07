@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_TRANSLATE_TRANSLATE_MANAGER_H_
 #define CHROME_BROWSER_TRANSLATE_TRANSLATE_MANAGER_H_
+#pragma once
 
 #include <map>
 #include <set>
@@ -13,15 +14,17 @@
 #include "base/lazy_instance.h"
 #include "base/singleton.h"
 #include "base/task.h"
-#include "chrome/browser/net/url_fetcher.h"
-#include "chrome/browser/translate/translate_infobars_delegates.h"
+#include "chrome/browser/prefs/pref_change_registrar.h"
+#include "chrome/common/net/url_fetcher.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/common/translate_errors.h"
 
 class GURL;
+struct PageTranslatedDetails;
 class PrefService;
 class TabContents;
+class TranslateInfoBarDelegate;
 
 // The TranslateManager class is responsible for showing an info-bar when a page
 // in a language different than the user language is loaded.  It triggers the
@@ -32,6 +35,25 @@ class TranslateManager : public NotificationObserver,
                          public URLFetcher::Delegate {
  public:
   virtual ~TranslateManager();
+
+  // Translates the page contents from |source_lang| to |target_lang|.
+  // The actual translation might be performed asynchronously if the translate
+  // script is not yet available.
+  void TranslatePage(TabContents* tab_contents,
+                     const std::string& source_lang,
+                     const std::string& target_lang);
+
+  // Reverts the contents of the page in |tab_contents| to its original
+  // language.
+  void RevertTranslation(TabContents* tab_contents);
+
+  // Reports to the Google translate server that a page language was incorrectly
+  // detected.  This call is initiated by the user selecting the "report" menu
+  // under options in the translate infobar.
+  void ReportLanguageDetectionError(TabContents* tab_contents);
+
+  // Clears the translate script, so it will be fetched next time we translate.
+  void ClearTranslateScript() { translate_script_.clear(); }
 
   // NotificationObserver implementation:
   virtual void Observe(NotificationType type,
@@ -46,20 +68,11 @@ class TranslateManager : public NotificationObserver,
                                   const ResponseCookies& cookies,
                                   const std::string& data);
 
-  // Translates the page contents from |source_lang| to |target_lang|.
-  // The actual translation might be performed asynchronously if the translate
-  // script is not yet available.
-  void TranslatePage(TabContents* tab_contents,
-                     const std::string& source_lang,
-                     const std::string& target_lang);
-
-  // Reverts the contents of the page in |tab_contents| to its original
-  // language.
-  void RevertTranslation(TabContents* tab_contents);
-
-  // Clears the translate script, so it will be fetched next time we translate.
-  // Currently used by unit-tests.
-  void ClearTranslateScript() { translate_script_.clear(); }
+  // Used by unit-tests to override the default delay after which the translate
+  // script is fetched again from the translation server.
+  void set_translate_script_expiration_delay(int delay_ms) {
+    translate_script_expiration_delay_ = delay_ms;
+  }
 
   // Convenience method to know if a tab is showing a translate infobar.
   static bool IsShowingTranslateInfobar(TabContents* tab);
@@ -76,8 +89,8 @@ class TranslateManager : public NotificationObserver,
   // specified |chrome_locale|.
   static std::string GetLanguageCode(const std::string& chrome_locale);
 
-  // Returns true if |page_language| is supported by the translation server.
-  static bool IsSupportedLanguage(const std::string& page_language);
+  // Returns true if |language| is supported by the translation server.
+  static bool IsSupportedLanguage(const std::string& language);
 
  protected:
   TranslateManager();
@@ -112,6 +125,9 @@ class TranslateManager : public NotificationObserver,
                        const std::string& source_lang,
                        const std::string& target_lang);
 
+   // Shows the after translate or error infobar depending on the details.
+   void PageTranslated(TabContents* tab, PageTranslatedDetails* details);
+
   // Returns true if the passed language has been configured by the user as an
   // accept language.
   bool IsAcceptLanguage(TabContents* tab, const std::string& language);
@@ -124,14 +140,9 @@ class TranslateManager : public NotificationObserver,
   // to translate it).
   void RequestTranslateScript();
 
-  // Convenience method that adds a translate infobar to |tab|.
-  static void AddTranslateInfoBar(
-      TabContents* tab,
-      TranslateInfoBarDelegate::TranslateState state,
-      const GURL& url,
-      const std::string& original_language,
-      const std::string& target_language,
-      TranslateErrors::Type error_type);
+  // Shows the specified translate |infobar| in the given |tab|.  If a current
+  // translate infobar is showing, it just replaces it with the new one.
+  void ShowInfoBar(TabContents* tab, TranslateInfoBarDelegate* infobar);
 
   // Returns the language to translate to, which is the language the UI is
   // configured in.  Returns an empty string if that language is not supported
@@ -143,6 +154,7 @@ class TranslateManager : public NotificationObserver,
       TabContents* tab);
 
   NotificationRegistrar notification_registrar_;
+  PrefChangeRegistrar pref_change_registrar_;
 
   // A map that associates a profile with its parsed "accept languages".
   typedef std::set<std::string> LanguageSet;
@@ -153,6 +165,10 @@ class TranslateManager : public NotificationObserver,
 
   // The JS injected in the page to do the translation.
   std::string translate_script_;
+
+  // Delay in milli-seconds after which the translate script is fetched again
+  // from the translate server.
+  int translate_script_expiration_delay_;
 
   // Whether the translate JS is currently being retrieved.
   bool translate_script_request_pending_;

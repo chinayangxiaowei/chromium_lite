@@ -9,7 +9,6 @@
 #define WEBKIT_GLUE_PLUGIN_PLUGIN_INSTANCE_H__
 
 #include <map>
-#include <set>
 #include <stack>
 #include <string>
 #include <vector>
@@ -333,7 +332,7 @@ class PluginInstance : public base::RefCountedThreadSafe<PluginInstance> {
   PendingRangeRequestMap pending_range_requests_;
   int next_range_request_id_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(PluginInstance);
+  DISALLOW_COPY_AND_ASSIGN(PluginInstance);
 };
 
 #if defined(OS_MACOSX)

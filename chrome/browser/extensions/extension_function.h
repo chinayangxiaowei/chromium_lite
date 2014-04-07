@@ -4,20 +4,20 @@
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_FUNCTION_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_FUNCTION_H_
+#pragma once
 
 #include <string>
 #include <list>
 
-#include "base/values.h"
 #include "base/scoped_ptr.h"
 #include "base/ref_counted.h"
 #include "chrome/browser/extensions/extension_function_dispatcher.h"
-#include "chrome/browser/extensions/extensions_service.h"
-#include "chrome/browser/profile.h"
 
 class ExtensionFunctionDispatcher;
+class ListValue;
 class Profile;
 class QuotaLimitHeuristic;
+class Value;
 
 #define EXTENSION_FUNCTION_VALIDATE(test) do { \
     if (!(test)) { \
@@ -37,12 +37,9 @@ class QuotaLimitHeuristic;
 
 // Abstract base class for extension functions the ExtensionFunctionDispatcher
 // knows how to dispatch to.
-//
-// TODO(aa): This will have to become reference counted when we introduce
-// APIs that live beyond a single stack frame.
-class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
+class ExtensionFunction : public base::RefCountedThreadSafe<ExtensionFunction> {
  public:
-  ExtensionFunction() : request_id_(-1), name_(""), has_callback_(false) {}
+  ExtensionFunction();
 
   // Specifies the name of the function.
   void set_name(const std::string& name) { name_ = name; }
@@ -60,7 +57,7 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   std::string extension_id() const { return extension_id_; }
 
   // Specifies the raw arguments to the function, as a JSON value.
-  virtual void SetArgs(const Value* args) = 0;
+  virtual void SetArgs(const ListValue* args) = 0;
 
   // Retrieves the results of the function as a JSON-encoded string (may
   // be empty).
@@ -93,6 +90,9 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   void set_include_incognito(bool include) { include_incognito_ = include; }
   bool include_incognito() { return include_incognito_; }
 
+  void set_user_gesture(bool user_gesture) { user_gesture_ = user_gesture; }
+  bool user_gesture() const { return user_gesture_; }
+
   // Execute the API. Clients should call set_raw_args() and
   // set_request_id() before calling this method. Derived classes should be
   // ready to return raw_result() and error() before returning from this
@@ -100,18 +100,14 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   virtual void Run() = 0;
 
  protected:
-  friend class base::RefCounted<ExtensionFunction>;
+  friend class base::RefCountedThreadSafe<ExtensionFunction>;
 
-  virtual ~ExtensionFunction() {}
+  virtual ~ExtensionFunction();
 
   // Gets the extension that called this function. This can return NULL for
   // async functions, for example if the extension is unloaded while the
   // function is running.
-  Extension* GetExtension() {
-    ExtensionsService* service = profile_->GetExtensionsService();
-    DCHECK(service);
-    return service->GetExtensionById(extension_id_, false);
-  }
+  Extension* GetExtension();
 
   // Gets the "current" browser, if any.
   //
@@ -129,9 +125,7 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   // This method can return NULL if there is no matching browser, which can
   // happen if only incognito windows are open, or early in startup or shutdown
   // shutdown when there are no active windows.
-  Browser* GetCurrentBrowser() {
-    return dispatcher()->GetCurrentBrowser(include_incognito_);
-  }
+  Browser* GetCurrentBrowser();
 
   // The peer to the dispatcher that will service this extension function call.
   scoped_refptr<ExtensionFunctionDispatcher::Peer> peer_;
@@ -155,8 +149,14 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   // of this call.
   bool has_callback_;
 
-  // True if this callback should include information from incognito contexts.
+  // True if this callback should include information from incognito contexts
+  // even if our profile_ is non-incognito. Note that in the case of a "split"
+  // mode extension, this will always be false, and we will limit access to
+  // data from within the same profile_ (either incognito or not).
   bool include_incognito_;
+
+  // True if the call was made in response of user gesture.
+  bool user_gesture_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionFunction);
 };
@@ -169,38 +169,28 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
 // parsing JSON (and instead uses custom serialization of Value objects).
 class AsyncExtensionFunction : public ExtensionFunction {
  public:
-  AsyncExtensionFunction() : args_(NULL), bad_message_(false) {}
+  AsyncExtensionFunction();
 
-  virtual void SetArgs(const Value* args);
+  virtual void SetArgs(const ListValue* args);
   virtual const std::string GetResult();
-  virtual const std::string GetError() { return error_; }
-  virtual void Run() {
-    if (!RunImpl())
-      SendResponse(false);
-  }
+  virtual const std::string GetError();
+  virtual void Run();
 
   // Derived classes should implement this method to do their work and return
   // success/failure.
   virtual bool RunImpl() = 0;
 
  protected:
-  virtual ~AsyncExtensionFunction() {}
+  virtual ~AsyncExtensionFunction();
 
   void SendResponse(bool success);
-
-  const ListValue* args_as_list() {
-    return static_cast<ListValue*>(args_.get());
-  }
-  const DictionaryValue* args_as_dictionary() {
-    return static_cast<DictionaryValue*>(args_.get());
-  }
 
   // Return true if the argument to this function at |index| was provided and
   // is non-null.
   bool HasOptionalArgument(size_t index);
 
   // The arguments to the API. Only non-null if argument were specified.
-  scoped_ptr<Value> args_;
+  scoped_ptr<ListValue> args_;
 
   // The result of the API. This should be populated by the derived class before
   // SendResponse() is called.
@@ -226,18 +216,16 @@ class AsyncExtensionFunction : public ExtensionFunction {
 // need to interact with things on the browser UI thread.
 class SyncExtensionFunction : public AsyncExtensionFunction {
  public:
-  SyncExtensionFunction() {}
+  SyncExtensionFunction();
 
   // Derived classes should implement this method to do their work and return
   // success/failure.
   virtual bool RunImpl() = 0;
 
-  virtual void Run() {
-    SendResponse(RunImpl());
-  }
+  virtual void Run();
 
  protected:
-  virtual ~SyncExtensionFunction() {}
+  virtual ~SyncExtensionFunction();
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SyncExtensionFunction);

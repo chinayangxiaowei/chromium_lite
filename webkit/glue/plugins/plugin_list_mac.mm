@@ -40,23 +40,14 @@ void GetPluginPrivateDirectory(std::vector<FilePath>* plugin_dirs) {
 
 // Returns true if the plugin should be prevented from loading.
 bool IsBlacklistedPlugin(const WebPluginInfo& info) {
-  std::string plugin_name = WideToUTF8(info.name);
-  // Non-functional, so it's better to let PDFs be downloaded.
-  if (plugin_name == "PDF Browser Plugin")
-    return true;
-
-  // We blacklist a couple of plugins by included MIME type, since those are
-  // more stable than their names. Be careful about adding any more plugins to
-  // this list though, since it's easy to accidentally blacklist plugins that
-  // support lots of MIME types.
+  // We blacklist Gears by included MIME type, since that is more stable than
+  // its name. Be careful about adding any more plugins to this list though,
+  // since it's easy to accidentally blacklist plugins that support lots of
+  // MIME types.
   for (std::vector<WebPluginMimeType>::const_iterator i =
            info.mime_types.begin(); i != info.mime_types.end(); ++i) {
     // The Gears plugin is Safari-specific, so don't load it.
     if (i->mime_type == "application/x-googlegears")
-      return true;
-    // The current version of O3D doesn't work (and overrealeases our dummy
-    // window). Waiting for a new release with recent fixes.
-    if (i->mime_type == "application/vnd.o3d.auto")
       return true;
   }
 
@@ -78,7 +69,8 @@ void PluginList::GetPluginDirectories(std::vector<FilePath>* plugin_dirs) {
   // Load from the machine-wide area
   GetPluginCommonDirectory(plugin_dirs, false);
 
-  // Load any bundled plugins
+  // Load any bundled plugins (deprecated)
+  // TODO(stuartmorgan): Remove this once it's not used in TestShell.
   GetPluginPrivateDirectory(plugin_dirs);
 }
 
@@ -99,6 +91,14 @@ bool PluginList::ShouldLoadPlugin(const WebPluginInfo& info,
                                   std::vector<WebPluginInfo>* plugins) {
   if (IsBlacklistedPlugin(info))
     return false;
+
+  // Flip4Mac has a reproducible hang during a synchronous call from the render
+  // with certain content types (as well as a common crash). Disable by default
+  // to minimize those issues, but don't blacklist it so that users can choose
+  // to enable it.
+  if (StartsWith(info.name, ASCIIToUTF16("Flip4Mac Windows Media Plugin"),
+                 false))
+    DisablePlugin(info.path);
 
   // Hierarchy check
   // (we're loading plugins hierarchically from Library folders, so plugins we

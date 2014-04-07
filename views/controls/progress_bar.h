@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_PROGRESS_BAR_H_
 #define VIEWS_CONTROLS_PROGRESS_BAR_H_
+#pragma once
 
 #include <string>
 
@@ -57,8 +58,8 @@ class ProgressBar : public View {
   virtual void SetEnabled(bool enabled);
 
   // Accessibility accessors, overridden from View.
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual bool GetAccessibleState(AccessibilityTypes::State* state);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual AccessibilityTypes::State GetAccessibleState();
 
   // Maximum value of progress.
   static const int kMaxProgress;
@@ -72,9 +73,6 @@ class ProgressBar : public View {
 
   // The view class name.
   static const char kViewClassName[];
-
-  // The storage string for the accessibility name associated with this control.
-  std::wstring accessible_name_;
 
   DISALLOW_COPY_AND_ASSIGN(ProgressBar);
 };

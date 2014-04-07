@@ -8,9 +8,9 @@
 #include <Security/Security.h>
 #include <time.h>
 
-#include "base/scoped_cftyperef.h"
 #include "base/logging.h"
 #include "base/pickle.h"
+#include "base/scoped_cftyperef.h"
 #include "base/sys_string_conversions.h"
 #include "net/base/cert_status_flags.h"
 #include "net/base/cert_verify_result.h"
@@ -358,6 +358,88 @@ OSStatus CopyCertChain(SecCertificateRef cert_handle,
   return SecTrustGetResult(trust, &status, out_cert_chain, &status_chain);
 }
 
+// Returns true if |purpose| is listed as allowed in |usage|. This
+// function also considers the "Any" purpose. If the attribute is
+// present and empty, we return false.
+bool ExtendedKeyUsageAllows(const CE_ExtendedKeyUsage* usage,
+                            const CSSM_OID* purpose) {
+  for (unsigned p = 0; p < usage->numPurposes; ++p) {
+    if (CSSMOIDEqual(&usage->purposes[p], purpose))
+      return true;
+    if (CSSMOIDEqual(&usage->purposes[p], &CSSMOID_ExtendedKeyUsageAny))
+      return true;
+  }
+  return false;
+}
+
+// Test that a given |cert_handle| is actually a valid X.509 certificate, and
+// return true if it is.
+//
+// On OS X, SecCertificateCreateFromData() does not return any errors if
+// called with invalid data, as long as data is present. The actual decoding
+// of the certificate does not happen until an API that requires a CSSM
+// handle is called. While SecCertificateGetCLHandle is the most likely
+// candidate, as it performs the parsing, it does not check whether the
+// parsing was actually successful. Instead, SecCertificateGetSubject is
+// used (supported since 10.3), as a means to check that the certificate
+// parsed as a valid X.509 certificate.
+bool IsValidOSCertHandle(SecCertificateRef cert_handle) {
+  const CSSM_X509_NAME* sanity_check = NULL;
+  OSStatus status = SecCertificateGetSubject(cert_handle, &sanity_check);
+  return status == noErr && sanity_check;
+}
+
+// Parses |data| of length |length|, attempting to decode it as the specified
+// |format|. If |data| is in the specified format, any certificates contained
+// within are stored into |output|.
+void AddCertificatesFromBytes(const char* data, size_t length,
+                              SecExternalFormat format,
+                              X509Certificate::OSCertHandles* output) {
+  SecExternalFormat input_format = format;
+  scoped_cftyperef<CFDataRef> local_data(CFDataCreateWithBytesNoCopy(
+      kCFAllocatorDefault, reinterpret_cast<const UInt8*>(data),
+      length, kCFAllocatorNull));
+
+  CFArrayRef items = NULL;
+  OSStatus status = SecKeychainItemImport(local_data, NULL, &input_format,
+                                          NULL, 0, NULL, NULL, &items);
+  if (status) {
+    DLOG(WARNING) << status << " Unable to import items from data of length "
+                  << length;
+    return;
+  }
+
+  scoped_cftyperef<CFArrayRef> scoped_items(items);
+  CFTypeID cert_type_id = SecCertificateGetTypeID();
+
+  for (CFIndex i = 0; i < CFArrayGetCount(items); ++i) {
+    SecKeychainItemRef item = reinterpret_cast<SecKeychainItemRef>(
+        const_cast<void*>(CFArrayGetValueAtIndex(items, i)));
+
+    // While inputFormat implies only certificates will be imported, if/when
+    // other formats (eg: PKCS#12) are supported, this may also include
+    // private keys or other items types, so filter appropriately.
+    if (CFGetTypeID(item) == cert_type_id) {
+      SecCertificateRef cert = reinterpret_cast<SecCertificateRef>(item);
+      // OS X ignores |input_format| if it detects that |local_data| is PEM
+      // encoded, attempting to decode data based on internal rules for PEM
+      // block headers. If a PKCS#7 blob is encoded with a PEM block of
+      // CERTIFICATE, OS X 10.5 will return a single, invalid certificate
+      // based on the decoded data. If this happens, the certificate should
+      // not be included in |output|. Because |output| is empty,
+      // CreateCertificateListfromBytes will use PEMTokenizer to decode the
+      // data. When called again with the decoded data, OS X will honor
+      // |input_format|, causing decode to succeed. On OS X 10.6, the data
+      // is properly decoded as a PKCS#7, whether PEM or not, which avoids
+      // the need to fallback to internal decoding.
+      if (IsValidOSCertHandle(cert)) {
+        CFRetain(cert);
+        output->push_back(cert);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 void X509Certificate::Initialize() {
@@ -446,6 +528,12 @@ int X509Certificate::Verify(const std::string& hostname, int flags,
   CFArrayAppendValue(cert_array, cert_handle_);
   for (size_t i = 0; i < intermediate_ca_certs_.size(); ++i)
     CFArrayAppendValue(cert_array, intermediate_ca_certs_[i]);
+
+  // From here on, only one thread can be active at a time. We have had a number
+  // of sporadic crashes in the SecTrustEvaluate call below, way down inside
+  // Apple's cert code, which we suspect are caused by a thread-safety issue.
+  // So as a speculative fix allow only one thread to use SecTrust on this cert.
+  AutoLock lock(verification_lock_);
 
   SecTrustRef trust_ref = NULL;
   status = SecTrustCreateWithCertificates(cert_array, ssl_policy, &trust_ref);
@@ -640,6 +728,21 @@ bool X509Certificate::VerifyEV() const {
 }
 
 // static
+bool X509Certificate::IsSameOSCert(X509Certificate::OSCertHandle a,
+                                   X509Certificate::OSCertHandle b) {
+  DCHECK(a && b);
+  if (a == b)
+    return true;
+  if (CFEqual(a, b))
+    return true;
+  CSSM_DATA a_data, b_data;
+  return SecCertificateGetData(a, &a_data) == noErr &&
+      SecCertificateGetData(b, &b_data) == noErr &&
+      a_data.Length == b_data.Length &&
+      memcmp(a_data.Data, b_data.Data, a_data.Length) == 0;
+}
+
+// static
 X509Certificate::OSCertHandle X509Certificate::CreateOSCertHandleFromBytes(
     const char* data, int length) {
   CSSM_DATA cert_data;
@@ -649,12 +752,38 @@ X509Certificate::OSCertHandle X509Certificate::CreateOSCertHandleFromBytes(
   OSCertHandle cert_handle = NULL;
   OSStatus status = SecCertificateCreateFromData(&cert_data,
                                                  CSSM_CERT_X_509v3,
-                                                 CSSM_CERT_ENCODING_BER,
+                                                 CSSM_CERT_ENCODING_DER,
                                                  &cert_handle);
-  if (status)
+  if (status != noErr)
     return NULL;
-
+  if (!IsValidOSCertHandle(cert_handle)) {
+    CFRelease(cert_handle);
+    return NULL;
+  }
   return cert_handle;
+}
+
+// static
+X509Certificate::OSCertHandles X509Certificate::CreateOSCertHandlesFromBytes(
+    const char* data, int length, Format format) {
+  OSCertHandles results;
+
+  switch (format) {
+    case FORMAT_SINGLE_CERTIFICATE: {
+      OSCertHandle handle = CreateOSCertHandleFromBytes(data, length);
+      if (handle)
+        results.push_back(handle);
+      break;
+    }
+    case FORMAT_PKCS7:
+      AddCertificatesFromBytes(data, length, kSecFormatPKCS7, &results);
+      break;
+    default:
+      NOTREACHED() << "Certificate format " << format << " unimplemented";
+      break;
+  }
+
+  return results;
 }
 
 // static
@@ -671,9 +800,9 @@ void X509Certificate::FreeOSCertHandle(OSCertHandle cert_handle) {
 }
 
 // static
-X509Certificate::Fingerprint X509Certificate::CalculateFingerprint(
+SHA1Fingerprint X509Certificate::CalculateFingerprint(
     OSCertHandle cert) {
-  Fingerprint sha1;
+  SHA1Fingerprint sha1;
   memset(sha1.data, 0, sizeof(sha1.data));
 
   CSSM_DATA cert_data;
@@ -693,25 +822,38 @@ bool X509Certificate::SupportsSSLClientAuth() const {
   CSSMFields fields;
   if (GetCertFields(cert_handle_, &fields) != noErr)
     return false;
+
+  // Gather the extensions we care about. We do not support
+  // CSSMOID_NetscapeCertType on OS X.
+  const CE_ExtendedKeyUsage* ext_key_usage = NULL;
+  const CE_KeyUsage* key_usage = NULL;
   for (unsigned f = 0; f < fields.num_of_fields; ++f) {
     const CSSM_FIELD& field = fields.fields[f];
     const CSSM_X509_EXTENSION* ext =
         reinterpret_cast<const CSSM_X509_EXTENSION*>(field.FieldValue.Data);
-    if (CSSMOIDEqual(&field.FieldOid, &CSSMOID_ExtendedKeyUsage)) {
-      const CE_ExtendedKeyUsage* usage =
+    if (CSSMOIDEqual(&field.FieldOid, &CSSMOID_KeyUsage)) {
+      key_usage = reinterpret_cast<const CE_KeyUsage*>(ext->value.parsedValue);
+    } else if (CSSMOIDEqual(&field.FieldOid, &CSSMOID_ExtendedKeyUsage)) {
+      ext_key_usage =
           reinterpret_cast<const CE_ExtendedKeyUsage*>(ext->value.parsedValue);
-      for (unsigned p = 0; p < usage->numPurposes; ++p) {
-        if (CSSMOIDEqual(&usage->purposes[p], &CSSMOID_ClientAuth))
-          return true;
-      }
-    } else if (CSSMOIDEqual(&field.FieldOid, &CSSMOID_NetscapeCertType)) {
-      uint16_t flags =
-          *reinterpret_cast<const uint16_t*>(ext->value.parsedValue);
-      if (flags & CE_NCT_SSL_Client)
-        return true;
     }
   }
-  return false;
+
+  // RFC5280 says to take the intersection of the two extensions.
+  //
+  // Our underlying crypto libraries don't expose
+  // ClientCertificateType, so for now we will not support fixed
+  // Diffie-Hellman mechanisms. For rsa_sign, we need the
+  // digitalSignature bit.
+  //
+  // In particular, if a key has the nonRepudiation bit and not the
+  // digitalSignature one, we will not offer it to the user.
+  if (key_usage && !((*key_usage) & CE_KU_DigitalSignature))
+    return false;
+  if (ext_key_usage && !ExtendedKeyUsageAllows(ext_key_usage,
+                                               &CSSMOID_ClientAuth))
+    return false;
+  return true;
 }
 
 bool X509Certificate::IsIssuedBy(
@@ -729,13 +871,12 @@ bool X509Certificate::IsIssuedBy(
   for (int i = 0; i < n; ++i) {
     SecCertificateRef cert_handle = reinterpret_cast<SecCertificateRef>(
         const_cast<void*>(CFArrayGetValueAtIndex(cert_chain, i)));
-    CFRetain(cert_handle);
     scoped_refptr<X509Certificate> cert = X509Certificate::CreateFromHandle(
         cert_handle,
         X509Certificate::SOURCE_LONE_CERT_IMPORT,
         X509Certificate::OSCertHandles());
     for (unsigned j = 0; j < valid_issuers.size(); j++) {
-      if (cert->subject().Matches(valid_issuers[j]))
+      if (cert->issuer().Matches(valid_issuers[j]))
         return true;
     }
   }
@@ -759,7 +900,7 @@ OSStatus X509Certificate::CreateSSLClientPolicy(SecPolicyRef* out_policy) {
 // static
 bool X509Certificate::GetSSLClientCertificates (
     const std::string& server_domain,
-    const std::vector<Principal>& valid_issuers,
+    const std::vector<CertPrincipal>& valid_issuers,
     std::vector<scoped_refptr<X509Certificate> >* certs) {
   scoped_cftyperef<SecIdentityRef> preferred_identity;
   if (!server_domain.empty()) {
@@ -789,16 +930,16 @@ bool X509Certificate::GetSSLClientCertificates (
     err = SecIdentityCopyCertificate(identity, &cert_handle);
     if (err != noErr)
       continue;
+    scoped_cftyperef<SecCertificateRef> scoped_cert_handle(cert_handle);
 
     scoped_refptr<X509Certificate> cert(
         CreateFromHandle(cert_handle, SOURCE_LONE_CERT_IMPORT,
                          OSCertHandles()));
-    // cert_handle is adoped by cert, so I don't need to release it myself.
     if (cert->HasExpired() || !cert->SupportsSSLClientAuth())
       continue;
 
     // Skip duplicates (a cert may be in multiple keychains).
-    X509Certificate::Fingerprint fingerprint = cert->fingerprint();
+    const SHA1Fingerprint& fingerprint = cert->fingerprint();
     unsigned i;
     for (i = 0; i < certs->size(); ++i) {
       if ((*certs)[i]->fingerprint().Equals(fingerprint))

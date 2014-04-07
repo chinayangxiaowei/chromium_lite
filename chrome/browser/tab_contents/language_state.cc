@@ -9,6 +9,7 @@
 
 LanguageState::LanguageState(NavigationController* nav_controller)
     : navigation_controller_(nav_controller),
+      page_translatable_(false),
       translation_pending_(false),
       translation_declined_(false),
       in_page_navigation_(false) {
@@ -17,11 +18,14 @@ LanguageState::LanguageState(NavigationController* nav_controller)
 LanguageState::~LanguageState() {
 }
 
-void LanguageState::DidNavigate(bool reload, bool in_page) {
-  in_page_navigation_ = in_page;
-  if (in_page)
+void LanguageState::DidNavigate(
+    const NavigationController::LoadCommittedDetails& details) {
+  in_page_navigation_ = details.is_in_page;
+  if (in_page_navigation_ || !details.is_main_frame)
     return;  // Don't reset our states, the page has not changed.
 
+  bool reload = details.entry->transition_type() == PageTransition::RELOAD ||
+                details.type == NavigationType::SAME_PAGE;
   if (reload) {
     // We might not get a LanguageDetermined notifications on reloads. Make sure
     // to keep the original language and to set current_lang_ so
@@ -38,13 +42,15 @@ void LanguageState::DidNavigate(bool reload, bool in_page) {
   translation_declined_ = false;
 }
 
-void LanguageState::LanguageDetermined(const std::string& page_language) {
+void LanguageState::LanguageDetermined(const std::string& page_language,
+                                       bool page_translatable) {
   if (in_page_navigation_ && !original_lang_.empty()) {
     // In-page navigation, we don't expect our states to change.
     // Note that we'll set the languages if original_lang_ is empty.  This might
     // happen if the we did not get called on the top-page.
     return;
   }
+  page_translatable_ = page_translatable;
   original_lang_ = page_language;
   current_lang_ = page_language;
 }

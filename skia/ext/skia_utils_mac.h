@@ -4,17 +4,22 @@
 
 #ifndef SKIA_EXT_SKIA_UTILS_MAC_H_
 #define SKIA_EXT_SKIA_UTILS_MAC_H_
+#pragma once
 
 #include <CoreGraphics/CGColor.h>
 
 #include "third_party/skia/include/core/SkColor.h"
 
-struct SkMatrix;
 struct SkIRect;
 struct SkPoint;
 struct SkRect;
 class SkBitmap;
+class SkMatrix;
+#ifdef __LP64__
+typedef CGSize NSSize;
+#else
 typedef struct _NSSize NSSize;
+#endif
 
 #ifdef __OBJC__
 @class NSImage;

@@ -4,9 +4,11 @@
 
 #ifndef BASE_SCOPED_NATIVE_LIBRARY_H_
 #define BASE_SCOPED_NATIVE_LIBRARY_H_
+#pragma once
 
-#include "base/file_path.h"
 #include "base/native_library.h"
+
+class FilePath;
 
 namespace base {
 
@@ -32,6 +34,7 @@ class ScopedNativeLibrary {
 
  private:
   base::NativeLibrary library_;
+  DISALLOW_COPY_AND_ASSIGN(ScopedNativeLibrary);
 };
 
 }  // namespace base

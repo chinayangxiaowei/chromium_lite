@@ -1,3 +1,7 @@
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 // extension_apitest.js
 // mini-framework for ExtensionApiTest browser tests
 
@@ -19,9 +23,15 @@ var chrome = chrome || {};
     throw "completed";
   }
 
+  // Helper function to get around the fact that function names in javascript
+  // are read-only, and you can't assign one to anonymous functions.
+  function testName(test) {
+    return test ? (test.name || test.generatedName) : "(no test)";
+  }
+
   chrome.test.fail = function(message) {
     if (completed) throw "completed";
-    chrome.test.log("(  FAILED  ) " + currentTest.name);
+    chrome.test.log("(  FAILED  ) " + testName(currentTest));
 
     var stack = "(no stack available)";
     try {
@@ -38,7 +48,7 @@ var chrome = chrome || {};
       message = "FAIL (no message)";
     }
     message += "\n" + stack;
-    console.log("[FAIL] " + currentTest.name + ": " + message);
+    console.log("[FAIL] " + testName(currentTest) + ": " + message);
     chrome.test.notifyFail(message);
     complete();
   };
@@ -53,7 +63,7 @@ var chrome = chrome || {};
 
   var pendingCallbacks = 0;
 
-  chrome.test.callbackAdded = function () {
+  chrome.test.callbackAdded = function() {
     pendingCallbacks++;
 
     return function() {
@@ -73,18 +83,18 @@ var chrome = chrome || {};
       return;
     }
     try {
-      chrome.test.log("( RUN      ) " + currentTest.name);
+      chrome.test.log("( RUN      ) " + testName(currentTest));
       currentTest.call();
     } catch (e) {
       var message = e.stack || "(no stack available)";
-      console.log("[FAIL] " + currentTest.name + ": " + message);
+      console.log("[FAIL] " + testName(currentTest) + ": " + message);
       chrome.test.notifyFail(message);
       complete();
     }
   };
 
   chrome.test.succeed = function() {
-    console.log("[SUCCESS] " + currentTest.name);
+    console.log("[SUCCESS] " + testName(currentTest));
     chrome.test.log("(  SUCCESS )");
     // Use setTimeout here to allow previous test contexts to be
     // eligible for garbage collection.
@@ -92,7 +102,15 @@ var chrome = chrome || {};
   };
 
   chrome.test.assertTrue = function(test, message) {
-    if (test !== true) {
+    chrome.test.assertBool(test, true, message);
+  };
+
+  chrome.test.assertFalse = function(test, message) {
+    chrome.test.assertBool(test, false, message);
+  };
+
+  chrome.test.assertBool = function(test, expected, message) {
+    if (test !== expected) {
       if (typeof(test) == "string") {
         if (message) {
           message = test + "\n" + message;
@@ -106,11 +124,11 @@ var chrome = chrome || {};
 
   chrome.test.assertEq = function(expected, actual) {
     if (expected != actual) {
-      chrome.test.fail("API Test Error in " + currentTest.name +
+      chrome.test.fail("API Test Error in " + testName(currentTest) +
                        "\nActual: " + actual + "\nExpected: " + expected);
     }
     if (typeof(expected) != typeof(actual)) {
-      chrome.test.fail("API Test Error in " + currentTest.name +
+      chrome.test.fail("API Test Error in " + testName(currentTest) +
                        " (type mismatch)\nActual Type: " + typeof(actual) +
                        "\nExpected Type:" + typeof(expected));
     }
@@ -134,9 +152,9 @@ var chrome = chrome || {};
         stack = e.stack.toString();
       }
       var msg = "Exception during execution of callback in " +
-                currentTest.name;
+                testName(currentTest);
       msg += "\n" + stack;
-      console.log("[FAIL] " + currentTest.name + ": " + msg);
+      console.log("[FAIL] " + testName(currentTest) + ": " + msg);
       chrome.test.notifyFail(msg);
       complete();
     }
@@ -155,6 +173,8 @@ var chrome = chrome || {};
         chrome.test.assertNoLastError();
       } else {
         chrome.test.assertEq(typeof(expectedError), 'string');
+        chrome.test.assertTrue(chrome.extension.lastError != undefined,
+            "No lastError, but expected " + expectedError);
         chrome.test.assertEq(expectedError, chrome.extension.lastError.message);
       }
 
@@ -196,8 +216,8 @@ var chrome = chrome || {};
     return chrome.test.callback(func);
   };
 
-  chrome.test.callbackFail = function(expectedError) {
-    return chrome.test.callback(null, expectedError);
+  chrome.test.callbackFail = function(expectedError, func) {
+    return chrome.test.callback(func, expectedError);
   };
 
   chrome.test.runTests = function(tests) {

@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.  Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #ifndef NET_FTP_FTP_DIRECTORY_LISTING_PARSER_UNITTEST_H_
 #define NET_FTP_FTP_DIRECTORY_LISTING_PARSER_UNITTEST_H_
+#pragma once
 
 #include "base/utf_string_conversions.h"
 #include "net/ftp/ftp_directory_listing_parser.h"
@@ -26,8 +27,7 @@ class FtpDirectoryListingParserTest : public testing::Test {
   };
 
  protected:
-  FtpDirectoryListingParserTest() {
-  }
+  FtpDirectoryListingParserTest() {}
 
   void RunSingleLineTestCase(FtpDirectoryListingParser* parser,
                              const SingleLineTestData& test_case) {
@@ -40,13 +40,23 @@ class FtpDirectoryListingParserTest : public testing::Test {
 
     base::Time::Exploded time_exploded;
     entry.last_modified.LocalExplode(&time_exploded);
+
+    // Only test members displayed on the directory listing.
     EXPECT_EQ(test_case.year, time_exploded.year);
     EXPECT_EQ(test_case.month, time_exploded.month);
     EXPECT_EQ(test_case.day_of_month, time_exploded.day_of_month);
     EXPECT_EQ(test_case.hour, time_exploded.hour);
     EXPECT_EQ(test_case.minute, time_exploded.minute);
-    EXPECT_EQ(0, time_exploded.second);
-    EXPECT_EQ(0, time_exploded.millisecond);
+  }
+
+  base::Time GetMockCurrentTime() {
+    base::Time::Exploded mock_current_time_exploded = { 0 };
+    mock_current_time_exploded.year = 1994;
+    mock_current_time_exploded.month = 11;
+    mock_current_time_exploded.day_of_month = 15;
+    mock_current_time_exploded.hour = 12;
+    mock_current_time_exploded.minute = 45;
+    return base::Time::FromLocalExploded(mock_current_time_exploded);
   }
 
  private:

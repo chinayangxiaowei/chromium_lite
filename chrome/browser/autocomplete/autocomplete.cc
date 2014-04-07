@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,12 @@
 
 #include "app/l10n_util.h"
 #include "base/basictypes.h"
+#include "base/command_line.h"
 #include "base/i18n/number_formatting.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/autocomplete/history_quick_provider.h"
 #include "chrome/browser/autocomplete/history_url_provider.h"
 #include "chrome/browser/autocomplete/history_contents_provider.h"
 #include "chrome/browser/autocomplete/keyword_provider.h"
@@ -18,8 +22,9 @@
 #include "chrome/browser/dom_ui/history_ui.h"
 #include "chrome/browser/external_protocol_handler.h"
 #include "chrome/browser/net/url_fixer_upper.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -27,6 +32,7 @@
 #include "googleurl/src/url_canon_ip.h"
 #include "googleurl/src/url_util.h"
 #include "grit/generated_resources.h"
+#include "grit/theme_resources.h"
 #include "net/base/net_util.h"
 #include "net/base/registry_controlled_domain.h"
 #include "net/url_request/url_request.h"
@@ -34,6 +40,13 @@
 using base::TimeDelta;
 
 // AutocompleteInput ----------------------------------------------------------
+
+AutocompleteInput::AutocompleteInput()
+  : type_(INVALID),
+    prevent_inline_autocomplete_(false),
+    prefer_keyword_(false),
+    synchronous_only_(false) {
+}
 
 AutocompleteInput::AutocompleteInput(const std::wstring& text,
                                      const std::wstring& desired_tld,
@@ -67,6 +80,9 @@ AutocompleteInput::AutocompleteInput(const std::wstring& text,
     text_.erase(0, 1);
 }
 
+AutocompleteInput::~AutocompleteInput() {
+}
+
 // static
 std::string AutocompleteInput::TypeToString(Type type) {
   switch (type) {
@@ -89,8 +105,6 @@ AutocompleteInput::Type AutocompleteInput::Parse(
     const std::wstring& desired_tld,
     url_parse::Parsed* parts,
     std::wstring* scheme) {
-  DCHECK(parts);
-
   const size_t first_non_white = text.find_first_not_of(kWhitespaceWide, 0);
   if (first_non_white == std::wstring::npos)
     return INVALID;  // All whitespace.
@@ -105,12 +119,17 @@ AutocompleteInput::Type AutocompleteInput::Parse(
   // use the URLFixerUpper here because we want to be smart about what we
   // consider a scheme.  For example, we shouldn't consider www.google.com:80
   // to have a scheme.
+  url_parse::Parsed local_parts;
+  if (!parts)
+    parts = &local_parts;
   const std::wstring parsed_scheme(URLFixerUpper::SegmentURL(text, parts));
   if (scheme)
     *scheme = parsed_scheme;
 
   if (parsed_scheme == L"file") {
-    // A user might or might not type a scheme when entering a file URL.
+    // A user might or might not type a scheme when entering a file URL.  In
+    // either case, |parsed_scheme| will tell us that this is a file URL, but
+    // |parts->scheme| might be empty, e.g. if the user typed "C:\foo".
     return URL;
   }
 
@@ -132,15 +151,15 @@ AutocompleteInput::Type AutocompleteInput::Parse(
     // should still claim to handle them.
     if (LowerCaseEqualsASCII(parsed_scheme, chrome::kViewSourceScheme) ||
         LowerCaseEqualsASCII(parsed_scheme, chrome::kJavaScriptScheme) ||
-        LowerCaseEqualsASCII(parsed_scheme, chrome::kDataScheme) ||
-        LowerCaseEqualsASCII(parsed_scheme, chrome::kPrintScheme))
+        LowerCaseEqualsASCII(parsed_scheme, chrome::kDataScheme))
       return URL;
 
     // Finally, check and see if the user has explicitly opened this scheme as
     // a URL before.  We need to do this last because some schemes may be in
     // here as "blocked" (e.g. "javascript") because we don't want pages to open
     // them, but users still can.
-    switch (ExternalProtocolHandler::GetBlockState(parsed_scheme)) {
+    // TODO(viettrungluu): get rid of conversion.
+    switch (ExternalProtocolHandler::GetBlockState(WideToUTF8(parsed_scheme))) {
       case ExternalProtocolHandler::DONT_BLOCK:
         return URL;
 
@@ -221,26 +240,24 @@ AutocompleteInput::Type AutocompleteInput::Parse(
         UNKNOWN : QUERY;
   }
 
-  // Presence of a port means this is likely a URL, if the port is really a port
-  // number.  If it's just garbage after a colon, this is a query.
+  // A port number is a good indicator that this is a URL.  However, it might
+  // also be a query like "1.66:1" that looks kind of like an IP address and
+  // port number. So here we only check for "port numbers" that are illegal and
+  // thus mean this can't be navigated to (e.g. "1.2.3.4:garbage"), and we save
+  // handling legal port numbers until after the "IP address" determination
+  // below.
   if (parts->port.is_nonempty()) {
     int port;
-    return (StringToInt(WideToUTF16(
-                text.substr(parts->port.begin, parts->port.len)), &port) &&
-            (port >= 0) && (port <= 65535)) ? URL : QUERY;
+    if (!base::StringToInt(WideToUTF8(
+            text.substr(parts->port.begin, parts->port.len)), &port) ||
+        (port < 0) || (port > 65535))
+      return QUERY;
   }
 
-  // Presence of a username could either indicate a URL or an email address
-  // ("user@mail.com").  E-mail addresses are likely queries so we only open
-  // this as a URL if the user explicitly typed a scheme.
-  if (parts->username.is_nonempty() && parts->scheme.is_nonempty())
-    return URL;
-
-  // Presence of a password means this is likely a URL.  Note that unless the
-  // user has typed an explicit "http://" or similar, we'll probably think that
-  // the username is some unknown scheme, and bail out in the scheme-handling
-  // code above.
-  if (parts->password.is_nonempty())
+  // Now that we've ruled out all schemes other than http or https and done a
+  // little more sanity checking, the presence of a scheme means this is likely
+  // a URL.
+  if (parts->scheme.is_nonempty())
     return URL;
 
   // See if the host is an IP address.
@@ -251,36 +268,48 @@ AutocompleteInput::Type AutocompleteInput::Parse(
     // it, unless they explicitly typed a scheme.  This is true even if the URL
     // appears to have a path: "1.2/45" is more likely a search (for the answer
     // to a math problem) than a URL.
-    if ((host_info.num_ipv4_components == 4) || parts->scheme.is_nonempty())
+    if (host_info.num_ipv4_components == 4)
       return URL;
     return desired_tld.empty() ? UNKNOWN : REQUESTED_URL;
   }
   if (host_info.family == url_canon::CanonHostInfo::IPV6)
     return URL;
 
+  // Now that we've ruled out invalid ports and queries that look like they have
+  // a port, the presence of a port means this is likely a URL.
+  if (parts->port.is_nonempty())
+    return URL;
+
+  // Presence of a password means this is likely a URL.  Note that unless the
+  // user has typed an explicit "http://" or similar, we'll probably think that
+  // the username is some unknown scheme, and bail out in the scheme-handling
+  // code above.
+  if (parts->password.is_nonempty())
+    return URL;
+
   // The host doesn't look like a number, so see if the user's given us a path.
   if (parts->path.is_nonempty()) {
     // Most inputs with paths are URLs, even ones without known registries (e.g.
-    // intranet URLs).  However, if the user didn't type a scheme, there's no
-    // known registry, and the path has a space, this is more likely a query
-    // with a slash in the first term (e.g. "ps/2 games") than a URL.  We can
-    // still open URLs with spaces in the path by escaping the space, and we
-    // will still inline autocomplete them if users have typed them in the past,
-    // but we default to searching since that's the common case.
-    return (!parts->scheme.is_nonempty() && (registry_length == 0) &&
+    // intranet URLs).  However, if there's no known registry and the path has
+    // a space, this is more likely a query with a slash in the first term
+    // (e.g. "ps/2 games") than a URL.  We can still open URLs with spaces in
+    // the path by escaping the space, and we will still inline autocomplete
+    // them if users have typed them in the past, but we default to searching
+    // since that's the common case.
+    return ((registry_length == 0) &&
             (text.substr(parts->path.begin, parts->path.len).find(' ') !=
                 std::wstring::npos)) ? UNKNOWN : URL;
   }
 
-  // If we reach here with a username, our input looks like "user@host"; this is
-  // the case mentioned above, where we think this is more likely an email
-  // address than an HTTP auth attempt, so search for it.
+  // If we reach here with a username, our input looks like "user@host".
+  // Because there is no scheme explicitly specified, we think this is more
+  // likely an email address than an HTTP auth attempt.  Hence, we search by
+  // default and let users correct us on a case-by-case basis.
   if (parts->username.is_nonempty())
     return UNKNOWN;
 
-  // We have a bare host string.  See if it has a known TLD or the user typed a
-  // scheme.  If so, it's probably a URL.
-  if (parts->scheme.is_nonempty() || (registry_length != 0))
+  // We have a bare host string.  If it has a known TLD, it's probably a URL.
+  if (registry_length != 0)
     return URL;
 
   // No TLD that we know about.  This could be:
@@ -317,12 +346,11 @@ void AutocompleteInput::ParseForEmphasizeComponents(
   *host = parts.host;
 
   int after_scheme_and_colon = parts.scheme.end() + 1;
-  // For the view-source and print schemes, we should emphasize the scheme and
-  // host of the URL qualified by the scheme prefix.
-  if ((LowerCaseEqualsASCII(scheme_str, chrome::kViewSourceScheme) ||
-       LowerCaseEqualsASCII(scheme_str, chrome::kPrintScheme)) &&
+  // For the view-source scheme, we should emphasize the scheme and host of the
+  // URL qualified by the view-source prefix.
+  if (LowerCaseEqualsASCII(scheme_str, chrome::kViewSourceScheme) &&
       (static_cast<int>(text.length()) > after_scheme_and_colon)) {
-    // Obtain the URL prefixed by scheme and parse it.
+    // Obtain the URL prefixed by view-source and parse it.
     std::wstring real_url(text.substr(after_scheme_and_colon));
     url_parse::Parsed real_parts;
     AutocompleteInput::Parse(real_url, desired_tld, &real_parts, NULL);
@@ -344,6 +372,19 @@ void AutocompleteInput::ParseForEmphasizeComponents(
     }
   }
 }
+
+// static
+std::wstring AutocompleteInput::FormattedStringWithEquivalentMeaning(
+    const GURL& url,
+    const std::wstring& formatted_url) {
+  if (!net::CanStripTrailingSlash(url))
+    return formatted_url;
+  const std::wstring url_with_path(formatted_url + L"/");
+  return (AutocompleteInput::Parse(formatted_url, std::wstring(), NULL, NULL) ==
+          AutocompleteInput::Parse(url_with_path, std::wstring(), NULL, NULL)) ?
+      formatted_url : url_with_path;
+}
+
 
 bool AutocompleteInput::Equals(const AutocompleteInput& other) const {
   return (text_ == other.text_) &&
@@ -367,6 +408,18 @@ void AutocompleteInput::Clear() {
 
 // AutocompleteMatch ----------------------------------------------------------
 
+AutocompleteMatch::AutocompleteMatch()
+    : provider(NULL),
+      relevance(0),
+      deletable(false),
+      inline_autocomplete_offset(std::wstring::npos),
+      transition(PageTransition::GENERATED),
+      is_history_what_you_typed_match(false),
+      type(SEARCH_WHAT_YOU_TYPED),
+      template_url(NULL),
+      starred(false) {
+}
+
 AutocompleteMatch::AutocompleteMatch(AutocompleteProvider* provider,
                                      int relevance,
                                      bool deletable,
@@ -382,25 +435,45 @@ AutocompleteMatch::AutocompleteMatch(AutocompleteProvider* provider,
       starred(false) {
 }
 
+AutocompleteMatch::~AutocompleteMatch() {
+}
+
 // static
 std::string AutocompleteMatch::TypeToString(Type type) {
-  switch (type) {
-    case URL_WHAT_YOU_TYPED:    return "url-what-you-typed";
-    case HISTORY_URL:           return "history-url";
-    case HISTORY_TITLE:         return "history-title";
-    case HISTORY_BODY:          return "history-body";
-    case HISTORY_KEYWORD:       return "history-keyword";
-    case NAVSUGGEST:            return "navsuggest";
-    case SEARCH_WHAT_YOU_TYPED: return "search-what-you-typed";
-    case SEARCH_HISTORY:        return "search-history";
-    case SEARCH_SUGGEST:        return "search-suggest";
-    case SEARCH_OTHER_ENGINE:   return "search-other-engine";
-    case OPEN_HISTORY_PAGE:     return "open-history-page";
+  const char* strings[NUM_TYPES] = {
+    "url-what-you-typed",
+    "history-url",
+    "history-title",
+    "history-body",
+    "history-keyword",
+    "navsuggest",
+    "search-what-you-typed",
+    "search-history",
+    "search-suggest",
+    "search-other-engine",
+    "open-history-page",
+  };
+  DCHECK(arraysize(strings) == NUM_TYPES);
+  return strings[type];
+}
 
-    default:
-      NOTREACHED();
-      return std::string();
-  }
+// static
+int AutocompleteMatch::TypeToIcon(Type type) {
+  int icons[NUM_TYPES] = {
+    IDR_OMNIBOX_HTTP,
+    IDR_OMNIBOX_HTTP,
+    IDR_OMNIBOX_HISTORY,
+    IDR_OMNIBOX_HISTORY,
+    IDR_OMNIBOX_HISTORY,
+    IDR_OMNIBOX_HTTP,
+    IDR_OMNIBOX_SEARCH,
+    IDR_OMNIBOX_SEARCH,
+    IDR_OMNIBOX_SEARCH,
+    IDR_OMNIBOX_SEARCH,
+    IDR_OMNIBOX_MORE,
+  };
+  DCHECK(arraysize(icons) == NUM_TYPES);
+  return icons[type];
 }
 
 // static
@@ -517,10 +590,18 @@ void AutocompleteMatch::ValidateClassifications(
 // AutocompleteProvider -------------------------------------------------------
 
 // static
-size_t AutocompleteProvider::max_matches_ = 3;
+const size_t AutocompleteProvider::kMaxMatches = 3;
 
-AutocompleteProvider::~AutocompleteProvider() {
-  Stop();
+AutocompleteProvider::ACProviderListener::~ACProviderListener() {
+}
+
+AutocompleteProvider::AutocompleteProvider(ACProviderListener* listener,
+                                           Profile* profile,
+                                           const char* name)
+    : profile_(profile),
+      listener_(listener),
+      done_(true),
+      name_(name) {
 }
 
 void AutocompleteProvider::SetProfile(Profile* profile) {
@@ -529,24 +610,25 @@ void AutocompleteProvider::SetProfile(Profile* profile) {
   profile_ = profile;
 }
 
-// static
-size_t AutocompleteProvider::TrimHttpPrefix(std::wstring* url) {
-  url_parse::Component scheme;
-  if (!url_util::FindAndCompareScheme(WideToUTF8(*url), chrome::kHttpScheme,
-                                      &scheme))
-    return 0;  // Not "http".
+void AutocompleteProvider::Stop() {
+  done_ = true;
+}
 
-  // Erase scheme plus up to two slashes.
-  size_t prefix_len = scheme.end() + 1;  // "http:"
-  const size_t after_slashes = std::min(url->length(),
-                                        static_cast<size_t>(scheme.end() + 3));
-  while ((prefix_len < after_slashes) && ((*url)[prefix_len] == L'/'))
-    ++prefix_len;
-  if (prefix_len == url->length())
-    url->clear();
-  else
-    url->erase(url->begin(), url->begin() + prefix_len);
-  return prefix_len;
+void AutocompleteProvider::DeleteMatch(const AutocompleteMatch& match) {
+}
+
+AutocompleteProvider::~AutocompleteProvider() {
+  Stop();
+}
+
+// static
+bool AutocompleteProvider::HasHTTPScheme(const std::wstring& input) {
+  std::string utf8_input(WideToUTF8(input));
+  url_parse::Component scheme;
+  if (url_util::FindAndCompareScheme(utf8_input, chrome::kViewSourceScheme,
+                                     &scheme))
+    utf8_input.erase(0, scheme.end() + 1);
+  return url_util::FindAndCompareScheme(utf8_input, chrome::kHttpScheme, NULL);
 }
 
 void AutocompleteProvider::UpdateStarredStateOfMatches() {
@@ -563,18 +645,22 @@ void AutocompleteProvider::UpdateStarredStateOfMatches() {
     i->starred = bookmark_model->IsBookmarked(GURL(i->destination_url));
 }
 
-std::wstring AutocompleteProvider::StringForURLDisplay(
-    const GURL& url,
-    bool check_accept_lang) const {
-  std::wstring languages = (check_accept_lang && profile_) ?
-      profile_->GetPrefs()->GetString(prefs::kAcceptLanguages) : std::wstring();
-  return net::FormatUrl(url, languages);
+std::wstring AutocompleteProvider::StringForURLDisplay(const GURL& url,
+                                                       bool check_accept_lang,
+                                                       bool trim_http) const {
+  std::string languages = (check_accept_lang && profile_) ?
+      profile_->GetPrefs()->GetString(prefs::kAcceptLanguages) : std::string();
+  return UTF16ToWideHack(net::FormatUrl(
+      url,
+      languages,
+      net::kFormatUrlOmitAll & ~(trim_http ? 0 : net::kFormatUrlOmitHTTP),
+      UnescapeRule::SPACES, NULL, NULL, NULL));
 }
 
 // AutocompleteResult ---------------------------------------------------------
 
 // static
-size_t AutocompleteResult::max_matches_ = 6;
+const size_t AutocompleteResult::kMaxMatches = 6;
 
 void AutocompleteResult::Selection::Clear() {
   destination_url = GURL();
@@ -585,13 +671,15 @@ void AutocompleteResult::Selection::Clear() {
 AutocompleteResult::AutocompleteResult() {
   // Reserve space for the max number of matches we'll show. The +1 accounts
   // for the history shortcut match as it isn't included in max_matches.
-  matches_.reserve(max_matches() + 1);
+  matches_.reserve(kMaxMatches + 1);
 
   // It's probably safe to do this in the initializer list, but there's little
   // penalty to doing it here and it ensures our object is fully constructed
   // before calling member functions.
   default_match_ = end();
 }
+
+AutocompleteResult::~AutocompleteResult() {}
 
 void AutocompleteResult::CopyFrom(const AutocompleteResult& rhs) {
   if (this == &rhs)
@@ -632,11 +720,11 @@ void AutocompleteResult::SortAndCull(const AutocompleteInput& input) {
                              &AutocompleteMatch::DestinationsEqual),
                  matches_.end());
 
-  // Find the top max_matches.
-  if (matches_.size() > max_matches()) {
-    std::partial_sort(matches_.begin(), matches_.begin() + max_matches(),
+  // Find the top |kMaxMatches| matches.
+  if (matches_.size() > kMaxMatches) {
+    std::partial_sort(matches_.begin(), matches_.begin() + kMaxMatches,
                       matches_.end(), &AutocompleteMatch::MoreRelevant);
-    matches_.erase(matches_.begin() + max_matches(), matches_.end());
+    matches_.erase(matches_.begin() + kMaxMatches, matches_.end());
   }
 
   // HistoryContentsProvider uses a negative relevance as a way to avoid
@@ -659,8 +747,14 @@ void AutocompleteResult::SortAndCull(const AutocompleteInput& input) {
        (input.type() == AutocompleteInput::REQUESTED_URL)) &&
       (default_match_ != end()) &&
       (default_match_->transition != PageTransition::TYPED) &&
+      (default_match_->transition != PageTransition::KEYWORD) &&
       (input.canonicalized_url() != default_match_->destination_url))
     alternate_nav_url_ = input.canonicalized_url();
+}
+
+void AutocompleteResult::Reset() {
+  matches_.clear();
+  default_match_ = end();
 }
 
 #ifndef NDEBUG
@@ -686,7 +780,11 @@ AutocompleteController::AutocompleteController(Profile* profile)
       have_committed_during_this_query_(false),
       done_(true) {
   providers_.push_back(new SearchProvider(this, profile));
-  providers_.push_back(new HistoryURLProvider(this, profile));
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEnableInMemoryURLIndex))
+    providers_.push_back(new HistoryQuickProvider(this, profile));
+  else
+    providers_.push_back(new HistoryURLProvider(this, profile));
   providers_.push_back(new KeywordProvider(this, profile));
   history_contents_provider_ = new HistoryContentsProvider(this, profile);
   providers_.push_back(history_contents_provider_);
@@ -743,9 +841,12 @@ void AutocompleteController::Start(const std::wstring& text,
   // If we're interrupting an old query, and committing its result won't shrink
   // the visible set (which would probably re-expand soon, thus looking very
   // flickery), then go ahead and commit what we've got, in order to feel more
-  // responsive when the user is typing rapidly.
+  // responsive when the user is typing rapidly.  In this case it's important
+  // that we don't update the edit, as the user has already changed its contents
+  // and anything we might do with it (e.g. inline autocomplete) likely no
+  // longer applies.
   if (!minimal_changes && !done_ && (latest_result_.size() >= result_.size()))
-    CommitResult();
+    CommitResult(false);
 
   // If the timer is already running, it could fire shortly after starting this
   // query, when we're likely to only have the synchronous results back, thus
@@ -772,8 +873,7 @@ void AutocompleteController::Start(const std::wstring& text,
 void AutocompleteController::Stop(bool clear_result) {
   for (ACProviders::const_iterator i(providers_.begin()); i != providers_.end();
        ++i) {
-    if (!(*i)->done())
-      (*i)->Stop();
+    (*i)->Stop();
   }
 
   update_delay_timer_.Stop();
@@ -797,17 +897,20 @@ void AutocompleteController::DeleteMatch(const AutocompleteMatch& match) {
   DCHECK(match.deletable);
   match.provider->DeleteMatch(match);  // This may synchronously call back to
                                        // OnProviderUpdate().
-  CommitResult();  // Ensure any new result gets committed immediately.  If it
-                   // was committed already or hasn't been modified, this is
-                   // harmless.
+  CommitResult(true);  // Ensure any new result gets committed immediately.  If
+                       // it was committed already or hasn't been modified, this
+                       // is harmless.
+}
+
+void AutocompleteController::CommitIfQueryHasNeverBeenCommitted() {
+  if (!have_committed_during_this_query_)
+    CommitResult(true);
 }
 
 void AutocompleteController::OnProviderUpdate(bool updated_matches) {
   CheckIfDone();
-  if (updated_matches || done_) {
+  if (updated_matches || done_)
     UpdateLatestResult(false);
-    return;
-  }
 }
 
 void AutocompleteController::UpdateLatestResult(bool is_synchronous_pass) {
@@ -848,15 +951,15 @@ void AutocompleteController::UpdateLatestResult(bool is_synchronous_pass) {
   // last commit, to minimize flicker.
   if (result_.empty() || (done_ && !have_committed_during_this_query_) ||
       delay_interval_has_passed_)
-    CommitResult();
+    CommitResult(true);
 }
 
 void AutocompleteController::DelayTimerFired() {
   delay_interval_has_passed_ = true;
-  CommitResult();
+  CommitResult(true);
 }
 
-void AutocompleteController::CommitResult() {
+void AutocompleteController::CommitResult(bool notify_default_match) {
   if (done_) {
     update_delay_timer_.Stop();
     delay_interval_has_passed_ = false;
@@ -874,13 +977,15 @@ void AutocompleteController::CommitResult() {
       NotificationType::AUTOCOMPLETE_CONTROLLER_RESULT_UPDATED,
       Source<AutocompleteController>(this),
       Details<const AutocompleteResult>(&result_));
-  // This notification must be sent after the other so the popup has time to
-  // update its state before the edit calls into it.
-  // TODO(pkasting): Eliminate this ordering requirement.
-  NotificationService::current()->Notify(
-      NotificationType::AUTOCOMPLETE_CONTROLLER_DEFAULT_MATCH_UPDATED,
-      Source<AutocompleteController>(this),
-      Details<const AutocompleteResult>(&result_));
+  if (notify_default_match) {
+    // This notification must be sent after the other so the popup has time to
+    // update its state before the edit calls into it.
+    // TODO(pkasting): Eliminate this ordering requirement.
+    NotificationService::current()->Notify(
+        NotificationType::AUTOCOMPLETE_CONTROLLER_DEFAULT_MATCH_UPDATED,
+        Source<AutocompleteController>(this),
+        Details<const AutocompleteResult>(&result_));
+  }
   if (!done_)
     update_delay_timer_.Reset();
 }
@@ -977,7 +1082,7 @@ void AutocompleteController::AddHistoryContentsShortcut() {
                               ACMatchClassification::NONE));
   }
   match.destination_url =
-      HistoryUI::GetHistoryURLWithSearchText(input_.text());
+      HistoryUI::GetHistoryURLWithSearchText(WideToUTF16(input_.text()));
   match.transition = PageTransition::AUTO_BOOKMARK;
   match.provider = history_contents_provider_;
   latest_result_.AddMatch(match);

@@ -4,6 +4,7 @@
 
 #ifndef BASE_LEAK_TRACKER_H_
 #define BASE_LEAK_TRACKER_H_
+#pragma once
 
 // Only enable leak tracking in debug builds.
 #ifndef NDEBUG
@@ -90,7 +91,7 @@ class LeakTracker : public LinkNode<LeakTracker<T> > {
 
       ++count;
       LOG(ERROR) << "Leaked " << node << " which was allocated by:";
-      allocation_stack.OutputToStream(&LOG(ERROR));
+      allocation_stack.OutputToStream(&LOG_STREAM(ERROR));
     }
 
     CHECK_EQ(0u, count);

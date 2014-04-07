@@ -26,45 +26,53 @@ bool HttpAuthHandlerBasic::Init(HttpAuth::ChallengeTokenizer* challenge) {
   scheme_ = "basic";
   score_ = 1;
   properties_ = 0;
-
-  // Verify the challenge's auth-scheme.
-  if (!challenge->valid() ||
-      !LowerCaseEqualsASCII(challenge->scheme(), "basic"))
-    return false;
-
-  // Extract the realm (may be missing).
-  while (challenge->GetNext()) {
-    if (LowerCaseEqualsASCII(challenge->name(), "realm"))
-      realm_ = challenge->unquoted_value();
-  }
-
-  return challenge->valid();
+  return ParseChallenge(challenge);
 }
 
-int HttpAuthHandlerBasic::GenerateAuthToken(
-    const std::wstring& username,
-    const std::wstring& password,
+bool HttpAuthHandlerBasic::ParseChallenge(
+    HttpAuth::ChallengeTokenizer* challenge) {
+  // Verify the challenge's auth-scheme.
+  if (!LowerCaseEqualsASCII(challenge->scheme(), "basic"))
+    return false;
+
+  HttpUtil::NameValuePairsIterator parameters = challenge->param_pairs();
+
+  // Extract the realm (may be missing).
+  std::string realm;
+  while (parameters.GetNext()) {
+    if (LowerCaseEqualsASCII(parameters.name(), "realm"))
+      realm = parameters.unquoted_value();
+  }
+
+  if (!parameters.valid())
+    return false;
+
+  realm_ = realm;
+  return true;
+}
+
+HttpAuth::AuthorizationResult HttpAuthHandlerBasic::HandleAnotherChallenge(
+    HttpAuth::ChallengeTokenizer* challenge) {
+  // Basic authentication is always a single round, so any responses should
+  // be treated as a rejection.
+  return HttpAuth::AUTHORIZATION_RESULT_REJECT;
+}
+
+int HttpAuthHandlerBasic::GenerateAuthTokenImpl(
+    const string16* username,
+    const string16* password,
     const HttpRequestInfo*,
-    const ProxyInfo*,
+    CompletionCallback*,
     std::string* auth_token) {
   // TODO(eroman): is this the right encoding of username/password?
   std::string base64_username_password;
-  if (!base::Base64Encode(WideToUTF8(username) + ":" + WideToUTF8(password),
+  if (!base::Base64Encode(UTF16ToUTF8(*username) + ":" + UTF16ToUTF8(*password),
                           &base64_username_password)) {
     LOG(ERROR) << "Unexpected problem Base64 encoding.";
     return ERR_UNEXPECTED;
   }
   *auth_token = "Basic " + base64_username_password;
   return OK;
-}
-
-int HttpAuthHandlerBasic::GenerateDefaultAuthToken(
-    const HttpRequestInfo* request,
-    const ProxyInfo* proxy,
-    std::string* auth_token) {
-  NOTREACHED();
-  LOG(ERROR) << ErrorToString(ERR_NOT_IMPLEMENTED);
-  return ERR_NOT_IMPLEMENTED;
 }
 
 HttpAuthHandlerBasic::Factory::Factory() {
@@ -77,11 +85,14 @@ int HttpAuthHandlerBasic::Factory::CreateAuthHandler(
     HttpAuth::ChallengeTokenizer* challenge,
     HttpAuth::Target target,
     const GURL& origin,
-    scoped_refptr<HttpAuthHandler>* handler) {
+    CreateReason reason,
+    int digest_nonce_count,
+    const BoundNetLog& net_log,
+    scoped_ptr<HttpAuthHandler>* handler) {
   // TODO(cbentzel): Move towards model of parsing in the factory
   //                 method and only constructing when valid.
-  scoped_refptr<HttpAuthHandler> tmp_handler(new HttpAuthHandlerBasic());
-  if (!tmp_handler->InitFromChallenge(challenge, target, origin))
+  scoped_ptr<HttpAuthHandler> tmp_handler(new HttpAuthHandlerBasic());
+  if (!tmp_handler->InitFromChallenge(challenge, target, origin, net_log))
     return ERR_INVALID_RESPONSE;
   handler->swap(tmp_handler);
   return OK;

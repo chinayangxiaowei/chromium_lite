@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GFX_ICON_UTIL_H_
 #define GFX_ICON_UTIL_H_
+#pragma once
 
 #include <windows.h>
 #include <string>
@@ -11,8 +12,9 @@
 #include "base/basictypes.h"
 
 namespace gfx {
-  class Size;
+class Size;
 }
+class FilePath;
 class SkBitmap;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -76,8 +78,11 @@ class IconUtil {
   // the desired .ico file.
   //
   // The function returns true on success and false otherwise.
+  // TODO(tfarina): Deprecated version of the FilePath version below.
   static bool CreateIconFileFromSkBitmap(const SkBitmap& bitmap,
                                          const std::wstring& icon_file_name);
+  static bool CreateIconFileFromSkBitmap(const SkBitmap& bitmap,
+                                         const FilePath& icon_path);
 
  private:
   // The icon format is published in the MSDN but there is no definition of
@@ -125,9 +130,6 @@ class IconUtil {
   // The dimensions of the icon images we insert into the .ico file.
   static const int icon_dimensions_[];
 
-  // Returns how many icon dimensions are defined.
-  static int GetIconDimensionCount();
-
   // Returns true if any pixel in the given pixels buffer has an non-zero alpha.
   static bool PixelsHaveAlpha(const uint32* pixels, size_t num_pixels);
 
@@ -146,17 +148,17 @@ class IconUtil {
   // includes only the image data written into the memory pointed to by
   // |icon_image|.
   static void SetSingleIconImageInformation(const SkBitmap& bitmap,
-                                            int index,
+                                            size_t index,
                                             ICONDIR* icon_dir,
                                             ICONIMAGE* icon_image,
-                                            int image_offset,
-                                            int* image_byte_count);
+                                            size_t image_offset,
+                                            size_t* image_byte_count);
 
   // Copies the bits of an SkBitmap object into a buffer holding the bits of
   // the corresponding image for an icon within the .ico file.
   static void CopySkBitmapBitsIntoIconBuffer(const SkBitmap& bitmap,
                                              unsigned char* buffer,
-                                             int buffer_size);
+                                             size_t buffer_size);
 
   // Given a single bitmap, this function creates a set of bitmaps with
   // specific dimensions by resizing the given bitmap to the appropriate sizes.
@@ -166,7 +168,7 @@ class IconUtil {
   // Given a set of bitmaps with varying dimensions, this function computes
   // the amount of memory needed in order to store the bitmaps as image icons
   // in a .ico file.
-  static int ComputeIconFileBufferSize(const std::vector<SkBitmap>& set);
+  static size_t ComputeIconFileBufferSize(const std::vector<SkBitmap>& set);
 
   // A helper function for computing various size components of a given bitmap.
   // The different sizes can be used within the various .ico file structures.
@@ -184,9 +186,8 @@ class IconUtil {
   //                       and is not accounted for when computing the
   //                       different size components.
   static void ComputeBitmapSizeComponents(const SkBitmap& bitmap,
-                                          int* xor_mask_size,
-                                          int* and_mask_size,
-                                          int* bytes_in_resource);
+                                          size_t* xor_mask_size,
+                                          size_t* bytes_in_resource);
 
   // Prevent clients from instantiating objects of that class by declaring the
   // ctor/dtor as private.

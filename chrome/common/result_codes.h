@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_RESULT_CODES_H_
 #define CHROME_COMMON_RESULT_CODES_H_
+#pragma once
 
 #include "base/process_util.h"
 
@@ -55,6 +56,8 @@ class ResultCodes {
                                 // not count as active chrome usage.
 
     PROFILE_IN_USE,             // The profile was in use on another host.
+
+    UNINSTALL_EXTENSION_ERROR,  // Failed to silently uninstall an extension.
 
     EXIT_LAST_CODE              // Last return code (keep it last).
   };

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_AUTOFILL_CREDIT_CARD_FIELD_H_
 #define CHROME_BROWSER_AUTOFILL_CREDIT_CARD_FIELD_H_
+#pragma once
 
 #include <vector>
 
@@ -15,7 +16,7 @@ class CreditCardField : public FormField {
  public:
   // FormField implementation:
   virtual bool GetFieldInfo(FieldTypeMap* field_type_map) const;
-  virtual FormFieldType GetFormFieldType() const { return kCreditCardType; }
+  virtual FormFieldType GetFormFieldType() const;
 
   static CreditCardField* Parse(
       std::vector<AutoFillField*>::const_iterator* iter,
@@ -23,8 +24,6 @@ class CreditCardField : public FormField {
 
  private:
   CreditCardField();
-  explicit CreditCardField(const CreditCardField& field);
-  void operator=(const CreditCardField&);
 
   AutoFillField* cardholder_;  // Optional.
 
@@ -40,12 +39,11 @@ class CreditCardField : public FormField {
   AutoFillField* type_;  // Optional.  TODO(jhawkins): Parse the select control.
   AutoFillField* number_;  // Required.
 
-  // The 3-digit card verification number; we don't currently fill this.
-  AutoFillField* verification_;
-
   // Both required.  TODO(jhawkins): Parse the select control.
   AutoFillField* expiration_month_;
   AutoFillField* expiration_year_;
+
+  DISALLOW_COPY_AND_ASSIGN(CreditCardField);
 };
 
 #endif  // CHROME_BROWSER_AUTOFILL_CREDIT_CARD_FIELD_H_

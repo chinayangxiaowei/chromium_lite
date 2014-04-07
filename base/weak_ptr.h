@@ -50,6 +50,7 @@
 
 #ifndef BASE_WEAK_PTR_H_
 #define BASE_WEAK_PTR_H_
+#pragma once
 
 #include "base/logging.h"
 #include "base/non_thread_safe.h"
@@ -65,35 +66,25 @@ class WeakReference {
  public:
   class Flag : public RefCounted<Flag>, public NonThreadSafe {
    public:
-    Flag(Flag** handle) : handle_(handle) {
-    }
+    Flag(Flag** handle);
+    ~Flag();
 
-    ~Flag() {
-      if (handle_)
-        *handle_ = NULL;
-    }
-
-    void AddRef() {
-      DCHECK(CalledOnValidThread());
-      RefCounted<Flag>::AddRef();
-    }
-
-    void Release() {
-      DCHECK(CalledOnValidThread());
-      RefCounted<Flag>::Release();
-    }
-
+    void AddRef() const;
+    void Release() const;
     void Invalidate() { handle_ = NULL; }
     bool is_valid() const { return handle_ != NULL; }
+
+    void DetachFromThread() { NonThreadSafe::DetachFromThread(); }
 
    private:
     Flag** handle_;
   };
 
-  WeakReference() {}
-  WeakReference(Flag* flag) : flag_(flag) {}
+  WeakReference();
+  WeakReference(Flag* flag);
+  ~WeakReference();
 
-  bool is_valid() const { return flag_ && flag_->is_valid(); }
+  bool is_valid() const;
 
  private:
   scoped_refptr<Flag> flag_;
@@ -101,28 +92,20 @@ class WeakReference {
 
 class WeakReferenceOwner {
  public:
-  WeakReferenceOwner() : flag_(NULL) {
-  }
+  WeakReferenceOwner();
+  ~WeakReferenceOwner();
 
-  ~WeakReferenceOwner() {
-    Invalidate();
-  }
-
-  WeakReference GetRef() const {
-    if (!flag_)
-      flag_ = new WeakReference::Flag(&flag_);
-    return WeakReference(flag_);
-  }
+  WeakReference GetRef() const;
 
   bool HasRefs() const {
     return flag_ != NULL;
   }
 
-  void Invalidate() {
-    if (flag_) {
-      flag_->Invalidate();
-      flag_ = NULL;
-    }
+  void Invalidate();
+
+  // Indicates that this object will be used on another thread from now on.
+  void DetachFromThread() {
+    if (flag_) flag_->DetachFromThread();
   }
 
  private:
@@ -135,12 +118,11 @@ class WeakReferenceOwner {
 // base class gives us a way to access ref_ in a protected fashion.
 class WeakPtrBase {
  public:
-  WeakPtrBase() {
-  }
+  WeakPtrBase();
+  ~WeakPtrBase();
 
  protected:
-  WeakPtrBase(const WeakReference& ref) : ref_(ref) {
-  }
+  WeakPtrBase(const WeakReference& ref);
 
   WeakReference ref_;
 };
@@ -215,6 +197,11 @@ class SupportsWeakPtr {
 
   WeakPtr<T> AsWeakPtr() {
     return WeakPtr<T>(weak_reference_owner_.GetRef(), static_cast<T*>(this));
+  }
+
+  // Indicates that this object will be used on another thread from now on.
+  void DetachFromThread() {
+    weak_reference_owner_.DetachFromThread();
   }
 
  private:

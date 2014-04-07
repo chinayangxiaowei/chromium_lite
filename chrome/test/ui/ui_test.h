@@ -4,6 +4,7 @@
 
 #ifndef CHROME_TEST_UI_UI_TEST_H_
 #define CHROME_TEST_UI_UI_TEST_H_
+#pragma once
 
 // This file provides a common base for running UI unit tests, which operate
 // the entire browser application in a separate process for holistic
@@ -23,6 +24,7 @@
 #include "base/message_loop.h"
 #include "base/process.h"
 #include "base/scoped_ptr.h"
+#include "base/test/test_timeouts.h"
 #include "base/time.h"
 #include "build/build_config.h"
 // TODO(evanm): we should be able to just forward-declare
@@ -36,6 +38,7 @@ class BrowserProxy;
 class DictionaryValue;
 class FilePath;
 class GURL;
+class ScopedTempDir;
 class TabProxy;
 
 // Base class for UI Tests. This implements the core of the functions.
@@ -62,14 +65,14 @@ class UITestBase {
   // Closes the browser window.
   virtual void TearDown();
 
-  // Set up the test time out values.
-  virtual void InitializeTimeouts();
-
  public:
   // ********* Utility functions *********
 
   // Launches the browser and IPC testing server.
   void LaunchBrowserAndServer();
+
+  // Only for pyauto.
+  void set_command_execution_timeout_ms(int timeout);
 
   // Overridable so that derived classes can provide their own AutomationProxy.
   virtual AutomationProxy* CreateAutomationProxy(int execution_timeout);
@@ -82,9 +85,16 @@ class UITestBase {
   // LaunchAnotherBrowserBlockUntilClosed.
   void LaunchBrowser(const CommandLine& cmdline, bool clear_profile);
 
+#if !defined(OS_MACOSX)
+  // This function is deliberately not defined on the Mac because re-using an
+  // existing browser process when launching from the command line isn't a
+  // concept that we support on the Mac; AppleEvents are the Mac solution for
+  // the same need. Any test based on this function doesn't apply to the Mac.
+
   // Launches an another browser process and waits for it to finish. Returns
   // true on success.
   bool LaunchAnotherBrowserBlockUntilClosed(const CommandLine& cmdline);
+#endif
 
   // Exits out browser instance.
   void QuitBrowser();
@@ -155,38 +165,6 @@ class UITestBase {
   // Same as GetTabCount(), except with the window at the given index.
   int GetTabCount(int window_index);
 
-  // Polls the tab for the cookie_name cookie and returns once one of the
-  // following conditions hold true:
-  // - The cookie is of expected_value.
-  // - The browser process died.
-  // - The time_out value has been exceeded.
-  bool WaitUntilCookieValue(TabProxy* tab, const GURL& url,
-                            const char* cookie_name,
-                            int time_out_ms,
-                            const char* expected_value);
-  // Polls the tab for the cookie_name cookie and returns once one of the
-  // following conditions hold true:
-  // - The cookie is set to any value.
-  // - The browser process died.
-  // - The time_out value has been exceeded.
-  std::string WaitUntilCookieNonEmpty(TabProxy* tab,
-                                      const GURL& url,
-                                      const char* cookie_name,
-                                      int time_out_ms);
-
-  // Polls the tab for a JavaScript condition and returns once one of the
-  // following conditions hold true:
-  // - The JavaScript condition evaluates to true (return true).
-  // - The browser process died (return false).
-  // - The time_out value has been exceeded (return false).
-  //
-  // The JavaScript expression is executed in the context of the frame that
-  // matches the provided xpath.
-  bool WaitUntilJavaScriptCondition(TabProxy* tab,
-                                    const std::wstring& frame_xpath,
-                                    const std::wstring& jscript,
-                                    int time_out_ms);
-
   // Polls up to kWaitForActionMaxMsec ms to attain a specific tab count. Will
   // assert that the tab count is valid at the end of the wait.
   void WaitUntilTabCount(int tab_count);
@@ -200,6 +178,10 @@ class UITestBase {
   // giving it a chance to appear (we don't know the exact timing) while
   // finishing as soon as possible.
   bool WaitForDownloadShelfInvisible(BrowserProxy* browser);
+
+  // Wait for the browser process to shut down on its own (i.e. as a result of
+  // some action that your test has taken).
+  bool WaitForBrowserProcessToQuit();
 
  private:
   // Waits for download shelf visibility or invisibility.
@@ -232,56 +214,6 @@ class UITestBase {
   // after the browser process has terminated.
   bool CloseBrowser(BrowserProxy* browser, bool* application_closed) const;
 
-  // Prints numerical information to stdout in a controlled format, for
-  // post-processing. |measurement| is a description of the quantity being
-  // measured, e.g. "vm_peak"; |modifier| is provided as a convenience and
-  // will be appended directly to the name of the |measurement|, e.g.
-  // "_browser"; |trace| is a description of the particular data point, e.g.
-  // "reference"; |value| is the measured value; and |units| is a description
-  // of the units of measure, e.g. "bytes". If |important| is true, the output
-  // line will be specially marked, to notify the post-processor. The strings
-  // may be empty.  They should not contain any colons (:) or equals signs (=).
-  // A typical post-processing step would be to produce graphs of the data
-  // produced for various builds, using the combined |measurement| + |modifier|
-  // string to specify a particular graph and the |trace| to identify a trace
-  // (i.e., data series) on that graph.
-  void PrintResult(const std::string& measurement,
-                   const std::string& modifier,
-                   const std::string& trace,
-                   size_t value,
-                   const std::string& units,
-                   bool important);
-
-  // Like the above version of PrintResult(), but takes a std::string value
-  // instead of a size_t.
-  void PrintResult(const std::string& measurement,
-                   const std::string& modifier,
-                   const std::string& trace,
-                   const std::string& value,
-                   const std::string& units,
-                   bool important);
-
-  // Like PrintResult(), but prints a (mean, standard deviation) result pair.
-  // The |<values>| should be two comma-seaprated numbers, the mean and
-  // standard deviation (or other error metric) of the measurement.
-  void PrintResultMeanAndError(const std::string& measurement,
-                               const std::string& modifier,
-                               const std::string& trace,
-                               const std::string& mean_and_error,
-                               const std::string& units,
-                               bool important);
-
-  // Like PrintResult(), but prints an entire list of results. The |values|
-  // will generally be a list of comma-separated numbers. A typical
-  // post-processing step might produce plots of their mean and standard
-  // deviation.
-  void PrintResultList(const std::string& measurement,
-                       const std::string& modifier,
-                       const std::string& trace,
-                       const std::string& values,
-                       const std::string& units,
-                       bool important);
-
   // Gets the directory for the currently active profile in the browser.
   FilePath GetDownloadDirectory();
 
@@ -289,17 +221,6 @@ class UITestBase {
   // function only retruns a reference to the handle so the caller does not
   // own the handle returned.
   base::ProcessHandle process() { return process_; }
-
-  // Wait for |generated_file| to be ready and then compare it with
-  // |original_file| to see if they're identical or not if |compare_file| is
-  // true. If |need_equal| is true, they need to be identical. Otherwise,
-  // they should be different. This function will delete the generated file if
-  // the parameter |delete_generated_file| is true.
-  void WaitForGeneratedFileAndCheck(const FilePath& generated_file,
-                                    const FilePath& original_file,
-                                    bool compare_files,
-                                    bool need_equal,
-                                    bool delete_generated_file);
 
   // Get/Set a flag to run the renderer in process when running the
   // tests.
@@ -350,28 +271,18 @@ class UITestBase {
     full_memory_dump_ = value;
   }
 
-  static bool use_existing_browser() { return default_use_existing_browser_; }
-  static void set_use_existing_browser(bool value) {
-    default_use_existing_browser_ = value;
-  }
-
   static bool dump_histograms_on_exit() { return dump_histograms_on_exit_; }
   static void set_dump_histograms_on_exit(bool value) {
     dump_histograms_on_exit_ = value;
   }
 
-  static int test_timeout_ms() { return timeout_ms_; }
-  static void set_test_timeout_ms(int value) {
-    timeout_ms_ = value;
-  }
-
-  static std::wstring js_flags() { return js_flags_; }
-  static void set_js_flags(const std::wstring& value) {
+  static const std::string& js_flags() { return js_flags_; }
+  static void set_js_flags(const std::string& value) {
     js_flags_ = value;
   }
 
-  static std::wstring log_level() { return log_level_; }
-  static void set_log_level(const std::wstring& value) {
+  static const std::string& log_level() { return log_level_; }
+  static void set_log_level(const std::string& value) {
     log_level_ = value;
   }
 
@@ -403,32 +314,39 @@ class UITestBase {
 
   // Return the user data directory being used by the browser instance in
   // UITest::SetUp().
-  FilePath user_data_dir() const { return user_data_dir_; }
+  FilePath user_data_dir() const;
 
   // Return the process id of the browser process (-1 on error).
   base::ProcessId browser_process_id() const { return process_id_; }
 
-  // Timeout accessors.
-  void set_command_execution_timeout_ms(int timeout) {
-    command_execution_timeout_ms_ = timeout;
+  // Compatibility timeout accessors.
+  // TODO(phajdan.jr): update callers and remove these.
+  static int command_execution_timeout_ms() {
+    return TestTimeouts::command_execution_timeout_ms();
+  }
+  static int action_timeout_ms() {
+    return TestTimeouts::action_timeout_ms();
+  }
+  static int action_max_timeout_ms() {
+    return TestTimeouts::action_max_timeout_ms();
+  }
+  static int sleep_timeout_ms() {
+    // TODO(phajdan.jr): Fix all callers and remove sleep_timeout_ms.
+    return TestTimeouts::action_timeout_ms();
+  }
+  static int test_timeout_ms() {
+    return TestTimeouts::huge_test_timeout_ms();
   }
 
-  int action_timeout_ms() const { return action_timeout_ms_; }
-
-  void set_action_timeout_ms(int timeout) {
-    action_timeout_ms_ = timeout;
-  }
-
-  int action_max_timeout_ms() const { return action_max_timeout_ms_; }
-
-  int sleep_timeout_ms() const { return sleep_timeout_ms_; }
-
-  std::wstring ui_test_name() const { return ui_test_name_; }
-
-  void set_ui_test_name(const std::wstring& name) {
+  void set_ui_test_name(const std::string& name) {
     ui_test_name_ = name;
   }
 
+  // Fetch the state which determines whether the profile will be cleared on
+  // next startup.
+  bool get_clear_profile() const {
+    return clear_profile_;
+  }
   // Sets clear_profile_. Should be called before launching browser to have
   // any effect.
   void set_clear_profile(bool clear_profile) {
@@ -437,7 +355,7 @@ class UITestBase {
 
   // Sets homepage_. Should be called before launching browser to have
   // any effect.
-  void set_homepage(const std::wstring& homepage) {
+  void set_homepage(const std::string& homepage) {
     homepage_ = homepage;
   }
 
@@ -453,55 +371,8 @@ class UITestBase {
     shutdown_type_ = value;
   }
 
-  // Count the number of active browser processes launched by this test.
-  // The count includes browser sub-processes.
-  int GetBrowserProcessCount();
-
-  // Returns a copy of local state preferences. The caller is responsible for
-  // deleting the returned object. Returns NULL if there is an error.
-  DictionaryValue* GetLocalState();
-
-  // Returns a copy of the default profile preferences. The caller is
-  // responsible for deleting the returned object. Returns NULL if there is an
-  // error.
-  DictionaryValue* GetDefaultProfilePreferences();
-
-  // Waits for the test case to finish.
-  // ASSERTS if there are test failures.
-  void WaitForFinish(const std::string &name,
-                     const std::string &id, const GURL &url,
-                     const std::string& test_complete_cookie,
-                     const std::string& expected_cookie_value,
-                     const int wait_time);
-
-  // Wrapper around EvictFileFromSystemCache to retry 10 times in case of
-  // error.
-  // Apparently needed for Windows buildbots (to workaround an error when
-  // file is in use).
-  // TODO(phajdan.jr): Move to test_file_util if we need it in more places.
-  bool EvictFileFromSystemCacheWrapper(const FilePath& path);
-
-  // Synchronously launches local http server normally used to run LayoutTests.
-  void StartHttpServer(const FilePath& root_directory);
-
-  // Launches local http server on the specified port.
-  void StartHttpServerWithPort(const FilePath& root_directory,
-                               const std::wstring& port);
-  void StopHttpServer();
-
-  // Prints IO performance data for use by perf graphs.
-  void PrintIOPerfInfo(const char* test_name);
-
-  // Prints memory usage data for use by perf graphs.
-  void PrintMemoryUsageInfo(const char* test_name);
-
-  // Prints memory commit charge stats for use by perf graphs.
-  void PrintSystemCommitCharge(const char* test_name,
-                               size_t charge,
-                               bool important);
-
-  // Configures the test to use the reference build.
-  void UseReferenceBuild();
+  // Get the number of crash dumps we've logged since the test started.
+  int GetCrashCount();
 
   // Use Chromium binaries from the given directory.
   void SetBrowserDirectory(const FilePath& dir);
@@ -510,16 +381,6 @@ class UITestBase {
   // Check that no processes related to Chrome exist, displaying
   // the given message if any do.
   void AssertAppNotRunning(const std::wstring& error_message);
-
-  // Common functionality for the public PrintResults methods.
-  void PrintResultsImpl(const std::string& measurement,
-                        const std::string& modifier,
-                        const std::string& trace,
-                        const std::string& values,
-                        const std::string& prefix,
-                        const std::string& suffix,
-                        const std::string& units,
-                        bool important);
 
  protected:
   AutomationProxy* automation() {
@@ -555,7 +416,7 @@ class UITestBase {
                                         // the run (generally 0).
   int expected_crashes_;                // The number of crashes expected during
                                         // the run (generally 0).
-  std::wstring homepage_;               // Homepage used for testing.
+  std::string homepage_;                // Homepage used for testing.
   bool wait_for_initial_loads_;         // Wait for initial loads to complete
                                         // in SetUp() before running test body.
   base::TimeTicks browser_launch_time_; // Time when the browser was run.
@@ -565,7 +426,6 @@ class UITestBase {
   FilePath template_user_data_;         // See set_template_user_data().
   base::ProcessHandle process_;         // Handle to the first Chrome process.
   base::ProcessId process_id_;          // PID of |process_| (for debugging).
-  FilePath user_data_dir_;              // User data directory used for the test
   static bool in_process_renderer_;     // true if we're in single process mode
   bool show_window_;                    // Determines if the window is shown or
                                         // hidden. Defaults to hidden.
@@ -574,8 +434,6 @@ class UITestBase {
   bool include_testing_id_;             // Should we supply the testing channel
                                         // id on the command line? Default is
                                         // true.
-  bool use_existing_browser_;           // Duplicate of the static version.
-                                        // Default value comes from static.
   bool enable_file_cookies_;            // Enable file cookies, default is true.
   ProfileType profile_type_;            // Are we using a profile with a
                                         // complex theme?
@@ -585,7 +443,6 @@ class UITestBase {
 
  private:
   bool LaunchBrowserHelper(const CommandLine& arguments,
-                           bool use_existing_browser,
                            bool wait,
                            base::ProcessHandle* process);
 
@@ -602,8 +459,6 @@ class UITestBase {
                                         // during crash.
   static bool show_error_dialogs_;      // If true, a user is paying attention
                                         // to the test, so show error dialogs.
-  static bool default_use_existing_browser_;  // The test connects to an already
-                                              // running browser instance.
   static bool dump_histograms_on_exit_;  // Include histograms in log on exit.
   static bool enable_dcheck_;           // Enable dchecks in release mode.
   static bool silent_dump_on_dcheck_;   // Dump process memory on dcheck without
@@ -611,18 +466,16 @@ class UITestBase {
   static bool disable_breakpad_;        // Disable breakpad on the browser.
   static int timeout_ms_;               // Timeout in milliseconds to wait
                                         // for an test to finish.
-  static std::wstring js_flags_;        // Flags passed to the JS engine.
-  static std::wstring log_level_;       // Logging level.
+  static std::string js_flags_;         // Flags passed to the JS engine.
+  static std::string log_level_;        // Logging level.
 
   scoped_ptr<AutomationProxy> server_;
 
-  int command_execution_timeout_ms_;
-  int action_timeout_ms_;
-  int action_max_timeout_ms_;
-  int sleep_timeout_ms_;
-  int terminate_timeout_ms_;
+  std::string ui_test_name_;
 
-  std::wstring ui_test_name_;
+  // We use a temporary directory for profile to avoid issues with being
+  // unable to delete some files because they're in use, etc.
+  scoped_ptr<ScopedTempDir> temp_profile_dir_;
 };
 
 class UITest : public UITestBase, public PlatformTest {
@@ -633,6 +486,88 @@ class UITest : public UITestBase, public PlatformTest {
   }
   virtual void SetUp();
   virtual void TearDown();
+
+  virtual AutomationProxy* CreateAutomationProxy(int execution_timeout);
+
+  // Synchronously launches local http server normally used to run LayoutTests.
+  void StartHttpServer(const FilePath& root_directory);
+
+  // Launches local http server on the specified port.
+  void StartHttpServerWithPort(const FilePath& root_directory, int port);
+
+  void StopHttpServer();
+
+  // Count the number of active browser processes launched by this test.
+  // The count includes browser sub-processes.
+  int GetBrowserProcessCount();
+
+  // Returns a copy of local state preferences. The caller is responsible for
+  // deleting the returned object. Returns NULL if there is an error.
+  DictionaryValue* GetLocalState();
+
+  // Returns a copy of the default profile preferences. The caller is
+  // responsible for deleting the returned object. Returns NULL if there is an
+  // error.
+  DictionaryValue* GetDefaultProfilePreferences();
+
+  // Waits for the test case to finish.
+  // ASSERTS if there are test failures.
+  void WaitForFinish(const std::string &name,
+                     const std::string &id, const GURL &url,
+                     const std::string& test_complete_cookie,
+                     const std::string& expected_cookie_value,
+                     const int wait_time);
+
+  // Wrapper around EvictFileFromSystemCache to retry 10 times in case of
+  // error.
+  // Apparently needed for Windows buildbots (to workaround an error when
+  // file is in use).
+  // TODO(phajdan.jr): Move to test_file_util if we need it in more places.
+  bool EvictFileFromSystemCacheWrapper(const FilePath& path);
+
+  // Wait for |generated_file| to be ready and then compare it with
+  // |original_file| to see if they're identical or not if |compare_file| is
+  // true. If |need_equal| is true, they need to be identical. Otherwise,
+  // they should be different. This function will delete the generated file if
+  // the parameter |delete_generated_file| is true.
+  void WaitForGeneratedFileAndCheck(const FilePath& generated_file,
+                                    const FilePath& original_file,
+                                    bool compare_files,
+                                    bool need_equal,
+                                    bool delete_generated_file);
+
+  // Polls the tab for a JavaScript condition and returns once one of the
+  // following conditions hold true:
+  // - The JavaScript condition evaluates to true (return true).
+  // - The browser process died (return false).
+  // - The time_out value has been exceeded (return false).
+  //
+  // The JavaScript expression is executed in the context of the frame that
+  // matches the provided xpath.
+  bool WaitUntilJavaScriptCondition(TabProxy* tab,
+                                    const std::wstring& frame_xpath,
+                                    const std::wstring& jscript,
+                                    int time_out_ms);
+
+  // Polls the tab for the cookie_name cookie and returns once one of the
+  // following conditions hold true:
+  // - The cookie is of expected_value.
+  // - The browser process died.
+  // - The time_out value has been exceeded.
+  bool WaitUntilCookieValue(TabProxy* tab, const GURL& url,
+                            const char* cookie_name,
+                            int time_out_ms,
+                            const char* expected_value);
+
+  // Polls the tab for the cookie_name cookie and returns once one of the
+  // following conditions hold true:
+  // - The cookie is set to any value.
+  // - The browser process died.
+  // - The time_out value has been exceeded.
+  std::string WaitUntilCookieNonEmpty(TabProxy* tab,
+                                      const GURL& url,
+                                      const char* cookie_name,
+                                      int time_out_ms);
 
  private:
   MessageLoop message_loop_;  // Enables PostTask to main thread.

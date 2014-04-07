@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved. Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #ifndef VIEWS_CONTROLS_BUTTON_NATIVE_BUTTON_WRAPPER_H_
 #define VIEWS_CONTROLS_BUTTON_NATIVE_BUTTON_WRAPPER_H_
+#pragma once
 
 #include "gfx/native_widget_types.h"
 
@@ -37,8 +38,12 @@ class NativeButtonWrapper {
   // associated NativeCheckbox. Valid only for checkboxes and radio buttons.
   virtual void UpdateChecked() {}
 
+  // Update the native button's accessible name to the accessible name of
+  // the associated NativeButton.
+  virtual void UpdateAccessibleName() {}
+
   // Shows the pushed state for the button if |pushed| is true.
-  virtual void SetPushed(bool pushed) {};
+  virtual void SetPushed(bool pushed) {}
 
   // Retrieves the views::View that hosts the native control.
   virtual View* GetView() = 0;
@@ -66,6 +71,9 @@ class NativeButtonWrapper {
   static NativeButtonWrapper* CreateCheckboxWrapper(Checkbox* checkbox);
   static NativeButtonWrapper* CreateRadioButtonWrapper(
       RadioButton* radio_button);
+
+ protected:
+  virtual ~NativeButtonWrapper() {}
 };
 
 }  // namespace views

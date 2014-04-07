@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VIEWS_IMPORTER_LOCK_VIEW_H__
 #define CHROME_BROWSER_VIEWS_IMPORTER_LOCK_VIEW_H__
+#pragma once
 
 #include "views/view.h"
 #include "views/window/dialog_delegate.h"
@@ -41,7 +42,7 @@ class ImporterLockView : public views::View,
 
   ImporterHost* importer_host_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(ImporterLockView);
+  DISALLOW_COPY_AND_ASSIGN(ImporterLockView);
 };
 
 #endif  // CHROME_BROWSER_VIEWS_IMPORTER_LOCK_VIEW_H__

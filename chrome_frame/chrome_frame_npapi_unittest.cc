@@ -81,7 +81,7 @@ class MockNPAPI: public ChromeFrameNPAPI {
 class MockAutomationClient: public ChromeFrameAutomationClient {
  public:
   MOCK_METHOD2(Initialize, bool(ChromeFrameDelegate*,
-                                const ChromeFrameLaunchParams&));
+                                ChromeFrameLaunchParams*));
   MOCK_METHOD1(SetEnableExtensionAutomation,
                void(const std::vector<std::string>&));  // NOLINT
 };
@@ -91,6 +91,16 @@ class MockProxyService: public NpProxyService {
   MOCK_METHOD2(Initialize, bool(NPP instance, ChromeFrameAutomationClient*));
 };
 
+namespace {
+
+MATCHER_P4(LaunchParamEq, version_check, extra, incognito, widget,
+           "Basic check for ChromeFrameLaunchParams") {
+  return arg->version_check() == version_check &&
+         arg->extra_arguments().compare(extra) == 0 &&
+         arg->incognito() == incognito,
+         arg->widget_mode() == widget;
+}
+}
 
 // Test fixture to allow testing the privileged NPAPI APIs
 class TestNPAPIPrivilegedApi: public ::testing::Test {
@@ -115,6 +125,7 @@ class TestNPAPIPrivilegedApi: public ::testing::Test {
                           bool expect_privilege_check,
                           bool is_privileged,
                           const std::wstring& profile_name,
+                          const std::wstring& language,
                           const std::wstring& extra_args) {
     EXPECT_CALL(mock_api, GetLocation())
         .WillOnce(Return(std::string("http://www.google.com")));
@@ -125,13 +136,12 @@ class TestNPAPIPrivilegedApi: public ::testing::Test {
 
     EXPECT_CALL(*mock_proxy, Initialize(_, _)).WillRepeatedly(Return(false));
 
+    scoped_refptr<ChromeFrameLaunchParams> launch_params(
+        new ChromeFrameLaunchParams(GURL(), GURL(), FilePath(), profile_name,
+            language, extra_args, is_incognito, true, false));
+
     EXPECT_CALL(*mock_automation,
-        Initialize(_, AllOf(
-            Field(&ChromeFrameLaunchParams::perform_version_check, true),
-            Field(&ChromeFrameLaunchParams::extra_chrome_arguments,
-                StrEq(extra_args)),
-            Field(&ChromeFrameLaunchParams::incognito_mode, is_incognito),
-            Field(&ChromeFrameLaunchParams::is_widget_mode, true))))
+      Initialize(_, LaunchParamEq(true, extra_args, is_incognito, true)))
         .WillOnce(Return(true));
 
     if (expect_privilege_check) {
@@ -168,6 +178,7 @@ TEST_F(TestNPAPIPrivilegedApi, NoPrivilegeCheckWhenNoArguments) {
                      false,  // Fail if privilege check is invoked.
                      false,
                      kDefaultProfileName,
+                     L"",    // No specific language override.
                      L"");   // No extra args to initialize.
 
   // No arguments, no privilege requested.
@@ -182,6 +193,7 @@ TEST_F(TestNPAPIPrivilegedApi, NoPrivilegeCheckWhenZeroArgument) {
                      false,  // Fail if privilege check is invoked.
                      false,
                      kDefaultProfileName,
+                     L"",    // No specific language override.
                      L"");   // No extra args to initialize.
 
   // Privileged mode explicitly zero.
@@ -198,6 +210,7 @@ TEST_F(TestNPAPIPrivilegedApi, NotPrivilegedDoesNotAllowArgsOrProfile) {
                      true,   // Fail unless privilege check is invoked.
                      false,  // Not privileged.
                      kDefaultProfileName,
+                     L"",    // No specific language override.
                      L"");   // No extra arguments allowed.
 
   char* argn[] = {
@@ -218,9 +231,10 @@ TEST_F(TestNPAPIPrivilegedApi, NotPrivilegedDoesNotAllowArgsOrProfile) {
 
 TEST_F(TestNPAPIPrivilegedApi, PrivilegedAllowsArgsAndProfile) {
   SetupPrivilegeTest(false,  // Not incognito.
-                     true,  // Fail unless privilege check is invoked.
-                     true,  // Privileged mode.
+                     true,   // Fail unless privilege check is invoked.
+                     true,   // Privileged mode.
                      L"custom_profile_name",  // Custom profile expected.
+                     L"",    // No specific language override.
                      L"-bar=far");  // Extra arguments expected
 
   // With privileged mode we expect automation to be enabled.
@@ -419,8 +433,9 @@ TEST_F(TestNPAPIPrivilegedProperty,
   // Attempt setting onprivatemessage when not privileged.
   SetupPrivilegeTest(false,  // not incognito.
                      true,   // expect privilege check.
-                     false,   // not privileged.
+                     false,  // not privileged.
                      kDefaultProfileName,
+                     L"",    // No specific language override.
                      L"");
 
   char* on_private_message_str = "onprivatemessage()";
@@ -455,6 +470,7 @@ TEST_F(TestNPAPIPrivilegedProperty,
                      true,   // expect privilege check.
                      true,   // privileged.
                      kDefaultProfileName,
+                     L"",    // No specific language override.
                      L"");
 
   char* on_private_message_str = "onprivatemessage()";
@@ -490,8 +506,9 @@ TEST_F(TestNPAPIPrivilegedProperty,
   // Assigning to onprivatemessage when not privileged should fail.
   SetupPrivilegeTest(false,  // not incognito.
                      true,   // expect privilege check.
-                     false,   // not privileged.
+                     false,  // not privileged.
                      kDefaultProfileName,
+                     L"",    // No specific language override.
                      L"");
 
   char* argn = "privileged_mode";
@@ -520,6 +537,7 @@ TEST_F(TestNPAPIPrivilegedProperty,
                      true,   // expect privilege check.
                      true,   // privileged.
                      kDefaultProfileName,
+                     L"",    // No specific language override.
                      L"");
 
   char* argn = "privileged_mode";
@@ -554,3 +572,4 @@ TEST_F(TestNPAPIPrivilegedProperty,
 }
 
 // TODO(siggi): test invoking postPrivateMessage.
+

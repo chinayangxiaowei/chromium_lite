@@ -239,6 +239,7 @@
         '../third_party/skia/src/core/SkGraphics.cpp',
         '../third_party/skia/src/core/SkLineClipper.cpp',
         '../third_party/skia/src/core/SkMMapStream.cpp',
+        '../third_party/skia/src/core/SkMallocPixelRef.cpp',
         '../third_party/skia/src/core/SkMask.cpp',
         '../third_party/skia/src/core/SkMaskFilter.cpp',
         '../third_party/skia/src/core/SkMath.cpp',
@@ -374,7 +375,7 @@
         #'../third_party/skia/src/ports/SkOSEvent_dummy.cpp',
         '../third_party/skia/src/ports/SkOSFile_stdio.cpp',
         #'../third_party/skia/src/ports/SkThread_none.cpp',
-        '../third_party/skia/src/ports/SkThread_pthread.cpp',
+        #'../third_party/skia/src/ports/SkThread_pthread.cpp',
         '../third_party/skia/src/ports/SkThread_win.cpp',
         '../third_party/skia/src/ports/SkTime_Unix.cpp',
         #'../third_party/skia/src/ports/SkXMLParser_empty.cpp',
@@ -497,7 +498,9 @@
         '../third_party/skia/include/images/SkMovie.h',
         '../third_party/skia/include/images/SkPageFlipper.h',
 
+        'ext/bitmap_platform_device.cc',
         'ext/bitmap_platform_device.h',
+        'ext/bitmap_platform_device_data.h',
         'ext/bitmap_platform_device_linux.cc',
         'ext/bitmap_platform_device_linux.h',
         'ext/bitmap_platform_device_mac.cc',
@@ -509,6 +512,7 @@
         'ext/google_logging.cc',
         'ext/image_operations.cc',
         'ext/image_operations.h',
+        'ext/SkThread_chrome.cc',
         'ext/platform_canvas.h',
         'ext/platform_canvas.cc',
         'ext/platform_canvas_linux.cc',
@@ -590,6 +594,14 @@
             '../third_party/skia/src/opts/opts_check_SSE2.cpp'
           ],
         }],
+        ['clang==1', {
+          'defines': [
+            # Remove all use of __restrict__ -- skia uses it incorrectly,
+            # and clang is more strict about it.
+            # http://code.google.com/p/skia/issues/detail?id=63
+            'SK_RESTRICT=',
+          ],
+        }],
         [ 'OS == "linux" or OS == "freebsd" or OS == "openbsd" or OS == "solaris"', {
           'dependencies': [
             '../build/linux/system.gyp:gdk',
@@ -597,6 +609,7 @@
             '../build/linux/system.gyp:freetype2',
             '../third_party/harfbuzz/harfbuzz.gyp:harfbuzz',
             '../third_party/harfbuzz/harfbuzz.gyp:harfbuzz_interface',
+            '../third_party/icu/icu.gyp:icuuc',
           ],
           'cflags': [
             '-Wno-unused',
@@ -635,8 +648,8 @@
         [ 'OS == "win"', {
           'sources!': [
             '../third_party/skia/src/core/SkMMapStream.cpp',
-            '../third_party/skia/src/ports/SkThread_pthread.cpp',
             '../third_party/skia/src/ports/SkTime_Unix.cc',
+            'ext/SkThread_chrome.cc',
           ],
           'include_dirs': [
             'config/win',
@@ -692,7 +705,7 @@
         '../third_party/skia/src/core',
       ],
       'conditions': [
-        [ 'OS == "linux" and target_arch != "arm"', {
+        [ '(OS == "linux" or OS == "freebsd" or OS == "openbsd") and target_arch != "arm"', {
           'cflags': [
             '-msse2',
           ],

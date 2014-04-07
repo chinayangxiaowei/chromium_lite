@@ -7,15 +7,18 @@
 #include "app/surface/transport_dib.h"
 #include "base/command_line.h"
 #include "base/logging.h"
+#include "base/histogram.h"
 #include "base/message_loop.h"
 #include "base/scoped_ptr.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "chrome/renderer/render_process.h"
 #include "chrome/renderer/render_thread.h"
 #include "gfx/point.h"
 #include "gfx/size.h"
+#include "ipc/ipc_sync_message.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/skia/include/core/SkShader.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCursorInfo.h"
@@ -24,6 +27,7 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebRect.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebScreenInfo.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebSize.h"
+#include "webkit/glue/plugins/webplugin.h"
 #include "webkit/glue/webkit_glue.h"
 
 #if defined(OS_POSIX)
@@ -34,16 +38,21 @@
 
 #include "third_party/WebKit/WebKit/chromium/public/WebWidget.h"
 
-using WebKit::WebCompositionCommand;
+using WebKit::WebCompositionUnderline;
 using WebKit::WebCursorInfo;
 using WebKit::WebInputEvent;
+using WebKit::WebMouseEvent;
 using WebKit::WebNavigationPolicy;
 using WebKit::WebPopupMenu;
 using WebKit::WebPopupMenuInfo;
+using WebKit::WebPopupType;
 using WebKit::WebRect;
 using WebKit::WebScreenInfo;
 using WebKit::WebSize;
 using WebKit::WebTextDirection;
+using WebKit::WebTextInputType;
+using WebKit::WebVector;
+using WebKit::WebWidget;
 
 RenderWidget::RenderWidget(RenderThreadBase* render_thread,
                            WebKit::WebPopupType popup_type)
@@ -61,16 +70,12 @@ RenderWidget::RenderWidget(RenderThreadBase* render_thread,
       has_focus_(false),
       handling_input_event_(false),
       closing_(false),
-      ime_is_active_(false),
-      ime_control_enable_ime_(true),
-      ime_control_x_(-1),
-      ime_control_y_(-1),
-      ime_control_new_state_(false),
-      ime_control_updated_(false),
-      ime_control_busy_(false),
+      input_method_is_active_(false),
+      text_input_type_(WebKit::WebTextInputTypeNone),
       popup_type_(popup_type),
       pending_window_rect_count_(0),
-      suppress_next_char_events_(false) {
+      suppress_next_char_events_(false),
+      is_gpu_rendering_active_(false) {
   RenderProcess::current()->AddRefProcess();
   DCHECK(render_thread_);
 }
@@ -84,7 +89,7 @@ RenderWidget::~RenderWidget() {
   RenderProcess::current()->ReleaseProcess();
 }
 
-/*static*/
+// static
 RenderWidget* RenderWidget::Create(int32 opener_id,
                                    RenderThreadBase* render_thread,
                                    WebKit::WebPopupType popup_type) {
@@ -95,6 +100,20 @@ RenderWidget* RenderWidget::Create(int32 opener_id,
   return widget;
 }
 
+// static
+WebWidget* RenderWidget::CreateWebWidget(RenderWidget* render_widget) {
+  switch (render_widget->popup_type_) {
+    case WebKit::WebPopupTypeNone: // Nothing to create.
+      break;
+    case WebKit::WebPopupTypeSelect:
+    case WebKit::WebPopupTypeSuggestion:
+      return WebPopupMenu::create(render_widget);
+    default:
+      NOTREACHED();
+  }
+  return NULL;
+}
+
 void RenderWidget::ConfigureAsExternalPopupMenu(const WebPopupMenuInfo& info) {
   popup_params_.reset(new ViewHostMsg_ShowPopup_Params);
   popup_params_->item_height = info.itemHeight;
@@ -102,18 +121,27 @@ void RenderWidget::ConfigureAsExternalPopupMenu(const WebPopupMenuInfo& info) {
   popup_params_->selected_item = info.selectedIndex;
   for (size_t i = 0; i < info.items.size(); ++i)
     popup_params_->popup_items.push_back(WebMenuItem(info.items[i]));
+  popup_params_->right_aligned = info.rightAligned;
 }
 
 void RenderWidget::Init(int32 opener_id) {
+  DoInit(opener_id,
+         RenderWidget::CreateWebWidget(this),
+         new ViewHostMsg_CreateWidget(opener_id, popup_type_, &routing_id_));
+}
+
+
+void RenderWidget::DoInit(int32 opener_id,
+                          WebWidget* web_widget,
+                          IPC::SyncMessage* create_widget_message) {
   DCHECK(!webwidget_);
 
   if (opener_id != MSG_ROUTING_NONE)
     opener_id_ = opener_id;
 
-  webwidget_ = WebPopupMenu::create(this);
+  webwidget_ = web_widget;
 
-  bool result = render_thread_->Send(
-      new ViewHostMsg_CreateWidget(opener_id, popup_type_, &routing_id_));
+  bool result = render_thread_->Send(create_widget_message);
   if (result) {
     render_thread_->AddRoute(routing_id_, this);
     // Take a reference on behalf of the RenderThread.  This will be balanced
@@ -147,8 +175,10 @@ IPC_DEFINE_MESSAGE_MAP(RenderWidget)
   IPC_MESSAGE_HANDLER(ViewMsg_HandleInputEvent, OnHandleInputEvent)
   IPC_MESSAGE_HANDLER(ViewMsg_MouseCaptureLost, OnMouseCaptureLost)
   IPC_MESSAGE_HANDLER(ViewMsg_SetFocus, OnSetFocus)
-  IPC_MESSAGE_HANDLER(ViewMsg_ImeSetInputMode, OnImeSetInputMode)
+  IPC_MESSAGE_HANDLER(ViewMsg_SetInputMethodActive, OnSetInputMethodActive)
   IPC_MESSAGE_HANDLER(ViewMsg_ImeSetComposition, OnImeSetComposition)
+  IPC_MESSAGE_HANDLER(ViewMsg_ImeConfirmComposition, OnImeConfirmComposition)
+  IPC_MESSAGE_HANDLER(ViewMsg_PaintAtSize, OnMsgPaintAtSize)
   IPC_MESSAGE_HANDLER(ViewMsg_Repaint, OnMsgRepaint)
   IPC_MESSAGE_HANDLER(ViewMsg_SetTextDirection, OnSetTextDirection)
   IPC_MESSAGE_HANDLER(ViewMsg_Move_ACK, OnRequestMoveAck)
@@ -225,8 +255,10 @@ void RenderWidget::OnResize(const gfx::Size& new_size,
   // an ACK if we are resized to a non-empty rect.
   webwidget_->resize(new_size);
   if (!new_size.IsEmpty()) {
-    // Resize should have caused an invalidation of the entire view.
-    DCHECK(paint_aggregator_.HasPendingUpdate());
+    if (!webwidget_->isAcceleratedCompositingActive()) {
+      // Resize should have caused an invalidation of the entire view.
+      DCHECK(paint_aggregator_.HasPendingUpdate());
+    }
 
     // We will send the Resize_ACK flag once we paint again.
     set_next_paint_is_resize_ack();
@@ -250,12 +282,16 @@ void RenderWidget::OnWasRestored(bool needs_repainting) {
     return;
   needs_repainting_on_restore_ = false;
 
-  // Tag the next paint as a restore ack, which is picked up by DoDeferredUpdate
-  // when it sends out the next PaintRect message.
+  // Tag the next paint as a restore ack, which is picked up by
+  // DoDeferredUpdate when it sends out the next PaintRect message.
   set_next_paint_is_restore_ack();
 
   // Generate a full repaint.
-  didInvalidateRect(gfx::Rect(size_.width(), size_.height()));
+  if (!webwidget_->isAcceleratedCompositingActive()) {
+    didInvalidateRect(gfx::Rect(size_.width(), size_.height()));
+  } else {
+    scheduleComposite();
+  }
 }
 
 void RenderWidget::OnRequestMoveAck() {
@@ -268,7 +304,7 @@ void RenderWidget::OnUpdateRectAck() {
   update_reply_pending_ = false;
 
   // If we sent an UpdateRect message with a zero-sized bitmap, then we should
-  // have no current update buf.
+  // have no current paint buffer.
   if (current_paint_buf_) {
     RenderProcess::current()->ReleaseTransportDIB(current_paint_buf_);
     current_paint_buf_ = NULL;
@@ -325,10 +361,17 @@ void RenderWidget::OnHandleInputEvent(const IPC::Message& message) {
   response->WriteInt(input_event->type);
   response->WriteBool(processed);
 
-  if (input_event->type == WebInputEvent::MouseMove &&
+  if ((input_event->type == WebInputEvent::MouseMove ||
+       input_event->type == WebInputEvent::MouseWheel) &&
       paint_aggregator_.HasPendingUpdate()) {
     // We want to rate limit the input events in this case, so we'll wait for
     // painting to finish before ACKing this message.
+    if (pending_input_event_ack_.get()) {
+      // As two different kinds of events could cause us to postpone an ack
+      // we send it now, if we have one pending. The Browser should never
+      // send us the same kind of event we are delaying the ack for.
+      Send(pending_input_event_ack_.release());
+    }
     pending_input_event_ack_.reset(response);
   } else {
     Send(response);
@@ -338,6 +381,8 @@ void RenderWidget::OnHandleInputEvent(const IPC::Message& message) {
 
   if (WebInputEvent::isKeyboardEventType(input_event->type))
     DidHandleKeyEvent();
+  if (WebInputEvent::isMouseEventType(input_event->type))
+    DidHandleMouseEvent(*(static_cast<const WebMouseEvent*>(input_event)));
 }
 
 void RenderWidget::OnMouseCaptureLost() {
@@ -349,13 +394,6 @@ void RenderWidget::OnSetFocus(bool enable) {
   has_focus_ = enable;
   if (webwidget_)
     webwidget_->setFocus(enable);
-  if (enable) {
-    // Force to retrieve the state of the focused widget to determine if we
-    // should activate IMEs next time when this process calls the UpdateIME()
-    // function.
-    ime_control_updated_ = true;
-    ime_control_new_state_ = true;
-  }
 }
 
 void RenderWidget::ClearFocus() {
@@ -423,10 +461,8 @@ void RenderWidget::PaintDebugBorder(const gfx::Rect& rect,
 void RenderWidget::CallDoDeferredUpdate() {
   DoDeferredUpdate();
 
-  if (pending_input_event_ack_.get()) {
-    Send(pending_input_event_ack_.get());
-    pending_input_event_ack_.release();
-  }
+  if (pending_input_event_ack_.get())
+    Send(pending_input_event_ack_.release());
 }
 
 void RenderWidget::DoDeferredUpdate() {
@@ -441,8 +477,25 @@ void RenderWidget::DoDeferredUpdate() {
     return;
   }
 
-  // Layout may generate more invalidation.
+  // Layout may generate more invalidation.  It may also enable the
+  // GPU acceleration, so make sure to run layout before we send the
+  // GpuRenderingActivated message.
   webwidget_->layout();
+
+  // If we are using accelerated compositing then all the drawing
+  // to the associated window happens directly from the gpu process and the
+  // browser process shouldn't do any drawing.
+  // TODO(vangelis): Currently the accelerated compositing path relies on
+  // invalidating parts of the page so that we get a request to redraw.
+  // This needs to change to a model where the compositor updates the
+  // contents of the page independently and the browser process gets no
+  // longer involved.
+  if (webwidget_->isAcceleratedCompositingActive() !=
+      is_gpu_rendering_active_) {
+    is_gpu_rendering_active_ = webwidget_->isAcceleratedCompositingActive();
+    Send(new ViewHostMsg_GpuRenderingActivated(
+        routing_id_, is_gpu_rendering_active_));
+  }
 
   // OK, save the pending update to a local since painting may cause more
   // invalidation.  Some WebCore rendering objects only layout when painted.
@@ -452,46 +505,75 @@ void RenderWidget::DoDeferredUpdate() {
   gfx::Rect scroll_damage = update.GetScrollDamage();
   gfx::Rect bounds = update.GetPaintBounds().Union(scroll_damage);
 
-  // Compute a buffer for painting and cache it.
-  scoped_ptr<skia::PlatformCanvas> canvas(
-      RenderProcess::current()->GetDrawingCanvas(&current_paint_buf_, bounds));
-  if (!canvas.get()) {
-    NOTREACHED();
-    return;
-  }
-
-  // We may get back a smaller canvas than we asked for.
-  // TODO(darin): This seems like it could cause painting problems!
-  DCHECK_EQ(bounds.width(), canvas->getDevice()->width());
-  DCHECK_EQ(bounds.height(), canvas->getDevice()->height());
-  bounds.set_width(canvas->getDevice()->width());
-  bounds.set_height(canvas->getDevice()->height());
-
-  HISTOGRAM_COUNTS_100("MPArch.RW_PaintRectCount", update.paint_rects.size());
-
-  // TODO(darin): Re-enable painting multiple damage rects once the
-  // page-cycler regressions are resolved.  See bug 29589.
-  if (update.scroll_rect.IsEmpty()) {
-    update.paint_rects.clear();
-    update.paint_rects.push_back(bounds);
-  }
-
-  // The scroll damage is just another rectangle to paint and copy.
+  // A plugin may be able to do an optimized paint. First check this, in which
+  // case we can skip all of the bitmap generation and regular paint code.
+  TransportDIB::Id dib_id = TransportDIB::Id();
+  TransportDIB* dib = NULL;
   std::vector<gfx::Rect> copy_rects;
-  copy_rects.swap(update.paint_rects);
-  if (!scroll_damage.IsEmpty())
-    copy_rects.push_back(scroll_damage);
+  gfx::Rect optimized_copy_rect, optimized_copy_location;
+  if (update.scroll_rect.IsEmpty() &&
+      !is_gpu_rendering_active_ &&
+      GetBitmapForOptimizedPluginPaint(bounds, &dib, &optimized_copy_location,
+                                       &optimized_copy_rect)) {
+    bounds = optimized_copy_location;
+    copy_rects.push_back(optimized_copy_rect);
+    dib_id = dib->id();
+  } else if (!is_gpu_rendering_active_) {
+    // Compute a buffer for painting and cache it.
+    scoped_ptr<skia::PlatformCanvas> canvas(
+        RenderProcess::current()->GetDrawingCanvas(&current_paint_buf_,
+                                                   bounds));
+    if (!canvas.get()) {
+      NOTREACHED();
+      return;
+    }
 
-  for (size_t i = 0; i < copy_rects.size(); ++i)
-    PaintRect(copy_rects[i], bounds.origin(), canvas.get());
+    // We may get back a smaller canvas than we asked for.
+    // TODO(darin): This seems like it could cause painting problems!
+    DCHECK_EQ(bounds.width(), canvas->getDevice()->width());
+    DCHECK_EQ(bounds.height(), canvas->getDevice()->height());
+    bounds.set_width(canvas->getDevice()->width());
+    bounds.set_height(canvas->getDevice()->height());
 
+    HISTOGRAM_COUNTS_100("MPArch.RW_PaintRectCount", update.paint_rects.size());
+
+    // TODO(darin): Re-enable painting multiple damage rects once the
+    // page-cycler regressions are resolved.  See bug 29589.
+    if (update.scroll_rect.IsEmpty()) {
+      update.paint_rects.clear();
+      update.paint_rects.push_back(bounds);
+    }
+
+    // The scroll damage is just another rectangle to paint and copy.
+    copy_rects.swap(update.paint_rects);
+    if (!scroll_damage.IsEmpty())
+      copy_rects.push_back(scroll_damage);
+
+    for (size_t i = 0; i < copy_rects.size(); ++i)
+      PaintRect(copy_rects[i], bounds.origin(), canvas.get());
+
+    dib_id = current_paint_buf_->id();
+  } else {  // Accelerated compositing path
+    // Begin painting.
+    bool finish = next_paint_is_resize_ack();
+    webwidget_->composite(finish);
+  }
+
+  // sending an ack to browser process that the paint is complete...
   ViewHostMsg_UpdateRect_Params params;
-  params.bitmap = current_paint_buf_->id();
+  params.bitmap = dib_id;
   params.bitmap_rect = bounds;
   params.dx = update.scroll_delta.x();
   params.dy = update.scroll_delta.y();
-  params.scroll_rect = update.scroll_rect;
-  params.copy_rects.swap(copy_rects);  // TODO(darin): clip to bounds?
+  if (is_gpu_rendering_active_) {
+    // If painting is done via the gpu process then we clear out all damage
+    // rects to save the browser process from doing unecessary work.
+    params.scroll_rect = gfx::Rect();
+    params.copy_rects.clear();
+  } else {
+    params.scroll_rect = update.scroll_rect;
+    params.copy_rects.swap(copy_rects);  // TODO(darin): clip to bounds?
+  }
   params.view_size = size_;
   params.plugin_window_moves.swap(plugin_window_moves_);
   params.flags = next_paint_flags_;
@@ -500,21 +582,31 @@ void RenderWidget::DoDeferredUpdate() {
   Send(new ViewHostMsg_UpdateRect(routing_id_, params));
   next_paint_flags_ = 0;
 
-  UpdateIME();
+  UpdateInputMethod();
 
   // Let derived classes know we've painted.
   DidInitiatePaint();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// WebWidgetDelegate
+// WebWidgetClient
 
 void RenderWidget::didInvalidateRect(const WebRect& rect) {
+  if (webwidget_->isAcceleratedCompositingActive()) {
+    // Drop invalidates on the floor when we are in compositing mode.
+    // TODO(nduca): Stop WebViewImpl from sending invalidates in the first
+    // place.
+    if (!(rect.x == 0 && rect.y == 0 &&
+          rect.width == 1 && rect.height == 1)) {
+      return;
+    }
+  }
+
   // We only want one pending DoDeferredUpdate call at any time...
   bool update_pending = paint_aggregator_.HasPendingUpdate();
 
   // The invalidated rect might be outside the bounds of the view.
-  gfx::Rect view_rect(0, 0, size_.width(), size_.height());
+  gfx::Rect view_rect(size_);
   gfx::Rect damaged_rect = view_rect.Intersect(rect);
   if (damaged_rect.IsEmpty())
     return;
@@ -539,11 +631,16 @@ void RenderWidget::didInvalidateRect(const WebRect& rect) {
 }
 
 void RenderWidget::didScrollRect(int dx, int dy, const WebRect& clip_rect) {
+  // Drop scrolls on the floor when we are in compositing mode.
+  // TODO(nduca): stop WebViewImpl from sending scrolls in the first place.
+  if (webwidget_->isAcceleratedCompositingActive())
+    return;
+
   // We only want one pending DoDeferredUpdate call at any time...
   bool update_pending = paint_aggregator_.HasPendingUpdate();
 
   // The scrolled rect might be outside the bounds of the view.
-  gfx::Rect view_rect(0, 0, size_.width(), size_.height());
+  gfx::Rect view_rect(size_);
   gfx::Rect damaged_rect = view_rect.Intersect(clip_rect);
   if (damaged_rect.IsEmpty())
     return;
@@ -565,6 +662,16 @@ void RenderWidget::didScrollRect(int dx, int dy, const WebRect& clip_rect) {
   //    the work that we will need to do.
   MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
       this, &RenderWidget::CallDoDeferredUpdate));
+}
+
+void RenderWidget::scheduleComposite() {
+  // TODO(nduca): replace with something a little less hacky.  The reason this
+  // hack is still used is because the Invalidate-DoDeferredUpdate loop
+  // contains a lot of host-renderer synchronization logic that is still
+  // important for the accelerated compositing case. The option of simply
+  // duplicating all that code is less desirable than "faking out" the
+  // invalidation path using a magical damage rect.
+  didInvalidateRect(WebRect(0,0,1,1));
 }
 
 void RenderWidget::didChangeCursor(const WebCursorInfo& cursor_info) {
@@ -607,23 +714,9 @@ void RenderWidget::show(WebNavigationPolicy) {
 }
 
 void RenderWidget::didFocus() {
-  // Note that didFocus() is invoked everytime a new node is focused in the
-  // page.  It could be expected that it would be called only when the widget
-  // gets the focus.  If the current behavior was to change in WebKit for the
-  // expected one, the following notification would not work anymore.
-  Send(new ViewHostMsg_FocusedNodeChanged(routing_id_));
-
-  // Prevent the widget from stealing the focus if it does not have focus
-  // already.  We do this by explicitely setting the focus to false again.
-  // We only let the browser focus the renderer.
-  if (!has_focus_ && webwidget_) {
-    MessageLoop::current()->PostTask(FROM_HERE,
-        NewRunnableMethod(this, &RenderWidget::ClearFocus));
-  }
 }
 
 void RenderWidget::didBlur() {
-  Send(new ViewHostMsg_Blur(routing_id_));
 }
 
 void RenderWidget::DoDeferredClose() {
@@ -641,10 +734,6 @@ void RenderWidget::closeWidgetSoon() {
   // complete, and then the Close message can be sent.
   MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
       this, &RenderWidget::DoDeferredClose));
-}
-
-void RenderWidget::GenerateFullRepaint() {
-  didInvalidateRect(gfx::Rect(size_.width(), size_.height()));
 }
 
 void RenderWidget::Close() {
@@ -696,24 +785,102 @@ WebRect RenderWidget::windowResizerRect() {
   return resizer_rect_;
 }
 
-void RenderWidget::OnImeSetInputMode(bool is_active) {
+void RenderWidget::OnSetInputMethodActive(bool is_active) {
   // To prevent this renderer process from sending unnecessary IPC messages to
   // a browser process, we permit the renderer process to send IPC messages
-  // only during the IME attached to the browser process is active.
-  ime_is_active_ = is_active;
+  // only during the input method attached to the browser process is active.
+  input_method_is_active_ = is_active;
 }
 
-void RenderWidget::OnImeSetComposition(WebCompositionCommand command,
-                                       int cursor_position,
-                                       int target_start, int target_end,
-                                       const string16& ime_string) {
+void RenderWidget::OnImeSetComposition(
+    const string16& text,
+    const std::vector<WebCompositionUnderline>& underlines,
+    int selection_start, int selection_end) {
   if (!webwidget_)
     return;
-  ime_control_busy_ = true;
-  webwidget_->handleCompositionEvent(command, cursor_position,
-                                     target_start, target_end,
-                                     ime_string);
-  ime_control_busy_ = false;
+  if (!webwidget_->setComposition(
+      text, WebVector<WebCompositionUnderline>(underlines),
+      selection_start, selection_end)) {
+    // If we failed to set the composition text, then we need to let the browser
+    // process to cancel the input method's ongoing composition session, to make
+    // sure we are in a consistent state.
+    Send(new ViewHostMsg_ImeCancelComposition(routing_id()));
+  }
+}
+
+void RenderWidget::OnImeConfirmComposition() {
+  if (webwidget_)
+    webwidget_->confirmComposition();
+}
+
+// This message causes the renderer to render an image of the
+// desired_size, regardless of whether the tab is hidden or not.
+void RenderWidget::OnMsgPaintAtSize(const TransportDIB::Handle& dib_handle,
+                                    int tag,
+                                    const gfx::Size& page_size,
+                                    const gfx::Size& desired_size) {
+  if (!webwidget_ || dib_handle == TransportDIB::DefaultHandleValue())
+    return;
+
+  if (page_size.IsEmpty() || desired_size.IsEmpty()) {
+    // If one of these is empty, then we just return the dib we were
+    // given, to avoid leaking it.
+    Send(new ViewHostMsg_PaintAtSize_ACK(routing_id_, tag, desired_size));
+    return;
+  }
+
+  // Map the given DIB ID into this process, and unmap it at the end
+  // of this function.
+  scoped_ptr<TransportDIB> paint_at_size_buffer(TransportDIB::Map(dib_handle));
+
+  DCHECK(paint_at_size_buffer.get());
+  if (!paint_at_size_buffer.get())
+    return;
+
+  gfx::Size canvas_size = page_size;
+  float x_scale = static_cast<float>(desired_size.width()) /
+                  static_cast<float>(canvas_size.width());
+  float y_scale = static_cast<float>(desired_size.height()) /
+                  static_cast<float>(canvas_size.height());
+
+  gfx::Rect orig_bounds(canvas_size);
+  canvas_size.set_width(static_cast<int>(canvas_size.width() * x_scale));
+  canvas_size.set_height(static_cast<int>(canvas_size.height() * y_scale));
+  gfx::Rect bounds(canvas_size);
+
+  scoped_ptr<skia::PlatformCanvas> canvas(
+      paint_at_size_buffer->GetPlatformCanvas(canvas_size.width(),
+                                              canvas_size.height()));
+  if (!canvas.get()) {
+    NOTREACHED();
+    return;
+  }
+
+  // Reset bounds to what we actually received, but they should be the
+  // same.
+  DCHECK_EQ(bounds.width(), canvas->getDevice()->width());
+  DCHECK_EQ(bounds.height(), canvas->getDevice()->height());
+  bounds.set_width(canvas->getDevice()->width());
+  bounds.set_height(canvas->getDevice()->height());
+
+  canvas->save();
+  // Add the scale factor to the canvas, so that we'll get the desired size.
+  canvas->scale(SkFloatToScalar(x_scale), SkFloatToScalar(y_scale));
+
+  // Have to make sure we're laid out at the right size before
+  // rendering.
+  gfx::Size old_size = webwidget_->size();
+  webwidget_->resize(page_size);
+  webwidget_->layout();
+
+  // Paint the entire thing (using original bounds, not scaled bounds).
+  PaintRect(orig_bounds, orig_bounds.origin(), canvas.get());
+  canvas->restore();
+
+  // Return the widget to its previous size.
+  webwidget_->resize(old_size);
+
+  Send(new ViewHostMsg_PaintAtSize_ACK(routing_id_, tag, bounds.size()));
 }
 
 void RenderWidget::OnMsgRepaint(const gfx::Size& size_to_paint) {
@@ -722,14 +889,27 @@ void RenderWidget::OnMsgRepaint(const gfx::Size& size_to_paint) {
     return;
 
   set_next_paint_is_repaint_ack();
-  gfx::Rect repaint_rect(size_to_paint.width(), size_to_paint.height());
-  didInvalidateRect(repaint_rect);
+  if (webwidget_->isAcceleratedCompositingActive()) {
+    scheduleComposite();
+  } else {
+    gfx::Rect repaint_rect(size_to_paint.width(), size_to_paint.height());
+    didInvalidateRect(repaint_rect);
+  }
 }
 
 void RenderWidget::OnSetTextDirection(WebTextDirection direction) {
   if (!webwidget_)
     return;
   webwidget_->setTextDirection(direction);
+}
+
+bool RenderWidget::GetBitmapForOptimizedPluginPaint(
+    const gfx::Rect& paint_bounds,
+    TransportDIB** dib,
+    gfx::Rect* location,
+    gfx::Rect* clip) {
+  // Normal RenderWidgets don't support optimized plugin painting.
+  return false;
 }
 
 void RenderWidget::SetHidden(bool hidden) {
@@ -746,6 +926,7 @@ void RenderWidget::SetHidden(bool hidden) {
 
 void RenderWidget::SetBackground(const SkBitmap& background) {
   background_ = background;
+
   // Generate a full repaint.
   didInvalidateRect(gfx::Rect(size_.width(), size_.height()));
 }
@@ -770,81 +951,46 @@ void RenderWidget::set_next_paint_is_repaint_ack() {
   next_paint_flags_ |= ViewHostMsg_UpdateRect_Flags::IS_REPAINT_ACK;
 }
 
-void RenderWidget::UpdateIME() {
-  // If a browser process does not have IMEs, its IMEs are not active, or there
-  // are not any attached widgets.
-  // a renderer process does not have to retrieve information of the focused
-  // control or send notification messages to a browser process.
-  if (!ime_is_active_) {
+void RenderWidget::UpdateInputMethod() {
+  if (!input_method_is_active_)
     return;
+
+  WebTextInputType new_type = WebKit::WebTextInputTypeNone;
+  WebRect new_caret_bounds;
+
+  if (webwidget_) {
+    new_type = webwidget_->textInputType();
+    new_caret_bounds = webwidget_->caretOrSelectionBounds();
   }
-  // Retrieve the caret position from the focused widget and verify we should
-  // enabled IMEs attached to the browser process.
-  bool enable_ime = false;
-  WebRect caret_rect;
-  if (!webwidget_ ||
-      !webwidget_->queryCompositionStatus(&enable_ime, &caret_rect)) {
-    // There are not any editable widgets attached to this process.
-    // We should disable the IME to prevent it from sending CJK strings to
-    // non-editable widgets.
-    ime_control_updated_ = true;
-    ime_control_new_state_ = false;
+
+  // Only sends text input type and caret bounds to the browser process if they
+  // are changed.
+  if (text_input_type_ != new_type || caret_bounds_ != new_caret_bounds) {
+    text_input_type_ = new_type;
+    caret_bounds_ = new_caret_bounds;
+    Send(new ViewHostMsg_ImeUpdateTextInputState(
+        routing_id(), new_type, new_caret_bounds));
   }
-  if (ime_control_new_state_ != enable_ime) {
-    ime_control_updated_ = true;
-    ime_control_new_state_ = enable_ime;
-  }
-  if (ime_control_updated_) {
-    // The input focus has been changed.
-    // Compare the current state with the updated state and choose actions.
-    if (ime_control_enable_ime_) {
-      if (ime_control_new_state_) {
-        // Case 1: a text input -> another text input
-        // Complete the current composition and notify the caret position.
-        Send(new ViewHostMsg_ImeUpdateStatus(routing_id(),
-                                             IME_COMPLETE_COMPOSITION,
-                                             caret_rect));
-      } else {
-        // Case 2: a text input -> a password input (or a static control)
-        // Complete the current composition and disable the IME.
-        Send(new ViewHostMsg_ImeUpdateStatus(routing_id(), IME_DISABLE,
-                                             caret_rect));
-      }
-    } else {
-      if (ime_control_new_state_) {
-        // Case 3: a password input (or a static control) -> a text input
-        // Enable the IME and notify the caret position.
-        Send(new ViewHostMsg_ImeUpdateStatus(routing_id(),
-                                             IME_COMPLETE_COMPOSITION,
-                                             caret_rect));
-      } else {
-        // Case 4: a password input (or a static contol) -> another password
-        //         input (or another static control).
-        // The IME has been already disabled and we don't have to do anything.
-      }
-    }
-  } else {
-    // The input focus is not changed.
-    // Notify the caret position to a browser process only if it is changed.
-    if (ime_control_enable_ime_) {
-      if (caret_rect.x != ime_control_x_ ||
-          caret_rect.y != ime_control_y_) {
-        Send(new ViewHostMsg_ImeUpdateStatus(routing_id(), IME_MOVE_WINDOWS,
-                                             caret_rect));
-      }
-    }
-  }
-  // Save the updated IME status to prevent from sending the same IPC messages.
-  ime_control_updated_ = false;
-  ime_control_enable_ime_ = ime_control_new_state_;
-  ime_control_x_ = caret_rect.x;
-  ime_control_y_ = caret_rect.y;
 }
 
 WebScreenInfo RenderWidget::screenInfo() {
   WebScreenInfo results;
   Send(new ViewHostMsg_GetScreenInfo(routing_id_, host_window_, &results));
   return results;
+}
+
+void RenderWidget::resetInputMethod() {
+  if (!input_method_is_active_)
+    return;
+
+  // If the last text input type is not None, then we should finish any
+  // ongoing composition regardless of the new text input type.
+  if (text_input_type_ != WebKit::WebTextInputTypeNone) {
+    // If a composition text exists, then we need to let the browser process
+    // to cancel the input method's ongoing composition session.
+    if (webwidget_->confirmComposition())
+      Send(new ViewHostMsg_ImeCancelComposition(routing_id()));
+  }
 }
 
 void RenderWidget::SchedulePluginMove(
@@ -874,4 +1020,3 @@ void RenderWidget::CleanupWindowInPluginMoves(gfx::PluginWindowHandle window) {
     }
   }
 }
-

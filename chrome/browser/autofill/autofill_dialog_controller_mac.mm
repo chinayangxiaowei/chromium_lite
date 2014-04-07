@@ -4,520 +4,952 @@
 
 #import "chrome/browser/autofill/autofill_dialog_controller_mac.h"
 #include "app/l10n_util.h"
+#include "app/resource_bundle.h"
 #include "base/mac_util.h"
+#include "base/singleton.h"
 #include "base/sys_string_conversions.h"
+#include "chrome/browser/browser.h"
+#include "chrome/browser/browser_list.h"
 #import "chrome/browser/autofill/autofill_address_model_mac.h"
-#import "chrome/browser/autofill/autofill_address_view_controller_mac.h"
+#import "chrome/browser/autofill/autofill_address_sheet_controller_mac.h"
 #import "chrome/browser/autofill/autofill_credit_card_model_mac.h"
-#import "chrome/browser/autofill/autofill_credit_card_view_controller_mac.h"
+#import "chrome/browser/autofill/autofill_credit_card_sheet_controller_mac.h"
+#import "chrome/browser/autofill/personal_data_manager.h"
 #include "chrome/browser/browser_process.h"
-#import "chrome/browser/cocoa/disclosure_view_controller.h"
-#import "chrome/browser/cocoa/section_separator_view.h"
 #import "chrome/browser/cocoa/window_size_autosaver.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
+#include "chrome/common/notification_details.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/pref_names.h"
 #include "grit/generated_resources.h"
+#include "grit/app_resources.h"
+#include "grit/theme_resources.h"
 
-@interface AutoFillDialogController (PrivateMethods)
-- (void)runModalDialog;
-- (void)installChildViews;
+namespace {
+
+// Type for singleton object that contains the instance of the visible
+// dialog.
+typedef std::map<Profile*, AutoFillDialogController*> ProfileControllerMap;
+
+// Update profile labels passed as |input|.  When profile data changes as a
+// result of adding new profiles, edititing existing profiles, or deleting a
+// profile, then the list of profiles need to have their derived labels
+// recomputed.
+void UpdateProfileLabels(std::vector<AutoFillProfile>* input) {
+  DCHECK(input);
+  std::vector<AutoFillProfile*> profiles;
+  profiles.resize(input->size());
+  for (size_t i = 0; i < input->size(); ++i) {
+    profiles[i] = &(*input)[i];
+  }
+  AutoFillProfile::AdjustInferredLabels(&profiles);
+}
+
+}  // namespace
+
+// Delegate protocol that needs to be in place for the AutoFillTableView's
+// handling of delete and backspace keys.
+@protocol DeleteKeyDelegate
+- (IBAction)deleteSelection:(id)sender;
 @end
 
-@implementation AutoFillDialogController
+// A subclass of NSTableView that allows for deleting selected elements using
+// the delete or backspace keys.
+@interface AutoFillTableView : NSTableView {
+}
+@end
 
-@synthesize auxiliaryEnabled = auxiliaryEnabled_;
+@implementation AutoFillTableView
 
-+ (void)showAutoFillDialogWithObserver:(AutoFillDialogObserver*)observer
-                autoFillProfiles:(const std::vector<AutoFillProfile*>&)profiles
-                     creditCards:(const std::vector<CreditCard*>&)creditCards
-                         profile:(Profile*)profile {
-  AutoFillDialogController* controller =
-      [AutoFillDialogController controllerWithObserver:observer
-          autoFillProfiles:profiles
-               creditCards:creditCards
-                   profile:profile];
+// We override the keyDown method to dispatch the |deleteSelection:| action
+// when the user presses the delete or backspace keys.  Note a delegate must
+// be present that conforms to the DeleteKeyDelegate protocol.
+- (void)keyDown:(NSEvent *)event {
+  id object = [self delegate];
+  unichar c = [[event characters] characterAtIndex: 0];
 
-  // Only run modal dialog if it is not already being shown.
-  if (![controller isWindowLoaded]) {
-    [controller runModalDialog];
+  // If the user pressed delete and the delegate supports deleteSelection:
+  if ((c == NSDeleteFunctionKey ||
+       c == NSDeleteCharFunctionKey ||
+       c == NSDeleteCharacter) &&
+      [object respondsToSelector:@selector(deleteSelection:)]) {
+    id <DeleteKeyDelegate> delegate = (id <DeleteKeyDelegate>) object;
+
+    [delegate deleteSelection:self];
+  } else {
+    [super keyDown:event];
   }
 }
 
+@end
+
+// Private interface.
+@interface AutoFillDialogController (PrivateMethods)
+// Save profiles and credit card information after user modification.
+- (void)save;
+
+// Asyncronous handler for when PersonalDataManager data loads.  The
+// personal data manager notifies the dialog with this method when the
+// data loading is complete and ready to be used.
+- (void)onPersonalDataLoaded:(const std::vector<AutoFillProfile*>&)profiles
+                 creditCards:(const std::vector<CreditCard*>&)creditCards;
+
+// Asyncronous handler for when PersonalDataManager data changes.  The
+// personal data manager notifies the dialog with this method when the
+// data has changed.
+- (void)onPersonalDataChanged:(const std::vector<AutoFillProfile*>&)profiles
+                  creditCards:(const std::vector<CreditCard*>&)creditCards;
+
+// Called upon changes to AutoFill preferences that should be reflected in the
+// UI.
+- (void)preferenceDidChange:(const std::string&)preferenceName;
+
+// Returns true if |row| is an index to a valid profile in |tableView_|, and
+// false otherwise.
+- (BOOL)isProfileRow:(NSInteger)row;
+
+// Returns true if |row| is an index to the profile group row in |tableView_|,
+// and false otherwise.
+- (BOOL)isProfileGroupRow:(NSInteger)row;
+
+// Returns true if |row| is an index to a valid credit card in |tableView_|, and
+// false otherwise.
+- (BOOL)isCreditCardRow:(NSInteger)row;
+
+// Returns true if |row| is the index to the credit card group row in
+// |tableView_|, and false otherwise.
+- (BOOL)isCreditCardGroupRow:(NSInteger)row;
+
+// Returns the index to |profiles_| of the corresponding |row| in |tableView_|.
+- (size_t)profileIndexFromRow:(NSInteger)row;
+
+// Returns the index to |creditCards_| of the corresponding |row| in
+// |tableView_|.
+- (size_t)creditCardIndexFromRow:(NSInteger)row;
+
+// Returns the  |row| in |tableView_| that corresponds to the index |i| into
+// |profiles_|.
+- (NSInteger)rowFromProfileIndex:(size_t)i;
+
+// Returns the  |row| in |tableView_| that corresponds to the index |i| into
+// |creditCards_|.
+- (NSInteger)rowFromCreditCardIndex:(size_t)row;
+
+@end
+
+namespace AutoFillDialogControllerInternal {
+
+// PersonalDataManagerObserver facilitates asynchronous loading of
+// PersonalDataManager data before showing the AutoFill settings data to the
+// user.  It acts as a C++-based delegate for the |AutoFillDialogController|.
+class PersonalDataManagerObserver : public PersonalDataManager::Observer {
+ public:
+  explicit PersonalDataManagerObserver(
+      AutoFillDialogController* controller,
+      PersonalDataManager* personal_data_manager,
+      Profile* profile)
+      : controller_(controller),
+        personal_data_manager_(personal_data_manager),
+        profile_(profile) {
+  }
+
+  virtual ~PersonalDataManagerObserver();
+
+  // Notifies the observer that the PersonalDataManager has finished loading.
+  virtual void OnPersonalDataLoaded();
+
+  // Notifies the observer that the PersonalDataManager data has changed.
+  virtual void OnPersonalDataChanged();
+
+ private:
+  // Utility method to remove |this| from |personal_data_manager_| as an
+  // observer.
+  void RemoveObserver();
+
+  // The dialog controller to be notified when the data loading completes.
+  // Weak reference.
+  AutoFillDialogController* controller_;
+
+  // The object in which we are registered as an observer.  We hold on to
+  // it to facilitate un-registering ourself in the destructor and in the
+  // |OnPersonalDataLoaded| method.  This may be NULL.
+  // Weak reference.
+  PersonalDataManager* personal_data_manager_;
+
+  // Profile of caller.  Held as weak reference.  May not be NULL.
+  Profile* profile_;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(PersonalDataManagerObserver);
+};
+
+// During destruction ensure that we are removed from the
+// |personal_data_manager_| as an observer.
+PersonalDataManagerObserver::~PersonalDataManagerObserver() {
+  RemoveObserver();
+}
+
+void PersonalDataManagerObserver::RemoveObserver() {
+  if (personal_data_manager_) {
+    personal_data_manager_->RemoveObserver(this);
+  }
+}
+
+// The data has been loaded, notify the controller.
+void PersonalDataManagerObserver::OnPersonalDataLoaded() {
+  [controller_ onPersonalDataLoaded:personal_data_manager_->web_profiles()
+                        creditCards:personal_data_manager_->credit_cards()];
+}
+
+// The data has changed, notify the controller.
+void PersonalDataManagerObserver::OnPersonalDataChanged() {
+  [controller_ onPersonalDataChanged:personal_data_manager_->web_profiles()
+                         creditCards:personal_data_manager_->credit_cards()];
+}
+
+// Bridges preference changed notifications to the dialog controller.
+class PreferenceObserver : public NotificationObserver {
+ public:
+  explicit PreferenceObserver(AutoFillDialogController* controller)
+      : controller_(controller) {}
+
+  // Overridden from NotificationObserver:
+  virtual void Observe(NotificationType type,
+                       const NotificationSource& source,
+                       const NotificationDetails& details) {
+    if (type == NotificationType::PREF_CHANGED) {
+      const std::string* pref = Details<std::string>(details).ptr();
+      if (pref) {
+        [controller_ preferenceDidChange:*pref];
+      }
+    }
+  }
+
+ private:
+  AutoFillDialogController* controller_;
+
+  DISALLOW_COPY_AND_ASSIGN(PreferenceObserver);
+};
+
+}  // namespace AutoFillDialogControllerInternal
+
+@implementation AutoFillDialogController
+
+@synthesize autoFillManaged = autoFillManaged_;
+@synthesize autoFillManagedAndDisabled = autoFillManagedAndDisabled_;
+@synthesize itemIsSelected = itemIsSelected_;
+@synthesize multipleSelected = multipleSelected_;
+
++ (void)showAutoFillDialogWithObserver:(AutoFillDialogObserver*)observer
+                               profile:(Profile*)profile {
+  AutoFillDialogController* controller =
+      [AutoFillDialogController controllerWithObserver:observer
+                                               profile:profile];
+  [controller runModelessDialog];
+}
+
 - (void)awakeFromNib {
-  [addressSectionBox_ setShowTopLine:FALSE];
-  [self installChildViews];
+  PersonalDataManager* personal_data_manager =
+      profile_->GetPersonalDataManager();
+  DCHECK(personal_data_manager);
+
+  if (personal_data_manager->IsDataLoaded()) {
+    // |personalDataManager| data is loaded, we can proceed with the contents.
+    [self onPersonalDataLoaded:personal_data_manager->web_profiles()
+                   creditCards:personal_data_manager->credit_cards()];
+  }
+
+  // Register as listener to listen to subsequent data change notifications.
+  personalDataManagerObserver_.reset(
+      new AutoFillDialogControllerInternal::PersonalDataManagerObserver(
+          self, personal_data_manager, profile_));
+  personal_data_manager->SetObserver(personalDataManagerObserver_.get());
+
+  // Explicitly load the data in the table before window displays to avoid
+  // nasty flicker as tables update.
+  [tableView_ reloadData];
+
+  // Set up edit when double-clicking on a table row.
+  [tableView_ setDoubleAction:@selector(editSelection:)];
 }
 
 // NSWindow Delegate callback.  When the window closes the controller can
 // be released.
 - (void)windowWillClose:(NSNotification *)notification {
-  // Force views to go away so they properly remove their observations.
-  addressFormViewControllers_.reset();
-  creditCardFormViewControllers_.reset();
+  [tableView_ setDataSource:nil];
+  [tableView_ setDelegate:nil];
   [self autorelease];
-}
 
-// Called when the user clicks the save button.
-- (IBAction)save:(id)sender {
-  // Call |makeFirstResponder:| to commit pending text field edits.
-  [[self window] makeFirstResponder:[self window]];
-
-  // If we have an |observer_| then communicate the changes back.
-  if (observer_) {
-    profiles_.clear();
-    profiles_.resize([addressFormViewControllers_ count]);
-    int i = 0;
-    for (AutoFillAddressViewController* addressFormViewController in
-        addressFormViewControllers_.get()) {
-      // Initialize the profile here.  The default initializer does not fully
-      // initialize.
-      profiles_[i] = AutoFillProfile(ASCIIToUTF16(""), 0);
-      [addressFormViewController copyModelToProfile:&profiles_[i]];
-      i++;
-    }
-    creditCards_.clear();
-    creditCards_.resize([creditCardFormViewControllers_ count]);
-    int j = 0;
-    for (AutoFillCreditCardViewController* creditCardFormViewController in
-        creditCardFormViewControllers_.get()) {
-      // Initialize the credit card here.  The default initializer does not
-      // fully initialize.
-      creditCards_[j] = CreditCard(ASCIIToUTF16(""), 0);
-      [creditCardFormViewController copyModelToCreditCard:&creditCards_[j]];
-      j++;
-    }
-    profile_->GetPrefs()->SetBoolean(prefs::kAutoFillAuxiliaryProfilesEnabled,
-                                     auxiliaryEnabled_);
-    // Make sure to use accessors here to save what the user sees.
-    profile_->GetPrefs()->SetString(
-        prefs::kAutoFillDefaultProfile,
-        base::SysNSStringToWide([self defaultAddressLabel]));
-    profile_->GetPrefs()->SetString(
-        prefs::kAutoFillDefaultCreditCard,
-        base::SysNSStringToWide([self defaultCreditCardLabel]));
-    observer_->OnAutoFillDialogApply(&profiles_, &creditCards_);
+  // Remove ourself from the map.
+  ProfileControllerMap* map = Singleton<ProfileControllerMap>::get();
+  ProfileControllerMap::iterator it = map->find(profile_);
+  if (it != map->end()) {
+    map->erase(it);
   }
-  [self closeDialog];
 }
 
-// Called when the user clicks the cancel button. All we need to do is stop
-// the modal session.
-- (IBAction)cancel:(id)sender {
-  [self closeDialog];
-}
-
-// Adds new address to bottom of list.  A new address controller is created
-// and its view is inserted into the view hierarchy.
+// Invokes the "Add" sheet for address information.  If user saves then the new
+// information is added to |profiles_| in |addressAddDidEnd:| method.
 - (IBAction)addNewAddress:(id)sender {
-  // Insert relative to top of section, or below last address.
-  NSView* insertionPoint;
-  NSUInteger count = [addressFormViewControllers_.get() count];
-  if (count == 0) {
-    insertionPoint = addressSection_;
-  } else {
-    insertionPoint = [[addressFormViewControllers_.get()
-        objectAtIndex:[addressFormViewControllers_.get() count] - 1] view];
-  }
+  DCHECK(!addressSheetController.get());
 
-  // Create a new default address, and add it to our array of controllers.
-  string16 new_address_name = l10n_util::GetStringUTF16(
-      IDS_AUTOFILL_NEW_ADDRESS);
-  AutoFillProfile newProfile(new_address_name, 0);
-  scoped_nsobject<AutoFillAddressViewController> addressViewController(
-      [[AutoFillAddressViewController alloc]
-          initWithProfile:newProfile
-               disclosure:NSOnState
-               controller:self]);
-  [self willChangeValueForKey:@"addressLabels"];
-  [addressFormViewControllers_.get() addObject:addressViewController];
-  [self didChangeValueForKey:@"addressLabels"];
-  // Might need to reset the default if added.
-  [self willChangeValueForKey:@"defaultAddressLabel"];
-  [self didChangeValueForKey:@"defaultAddressLabel"];
+  // Create a new default address.
+  string16 newName = l10n_util::GetStringUTF16(IDS_AUTOFILL_NEW_ADDRESS);
+  AutoFillProfile newAddress(newName, 0);
 
-  // Embed the new address into our target view.
-  [childView_ addSubview:[addressViewController view]
-      positioned:NSWindowBelow relativeTo:insertionPoint];
-  [[addressViewController view] setFrameOrigin:NSMakePoint(0, 0)];
+  // Create a new address sheet controller in "Add" mode.
+  addressSheetController.reset(
+      [[AutoFillAddressSheetController alloc]
+          initWithProfile:newAddress
+                     mode:kAutoFillAddressAddMode]);
 
-  [self notifyAddressChange:self];
-
-  // Recalculate key view loop to account for change in view tree.
-  [[self window] recalculateKeyViewLoop];
+  // Show the sheet.
+  [NSApp beginSheet:[addressSheetController window]
+     modalForWindow:[self window]
+      modalDelegate:self
+     didEndSelector:@selector(addressAddDidEnd:returnCode:contextInfo:)
+        contextInfo:NULL];
 }
 
-// Adds new credit card to bottom of list.  A new credit card controller is
-// created and its view is inserted into the view hierarchy.
+// Invokes the "Add" sheet for credit card information.  If user saves then the
+// new information is added to |creditCards_| in |creditCardAddDidEnd:| method.
 - (IBAction)addNewCreditCard:(id)sender {
-  // Insert relative to top of section, or below last address.
-  NSView* insertionPoint;
-  NSUInteger count = [creditCardFormViewControllers_.get() count];
-  if (count == 0) {
-    insertionPoint = creditCardSection_;
-  } else {
-    insertionPoint = [[creditCardFormViewControllers_.get()
-        objectAtIndex:[creditCardFormViewControllers_.get() count] - 1] view];
-  }
+  DCHECK(!creditCardSheetController.get());
 
-  // Create a new default credit card, and add it to our array of controllers.
-  string16 new_credit_card_name = l10n_util::GetStringUTF16(
-      IDS_AUTOFILL_NEW_CREDITCARD);
-  CreditCard newCreditCard(new_credit_card_name, 0);
-  scoped_nsobject<AutoFillCreditCardViewController> creditCardViewController(
-      [[AutoFillCreditCardViewController alloc]
+  // Create a new default credit card.
+  string16 newName = l10n_util::GetStringUTF16(IDS_AUTOFILL_NEW_CREDITCARD);
+  CreditCard newCreditCard(newName, 0);
+
+  // Create a new address sheet controller in "Add" mode.
+  creditCardSheetController.reset(
+      [[AutoFillCreditCardSheetController alloc]
           initWithCreditCard:newCreditCard
-                  disclosure:NSOnState
-                  controller:self]);
-  [self willChangeValueForKey:@"creditCardLabels"];
-  [creditCardFormViewControllers_.get() addObject:creditCardViewController];
-  [self didChangeValueForKey:@"creditCardLabels"];
-  // Might need to reset the default if added.
-  [self willChangeValueForKey:@"defaultCreditCardLabel"];
-  [self didChangeValueForKey:@"defaultCreditCardLabel"];
+                        mode:kAutoFillCreditCardAddMode]);
 
-  // Embed the new address into our target view.
-  [childView_ addSubview:[creditCardViewController view]
-      positioned:NSWindowBelow relativeTo:insertionPoint];
-  [[creditCardViewController view] setFrameOrigin:NSMakePoint(0, 0)];
-
-  // Recalculate key view loop to account for change in view tree.
-  [[self window] recalculateKeyViewLoop];
+  // Show the sheet.
+  [NSApp beginSheet:[creditCardSheetController window]
+     modalForWindow:[self window]
+      modalDelegate:self
+     didEndSelector:@selector(creditCardAddDidEnd:returnCode:contextInfo:)
+        contextInfo:NULL];
 }
 
-- (IBAction)deleteAddress:(id)sender {
-  NSUInteger i = [addressFormViewControllers_.get() indexOfObject:sender];
-  DCHECK(i != NSNotFound);
+// Add address sheet was dismissed.  Non-zero |returnCode| indicates a save.
+- (void)addressAddDidEnd:(NSWindow*)sheet
+              returnCode:(int)returnCode
+             contextInfo:(void*)contextInfo {
+  DCHECK(contextInfo == NULL);
 
-  // Remove controller's view from superview and remove from list of
-  // controllers.  Note on lifetime: removing view from super view decrements
-  // refcount of view, removing controller from array decrements refcount of
-  // controller which in-turn decrement refcount of view.  Both should dealloc
-  // at this point.
-  [[sender view] removeFromSuperview];
-  [self willChangeValueForKey:@"addressLabels"];
-  [addressFormViewControllers_.get() removeObjectAtIndex:i];
-  [self didChangeValueForKey:@"addressLabels"];
-  // Might need to reset the default if deleted.
-  [self willChangeValueForKey:@"defaultAddressLabel"];
-  [self didChangeValueForKey:@"defaultAddressLabel"];
+  if (returnCode) {
+    // Create a new address and save it to the |profiles_| list.
+    AutoFillProfile newAddress(string16(), 0);
+    [addressSheetController copyModelToProfile:&newAddress];
+    if (!newAddress.IsEmpty()) {
+      profiles_.push_back(newAddress);
 
-  [self notifyAddressChange:self];
+      // Saving will save to the PDM and the table will refresh when PDM sends
+      // notification that the underlying model has changed.
+      [self save];
 
-  // Recalculate key view loop to account for change in view tree.
-  [[self window] recalculateKeyViewLoop];
-}
-
-- (IBAction)deleteCreditCard:(id)sender {
-  NSUInteger i = [creditCardFormViewControllers_.get() indexOfObject:sender];
-  DCHECK(i != NSNotFound);
-
-  // Remove controller's view from superview and remove from list of
-  // controllers.  Note on lifetime: removing view from super view decrements
-  // refcount of view, removing controller from array decrements refcount of
-  // controller which in-turn decrement refcount of view.  Both should dealloc
-  // at this point.
-  [[sender view] removeFromSuperview];
-  [self willChangeValueForKey:@"creditCardLabels"];
-  [creditCardFormViewControllers_.get() removeObjectAtIndex:i];
-  [self didChangeValueForKey:@"creditCardLabels"];
-  // Might need to reset the default if deleted.
-  [self willChangeValueForKey:@"defaultCreditCardLabel"];
-  [self didChangeValueForKey:@"defaultCreditCardLabel"];
-
-  // Recalculate key view loop to account for change in view tree.
-  [[self window] recalculateKeyViewLoop];
-}
-
-// Credit card controllers are dependent upon the address labels.  So we notify
-// them here that something has changed.
-- (IBAction)notifyAddressChange:(id)sender {
-  for (AutoFillCreditCardViewController* creditCardFormViewController in
-      creditCardFormViewControllers_.get()) {
-      [creditCardFormViewController onAddressesChanged:self];
+      // Update the selection to the newly added item.
+      NSInteger row = [self rowFromProfileIndex:profiles_.size() - 1];
+      [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
+              byExtendingSelection:NO];
+    }
   }
+  [sheet orderOut:self];
+  addressSheetController.reset(nil);
 }
 
-- (NSArray*)addressLabels {
-  NSUInteger capacity = [addressFormViewControllers_ count];
-  NSMutableArray* array = [NSMutableArray arrayWithCapacity:capacity];
+// Add credit card sheet was dismissed.  Non-zero |returnCode| indicates a save.
+- (void)creditCardAddDidEnd:(NSWindow *)sheet
+                 returnCode:(int)returnCode
+                contextInfo:(void *)contextInfo {
+  DCHECK(contextInfo == NULL);
 
-  for (AutoFillAddressViewController* addressFormViewController in
-      addressFormViewControllers_.get()) {
-    [array addObject:[[addressFormViewController addressModel] label]];
+  if (returnCode) {
+    // Create a new credit card and save it to the |creditCards_| list.
+    CreditCard newCreditCard(string16(), 0);
+    [creditCardSheetController copyModelToCreditCard:&newCreditCard];
+    if (!newCreditCard.IsEmpty()) {
+      creditCards_.push_back(newCreditCard);
+
+      // Saving will save to the PDM and the table will refresh when PDM sends
+      // notification that the underlying model has changed.
+      [self save];
+
+      // Update the selection to the newly added item.
+      NSInteger row = [self rowFromCreditCardIndex:creditCards_.size() - 1];
+      [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
+              byExtendingSelection:NO];
+    }
   }
-
-  return array;
+  [sheet orderOut:self];
+  creditCardSheetController.reset(nil);
 }
 
-- (NSArray*)creditCardLabels {
-  NSUInteger capacity = [creditCardFormViewControllers_ count];
-  NSMutableArray* array = [NSMutableArray arrayWithCapacity:capacity];
+// Deletes selected items; either addresses, credit cards, or a mixture of the
+// two depending on the items selected.
+- (IBAction)deleteSelection:(id)sender {
+  NSIndexSet* selection = [tableView_ selectedRowIndexes];
+  NSInteger selectedRow = [tableView_ selectedRow];
 
-  for (AutoFillCreditCardViewController* creditCardFormViewController in
-      creditCardFormViewControllers_.get()) {
-    [array addObject:[[creditCardFormViewController creditCardModel] label]];
-  }
+  // Loop through from last to first deleting selected items as we go.
+  for (NSUInteger i = [selection lastIndex];
+       i != NSNotFound;
+       i = [selection indexLessThanIndex:i]) {
+    // We keep track of the "top most" selection in the list so we know where
+    // to set new selection below.
+    selectedRow = i;
 
-  return array;
-}
-
-- (NSString*)defaultAddressLabel {
-  NSArray* labels = [self addressLabels];
-  NSString* def = defaultAddressLabel_.get();
-  if ([def length] && [labels containsObject:def])
-    return def;
-
-  // No valid default; pick the first item.
-  if ([labels count]) {
-    return [labels objectAtIndex:0];
-  } else {
-    return @"";
-  }
-}
-
-- (void)setDefaultAddressLabel:(NSString*)label {
-  if (!label) {
-    // Setting nil means the user un-checked an item. Find a new default.
-    NSUInteger itemCount = [addressFormViewControllers_ count];
-    if (itemCount == 0) {
-      DCHECK(false) << "Attempt to set default when there are no items.";
-      return;
-    } else if (itemCount == 1) {
-      DCHECK(false) << "Attempt to set default when there is only one item, so "
-                       "it should have been disabled.";
-      AutoFillAddressViewController* controller =
-          [addressFormViewControllers_ objectAtIndex:0];
-      label = [[controller addressModel] label];
-    } else {
-      AutoFillAddressViewController* controller =
-          [addressFormViewControllers_ objectAtIndex:0];
-      NSString* firstItemsLabel = [[controller addressModel] label];
-
-      // If they unchecked an item that wasn't the first item, make the first
-      // item default.
-      if (![defaultAddressLabel_ isEqual:firstItemsLabel]) {
-        label = firstItemsLabel;
-      } else {
-        // Otherwise they unchecked the first item. Pick the second one for 'em.
-        AutoFillAddressViewController* controller =
-            [addressFormViewControllers_ objectAtIndex:1];
-        label = [[controller addressModel] label];
-      }
+    if ([self isProfileRow:i]) {
+      profiles_.erase(
+          profiles_.begin() + [self profileIndexFromRow:i]);
+    } else if ([self isCreditCardRow:i]) {
+      creditCards_.erase(
+          creditCards_.begin() + [self creditCardIndexFromRow:i]);
     }
   }
 
-  defaultAddressLabel_.reset([label copy]);
-  return;
-}
-
-- (NSString*)defaultCreditCardLabel {
-  NSArray* labels = [self creditCardLabels];
-  NSString* def = defaultCreditCardLabel_.get();
-  if ([def length] && [labels containsObject:def])
-    return def;
-
-  // No valid default; pick the first item.
-  if ([labels count]) {
-    return [labels objectAtIndex:0];
+  // Select the previous row if possible, else current row, else deselect all.
+  if ([self tableView:tableView_ shouldSelectRow:selectedRow-1]) {
+    [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:selectedRow-1]
+            byExtendingSelection:NO];
+  } else if ([self tableView:tableView_ shouldSelectRow:selectedRow]) {
+    [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:selectedRow]
+            byExtendingSelection:NO];
   } else {
-    return @"";
+    [tableView_ deselectAll:self];
   }
+
+  // Saving will save to the PDM and the table will refresh when PDM sends
+  // notification that the underlying model has changed.
+  [self save];
 }
 
-- (void)setDefaultCreditCardLabel:(NSString*)label {
-  if (!label) {
-    // Setting nil means the user un-checked an item. Find a new default.
-    NSUInteger itemCount = [creditCardFormViewControllers_ count];
-    if (itemCount == 0) {
-      DCHECK(false) << "Attempt to set default when there are no items.";
-      return;
-    } else if (itemCount == 1) {
-      DCHECK(false) << "Attempt to set default when there is only one item, so "
-                       "it should have been disabled.";
-      AutoFillCreditCardViewController* controller =
-         [creditCardFormViewControllers_ objectAtIndex:0];
-      label = [[controller creditCardModel] label];
-    } else {
-      AutoFillCreditCardViewController* controller =
-         [creditCardFormViewControllers_ objectAtIndex:0];
-      NSString* firstItemsLabel = [[controller creditCardModel] label];
+// Edits the selected item, either address or credit card depending on the item
+// selected.
+- (IBAction)editSelection:(id)sender {
+  NSInteger selectedRow = [tableView_ selectedRow];
+  if ([self isProfileRow:selectedRow]) {
+    if (!addressSheetController.get()) {
+      int i = [self profileIndexFromRow:selectedRow];
 
-      // If they unchecked an item that wasn't the first item, make the first
-      // item default.
-      if (![defaultCreditCardLabel_ isEqual:firstItemsLabel]) {
-        label = firstItemsLabel;
-      } else {
-        // Otherwise they unchecked the first item. Pick the second one for 'em.
-        AutoFillCreditCardViewController* controller =
-           [creditCardFormViewControllers_ objectAtIndex:1];
-        label = [[controller creditCardModel] label];
-      }
+      // Create a new address sheet controller in "Edit" mode.
+      addressSheetController.reset(
+          [[AutoFillAddressSheetController alloc]
+              initWithProfile:profiles_[i]
+                         mode:kAutoFillAddressEditMode]);
+
+      // Show the sheet.
+      [NSApp beginSheet:[addressSheetController window]
+         modalForWindow:[self window]
+          modalDelegate:self
+         didEndSelector:@selector(addressEditDidEnd:returnCode:contextInfo:)
+            contextInfo:&profiles_[i]];
+    }
+  } else if ([self isCreditCardRow:selectedRow]) {
+    if (!creditCardSheetController.get()) {
+      int i = [self creditCardIndexFromRow:selectedRow];
+
+      // Create a new credit card sheet controller in "Edit" mode.
+      creditCardSheetController.reset(
+          [[AutoFillCreditCardSheetController alloc]
+              initWithCreditCard:creditCards_[i]
+                            mode:kAutoFillCreditCardEditMode]);
+
+      // Show the sheet.
+      [NSApp beginSheet:[creditCardSheetController window]
+         modalForWindow:[self window]
+          modalDelegate:self
+         didEndSelector:@selector(creditCardEditDidEnd:returnCode:contextInfo:)
+            contextInfo:&creditCards_[i]];
     }
   }
+}
 
-  defaultCreditCardLabel_.reset([label copy]);
-  return;
+// Navigates to the AutoFill help url.
+- (IBAction)openHelp:(id)sender {
+  Browser* browser = BrowserList::GetLastActive();
+
+  if (!browser || !browser->GetSelectedTabContents())
+    browser = Browser::Create(profile_);
+  browser->OpenAutoFillHelpTabAndActivate();
+}
+
+// Edit address sheet was dismissed.  Non-zero |returnCode| indicates a save.
+- (void)addressEditDidEnd:(NSWindow *)sheet
+               returnCode:(int)returnCode
+              contextInfo:(void *)contextInfo {
+  DCHECK(contextInfo != NULL);
+  if (returnCode) {
+    AutoFillProfile* profile = static_cast<AutoFillProfile*>(contextInfo);
+    [addressSheetController copyModelToProfile:profile];
+
+    if (profile->IsEmpty())
+      [tableView_ deselectAll:self];
+    profiles_.erase(
+        std::remove_if(profiles_.begin(), profiles_.end(),
+                       std::mem_fun_ref(&AutoFillProfile::IsEmpty)),
+        profiles_.end());
+
+    // Saving will save to the PDM and the table will refresh when PDM sends
+    // notification that the underlying model has changed.
+    [self save];
+  }
+  [sheet orderOut:self];
+  addressSheetController.reset(nil);
+}
+
+// Edit credit card sheet was dismissed.  Non-zero |returnCode| indicates a
+// save.
+- (void)creditCardEditDidEnd:(NSWindow *)sheet
+                  returnCode:(int)returnCode
+                 contextInfo:(void *)contextInfo {
+  DCHECK(contextInfo != NULL);
+  if (returnCode) {
+    CreditCard* creditCard = static_cast<CreditCard*>(contextInfo);
+    [creditCardSheetController copyModelToCreditCard:creditCard];
+
+    if (creditCard->IsEmpty())
+      [tableView_ deselectAll:self];
+    creditCards_.erase(
+        std::remove_if(
+            creditCards_.begin(), creditCards_.end(),
+            std::mem_fun_ref(&CreditCard::IsEmpty)),
+        creditCards_.end());
+
+    // Saving will save to the PDM and the table will refresh when PDM sends
+    // notification that the underlying model has changed.
+    [self save];
+  }
+  [sheet orderOut:self];
+  creditCardSheetController.reset(nil);
+}
+
+// NSTableView Delegate method.
+- (BOOL)tableView:(NSTableView *)tableView isGroupRow:(NSInteger)row {
+  if ([self isProfileGroupRow:row] || [self isCreditCardGroupRow:row])
+    return YES;
+  return NO;
+}
+
+// NSTableView Delegate method.
+- (BOOL)tableView:(NSTableView *)tableView shouldSelectRow:(NSInteger)row {
+  return [self isProfileRow:row] || [self isCreditCardRow:row];
+}
+
+// NSTableView Delegate method.
+- (id)tableView:(NSTableView *)tableView
+  objectValueForTableColumn:(NSTableColumn *)tableColumn
+                        row:(NSInteger)row {
+  if ([[tableColumn identifier] isEqualToString:@"Spacer"])
+    return @"";
+
+  // Check that we're initialized before supplying data.
+  if (tableView != tableView_)
+    return @"";
+
+  // Section label.
+  if ([self isProfileGroupRow:row]) {
+    if ([[tableColumn identifier] isEqualToString:@"Summary"])
+      return l10n_util::GetNSString(IDS_AUTOFILL_ADDRESSES_GROUP_NAME);
+    else
+      return @"";
+  }
+
+  if (row < 0)
+    return @"";
+
+  // Data row.
+  if ([self isProfileRow:row]) {
+    if ([[tableColumn identifier] isEqualToString:@"Summary"]) {
+      return SysUTF16ToNSString(
+          profiles_[[self profileIndexFromRow:row]].Label());
+    }
+
+    return @"";
+  }
+
+  // Section label.
+  if ([self isCreditCardGroupRow:row]) {
+    if ([[tableColumn identifier] isEqualToString:@"Summary"])
+      return l10n_util::GetNSString(IDS_AUTOFILL_CREDITCARDS_GROUP_NAME);
+    else
+      return @"";
+  }
+
+  // Data row.
+  if ([self isCreditCardRow:row]) {
+    if ([[tableColumn identifier] isEqualToString:@"Summary"]) {
+      return SysUTF16ToNSString(
+          creditCards_[
+              [self creditCardIndexFromRow:row]].PreviewSummary());
+    }
+
+    return @"";
+  }
+
+  return @"";
+}
+
+// We implement this delegate method to update our |itemIsSelected| and
+// |multipleSelected| properties.
+// The "Edit..." and "Remove" buttons' enabled state depends on having a
+// valid selection in the table.  The "Edit..." button depends on having
+// exactly one item selected.
+- (void)tableViewSelectionDidChange:(NSNotification *)aNotification {
+  if ([tableView_ selectedRow] >= 0)
+    [self setItemIsSelected:YES];
+  else
+    [self setItemIsSelected:NO];
+
+  [self setMultipleSelected:([[tableView_ selectedRowIndexes] count] > 1UL)];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+  if (tableView == tableView_) {
+    // 1 section header, the profiles, 1 section header, the credit cards.
+    return 1 + profiles_.size() + 1 + creditCards_.size();
+  }
+
+  return 0;
+}
+
+- (void)addressLabels:(NSArray**)labels addressIDs:(std::vector<int>*)ids {
+  NSUInteger capacity = profiles_.size();
+  NSMutableArray* array = [NSMutableArray arrayWithCapacity:capacity];
+  ids->clear();
+
+  std::vector<AutoFillProfile>::iterator i;
+  for (i = profiles_.begin(); i != profiles_.end(); ++i) {
+    FieldTypeSet fields;
+    i->GetAvailableFieldTypes(&fields);
+    if (fields.find(ADDRESS_HOME_LINE1) == fields.end() &&
+        fields.find(ADDRESS_HOME_LINE2) == fields.end() &&
+        fields.find(ADDRESS_HOME_APT_NUM) == fields.end() &&
+        fields.find(ADDRESS_HOME_CITY) == fields.end() &&
+        fields.find(ADDRESS_HOME_STATE) == fields.end() &&
+        fields.find(ADDRESS_HOME_ZIP) == fields.end() &&
+        fields.find(ADDRESS_HOME_COUNTRY) == fields.end()) {
+      // No address information in this profile; it's useless as a billing
+      // address.
+      continue;
+    }
+    [array addObject:SysUTF16ToNSString(i->Label())];
+    ids->push_back(i->unique_id());
+  }
+
+  *labels = array;
+}
+
+// Accessor for |autoFillEnabled| preference state.  Note: a checkbox in Nib
+// is bound to this via KVO.
+- (BOOL)autoFillEnabled {
+  return autoFillEnabled_.GetValue();
+}
+
+// Setter for |autoFillEnabled| preference state.
+- (void)setAutoFillEnabled:(BOOL)value {
+  autoFillEnabled_.SetValueIfNotManaged(value ? true : false);
+}
+
+// Accessor for |auxiliaryEnabled| preference state.  Note: a checkbox in Nib
+// is bound to this via KVO.
+- (BOOL)auxiliaryEnabled {
+  return auxiliaryEnabled_.GetValue();
+}
+
+// Setter for |auxiliaryEnabled| preference state.
+- (void)setAuxiliaryEnabled:(BOOL)value {
+  if ([self autoFillEnabled])
+    auxiliaryEnabled_.SetValueIfNotManaged(value ? true : false);
 }
 
 @end
 
 @implementation AutoFillDialogController (ExposedForUnitTests)
 
-+ (AutoFillDialogController*)controllerWithObserver:
-      (AutoFillDialogObserver*)observer
-      autoFillProfiles:(const std::vector<AutoFillProfile*>&)profiles
-      creditCards:(const std::vector<CreditCard*>&)creditCards
-      profile:(Profile*)profile {
++ (AutoFillDialogController*)
+    controllerWithObserver:(AutoFillDialogObserver*)observer
+                   profile:(Profile*)profile {
+  profile = profile->GetOriginalProfile();
+
+  ProfileControllerMap* map = Singleton<ProfileControllerMap>::get();
+  DCHECK(map != NULL);
+  ProfileControllerMap::iterator it = map->find(profile);
+  if (it == map->end()) {
+    // We should have exactly 1 or 0 entry in the map, no more.  That is,
+    // only one profile can have the AutoFill dialog up at a time.
+    DCHECK_EQ(map->size(), 0U);
 
   // Deallocation is done upon window close.  See |windowWillClose:|.
   AutoFillDialogController* controller =
-      [[self alloc] initWithObserver:observer
-                    autoFillProfiles:profiles
-                         creditCards:creditCards
-                             profile:profile];
-  return controller;
+      [[self alloc] initWithObserver:observer profile:profile];
+    it = map->insert(std::make_pair(profile, controller)).first;
+  }
+
+  return it->second;
 }
 
 
 // This is the designated initializer for this class.
-// |profiles| are non-retained immutable list of autofill profiles.
+// |profiles| are non-retained immutable list of AutoFill profiles.
 // |creditCards| are non-retained immutable list of credit card info.
 - (id)initWithObserver:(AutoFillDialogObserver*)observer
-      autoFillProfiles:(const std::vector<AutoFillProfile*>&)profiles
-           creditCards:(const std::vector<CreditCard*>&)creditCards
                profile:(Profile*)profile {
-  CHECK(profile);
+  DCHECK(profile);
   // Use initWithWindowNibPath: instead of initWithWindowNibName: so we
   // can override it in a unit test.
   NSString* nibpath = [mac_util::MainAppBundle()
                        pathForResource:@"AutoFillDialog"
                        ofType:@"nib"];
   if ((self = [super initWithWindowNibPath:nibpath owner:self])) {
+    // Initialize member variables based on input.
     observer_ = observer;
-
-    // Make local copy of |profiles|.
-    std::vector<AutoFillProfile*>::const_iterator i;
-    for (i = profiles.begin(); i != profiles.end(); ++i)
-      profiles_.push_back(**i);
-
-    // Make local copy of |creditCards|.
-    std::vector<CreditCard*>::const_iterator j;
-    for (j = creditCards.begin(); j != creditCards.end(); ++j)
-      creditCards_.push_back(**j);
-
     profile_ = profile;
 
-    // Use property here to trigger KVO binding.
-    [self setAuxiliaryEnabled:profile_->GetPrefs()->GetBoolean(
-        prefs::kAutoFillAuxiliaryProfilesEnabled)];
+    // Initialize the preference observer and watch kAutoFillEnabled.
+    preferenceObserver_.reset(
+        new AutoFillDialogControllerInternal::PreferenceObserver(self));
+    autoFillEnabled_.Init(prefs::kAutoFillEnabled, profile_->GetPrefs(),
+                          preferenceObserver_.get());
+
+    // Call |preferenceDidChange| in order to initialize UI state of the
+    // checkbox.
+    [self preferenceDidChange:prefs::kAutoFillEnabled];
+
+    // Initialize the preference observer and watch
+    // kAutoFillAuxiliaryProfilesEnabled.
+    auxiliaryEnabled_.Init(prefs::kAutoFillAuxiliaryProfilesEnabled,
+                           profile_->GetPrefs(),
+                           preferenceObserver_.get());
+
+    // Call |preferenceDidChange| in order to initialize UI state of the
+    // checkbox.
+    [self preferenceDidChange:prefs::kAutoFillAuxiliaryProfilesEnabled];
 
     // Do not use [NSMutableArray array] here; we need predictable destruction
     // which will be prevented by having a reference held by an autorelease
     // pool.
-
-    // Initialize array of sub-controllers.
-    addressFormViewControllers_.reset(
-        [[NSMutableArray alloc] initWithCapacity:0]);
-
-    // Initialize array of sub-controllers.
-    creditCardFormViewControllers_.reset(
-        [[NSMutableArray alloc] initWithCapacity:0]);
-
-    NSString* defaultAddressLabel = base::SysWideToNSString(
-        profile_->GetPrefs()->GetString(prefs::kAutoFillDefaultProfile));
-    defaultAddressLabel_.reset([defaultAddressLabel retain]);
-
-    NSString* defaultCreditCardLabel = base::SysWideToNSString(
-        profile_->GetPrefs()->GetString(prefs::kAutoFillDefaultCreditCard));
-    defaultCreditCardLabel_.reset([defaultCreditCardLabel retain]);
   }
   return self;
 }
 
+// Run modeless.
+- (void)runModelessDialog {
+  // Use stored window geometry if it exists.
+  if (g_browser_process && g_browser_process->local_state()) {
+    sizeSaver_.reset([[WindowSizeAutosaver alloc]
+        initWithWindow:[self window]
+           prefService:g_browser_process->local_state()
+                  path:prefs::kAutoFillDialogPlacement]);
+  }
+
+  [self showWindow:nil];
+}
+
 // Close the dialog.
 - (void)closeDialog {
-  [[self window] close];
-  [NSApp stopModal];
+  [[self window] performClose:self];
 }
 
-- (NSMutableArray*)addressFormViewControllers {
-  return addressFormViewControllers_.get();
+- (AutoFillAddressSheetController*)addressSheetController {
+  return addressSheetController.get();
 }
 
-- (NSMutableArray*)creditCardFormViewControllers {
-  return creditCardFormViewControllers_.get();
+- (AutoFillCreditCardSheetController*)creditCardSheetController {
+  return creditCardSheetController.get();
+}
+
+- (void)selectAddressAtIndex:(size_t)i {
+  [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:
+                                   [self rowFromProfileIndex:i]]
+          byExtendingSelection:NO];
+}
+
+- (void)selectCreditCardAtIndex:(size_t)i {
+  [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:
+                                   [self rowFromCreditCardIndex:i]]
+          byExtendingSelection:NO];
+}
+
+- (void)addSelectedAddressAtIndex:(size_t)i {
+  [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:
+                                   [self rowFromProfileIndex:i]]
+          byExtendingSelection:YES];
+}
+
+- (void)addSelectedCreditCardAtIndex:(size_t)i {
+  [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:
+                                   [self rowFromCreditCardIndex:i]]
+          byExtendingSelection:YES];
+}
+
+- (BOOL)editButtonEnabled {
+  return [editButton_ isEnabled];
+}
+
+- (std::vector<AutoFillProfile>&)profiles {
+  return profiles_;
+}
+
+- (std::vector<CreditCard>&)creditCards {
+  return creditCards_;
 }
 
 @end
 
 @implementation AutoFillDialogController (PrivateMethods)
 
-// Run application modal.
-- (void)runModalDialog {
-  // Use stored window geometry if it exists.
-  if (g_browser_process && g_browser_process->local_state()) {
-    sizeSaver_.reset([[WindowSizeAutosaver alloc]
-        initWithWindow:[self window]
-           prefService:g_browser_process->local_state()
-                  path:prefs::kAutoFillDialogPlacement
-                 state:kSaveWindowPos]);
-  }
+// Called when the user modifies the profiles or credit card information.
+- (void)save {
+  // If we have an |observer_| then communicate the changes back, unless
+  // AutoFill has been disabled through policy in the mean time.
+  if (observer_ && !autoFillManagedAndDisabled_) {
+    // Make a working copy of profiles.  |OnAutoFillDialogApply| can mutate
+    // |profiles_|.
+    std::vector<AutoFillProfile> profiles = profiles_;
 
-  [NSApp runModalForWindow:[self window]];
+    // Make a working copy of credit cards.  |OnAutoFillDialogApply| can mutate
+    // |creditCards_|.
+    std::vector<CreditCard> creditCards = creditCards_;
+
+    observer_->OnAutoFillDialogApply(&profiles, &creditCards);
+  }
 }
 
-// Install controller and views for the address form and the credit card form.
-// They are installed into the appropriate sibling order so that they can be
-// arranged vertically by the VerticalLayoutView class.  We insert the views
-// into the |childView_| but we hold onto the controllers and release them in
-// our dealloc once the dialog closes.
-- (void)installChildViews {
-  NSView* insertionPoint;
-  insertionPoint = addressSection_;
-  for (size_t i = 0; i < profiles_.size(); i++) {
-    // Special case for first address, we want to show full contents.
-    NSCellStateValue disclosureState = (i == 0) ? NSOnState : NSOffState;
-    scoped_nsobject<AutoFillAddressViewController> addressViewController(
-        [[AutoFillAddressViewController alloc]
-            initWithProfile:profiles_[i]
-                 disclosure:disclosureState
-                 controller:self]);
-    [self willChangeValueForKey:@"addressLabels"];
-    [addressFormViewControllers_.get() addObject:addressViewController];
-    [self didChangeValueForKey:@"addressLabels"];
+- (void)onPersonalDataLoaded:(const std::vector<AutoFillProfile*>&)profiles
+                 creditCards:(const std::vector<CreditCard*>&)creditCards {
+  [self onPersonalDataChanged:profiles creditCards:creditCards];
+}
 
-    // Embed the child view into our (owned by us) target view.
-    [childView_ addSubview:[addressViewController view]
-                positioned:NSWindowBelow relativeTo:insertionPoint];
-    insertionPoint = [addressViewController view];
-    [[addressViewController view] setFrameOrigin:NSMakePoint(0, 0)];
+- (void)onPersonalDataChanged:(const std::vector<AutoFillProfile*>&)profiles
+                  creditCards:(const std::vector<CreditCard*>&)creditCards {
+  // Make local copy of |profiles|.
+  profiles_.clear();
+  for (std::vector<AutoFillProfile*>::const_iterator iter = profiles.begin();
+       iter != profiles.end(); ++iter)
+    profiles_.push_back(**iter);
+
+  // Make local copy of |creditCards|.
+  creditCards_.clear();
+  for (std::vector<CreditCard*>::const_iterator iter = creditCards.begin();
+       iter != creditCards.end(); ++iter)
+    creditCards_.push_back(**iter);
+
+  UpdateProfileLabels(&profiles_);
+  [tableView_ reloadData];
+}
+
+- (void)preferenceDidChange:(const std::string&)preferenceName {
+  if (preferenceName == prefs::kAutoFillEnabled) {
+    [self setAutoFillEnabled:autoFillEnabled_.GetValue()];
+    [self setAutoFillManaged:autoFillEnabled_.IsManaged()];
+    [self setAutoFillManagedAndDisabled:
+        autoFillEnabled_.IsManaged() && !autoFillEnabled_.GetValue()];
+  } else if (preferenceName == prefs::kAutoFillAuxiliaryProfilesEnabled) {
+    [self setAuxiliaryEnabled:auxiliaryEnabled_.GetValue()];
+  } else {
+    NOTREACHED();
+  }
+}
+
+- (BOOL)isProfileRow:(NSInteger)row {
+  if (row > 0 && static_cast<size_t>(row) <= profiles_.size())
+    return YES;
+  return NO;
+}
+
+- (BOOL)isProfileGroupRow:(NSInteger)row {
+  if (row == 0)
+    return YES;
+  return NO;
+}
+
+- (BOOL)isCreditCardRow:(NSInteger)row {
+  if (row > 0 &&
+      static_cast<size_t>(row) >= profiles_.size() + 2 &&
+      static_cast<size_t>(row) <= profiles_.size() + creditCards_.size() + 1)
+    return YES;
+  return NO;
+}
+
+- (BOOL)isCreditCardGroupRow:(NSInteger)row {
+  if (row > 0 && static_cast<size_t>(row) == profiles_.size() + 1)
+    return YES;
+  return NO;
+}
+
+- (size_t)profileIndexFromRow:(NSInteger)row {
+  DCHECK([self isProfileRow:row]);
+  return static_cast<size_t>(row) - 1;
+}
+
+- (size_t)creditCardIndexFromRow:(NSInteger)row {
+  DCHECK([self isCreditCardRow:row]);
+  return static_cast<size_t>(row) - (profiles_.size() + 2);
+}
+
+- (NSInteger)rowFromProfileIndex:(size_t)i {
+  return 1 + i;
+}
+
+- (NSInteger)rowFromCreditCardIndex:(size_t)i {
+  return 1 + profiles_.size() + 1 + i;
+}
+
+@end
+
+// An NSValueTransformer subclass for use in validation of phone number
+// fields.  Transforms an invalid phone number string into a warning image.
+// This data transformer is used in the credit card sheet for invalid phone and
+// fax numbers.
+@interface InvalidPhoneTransformer : NSValueTransformer {
+}
+@end
+
+@implementation InvalidPhoneTransformer
++ (Class)transformedValueClass {
+  return [NSImage class];
+}
+
++ (BOOL)allowsReverseTransformation {
+  return NO;
+}
+
+- (id)transformedValue:(id)string {
+  NSImage* image = nil;
+  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+
+  // We display no validation icon when input has not yet been entered.
+  if (string == nil || [string length] == 0)
+    return nil;
+
+  // If we have input then display alert icon if we have an invalid number.
+  if (string != nil && [string length] != 0) {
+    // TODO(dhollowa): Using SetInfo() call to validate phone number.  Should
+    // have explicit validation method.  More robust validation is needed as
+    // well eventually.
+    AutoFillProfile profile(string16(), 0);
+    profile.SetInfo(AutoFillType(PHONE_HOME_WHOLE_NUMBER),
+                    base::SysNSStringToUTF16(string));
+    if (profile.GetFieldText(AutoFillType(PHONE_HOME_WHOLE_NUMBER)).empty()) {
+      image = rb.GetNSImageNamed(IDR_INPUT_ALERT);
+      DCHECK(image);
+      return image;
+    }
   }
 
-  insertionPoint = creditCardSection_;
-  for (size_t i = 0; i < creditCards_.size(); i++) {
-    scoped_nsobject<AutoFillCreditCardViewController> creditCardViewController(
-        [[AutoFillCreditCardViewController alloc]
-            initWithCreditCard:creditCards_[i]
-                    disclosure:NSOffState
-                    controller:self]);
-    [self willChangeValueForKey:@"creditCardLabels"];
-    [creditCardFormViewControllers_.get() addObject:creditCardViewController];
-    [self didChangeValueForKey:@"creditCardLabels"];
-
-    // Embed the child view into our (owned by us) target view.
-    [childView_ addSubview:[creditCardViewController view]
-                positioned:NSWindowBelow relativeTo:insertionPoint];
-    insertionPoint = [creditCardViewController view];
-    [[creditCardViewController view] setFrameOrigin:NSMakePoint(0, 0)];
+  // No alert icon, so must be valid input.
+  if (!image) {
+    image = rb.GetNSImageNamed(IDR_INPUT_GOOD);
+    DCHECK(image);
+    return image;
   }
 
-  // During initialization the default accessors were returning faulty values
-  // since the controller arrays weren't set up. Poke our observers.
-  [self willChangeValueForKey:@"defaultAddressLabel"];
-  [self didChangeValueForKey:@"defaultAddressLabel"];
-  [self willChangeValueForKey:@"defaultCreditCardLabel"];
-  [self didChangeValueForKey:@"defaultCreditCardLabel"];
+  return nil;
 }
 
 @end

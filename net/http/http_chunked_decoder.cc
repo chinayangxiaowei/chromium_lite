@@ -41,6 +41,7 @@
 #include "net/http/http_chunked_decoder.h"
 
 #include "base/logging.h"
+#include "base/string_number_conversions.h"
 #include "base/string_piece.h"
 #include "base/string_util.h"
 #include "net/base/net_errors.h"
@@ -116,11 +117,11 @@ int HttpChunkedDecoder::ScanForChunkRemaining(const char* buf, int buf_len) {
         reached_eof_ = true;
       }
     } else if (chunk_terminator_remaining_) {
-       if (buf_len) {
-         DLOG(ERROR) << "chunk data not terminated properly";
-         return ERR_INVALID_CHUNKED_ENCODING;
-       }
-       chunk_terminator_remaining_ = false;
+      if (buf_len) {
+        DLOG(ERROR) << "chunk data not terminated properly";
+        return ERR_INVALID_CHUNKED_ENCODING;
+      }
+      chunk_terminator_remaining_ = false;
     } else if (buf_len) {
       // Ignore any chunk-extensions.
       size_t index_of_semicolon = base::StringPiece(buf, buf_len).find(';');
@@ -188,7 +189,7 @@ bool HttpChunkedDecoder::ParseChunkSize(const char* start, int len, int* out) {
     return false;
 
   int parsed_number;
-  bool ok = HexStringToInt(std::string(start, len), &parsed_number);
+  bool ok = base::HexStringToInt(std::string(start, len), &parsed_number);
   if (ok && parsed_number >= 0) {
     *out = parsed_number;
     return true;

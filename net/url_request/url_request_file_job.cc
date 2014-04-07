@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@
 #include "base/message_loop.h"
 #include "base/platform_file.h"
 #include "base/string_util.h"
-#include "base/worker_pool.h"
+#include "build/build_config.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_flags.h"
@@ -32,18 +32,23 @@
 #include "net/base/net_util.h"
 #include "net/http/http_util.h"
 #include "net/url_request/url_request.h"
+#include "net/url_request/url_request_error_job.h"
 #include "net/url_request/url_request_file_dir_job.h"
 
 #if defined(OS_WIN)
-class URLRequestFileJob::AsyncResolver :
-    public base::RefCountedThreadSafe<URLRequestFileJob::AsyncResolver> {
+#include "base/worker_pool.h"
+#endif
+
+#if defined(OS_WIN)
+class URLRequestFileJob::AsyncResolver
+    : public base::RefCountedThreadSafe<URLRequestFileJob::AsyncResolver> {
  public:
   explicit AsyncResolver(URLRequestFileJob* owner)
       : owner_(owner), owner_loop_(MessageLoop::current()) {
   }
 
   void Resolve(const FilePath& file_path) {
-    file_util::FileInfo file_info;
+    base::PlatformFileInfo file_info;
     bool exists = file_util::GetFileInfo(file_path, &file_info);
     AutoLock locked(lock_);
     if (owner_loop_) {
@@ -64,7 +69,7 @@ class URLRequestFileJob::AsyncResolver :
 
   ~AsyncResolver() {}
 
-  void ReturnResults(bool exists, const file_util::FileInfo& file_info) {
+  void ReturnResults(bool exists, const base::PlatformFileInfo& file_info) {
     if (owner_)
       owner_->DidResolve(exists, file_info);
   }
@@ -79,9 +84,24 @@ class URLRequestFileJob::AsyncResolver :
 // static
 URLRequestJob* URLRequestFileJob::Factory(
     URLRequest* request, const std::string& scheme) {
+
   FilePath file_path;
-  if (net::FileURLToFilePath(request->url(), &file_path) &&
-      file_util::EnsureEndsWithSeparator(&file_path) &&
+  const bool is_file = net::FileURLToFilePath(request->url(), &file_path);
+
+#if defined(OS_CHROMEOS)
+  // Check file access.
+  if (AccessDisabled(file_path))
+    return new URLRequestErrorJob(request, net::ERR_ACCESS_DENIED);
+#endif
+
+  // We need to decide whether to create URLRequestFileJob for file access or
+  // URLRequestFileDirJob for directory access. To avoid accessing the
+  // filesystem, we only look at the path string here.
+  // The code in the URLRequestFileJob::Start() method discovers that a path,
+  // which doesn't end with a slash, should really be treated as a directory,
+  // and it then redirects to the URLRequestFileDirJob.
+  if (is_file &&
+      file_util::EndsWithSeparator(file_path) &&
       file_path.IsAbsolute())
     return new URLRequestFileDirJob(request, file_path);
 
@@ -117,7 +137,7 @@ void URLRequestFileJob::Start() {
     return;
   }
 #endif
-  file_util::FileInfo file_info;
+  base::PlatformFileInfo file_info;
   bool exists = file_util::GetFileInfo(file_path_, &file_info);
 
   // Continue asynchronously.
@@ -188,24 +208,29 @@ bool URLRequestFileJob::GetMimeType(std::string* mime_type) const {
   return net::GetMimeTypeFromFile(file_path_, mime_type);
 }
 
-void URLRequestFileJob::SetExtraRequestHeaders(const std::string& headers) {
-  // We only care about "Range" header here.
-  std::vector<net::HttpByteRange> ranges;
-  if (net::HttpUtil::ParseRanges(headers, &ranges)) {
-    if (ranges.size() == 1) {
-      byte_range_ = ranges[0];
-    } else {
-      // We don't support multiple range requests in one single URL request,
-      // because we need to do multipart encoding here.
-      // TODO(hclam): decide whether we want to support multiple range requests.
-      NotifyDone(URLRequestStatus(URLRequestStatus::FAILED,
-                 net::ERR_REQUEST_RANGE_NOT_SATISFIABLE));
+void URLRequestFileJob::SetExtraRequestHeaders(
+    const net::HttpRequestHeaders& headers) {
+  std::string range_header;
+  if (headers.GetHeader(net::HttpRequestHeaders::kRange, &range_header)) {
+    // We only care about "Range" header here.
+    std::vector<net::HttpByteRange> ranges;
+    if (net::HttpUtil::ParseRangeHeader(range_header, &ranges)) {
+      if (ranges.size() == 1) {
+        byte_range_ = ranges[0];
+      } else {
+        // We don't support multiple range requests in one single URL request,
+        // because we need to do multipart encoding here.
+        // TODO(hclam): decide whether we want to support multiple range
+        // requests.
+        NotifyDone(URLRequestStatus(URLRequestStatus::FAILED,
+                                    net::ERR_REQUEST_RANGE_NOT_SATISFIABLE));
+      }
     }
   }
 }
 
 void URLRequestFileJob::DidResolve(
-    bool exists, const file_util::FileInfo& file_info) {
+    bool exists, const base::PlatformFileInfo& file_info) {
 #if defined(OS_WIN)
   async_resolver_ = NULL;
 #endif
@@ -214,15 +239,20 @@ void URLRequestFileJob::DidResolve(
   if (!request_)
     return;
 
+  is_directory_ = file_info.is_directory;
+
   int rv = net::OK;
-  // We use URLRequestFileJob to handle valid and invalid files as well as
-  // invalid directories. For a directory to be invalid, it must either not
-  // exist, or be "\" on Windows. (Windows resolves "\" to "C:\", thus
-  // reporting it as existent.) On POSIX, we don't count any existent
-  // directory as invalid.
-  if (!exists || file_info.is_directory) {
+  // We use URLRequestFileJob to handle files as well as directories without
+  // trailing slash.
+  // If a directory does not exist, we return ERR_FILE_NOT_FOUND. Otherwise,
+  // we will append trailing slash and redirect to FileDirJob.
+  // A special case is "\" on Windows. We should resolve as invalid.
+  // However, Windows resolves "\" to "C:\", thus reports it as existent.
+  // So what happens is we append it with trailing slash and redirect it to
+  // FileDirJob where it is resolved as invalid.
+  if (!exists) {
     rv = net::ERR_FILE_NOT_FOUND;
-  } else {
+  } else if (!is_directory_) {
     int flags = base::PLATFORM_FILE_OPEN |
                 base::PLATFORM_FILE_READ |
                 base::PLATFORM_FILE_ASYNC;
@@ -275,6 +305,19 @@ void URLRequestFileJob::DidRead(int result) {
 
 bool URLRequestFileJob::IsRedirectResponse(GURL* location,
                                            int* http_status_code) {
+  if (is_directory_) {
+    // This happens when we discovered the file is a directory, so needs a
+    // slash at the end of the path.
+    std::string new_path = request_->url().path();
+    new_path.push_back('/');
+    GURL::Replacements replacements;
+    replacements.SetPathStr(new_path);
+
+    *location = request_->url().ReplaceComponents(replacements);
+    *http_status_code = 301;  // simulate a permanent redirect
+    return true;
+  }
+
 #if defined(OS_WIN)
   // Follow a Windows shortcut.
   // We just resolve .lnk file, ignore others.
@@ -296,3 +339,31 @@ bool URLRequestFileJob::IsRedirectResponse(GURL* location,
   return false;
 #endif
 }
+
+#if defined(OS_CHROMEOS)
+static const char* const kLocalAccessWhiteList[] = {
+  "/home/chronos/user/Downloads",
+  "/mnt/partner_partition",
+  "/usr/share/chromeos-assets",
+  "/tmp",
+  "/var/log",
+};
+
+// static
+bool URLRequestFileJob::AccessDisabled(const FilePath& file_path) {
+  if (URLRequest::IsFileAccessAllowed()) {  // for tests.
+    return false;
+  }
+
+  for (size_t i = 0; i < arraysize(kLocalAccessWhiteList); ++i) {
+    const FilePath white_listed_path(kLocalAccessWhiteList[i]);
+    // FilePath::operator== should probably handle trailing seperators.
+    if (white_listed_path == file_path.StripTrailingSeparators() ||
+        white_listed_path.IsParent(file_path)) {
+      return false;
+    }
+  }
+  return true;
+}
+#endif
+

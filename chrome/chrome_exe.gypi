@@ -1,4 +1,4 @@
-# Copyright (c) 2009-2010 The Chromium Authors. All rights reserved.
+# Copyright (c) 2010 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -130,11 +130,6 @@
       'variables': {
         'chrome_exe_target': 1,
       },
-      'dependencies': [
-        # Copy Flash Player files to PRODUCT_DIR if applicable.
-        # Let the .gyp file decide what to do on a per-OS basis.
-        '../third_party/adobe/flash/flash_player.gyp:flash_player',
-      ],
       'conditions': [
         ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
           'actions': [
@@ -185,11 +180,12 @@
             # On Linux, link the dependencies (libraries) that make up actual
             # Chromium functionality directly into the executable.
             '<@(chromium_dependencies)',
-            # Needed for chrome_dll_main.cc #include of gtk/gtk.h
+            # Needed for chrome_dll_main.cc initialization of libraries.
+            '../build/linux/system.gyp:dbus-glib',
             '../build/linux/system.gyp:gtk',
             'packed_resources',
             # Needed to use the master_preferences functions
-            'installer/installer.gyp:installer_util',
+            'installer_util',
           ],
           'sources': [
             'app/chrome_dll_main.cc',
@@ -199,6 +195,7 @@
             {
               'destination': '<(PRODUCT_DIR)',
               'files': ['tools/build/linux/chrome-wrapper',
+                        '../third_party/xdg-utils/scripts/xdg-mime',
                         '../third_party/xdg-utils/scripts/xdg-settings',
                         ],
               # The wrapper script above may need to generate a .desktop file,
@@ -213,21 +210,7 @@
             },
           ],
         }],
-        ['OS=="linux" and (toolkit_views==1 or chromeos==1)', {
-          'dependencies': [
-            '../views/views.gyp:views',
-          ],
-        }],
         ['OS=="mac"', {
-          'variables': {
-            'mac_packaging_dir':
-                '<(PRODUCT_DIR)/<(mac_product_name) Packaging',
-            # <(PRODUCT_DIR) expands to $(BUILT_PRODUCTS_DIR), which doesn't
-            # work properly in a shell script, where ${BUILT_PRODUCTS_DIR} is
-            # needed.
-            'mac_packaging_sh_dir':
-                '${BUILT_PRODUCTS_DIR}/<(mac_product_name) Packaging',
-          },
           # 'branding' is a variable defined in common.gypi
           # (e.g. "Chromium", "Chrome")
           'conditions': [
@@ -235,11 +218,13 @@
               'mac_bundle_resources': [
                 'app/theme/google_chrome/app.icns',
                 'app/theme/google_chrome/document.icns',
+                'browser/cocoa/applescript/scripting.sdef',
               ],
             }, {  # else: 'branding!="Chrome"
               'mac_bundle_resources': [
                 'app/theme/chromium/app.icns',
                 'app/theme/chromium/document.icns',
+                'browser/cocoa/applescript/scripting.sdef',
               ],
             }],
             ['mac_breakpad==1', {
@@ -279,50 +264,6 @@
                 }],
               ],
             }],  # mac_breakpad
-            ['mac_keystone==1', {
-              'copies': [
-                {
-                  # Put keystone_install.sh where the packaging system will
-                  # find it.  The packager will copy this script to the
-                  # correct location on the disk image.
-                  'destination': '<(mac_packaging_dir)',
-                  'files': [
-                    'tools/build/mac/keystone_install.sh',
-                  ],
-                },
-              ],
-            }],  # mac_keystone
-            ['buildtype=="Official"', {
-              'actions': [
-                {
-                  # Create sign.sh, the script that the packaging system will
-                  # use to sign the .app bundle.
-                  'action_name': 'Make sign.sh',
-                  'variables': {
-                    'make_sign_sh_path': 'tools/build/mac/make_sign_sh',
-                    'sign_sh_in_path': 'tools/build/mac/sign.sh.in',
-                    'app_resource_rules_in_path':
-                        'tools/build/mac/app_resource_rules.plist.in',
-                  },
-                  'inputs': [
-                    '<(make_sign_sh_path)',
-                    '<(sign_sh_in_path)',
-                    '<(app_resource_rules_in_path)',
-                    '<(version_path)',
-                  ],
-                  'outputs': [
-                    '<(mac_packaging_dir)/sign.sh',
-                    '<(mac_packaging_dir)/app_resource_rules.plist',
-                  ],
-                  'action': [
-                    '<(make_sign_sh_path)',
-                    '<(mac_packaging_sh_dir)',
-                    '<(mac_product_name)',
-                    '<(version_full)',
-                  ],
-                },
-              ],
-            }],  # buildtype=="Official"
           ],
           'product_name': '<(mac_product_name)',
           'xcode_settings': {
@@ -339,11 +280,15 @@
           'dependencies': [
             'helper_app',
             'infoplist_strings_tool',
+            'chrome_manifest_bundle',
+          ],
+          'mac_bundle_resources': [
+            '<(PRODUCT_DIR)/<(mac_bundle_id).manifest',
           ],
           'actions': [
             {
               # Generate the InfoPlist.strings file
-              'action_name': 'Generating InfoPlist.strings files',
+              'action_name': 'Generate InfoPlist.strings files',
               'variables': {
                 'tool_path': '<(PRODUCT_DIR)/infoplist_strings_tool',
                 # Unique dir to write to so the [lang].lproj/InfoPlist.strings
@@ -390,14 +335,6 @@
               'files': [
                 '<(PRODUCT_DIR)/<(mac_product_name) Helper.app',
               ],
-              'conditions': [
-                [ 'branding == "Chrome"', {
-                  'files': [
-                    '<(PRODUCT_DIR)/Flash Player Plugin for Chrome.plugin',
-                    '<(PRODUCT_DIR)/plugin.vch',
-                  ],
-                }],
-              ],
             },
           ],
           'postbuilds': [
@@ -414,9 +351,11 @@
               # is needed.  This is also done in the helper_app and chrome_dll
               # targets.  Use -b0 to not include any Breakpad information; that
               # all goes into the framework's Info.plist.  Keystone information
-              # is included if Keystone is enabled because the ticket will
-              # reference this Info.plist to determine the tag of the installed
-              # product.  Use -s1 to include Subversion information.
+              # is included if Keystone is enabled.  The application reads
+              # Keystone keys from this plist and not the framework's, and
+              # the ticket will reference this Info.plist to determine the tag
+              # of the installed product.  Use -s1 to include Subversion
+              # information.
               'postbuild_name': 'Tweak Info.plist',
               'action': ['<(tweak_info_plist_path)',
                          '-b0',
@@ -438,7 +377,7 @@
           'conditions': [
             ['branding=="Chrome"', {
               'dependencies': [
-                'installer/installer.gyp:linux_installer_configs',
+                'linux_installer_configs',
               ],
             }],
             ['selinux==0', {
@@ -467,6 +406,19 @@
               # etc.; should we try to extract from there instead?
               'product_name': 'chrome'
             }],
+            # On Mac, this is done in chrome_dll.gypi.
+            ['internal_pdf', {
+              'dependencies': [
+                '../pdf/pdf.gyp:pdf',
+              ],
+            }],
+          ],
+          'dependencies': [
+            'packed_extra_resources',
+            # Copy Flash Player files to PRODUCT_DIR if applicable. Let the .gyp
+            # file decide what to do on a per-OS basis; on Mac, internal plugins
+            # go inside the framework, so this dependency is in chrome_dll.gypi.
+            '../third_party/adobe/flash/flash_player.gyp:flash_player',
           ],
         }],
         ['OS=="mac" or OS=="win"', {
@@ -478,8 +430,8 @@
         }],
         ['OS=="win"', {
           'dependencies': [
-            'installer/installer.gyp:installer_util',
-            'installer/installer.gyp:installer_util_strings',
+            'installer_util',
+            'installer_util_strings',
             '../breakpad/breakpad.gyp:breakpad_handler',
             '../breakpad/breakpad.gyp:breakpad_sender',
             '../sandbox/sandbox.gyp:sandbox',
@@ -511,7 +463,7 @@
             # which contains all of the library code with Chromium
             # functionality.
             'chrome_dll_nacl_win64',
-            'installer/installer.gyp:installer_util_nacl_win64',
+            'installer_util_nacl_win64',
             'common_constants_win64',
             '../breakpad/breakpad.gyp:breakpad_handler_win64',
             '../breakpad/breakpad.gyp:breakpad_sender_win64',
@@ -539,5 +491,75 @@
         },
       ],
     }],
+    ['OS=="mac"', {
+      'targets': [
+        {
+          # This is the bundle of the manifest file of Chrome.
+          # It contains the manifest file and its string tables.
+          'target_name': 'chrome_manifest_bundle',
+          'type': 'loadable_module',
+          'mac_bundle': 1,
+          'product_extension': 'manifest',
+          'product_name': '<(mac_bundle_id)',
+          'variables': {
+            # This avoids stripping debugging symbols from the target, which
+            # would fail because there is no binary code here.
+            'mac_strip': 0,
+          },
+          'dependencies': [
+             # Provides app-Manifest.plist and its string tables:
+            'policy_templates',
+          ],
+          'actions': [
+            {
+              'action_name': 'Copy MCX manifest file to manifest bundle',
+              'inputs': [
+                '<(grit_out_dir)/app/policy/mac/app-Manifest.plist',
+              ],
+              'outputs': [
+                '<(INTERMEDIATE_DIR)/app_manifest/<(mac_bundle_id).manifest',
+              ],
+              'action': [
+                'cp',
+                '<@(_inputs)',
+                '<@(_outputs)',
+              ],
+              'message':
+                'Copying the MCX policy manifest file to the manifest bundle',
+              'process_outputs_as_mac_bundle_resources': 1,
+            },
+            {
+              'action_name':
+                'Copy Localizable.strings files to manifest bundle',
+              'variables': {
+                'input_path': '<(grit_out_dir)/app/policy/mac/strings',
+                # Directory to collect the Localizable.strings files before
+                # they are copied to the bundle.
+                'output_path': '<(INTERMEDIATE_DIR)/app_manifest',
+                # TODO(gfeher): replace this with <(locales) when we have real
+                # translations
+                'available_locales': 'en',
+              },
+              'inputs': [
+                # TODO: remove this helper when we have loops in GYP
+                '>!@(<(apply_locales_cmd) -d \'<(input_path)/ZZLOCALE.lproj/Localizable.strings\' <(available_locales))',
+              ],
+              'outputs': [
+                # TODO: remove this helper when we have loops in GYP
+                '>!@(<(apply_locales_cmd) -d \'<(output_path)/ZZLOCALE.lproj/Localizable.strings\' <(available_locales))',
+              ],
+              'action': [
+                'cp', '-R',
+                '<(input_path)/',
+                '<(output_path)',
+              ],
+              'message':
+                'Copy the Localizable.strings files to the manifest bundle',
+              'process_outputs_as_mac_bundle_resources': 1,
+            },
+          ],
+        },
+      ]
+    }]
   ],
 }

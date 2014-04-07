@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_DEBUGGER_DEVTOOLS_REMOTE_MESSAGE_H_
 #define CHROME_BROWSER_DEBUGGER_DEVTOOLS_REMOTE_MESSAGE_H_
+#pragma once
 
 #include <string>
 
@@ -34,11 +35,9 @@ class DevToolsRemoteMessage {
   static const char kEmptyValue[];
 
   // Constructs an empty message with no content or headers.
-  DevToolsRemoteMessage() {}
-  DevToolsRemoteMessage(const HeaderMap& headers, const std::string& content)
-      : header_map_(headers),
-        content_(content) {}
-  virtual ~DevToolsRemoteMessage() {}
+  DevToolsRemoteMessage();
+  DevToolsRemoteMessage(const HeaderMap& headers, const std::string& content);
+  virtual ~DevToolsRemoteMessage();
 
   const HeaderMap& headers() const {
     return header_map_;

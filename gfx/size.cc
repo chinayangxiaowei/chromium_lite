@@ -10,7 +10,7 @@
 #include <CoreGraphics/CGGeometry.h>
 #endif
 
-#include <iostream>
+#include <ostream>
 
 #include "base/logging.h"
 
@@ -49,7 +49,7 @@ CGSize Size::ToCGSize() const {
 
 void Size::set_width(int width) {
   if (width < 0) {
-    NOTREACHED();
+    NOTREACHED() << "negative width:" << width;
     width = 0;
   }
   width_ = width;
@@ -57,14 +57,14 @@ void Size::set_width(int width) {
 
 void Size::set_height(int height) {
   if (height < 0) {
-    NOTREACHED();
+    NOTREACHED() << "negative height:" << height;
     height = 0;
   }
   height_ = height;
 }
 
-}  // namespace gfx
-
 std::ostream& operator<<(std::ostream& out, const gfx::Size& s) {
   return out << s.width() << "x" << s.height();
 }
+
+}  // namespace gfx

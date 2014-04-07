@@ -1,31 +1,6 @@
-// Copyright 2008-2009, Google Inc.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//    * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//    * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//    * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 // Tests for the top plugins to catch regressions in our plugin host code, as
 // well as in the out of process code.  Currently this tests:
@@ -37,10 +12,14 @@
 //     comes with XP.  np-mswmp.dll can be downloaded from Microsoft and
 //     needs SP2 or Vista.
 
+#include "build/build_config.h"
+
+#if defined(OS_WIN)
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <comutil.h>
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -50,24 +29,51 @@
 
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/message_loop.h"
 #include "base/path_service.h"
-#include "base/registry.h"
 #include "chrome/browser/net/url_request_mock_http_job.h"
+#include "chrome/browser/plugin_download_helper.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/ui/ui_test.h"
+#include "net/base/capturing_net_log.h"
+#include "net/base/host_resolver.h"
 #include "net/base/net_util.h"
+#include "net/base/ssl_config_service_defaults.h"
+#include "net/http/http_auth_handler_factory.h"
+#include "net/http/http_cache.h"
+#include "net/http/http_network_layer.h"
+#include "net/url_request/url_request_context.h"
+#include "net/url_request/url_request_status.h"
 #include "third_party/npapi/bindings/npapi.h"
-#include "webkit/default_plugin/plugin_impl.h"
 #include "webkit/glue/plugins/plugin_constants_win.h"
 #include "webkit/glue/plugins/plugin_list.h"
 
-const char kTestCompleteCookie[] = "status";
-const char kTestCompleteSuccess[] = "OK";
+#if defined(OS_WIN)
+#include "base/registry.h"
+#endif
 
 class PluginTest : public UITest {
+ public:
+  // Generate the URL for testing a particular test.
+  // HTML for the tests is all located in test_directory\plugin\<testcase>
+  // Set |mock_http| to true to use mock HTTP server.
+  static GURL GetTestUrl(const std::string &test_case, bool mock_http) {
+    static const FilePath::CharType kPluginPath[] = FILE_PATH_LITERAL("plugin");
+    if (mock_http) {
+      FilePath plugin_path = FilePath(kPluginPath).AppendASCII(test_case);
+      return URLRequestMockHTTPJob::GetMockUrl(plugin_path);
+    }
+
+    FilePath path;
+    PathService::Get(chrome::DIR_TEST_DATA, &path);
+    path = path.Append(kPluginPath).AppendASCII(test_case);
+    return net::FilePathToFileURL(path);
+  }
+
  protected:
+#if defined(OS_WIN)
   virtual void SetUp() {
     const testing::TestInfo* const test_info =
         testing::UnitTest::GetInstance()->current_test_info();
@@ -85,14 +91,15 @@ class PluginTest : public UITest {
       // the new plugin.
       launch_arguments_.AppendSwitch(kUseOldWMPPluginSwitch);
     } else if (strcmp(test_info->name(), "FlashSecurity") == 0) {
-      launch_arguments_.AppendSwitchWithValue(switches::kTestSandbox,
-                                              L"security_tests.dll");
+      launch_arguments_.AppendSwitchASCII(switches::kTestSandbox,
+                                          "security_tests.dll");
     }
 
     UITest::SetUp();
   }
+#endif  // defined(OS_WIN)
 
-  void TestPlugin(const std::wstring& test_case,
+  void TestPlugin(const std::string& test_case,
                   int timeout,
                   bool mock_http) {
     GURL url = GetTestUrl(test_case, mock_http);
@@ -100,73 +107,201 @@ class PluginTest : public UITest {
     WaitForFinish(timeout, mock_http);
   }
 
-  // Generate the URL for testing a particular test.
-  // HTML for the tests is all located in test_directory\plugin\<testcase>
-  // Set |mock_http| to true to use mock HTTP server.
-  GURL GetTestUrl(const std::wstring &test_case, bool mock_http) {
-    if (mock_http) {
-      return URLRequestMockHTTPJob::GetMockUrl(
-                 FilePath(L"plugin/" + test_case));
-    }
-
-    FilePath path;
-    PathService::Get(chrome::DIR_TEST_DATA, &path);
-    path = path.AppendASCII("plugin");
-    path = path.Append(FilePath::FromWStringHack(test_case));
-    return net::FilePathToFileURL(path);
-  }
-
   // Waits for the test case to finish.
   void WaitForFinish(const int wait_time, bool mock_http) {
-    GURL url = GetTestUrl(L"done", mock_http);
+    static const char kTestCompleteCookie[] = "status";
+    static const char kTestCompleteSuccess[] = "OK";
+
+    GURL url = GetTestUrl("done", mock_http);
     scoped_refptr<TabProxy> tab(GetActiveTab());
 
-    ASSERT_TRUE(WaitUntilCookieValue(tab, url, kTestCompleteCookie,
-                                     wait_time, kTestCompleteSuccess));
+    const std::string result =
+        WaitUntilCookieNonEmpty(tab, url, kTestCompleteCookie, wait_time);
+    ASSERT_EQ(kTestCompleteSuccess, result);
   }
 };
 
-TEST_F(PluginTest, Quicktime) {
-  TestPlugin(L"quicktime.html", action_max_timeout_ms(), false);
+TEST_F(PluginTest, Flash) {
+  // Note: This does not work with the npwrapper on 64-bit Linux. Install the
+  // native 64-bit Flash to run the test.
+  // TODO(thestig) Update this list if we decide to only test against internal
+  // Flash plugin in the future?
+  std::string kFlashQuery =
+#if defined(OS_WIN)
+      "npswf32.dll"
+#elif defined(OS_MACOSX)
+      "Flash Player.plugin"
+#elif defined(OS_POSIX)
+      "libflashplayer.so"
+#endif
+      ;
+  TestPlugin("flash.html?" + kFlashQuery, action_max_timeout_ms(), false);
 }
 
+#if defined(OS_WIN)
+// Windows only test
+TEST_F(PluginTest, FlashSecurity) {
+  TestPlugin("flash.html", action_max_timeout_ms(), false);
+}
+#endif  // defined(OS_WIN)
+
+#if defined(OS_WIN)
+// TODO(port) Port the following tests to platforms that have the required
+// plugins.
+TEST_F(PluginTest, FLAKY_Quicktime) {
+  TestPlugin("quicktime.html", action_max_timeout_ms(), false);
+}
+
+// Disabled on Release bots - http://crbug.com/44662
+#if defined(NDEBUG)
+#define MediaPlayerNew DISABLED_MediaPlayerNew
+#endif
 TEST_F(PluginTest, MediaPlayerNew) {
-  TestPlugin(L"wmp_new.html", action_max_timeout_ms(), false);
+  TestPlugin("wmp_new.html", action_max_timeout_ms(), false);
 }
 
 // http://crbug.com/4809
 TEST_F(PluginTest, DISABLED_MediaPlayerOld) {
-  TestPlugin(L"wmp_old.html", action_max_timeout_ms(), false);
+  TestPlugin("wmp_old.html", action_max_timeout_ms(), false);
 }
 
+#if defined(NDEBUG)
+#define Real DISABLED_Real
+#endif
+// Disabled on Release bots - http://crbug.com/44673
 TEST_F(PluginTest, Real) {
-  TestPlugin(L"real.html", action_max_timeout_ms(), false);
-}
-
-TEST_F(PluginTest, Flash) {
-  TestPlugin(L"flash.html", action_max_timeout_ms(), false);
+  TestPlugin("real.html", action_max_timeout_ms(), false);
 }
 
 TEST_F(PluginTest, FlashOctetStream) {
-  TestPlugin(L"flash-octet-stream.html", action_max_timeout_ms(), false);
+  TestPlugin("flash-octet-stream.html", action_max_timeout_ms(), false);
 }
 
-TEST_F(PluginTest, FlashSecurity) {
-  TestPlugin(L"flash.html", action_max_timeout_ms(), false);
-}
-
-// http://crbug.com/16114
-// Flaky, http://crbug.com/21538
+#if defined(OS_WIN)
+// http://crbug.com/53926
 TEST_F(PluginTest, FLAKY_FlashLayoutWhilePainting) {
-  TestPlugin(L"flash-layout-while-painting.html", action_max_timeout_ms(), true);
+#else
+TEST_F(PluginTest, FlashLayoutWhilePainting) {
+#endif
+  TestPlugin("flash-layout-while-painting.html", action_max_timeout_ms(), true);
 }
 
 // http://crbug.com/8690
 TEST_F(PluginTest, DISABLED_Java) {
-  TestPlugin(L"Java.html", action_max_timeout_ms(), false);
+  TestPlugin("Java.html", action_max_timeout_ms(), false);
 }
 
-// Flaky, http://crbug.com/22666
-TEST_F(PluginTest, FLAKY_Silverlight) {
-  TestPlugin(L"silverlight.html", action_max_timeout_ms(), false);
+TEST_F(PluginTest, Silverlight) {
+  TestPlugin("silverlight.html", action_max_timeout_ms(), false);
 }
+
+// This class provides functionality to test the plugin installer download
+// file functionality.
+class PluginInstallerDownloadTest
+    : public PluginDownloadUrlHelper::DownloadDelegate,
+      public testing::Test {
+ public:
+  // This class provides HTTP request context information for the downloads.
+  class UploadRequestContext : public URLRequestContext {
+   public:
+    UploadRequestContext() {
+      Initialize();
+    }
+
+    ~UploadRequestContext() {
+      DLOG(INFO) << __FUNCTION__;
+      delete http_transaction_factory_;
+      delete http_auth_handler_factory_;
+    }
+
+    void Initialize() {
+      host_resolver_ =
+          net::CreateSystemHostResolver(net::HostResolver::kDefaultParallelism,
+                                        NULL);
+      net::ProxyConfigService* proxy_config_service =
+          net::ProxyService::CreateSystemProxyConfigService(NULL, NULL);
+      DCHECK(proxy_config_service);
+
+      const size_t kNetLogBound = 50u;
+      net_log_.reset(new net::CapturingNetLog(kNetLogBound));
+
+      proxy_service_ = net::ProxyService::Create(proxy_config_service, false, 0,
+                                                 this, net_log_.get(),
+                                                 MessageLoop::current());
+      DCHECK(proxy_service_);
+
+      ssl_config_service_ = new net::SSLConfigServiceDefaults;
+      http_auth_handler_factory_ = net::HttpAuthHandlerFactory::CreateDefault(
+          host_resolver_);
+      http_transaction_factory_ = new net::HttpCache(
+          net::HttpNetworkLayer::CreateFactory(host_resolver_,
+                                               NULL /* dnsrr_resolver */,
+                                               proxy_service_,
+                                               ssl_config_service_,
+                                               http_auth_handler_factory_,
+                                               network_delegate_,
+                                               NULL),
+          net::HttpCache::DefaultBackend::InMemory(0));
+    }
+
+   private:
+    scoped_ptr<net::NetLog> net_log_;
+    scoped_ptr<net::URLSecurityManager> url_security_manager_;
+  };
+
+  PluginInstallerDownloadTest()
+      : success_(false),
+        download_helper_(NULL) {}
+  ~PluginInstallerDownloadTest() {}
+
+  void Start() {
+    initial_download_path_ = PluginTest::GetTestUrl("flash.html", false);
+    download_helper_ = new PluginDownloadUrlHelper(
+        initial_download_path_.spec(), base::GetCurrentProcId(), NULL,
+        static_cast<PluginDownloadUrlHelper::DownloadDelegate*>(this));
+    download_helper_->InitiateDownload(new UploadRequestContext);
+
+    MessageLoop::current()->PostDelayedTask(
+        FROM_HERE, new MessageLoop::QuitTask,
+        TestTimeouts::action_max_timeout_ms());
+  }
+
+  virtual void OnDownloadCompleted(const FilePath& download_path,
+                                   bool success) {
+    success_ = success;
+    final_download_path_ = download_path;
+    MessageLoop::current()->Quit();
+    download_helper_ = NULL;
+  }
+
+  FilePath final_download_path() const {
+    return final_download_path_;
+  }
+
+  FilePath initial_download_path() const {
+    return final_download_path_;
+  }
+
+  bool success() const {
+    return success_;
+  }
+
+ private:
+  FilePath final_download_path_;
+  PluginDownloadUrlHelper* download_helper_;
+  bool success_;
+  GURL initial_download_path_;
+};
+
+// This test validates that the plugin downloader downloads the specified file
+// to a temporary path with the same file name.
+TEST_F(PluginInstallerDownloadTest, PluginInstallerDownloadPathTest) {
+  MessageLoop loop(MessageLoop::TYPE_IO);
+  Start();
+  loop.Run();
+
+  EXPECT_TRUE(success());
+  EXPECT_TRUE(initial_download_path().BaseName().value() ==
+              final_download_path().BaseName().value());
+}
+#endif  // defined(OS_WIN)

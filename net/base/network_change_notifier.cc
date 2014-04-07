@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,9 +14,27 @@
 
 namespace net {
 
-// static
-NetworkChangeNotifier*
-NetworkChangeNotifier::CreateDefaultNetworkChangeNotifier() {
+namespace {
+
+// The actual singleton notifier.  The class contract forbids usage of the API
+// in ways that would require us to place locks around access to this object.
+// (The prohibition on global non-POD objects makes it tricky to do such a thing
+// anyway.)
+NetworkChangeNotifier* g_network_change_notifier = NULL;
+
+class MockNetworkChangeNotifier : public NetworkChangeNotifier {
+ public:
+  virtual bool IsCurrentlyOffline() const { return false; }
+};
+
+}  // namespace
+
+NetworkChangeNotifier::~NetworkChangeNotifier() {
+  DCHECK_EQ(this, g_network_change_notifier);
+  g_network_change_notifier = NULL;
+}
+
+NetworkChangeNotifier* NetworkChangeNotifier::Create() {
 #if defined(OS_WIN)
   return new NetworkChangeNotifierWin();
 #elif defined(OS_LINUX)
@@ -27,6 +45,42 @@ NetworkChangeNotifier::CreateDefaultNetworkChangeNotifier() {
   NOTIMPLEMENTED();
   return NULL;
 #endif
+}
+
+// static
+bool NetworkChangeNotifier::IsOffline() {
+  return g_network_change_notifier &&
+         g_network_change_notifier->IsCurrentlyOffline();
+}
+
+// static
+NetworkChangeNotifier* NetworkChangeNotifier::CreateMock() {
+  return new MockNetworkChangeNotifier();
+}
+
+void NetworkChangeNotifier::AddObserver(Observer* observer) {
+  if (g_network_change_notifier)
+    g_network_change_notifier->observer_list_->AddObserver(observer);
+}
+
+void NetworkChangeNotifier::RemoveObserver(Observer* observer) {
+  if (g_network_change_notifier)
+    g_network_change_notifier->observer_list_->RemoveObserver(observer);
+}
+
+NetworkChangeNotifier::NetworkChangeNotifier()
+    : observer_list_(
+        new ObserverListThreadSafe<Observer>(
+            ObserverListBase<Observer>::NOTIFY_EXISTING_ONLY)) {
+  DCHECK(!g_network_change_notifier);
+  g_network_change_notifier = this;
+}
+
+void NetworkChangeNotifier::NotifyObserversOfIPAddressChange() {
+  if (g_network_change_notifier) {
+    g_network_change_notifier->observer_list_->Notify(
+        &Observer::OnIPAddressChanged);
+  }
 }
 
 }  // namespace net

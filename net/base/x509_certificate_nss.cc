@@ -5,6 +5,7 @@
 #include "net/base/x509_certificate.h"
 
 #include <cert.h>
+#include <nss.h>
 #include <pk11pub.h>
 #include <prerror.h>
 #include <prtime.h>
@@ -15,6 +16,7 @@
 
 #include "base/logging.h"
 #include "base/pickle.h"
+#include "base/scoped_ptr.h"
 #include "base/time.h"
 #include "base/nss_util.h"
 #include "net/base/cert_status_flags.h"
@@ -25,38 +27,6 @@
 namespace net {
 
 namespace {
-
-class ScopedCERTCertificate {
- public:
-  explicit ScopedCERTCertificate(CERTCertificate* cert)
-      : cert_(cert) {}
-
-  ~ScopedCERTCertificate() {
-    if (cert_)
-      CERT_DestroyCertificate(cert_);
-  }
-
- private:
-  CERTCertificate* cert_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedCERTCertificate);
-};
-
-class ScopedCERTCertList {
- public:
-  explicit ScopedCERTCertList(CERTCertList* cert_list)
-      : cert_list_(cert_list) {}
-
-  ~ScopedCERTCertList() {
-    if (cert_list_)
-      CERT_DestroyCertList(cert_list_);
-  }
-
- private:
-  CERTCertList* cert_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedCERTCertList);
-};
 
 class ScopedCERTCertificatePolicies {
  public:
@@ -218,7 +188,7 @@ void GetCertChainInfo(CERTCertList* cert_list,
 typedef char* (*CERTGetNameFunc)(CERTName* name);
 
 void ParsePrincipal(CERTName* name,
-                    X509Certificate::Principal* principal) {
+                    CertPrincipal* principal) {
   // TODO(jcampan): add business_category and serial_number.
   // TODO(wtc): NSS has the CERT_GetOrgName, CERT_GetOrgUnitName, and
   // CERT_GetDomainComponentName functions, but they return only the most
@@ -339,6 +309,31 @@ SECStatus PKIXVerifyCert(X509Certificate::OSCertHandle cert_handle,
                          CERTValOutParam* cvout) {
   bool use_crl = check_revocation;
   bool use_ocsp = check_revocation;
+
+  // These CAs have multiple keys, which trigger two bugs in NSS's CRL code.
+  // 1. NSS may use one key to verify a CRL signed with another key,
+  //    incorrectly concluding that the CRL's signature is invalid.
+  //    Hopefully this bug will be fixed in NSS 3.12.9.
+  // 2. NSS considers all certificates issued by the CA as revoked when it
+  //    receives a CRL with an invalid signature.  This overly strict policy
+  //    has been relaxed in NSS 3.12.7.  See
+  //    https://bugzilla.mozilla.org/show_bug.cgi?id=562542.
+  // So we have to turn off CRL checking for these CAs.  See
+  // http://crbug.com/55695.
+  static const char* const kMultipleKeyCA[] = {
+    "CN=Microsoft Secure Server Authority,"
+    "DC=redmond,DC=corp,DC=microsoft,DC=com",
+    "CN=Microsoft Secure Server Authority",
+  };
+
+  if (!NSS_VersionCheck("3.12.7")) {
+    for (size_t i = 0; i < arraysize(kMultipleKeyCA); ++i) {
+      if (strcmp(cert_handle->issuerName, kMultipleKeyCA[i]) == 0) {
+        use_crl = false;
+        break;
+      }
+    }
+  }
 
   PRUint64 revocation_method_flags =
       CERT_REV_M_DO_NOT_TEST_USING_THIS_METHOD |
@@ -570,6 +565,22 @@ bool CheckCertPolicies(X509Certificate::OSCertHandle cert_handle,
   return false;
 }
 
+SECStatus PR_CALLBACK
+CollectCertsCallback(void* arg, SECItem** certs, int num_certs) {
+  X509Certificate::OSCertHandles* results =
+      reinterpret_cast<X509Certificate::OSCertHandles*>(arg);
+
+  for (int i = 0; i < num_certs; ++i) {
+    X509Certificate::OSCertHandle handle =
+        X509Certificate::CreateOSCertHandleFromBytes(
+            reinterpret_cast<char*>(certs[i]->data), certs[i]->len);
+    if (handle)
+      results->push_back(handle);
+  }
+
+  return SECSuccess;
+}
+
 }  // namespace
 
 void X509Certificate::Initialize() {
@@ -603,10 +614,6 @@ void X509Certificate::GetDNSNames(std::vector<std::string>* dns_names) const {
 
   // Compare with CERT_VerifyCertName().
   GetCertSubjectAltNamesOfType(cert_handle_, certDNSName, dns_names);
-
-  // TODO(port): suppress nss's support of the obsolete extension
-  //  SEC_OID_NS_CERT_EXT_SSL_SERVER_NAME
-  // by providing our own authCertificate callback.
 
   if (dns_names->empty())
     dns_names->push_back(subject_.common_name);
@@ -705,7 +712,7 @@ bool X509Certificate::VerifyEV() const {
       cvout[cvout_trust_anchor_index].value.pointer.cert;
   if (root_ca == NULL)
     return false;
-  X509Certificate::Fingerprint fingerprint =
+  SHA1Fingerprint fingerprint =
       X509Certificate::CalculateFingerprint(root_ca);
   SECOidTag ev_policy_tag = SEC_OID_UNKNOWN;
   if (!metadata->GetPolicyOID(fingerprint, &ev_policy_tag))
@@ -718,20 +725,71 @@ bool X509Certificate::VerifyEV() const {
 }
 
 // static
+bool X509Certificate::IsSameOSCert(X509Certificate::OSCertHandle a,
+                                   X509Certificate::OSCertHandle b) {
+  DCHECK(a && b);
+  if (a == b)
+    return true;
+  return a->derCert.len == b->derCert.len &&
+      memcmp(a->derCert.data, b->derCert.data, a->derCert.len) == 0;
+}
+
+// static
 X509Certificate::OSCertHandle X509Certificate::CreateOSCertHandleFromBytes(
     const char* data, int length) {
+  if (length < 0)
+    return NULL;
+
   base::EnsureNSSInit();
 
-  // Make a copy of |data| since CERT_DecodeCertPackage might modify it.
-  char* data_copy = new char[length];
-  memcpy(data_copy, data, length);
+  if (!NSS_IsInitialized())
+    return NULL;
+
+  SECItem der_cert;
+  der_cert.data = reinterpret_cast<unsigned char*>(const_cast<char*>(data));
+  der_cert.len  = length;
+  der_cert.type = siDERCertBuffer;
 
   // Parse into a certificate structure.
-  CERTCertificate* cert = CERT_DecodeCertFromPackage(data_copy, length);
-  delete [] data_copy;
-  if (!cert)
-    LOG(ERROR) << "Couldn't parse a certificate from " << length << " bytes";
-  return cert;
+  return CERT_NewTempCertificate(CERT_GetDefaultCertDB(), &der_cert, NULL,
+                                 PR_FALSE, PR_TRUE);
+}
+
+// static
+X509Certificate::OSCertHandles X509Certificate::CreateOSCertHandlesFromBytes(
+    const char* data, int length, Format format) {
+  OSCertHandles results;
+  if (length < 0)
+    return results;
+
+  base::EnsureNSSInit();
+
+  if (!NSS_IsInitialized())
+    return results;
+
+  switch (format) {
+    case FORMAT_SINGLE_CERTIFICATE: {
+      OSCertHandle handle = CreateOSCertHandleFromBytes(data, length);
+      if (handle)
+        results.push_back(handle);
+      break;
+    }
+    case FORMAT_PKCS7: {
+      // Make a copy since CERT_DecodeCertPackage may modify it
+      std::vector<char> data_copy(data, data + length);
+
+      SECStatus result = CERT_DecodeCertPackage(&data_copy[0],
+          length, CollectCertsCallback, &results);
+      if (result != SECSuccess)
+        results.clear();
+      break;
+    }
+    default:
+      NOTREACHED() << "Certificate format " << format << " unimplemented";
+      break;
+  }
+
+  return results;
 }
 
 // static
@@ -746,9 +804,9 @@ void X509Certificate::FreeOSCertHandle(OSCertHandle cert_handle) {
 }
 
 // static
-X509Certificate::Fingerprint X509Certificate::CalculateFingerprint(
+SHA1Fingerprint X509Certificate::CalculateFingerprint(
     OSCertHandle cert) {
-  Fingerprint sha1;
+  SHA1Fingerprint sha1;
   memset(sha1.data, 0, sizeof(sha1.data));
 
   DCHECK(NULL != cert->derCert.data);

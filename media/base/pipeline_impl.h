@@ -11,8 +11,10 @@
 #include <string>
 #include <vector>
 
+#include "base/gtest_prod_util.h"
 #include "base/message_loop.h"
 #include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
 #include "base/thread.h"
 #include "base/time.h"
 #include "media/base/clock_impl.h"
@@ -28,27 +30,26 @@ namespace media {
 //
 // Here's a state diagram that describes the lifetime of this object.
 //
-//   [ *Created ]
-//         | Start()
-//         V
-//   [ InitXXX (for each filter) ]
-//         |
-//         V
-//   [ Seeking (for each filter) ] <----------------------.
-//         |                                              |
+//   [ *Created ]                                    [ Stopped ]
+//         | Start()                                      ^
+//         V                       SetError()             |
+//   [ InitXXX (for each filter) ] -------->[ Stopping (for each filter) ]
+//         |                                              ^
+//         V                                              | if Stop
+//   [ Seeking (for each filter) ] <--------[ Flushing (for each filter) ]
+//         |                         if Seek              ^
 //         V                                              |
 //   [ Starting (for each filter) ]                       |
 //         |                                              |
-//         V      Seek()                                  |
-//   [ Started ] --------> [ Pausing (for each filter) ] -'
-//         |                                              |
-//         |   NotifyEnded()                Seek()        |
+//         V      Seek()/Stop()                           |
+//   [ Started ] -------------------------> [ Pausing (for each filter) ]
+//         |                                              ^
+//         |   NotifyEnded()             Seek()/Stop()    |
 //         `-------------> [ Ended ] ---------------------'
-//
-//                  SetError()
-//   [ Any State ] -------------> [ Error ]
-//         |          Stop()
-//         '--------------------> [ Stopped ]
+//                                                        ^  SetError()
+//                                                        |
+//                                         [ Any State Other Than InitXXX ]
+
 //
 // Initialization is a series of state transitions from "Created" through each
 // filter initialization state.  When all filter initialization states have
@@ -79,7 +80,7 @@ class PipelineImpl : public Pipeline, public FilterHost {
   virtual float GetVolume() const;
   virtual void SetVolume(float volume);
   virtual base::TimeDelta GetCurrentTime() const;
-  virtual base::TimeDelta GetBufferedTime() const;
+  virtual base::TimeDelta GetBufferedTime();
   virtual base::TimeDelta GetMediaDuration() const;
   virtual int64 GetBufferedBytes() const;
   virtual int64 GetTotalBytes() const;
@@ -112,9 +113,11 @@ class PipelineImpl : public Pipeline, public FilterHost {
     kInitVideoRenderer,
     kPausing,
     kSeeking,
+    kFlushing,
     kStarting,
     kStarted,
     kEnded,
+    kStopping,
     kStopped,
     kError,
   };
@@ -131,12 +134,30 @@ class PipelineImpl : public Pipeline, public FilterHost {
   // Helper method to tell whether we are in the state of initializing.
   bool IsPipelineInitializing();
 
-  // Returns true if the given state is one that transitions to the started
-  // state.
-  static bool StateTransitionsToStarted(State state);
+  // Helper method to tell whether we are stopped or in error.
+  bool IsPipelineStopped();
+
+  // Helper method to tell whether we are in transition to stop state.
+  bool IsPipelineTearingDown();
+
+  // We could also be delayed by a transition during seek is performed.
+  bool IsPipelineStopPending();
+
+  // Helper method to tell whether we are in transition to seek state.
+  bool IsPipelineSeeking();
+
+  // Helper method to execute callback from Start() and reset
+  // |filter_factory_|. Called when initialization completes
+  // normally or when pipeline is stopped or error occurs during
+  // initialization.
+  void FinishInitialization();
+
+  // Returns true if the given state is one that transitions to a new state
+  // after iterating through each filter.
+  static bool TransientState(State state);
 
   // Given the current state, returns the next state.
-  static State FindNextState(State current);
+  State FindNextState(State current);
 
   // FilterHost implementation.
   virtual void SetError(PipelineError error);
@@ -152,7 +173,9 @@ class PipelineImpl : public Pipeline, public FilterHost {
   virtual void SetLoaded(bool loaded);
   virtual void SetNetworkActivity(bool network_activity);
   virtual void NotifyEnded();
-  virtual void BroadcastMessage(FilterMessage message);
+  virtual void DisableAudioRenderer();
+  virtual void SetCurrentReadPosition(int64 offset);
+  virtual int64 GetCurrentReadPosition();
 
   // Method called during initialization to insert a mime type into the
   // |rendered_mime_types_| set.
@@ -164,7 +187,8 @@ class PipelineImpl : public Pipeline, public FilterHost {
   // Callback executed by filters upon completing initialization.
   void OnFilterInitialize();
 
-  // Callback executed by filters upon completing Play(), Pause() or Seek().
+  // Callback executed by filters upon completing Play(), Pause(), Seek(),
+  // or Stop().
   void OnFilterStateTransition();
 
   // The following "task" methods correspond to the public methods, but these
@@ -180,8 +204,7 @@ class PipelineImpl : public Pipeline, public FilterHost {
   // initialization.
   void InitializeTask();
 
-  // Stops and destroys all filters, placing the pipeline in the kStopped state
-  // and setting the error code to PIPELINE_STOPPED.
+  // Stops and destroys all filters, placing the pipeline in the kStopped state.
   void StopTask(PipelineCallback* stop_callback);
 
   // Carries out stopping and destroying all filters, placing the pipeline in
@@ -203,11 +226,17 @@ class PipelineImpl : public Pipeline, public FilterHost {
   // Carries out handling a notification of network event.
   void NotifyNetworkEventTask();
 
-  // Carries out message broadcasting on the message loop.
-  void BroadcastMessageTask(FilterMessage message);
+  // Carries out disabling the audio renderer.
+  void DisableAudioRendererTask();
 
   // Carries out advancing to the next filter during Play()/Pause()/Seek().
   void FilterStateTransitionTask();
+
+  // Carries out stopping filter threads, deleting filters, running
+  // appropriate callbacks, and setting the appropriate pipeline state
+  // depending on whether we performing Stop() or SetError().
+  // Called after all filters have been stopped.
+  void FinishDestroyingFiltersTask();
 
   // Internal methods used in the implementation of the pipeline thread.  All
   // of these methods are only called on the pipeline thread.
@@ -271,9 +300,14 @@ class PipelineImpl : public Pipeline, public FilterHost {
   template <class Filter>
   void GetFilter(scoped_refptr<Filter>* filter_out) const;
 
-  // Stops every filters, filter host and filter thread and releases all
-  // references to them.
-  void DestroyFilters();
+  // Kicks off destroying filters. Called by StopTask() and ErrorChangedTask().
+  // When we start to tear down the pipeline, we will consider two cases:
+  // 1. when pipeline has not been initialized, we will transit to stopping
+  // state first.
+  // 2. when pipeline has been initialized, we will first transit to pausing
+  // => flushing => stopping => stopped state.
+  // This will remove the race condition during stop between filters.
+  void TearDownPipeline();
 
   // Message loop used to execute pipeline tasks.
   MessageLoop* message_loop_;
@@ -283,6 +317,15 @@ class PipelineImpl : public Pipeline, public FilterHost {
 
   // Whether or not the pipeline is running.
   bool running_;
+
+  // Whether or not the pipeline is in transition for a seek operation.
+  bool seek_pending_;
+
+  // Whether or not the pipeline is pending a stop operation.
+  bool stop_pending_;
+
+  // Whether or not the pipeline is perform a stop operation.
+  bool tearing_down_;
 
   // Duration of the media in microseconds.  Set by filters.
   base::TimeDelta duration_;
@@ -357,6 +400,18 @@ class PipelineImpl : public Pipeline, public FilterHost {
   // replies.
   base::TimeDelta seek_timestamp_;
 
+  // For GetCurrentBytes()/SetCurrentBytes() we need to know what byte we are
+  // currently reading.
+  int64 current_bytes_;
+
+  // Set to true in DisableAudioRendererTask().
+  bool audio_disabled_;
+
+  // Keep track of the maximum buffered position so the buffering appears
+  // smooth.
+  // TODO(vrk): This is a hack.
+  base::TimeDelta max_buffered_time_;
+
   // Filter factory as passed in by Start().
   scoped_refptr<FilterFactory> filter_factory_;
 
@@ -381,6 +436,8 @@ class PipelineImpl : public Pipeline, public FilterHost {
   // Vector of threads owned by the pipeline and being used by filters.
   typedef std::vector<base::Thread*> FilterThreadVector;
   FilterThreadVector filter_threads_;
+
+  FRIEND_TEST_ALL_PREFIXES(PipelineImplTest, GetBufferedTime);
 
   DISALLOW_COPY_AND_ASSIGN(PipelineImpl);
 };

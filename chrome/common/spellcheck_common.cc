@@ -46,8 +46,10 @@ static const struct {
   {"ru", "ru-RU"},
   {"sk", "sk-SK"},
   {"sl", "sl-SI"},
+  {"sr", "sr"},
   {"sv", "sv-SE"},
   {"tr", "tr-TR"},
+  {"uk", "uk-UA"},
   {"vi", "vi-VN"},
 };
 
@@ -91,13 +93,15 @@ FilePath GetVersionedFileName(const std::string& input_language,
     {"hi-IN", "-1-1"},
     {"tr-TR", "-1-1"},
     {"et-EE", "-1-1"},
-    {"fr-FR", "-1-4"},  // To fix a crash, fr dictionary was updated to 1.4.
+    {"fr-FR", "-2-0"}, // Hunspell fr(modern) 3.7 + Chromium delta.
     {"lt-LT", "-1-3"},
     {"pl-PL", "-1-3"},
     {"hu-HU", "-2-0"},
     {"ro-RO", "-2-0"},
     {"ru-RU", "-2-0"},
     {"bg-BG", "-2-0"},
+    {"sr", "-2-0"},
+    {"uk-UA", "-2-0"},
   };
 
   // Generate the bdict file name using default version string or special

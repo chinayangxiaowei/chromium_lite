@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,6 @@
 #include "chrome/common/extensions/extension_l10n_util.h"
 #include "chrome/common/extensions/extension_message_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webkit/glue/resource_type.h"
 
 namespace errors = extension_manifest_errors;
 namespace keys = extension_manifest_keys;
@@ -231,16 +230,16 @@ ExtensionMessageBundle* CreateManifestBundle() {
   linked_ptr<DictionaryValue> catalog(new DictionaryValue);
 
   DictionaryValue* name_tree = new DictionaryValue();
-  name_tree->SetString(L"message", "name");
-  catalog->Set(L"name", name_tree);
+  name_tree->SetString("message", "name");
+  catalog->Set("name", name_tree);
 
   DictionaryValue* description_tree = new DictionaryValue();
-  description_tree->SetString(L"message", "description");
-  catalog->Set(L"description", description_tree);
+  description_tree->SetString("message", "description");
+  catalog->Set("description", description_tree);
 
   DictionaryValue* action_title_tree = new DictionaryValue();
-  action_title_tree->SetString(L"message", "action title");
-  catalog->Set(L"title", action_title_tree);
+  action_title_tree->SetString("message", "action title");
+  catalog->Set("title", action_title_tree);
 
   std::vector<linked_ptr<DictionaryValue> > catalogs;
   catalogs.push_back(catalog);
@@ -324,8 +323,8 @@ TEST(ExtensionL10nUtil, LocalizeManifestWithNameDescriptionDefaultTitleMsgs) {
   DictionaryValue manifest;
   manifest.SetString(keys::kName, "__MSG_name__");
   manifest.SetString(keys::kDescription, "__MSG_description__");
-  std::wstring action_title(keys::kBrowserAction);
-  action_title.append(L".");
+  std::string action_title(keys::kBrowserAction);
+  action_title.append(".");
   action_title.append(keys::kPageActionDefaultTitle);
   manifest.SetString(action_title, "__MSG_title__");
 

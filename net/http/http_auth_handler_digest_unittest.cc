@@ -2,10 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "testing/gtest/include/gtest/gtest.h"
+#include <string>
 
 #include "base/basictypes.h"
+#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "net/base/net_errors.h"
 #include "net/http/http_auth_handler_digest.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
 
@@ -63,7 +67,7 @@ TEST(HttpAuthHandlerDigestTest, ParseChallenge) {
 
     { // Check that md5-sess is recognized, as is single QOP
       "Digest nonce=\"xyz\", algorithm=\"md5-sess\", "
-          "realm=\"Oblivion\", qop=\"auth\"",
+      "realm=\"Oblivion\", qop=\"auth\"",
       true,
       "Oblivion",
       "xyz",
@@ -100,14 +104,25 @@ TEST(HttpAuthHandlerDigestTest, ParseChallenge) {
     }
   };
 
+  GURL origin("http://www.example.com");
+  scoped_ptr<HttpAuthHandlerDigest::Factory> factory(
+      new HttpAuthHandlerDigest::Factory());
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    std::string challenge(tests[i].challenge);
-
-    scoped_refptr<HttpAuthHandlerDigest> digest = new HttpAuthHandlerDigest;
-    HttpAuth::ChallengeTokenizer tok(challenge.begin(), challenge.end());
-    bool ok = digest->ParseChallenge(&tok);
-
-    EXPECT_EQ(tests[i].parsed_success, ok);
+    scoped_ptr<HttpAuthHandler> handler;
+    int rv = factory->CreateAuthHandlerFromString(tests[i].challenge,
+                                                  HttpAuth::AUTH_SERVER,
+                                                  origin,
+                                                  BoundNetLog(),
+                                                  &handler);
+    if (tests[i].parsed_success) {
+      EXPECT_EQ(OK, rv);
+    } else {
+      EXPECT_NE(OK, rv);
+      continue;
+    }
+    ASSERT_TRUE(handler != NULL);
+    HttpAuthHandlerDigest* digest =
+        static_cast<HttpAuthHandlerDigest*>(handler.get());
     EXPECT_STREQ(tests[i].parsed_realm, digest->realm_.c_str());
     EXPECT_STREQ(tests[i].parsed_nonce, digest->nonce_.c_str());
     EXPECT_STREQ(tests[i].parsed_domain, digest->domain_.c_str());
@@ -250,18 +265,60 @@ TEST(HttpAuthHandlerDigestTest, AssembleCredentials) {
     }
   };
   GURL origin("http://www.example.com");
+  scoped_ptr<HttpAuthHandlerDigest::Factory> factory(
+      new HttpAuthHandlerDigest::Factory());
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    scoped_refptr<HttpAuthHandlerDigest> digest = new HttpAuthHandlerDigest;
-    std::string challenge = tests[i].challenge;
-    HttpAuth::ChallengeTokenizer tok(challenge.begin(), challenge.end());
-    EXPECT_TRUE(digest->InitFromChallenge(&tok, HttpAuth::AUTH_SERVER, origin));
+    scoped_ptr<HttpAuthHandler> handler;
+    int rv = factory->CreateAuthHandlerFromString(tests[i].challenge,
+                                                  HttpAuth::AUTH_SERVER,
+                                                  origin,
+                                                  BoundNetLog(),
+                                                  &handler);
+    EXPECT_EQ(OK, rv);
+    ASSERT_TRUE(handler != NULL);
 
-    std::string creds = digest->AssembleCredentials(tests[i].req_method,
-        tests[i].req_path, tests[i].username, tests[i].password,
-        tests[i].cnonce, tests[i].nonce_count);
+    HttpAuthHandlerDigest* digest =
+        static_cast<HttpAuthHandlerDigest*>(handler.get());
+    std::string creds =
+        digest->AssembleCredentials(tests[i].req_method,
+                                    tests[i].req_path,
+                                    ASCIIToUTF16(tests[i].username),
+                                    ASCIIToUTF16(tests[i].password),
+                                    tests[i].cnonce,
+                                    tests[i].nonce_count);
 
     EXPECT_STREQ(tests[i].expected_creds, creds.c_str());
   }
+}
+
+TEST(HttpAuthHandlerDigest, HandleAnotherChallenge_Failed) {
+  scoped_ptr<HttpAuthHandlerDigest::Factory> factory(
+      new HttpAuthHandlerDigest::Factory());
+  scoped_ptr<HttpAuthHandler> handler;
+  std::string default_challenge =
+      "Digest realm=\"Oblivion\", nonce=\"nonce-value\"";
+  GURL origin("intranet.google.com");
+  int rv = factory->CreateAuthHandlerFromString(
+      default_challenge, HttpAuth::AUTH_SERVER, origin, BoundNetLog(),
+      &handler);
+  EXPECT_EQ(OK, rv);
+
+  HttpAuth::ChallengeTokenizer tok_default(default_challenge.begin(),
+                                           default_challenge.end());
+  EXPECT_EQ(HttpAuth::AUTHORIZATION_RESULT_REJECT,
+            handler->HandleAnotherChallenge(&tok_default));
+
+  std::string stale_challenge = default_challenge + ", stale=true";
+  HttpAuth::ChallengeTokenizer tok_stale(stale_challenge.begin(),
+                                         stale_challenge.end());
+  EXPECT_EQ(HttpAuth::AUTHORIZATION_RESULT_STALE,
+            handler->HandleAnotherChallenge(&tok_stale));
+
+  std::string stale_false_challenge = default_challenge + ", stale=false";
+  HttpAuth::ChallengeTokenizer tok_stale_false(stale_false_challenge.begin(),
+                                               stale_false_challenge.end());
+  EXPECT_EQ(HttpAuth::AUTHORIZATION_RESULT_REJECT,
+            handler->HandleAnotherChallenge(&tok_stale_false));
 }
 
 } // namespace net

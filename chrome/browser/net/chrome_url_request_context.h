@@ -4,27 +4,36 @@
 
 #ifndef CHROME_BROWSER_NET_CHROME_URL_REQUEST_CONTEXT_H_
 #define CHROME_BROWSER_NET_CHROME_URL_REQUEST_CONTEXT_H_
+#pragma once
+
+#include <string>
+#include <vector>
 
 #include "base/file_path.h"
-#include "base/linked_ptr.h"
-#include "net/base/cookie_monster.h"
-#include "net/base/cookie_policy.h"
 #include "chrome/browser/appcache/chrome_appcache_service.h"
+#include "chrome/browser/chrome_blob_storage_context.h"
+#include "chrome/browser/extensions/extension_info_map.h"
+#include "chrome/browser/file_system/file_system_host_context.h"
 #include "chrome/browser/host_content_settings_map.h"
 #include "chrome/browser/host_zoom_map.h"
 #include "chrome/browser/io_thread.h"
-#include "chrome/browser/pref_service.h"
-#include "chrome/browser/privacy_blacklist/blacklist.h"
 #include "chrome/browser/net/chrome_cookie_policy.h"
-#include "chrome/browser/net/url_request_context_getter.h"
-#include "chrome/common/extensions/extension.h"
+#include "chrome/browser/prefs/pref_change_registrar.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/common/extensions/extension_icon_set.h"
+#include "chrome/common/net/url_request_context_getter.h"
 #include "chrome/common/notification_registrar.h"
+#include "net/base/cookie_monster.h"
+#include "net/base/cookie_policy.h"
 #include "net/url_request/url_request_context.h"
+#include "webkit/database/database_tracker.h"
 
 class CommandLine;
+class PrefService;
 class Profile;
 
 namespace net {
+class NetworkDelegate;
 class ProxyConfig;
 }
 
@@ -38,38 +47,7 @@ class ChromeURLRequestContextFactory;
 // including the constructor and destructor.
 class ChromeURLRequestContext : public URLRequestContext {
  public:
-  // Maintains some extension-related state we need on the IO thread.
-  // TODO(aa): It would be cool if the Extension objects in ExtensionsService
-  // could be immutable and ref-counted so that we could use them directly from
-  // both threads. There is only a small amount of mutable state in Extension.
-  struct ExtensionInfo {
-    ExtensionInfo(const FilePath& path, const std::string& default_locale,
-                  const ExtensionExtent& extent,
-                  const std::vector<std::string>& api_permissions)
-        : path(path), default_locale(default_locale),
-          extent(extent), api_permissions(api_permissions) {
-    }
-    FilePath path;
-    std::string default_locale;
-    ExtensionExtent extent;
-    std::vector<std::string> api_permissions;
-  };
-
-  // Map of extension info by extension id.
-  typedef std::map<std::string, linked_ptr<ExtensionInfo> > ExtensionInfoMap;
-
   ChromeURLRequestContext();
-
-  // Gets the path to the directory for the specified extension.
-  FilePath GetPathForExtension(const std::string& id);
-
-  // Returns an empty string if the extension with |id| doesn't have a default
-  // locale.
-  std::string GetDefaultLocaleForExtension(const std::string& id);
-
-  // Determine whether a URL has access to the specified extension permission.
-  bool CheckURLAccessToExtensionPermission(const GURL& url,
-                                           const char* permission_name);
 
   // Gets the path to the directory user scripts are stored in.
   FilePath user_script_dir_path() const {
@@ -82,6 +60,21 @@ class ChromeURLRequestContext : public URLRequestContext {
     return appcache_service_.get();
   }
 
+  // Gets the database tracker associated with this context's profile.
+  webkit_database::DatabaseTracker* database_tracker() const {
+    return database_tracker_.get();
+  }
+
+  // Gets the blob storage context associated with this context's profile.
+  ChromeBlobStorageContext* blob_storage_context() const {
+    return blob_storage_context_.get();
+  }
+
+  // Gets the file system host context with this context's profile.
+  FileSystemHostContext* file_system_host_context() const {
+    return file_system_host_context_.get();
+  }
+
   bool is_off_the_record() const {
     return is_off_the_record_;
   }
@@ -91,38 +84,19 @@ class ChromeURLRequestContext : public URLRequestContext {
 
   virtual const std::string& GetUserAgent(const GURL& url) const;
 
-  // Returns true if cookies can be added to request.
-  virtual bool InterceptRequestCookies(const URLRequest* request,
-                                       const std::string& cookie) const;
-
-  // Returns true if response cookies should be stored.
-  virtual bool InterceptResponseCookie(const URLRequest* request,
-                                       const std::string& cookie) const;
-
   HostContentSettingsMap* host_content_settings_map() {
     return host_content_settings_map_;
   }
 
   const HostZoomMap* host_zoom_map() const { return host_zoom_map_; }
 
-  // Gets the Privacy Blacklist, if any for this context.
-  const Blacklist* GetPrivacyBlacklist() const;
-
-  // Callback for when new extensions are loaded. Takes ownership of
-  // |extension_info|.
-  void OnNewExtensions(const std::string& id, ExtensionInfo* extension_info);
-
-  // Callback for when an extension is unloaded.
-  void OnUnloadedExtension(const std::string& id);
-
-  // False only if cookies are globally blocked without exception.
-  bool AreCookiesEnabled() const;
+  const ExtensionInfoMap* extension_info_map() const {
+    return extension_info_map_;
+  }
 
   // Returns true if this context is an external request context, like
   // ChromeFrame.
-  virtual bool IsExternal() const {
-    return false;
-  }
+  virtual bool IsExternal() const;
 
  protected:
   // Copies the dependencies from |other| into |this|. If you use this
@@ -143,10 +117,6 @@ class ChromeURLRequestContext : public URLRequestContext {
   void set_referrer_charset(const std::string& referrer_charset) {
     referrer_charset_ = referrer_charset;
   }
-  void set_extension_info(
-      const ChromeURLRequestContext::ExtensionInfoMap& info) {
-    extension_info_ = info;
-  }
   void set_transport_security_state(
       net::TransportSecurityState* state) {
     transport_security_state_ = state;
@@ -156,6 +126,9 @@ class ChromeURLRequestContext : public URLRequestContext {
   }
   void set_host_resolver(net::HostResolver* resolver) {
     host_resolver_ = resolver;
+  }
+  void set_dnsrr_resolver(net::DnsRRResolver* dnsrr_resolver) {
+    dnsrr_resolver_ = dnsrr_resolver;
   }
   void set_http_transaction_factory(net::HttpTransactionFactory* factory) {
     http_transaction_factory_ = factory;
@@ -192,14 +165,27 @@ class ChromeURLRequestContext : public URLRequestContext {
   void set_host_zoom_map(HostZoomMap* host_zoom_map) {
     host_zoom_map_ = host_zoom_map;
   }
-  void set_privacy_blacklist(Blacklist* privacy_blacklist) {
-    privacy_blacklist_ = privacy_blacklist;
-  }
   void set_appcache_service(ChromeAppCacheService* service) {
     appcache_service_ = service;
   }
+  void set_database_tracker(webkit_database::DatabaseTracker* tracker) {
+    database_tracker_ = tracker;
+  }
+  void set_blob_storage_context(ChromeBlobStorageContext* context) {
+    blob_storage_context_ = context;
+  }
+  void set_file_system_host_context(FileSystemHostContext* context) {
+    file_system_host_context_ = context;
+  }
+  void set_extension_info_map(ExtensionInfoMap* map) {
+    extension_info_map_ = map;
+  }
   void set_net_log(net::NetLog* net_log) {
     net_log_ = net_log;
+  }
+  void set_network_delegate(
+      net::HttpNetworkDelegate* network_delegate) {
+    network_delegate_ = network_delegate;
   }
 
   // Callback for when the accept language changes.
@@ -209,27 +195,22 @@ class ChromeURLRequestContext : public URLRequestContext {
   void OnDefaultCharsetChange(const std::string& default_charset);
 
  protected:
-  ExtensionInfoMap extension_info_;
-
   // Path to the directory user scripts are stored in.
   FilePath user_script_dir_path_;
 
   scoped_refptr<ChromeAppCacheService> appcache_service_;
+  scoped_refptr<webkit_database::DatabaseTracker> database_tracker_;
   scoped_refptr<ChromeCookiePolicy> chrome_cookie_policy_;
   scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
   scoped_refptr<HostZoomMap> host_zoom_map_;
-  scoped_refptr<Blacklist> privacy_blacklist_;
+  scoped_refptr<ChromeBlobStorageContext> blob_storage_context_;
+  scoped_refptr<FileSystemHostContext> file_system_host_context_;
+  scoped_refptr<ExtensionInfoMap> extension_info_map_;
 
   bool is_media_;
   bool is_off_the_record_;
 
  private:
-  // Blacklist implementation of InterceptRequestCookie and
-  // InterceptResponseCookie. Returns true if cookies are allowed and false
-  // if the request matches a Blacklist rule and cookies should be blocked.
-  bool InterceptCookie(const URLRequest* request,
-                       const std::string& cookie) const;
-
   DISALLOW_COPY_AND_ASSIGN(ChromeURLRequestContext);
 };
 
@@ -250,13 +231,16 @@ class ChromeURLRequestContextGetter : public URLRequestContextGetter,
   ChromeURLRequestContextGetter(Profile* profile,
                                 ChromeURLRequestContextFactory* factory);
 
+  static void RegisterUserPrefs(PrefService* user_prefs);
+
   // Note that GetURLRequestContext() can only be called from the IO
-  // thread (it will assert otherwise). GetCookieStore() however can
-  // be called from any thread.
+  // thread (it will assert otherwise). GetCookieStore() and
+  // GetIOMessageLoopProxy however can be called from any thread.
   //
   // URLRequestContextGetter implementation.
   virtual URLRequestContext* GetURLRequestContext();
   virtual net::CookieStore* GetCookieStore();
+  virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy();
 
   // Convenience overload of GetURLRequestContext() that returns a
   // ChromeURLRequestContext* rather than a URLRequestContext*.
@@ -285,16 +269,14 @@ class ChromeURLRequestContextGetter : public URLRequestContextGetter,
   // called on the UI thread.
   static ChromeURLRequestContextGetter* CreateOffTheRecord(Profile* profile);
 
+  // Create an instance for an OTR profile for extensions. This is expected
+  // to get called on UI thread.
+  static ChromeURLRequestContextGetter* CreateOffTheRecordForExtensions(
+      Profile* profile);
+
   // Clean up UI thread resources. This is expected to get called on the UI
   // thread before the instance is deleted on the IO thread.
   void CleanupOnUIThread();
-
-  // These methods simply forward to the corresponding methods on
-  // ChromeURLRequestContext. Takes ownership of |extension_info|.
-  void OnNewExtensions(
-      const std::string& extension_id,
-      ChromeURLRequestContext::ExtensionInfo* extension_info);
-  void OnUnloadedExtension(const std::string& id);
 
   // NotificationObserver implementation.
   virtual void Observe(NotificationType type,
@@ -325,8 +307,7 @@ class ChromeURLRequestContextGetter : public URLRequestContextGetter,
   void GetCookieStoreAsyncHelper(base::WaitableEvent* completion,
                                  net::CookieStore** result);
 
-  // Access only from the UI thread.
-  PrefService* prefs_;
+  PrefChangeRegistrar registrar_;
 
   // Deferred logic for creating a ChromeURLRequestContext.
   // Access only from the IO thread.
@@ -372,16 +353,20 @@ class ChromeURLRequestContextFactory {
   std::string accept_language_;
   std::string accept_charset_;
   std::string referrer_charset_;
-  ChromeURLRequestContext::ExtensionInfoMap extension_info_;
+
   // TODO(aa): I think this can go away now as we no longer support standalone
   // user scripts.
   FilePath user_script_dir_path_;
   scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
+  scoped_refptr<ChromeAppCacheService> appcache_service_;
+  scoped_refptr<webkit_database::DatabaseTracker> database_tracker_;
   scoped_refptr<HostZoomMap> host_zoom_map_;
-  scoped_refptr<Blacklist> privacy_blacklist_;
   scoped_refptr<net::TransportSecurityState> transport_security_state_;
   scoped_refptr<net::SSLConfigService> ssl_config_service_;
   scoped_refptr<net::CookieMonster::Delegate> cookie_monster_delegate_;
+  scoped_refptr<ChromeBlobStorageContext> blob_storage_context_;
+  scoped_refptr<FileSystemHostContext> file_system_host_context_;
+  scoped_refptr<ExtensionInfoMap> extension_info_map_;
 
   FilePath profile_dir_path_;
 
@@ -391,8 +376,9 @@ class ChromeURLRequestContextFactory {
   DISALLOW_COPY_AND_ASSIGN(ChromeURLRequestContextFactory);
 };
 
-// Creates a proxy configuration using the overrides specified on the command
-// line. Returns NULL if the system defaults should be used instead.
-net::ProxyConfig* CreateProxyConfig(const CommandLine& command_line);
+// Creates a proxy configuration from proxy-related preferences fetched
+// from |pref_service|. The relevant preferences in |pref_service| are
+// initialized from the process' command line or by applicable proxy policies.
+net::ProxyConfig* CreateProxyConfig(const PrefService* pref_service);
 
 #endif  // CHROME_BROWSER_NET_CHROME_URL_REQUEST_CONTEXT_H_

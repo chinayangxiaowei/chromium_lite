@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,10 +12,11 @@
 #include <set>
 
 #include "app/l10n_util.h"
-#include "app/win_util.h"
 #include "base/file_util.h"
+#include "base/message_loop.h"
 #include "base/registry.h"
 #include "base/scoped_comptr_win.h"
+#include "base/string_split.h"
 #include "base/thread.h"
 #include "base/utf_string_conversions.h"
 #include "base/win_util.h"
@@ -23,53 +24,47 @@
 #include "gfx/font.h"
 #include "grit/app_strings.h"
 #include "grit/generated_resources.h"
-#include "net/base/mime_util.h"
-
-namespace {
 
 // This function takes the output of a SaveAs dialog: a filename, a filter and
 // the extension originally suggested to the user (shown in the dialog box) and
-// returns back the filename with the appropriate extension tacked on. For
-// example, if you pass in 'foo' as filename with filter '*.jpg' this function
-// will return 'foo.jpg'. It respects MIME types, so if you pass in 'foo.jpeg'
-// with filer '*.jpg' it will return 'foo.jpeg' (will not append .jpg).
-// |filename| should contain the filename selected in the SaveAs dialog box and
-// may include the path, |filter_selected| should be '*.something', for example
-// '*.*' or it can be blank (which is treated as *.*). |suggested_ext| should
-// contain the extension without the dot (.) in front, for example 'jpg'.
+// returns back the filename with the appropriate extension tacked on. If the
+// user requests an unknown extension and is not using the 'All files' filter,
+// the suggested extension will be appended, otherwise we will leave the
+// filename unmodified. |filename| should contain the filename selected in the
+// SaveAs dialog box and may include the path, |filter_selected| should be
+// '*.something', for example '*.*' or it can be blank (which is treated as
+// *.*). |suggested_ext| should contain the extension without the dot (.) in
+// front, for example 'jpg'.
 std::wstring AppendExtensionIfNeeded(const std::wstring& filename,
                                      const std::wstring& filter_selected,
                                      const std::wstring& suggested_ext) {
+  DCHECK(!filename.empty());
   std::wstring return_value = filename;
 
-  // Get the extension the user ended up selecting.
-  std::wstring selected_ext = file_util::GetFileExtensionFromPath(filename);
-
-  if (filter_selected.empty() || filter_selected == L"*.*") {
-    // If the user selects 'All files' we respect any extension given to us from
-    // the File Save dialog. We also strip any trailing dots, which matches
-    // Windows Explorer and is needed because Windows doesn't allow filenames
-    // to have trailing dots. The GetSaveFileName dialog will not return a
-    // string with only one or more dots.
-    size_t index = return_value.find_last_not_of(L'.');
-    if (index < return_value.size() - 1)
-      return_value.resize(index + 1);
-  } else {
-    // User selected a specific filter (not *.*) so we need to check if the
-    // extension provided has the same mime type. If it doesn't we append the
-    // extension.
-    std::string suggested_mime_type, selected_mime_type;
-    if (suggested_ext != selected_ext &&
-        (!net::GetMimeTypeFromExtension(suggested_ext, &suggested_mime_type) ||
-         !net::GetMimeTypeFromExtension(selected_ext, &selected_mime_type) ||
-         suggested_mime_type != selected_mime_type)) {
+  // If we wanted a specific extension, but the user's filename deleted it or
+  // changed it to something that the system doesn't understand, re-append.
+  // Careful: Checking net::GetMimeTypeFromExtension() will only find
+  // extensions with a known MIME type, which many "known" extensions on Windows
+  // don't have.  So we check directly for the "known extension" registry key.
+  std::wstring file_extension(file_util::GetFileExtensionFromPath(filename));
+  std::wstring key(L"." + file_extension);
+  if (!(filter_selected.empty() || filter_selected == L"*.*") &&
+      !RegKey(HKEY_CLASSES_ROOT, key.c_str(), KEY_READ).Valid() &&
+      file_extension != suggested_ext) {
+    if (return_value[return_value.length() - 1] != L'.')
       return_value.append(L".");
-      return_value.append(suggested_ext);
-    }
+    return_value.append(suggested_ext);
   }
+
+  // Strip any trailing dots, which Windows doesn't allow.
+  size_t index = return_value.find_last_not_of(L'.');
+  if (index < return_value.size() - 1)
+    return_value.resize(index + 1);
 
   return return_value;
 }
+
+namespace {
 
 // Get the file type description from the registry. This will be "Text Document"
 // for .txt files, "JPEG Image" for .jpg files, etc. If the registry doesn't
@@ -717,8 +712,8 @@ void SelectFileDialogImpl::ExecuteSelectFile(
     std::vector<FilePath> paths;
     if (RunOpenMultiFileDialog(params.title, filter,
                                params.run_state.owner, &paths)) {
-      ChromeThread::PostTask(
-          ChromeThread::UI, FROM_HERE,
+      BrowserThread::PostTask(
+          BrowserThread::UI, FROM_HERE,
           NewRunnableMethod(
               this, &SelectFileDialogImpl::MultiFilesSelected, paths,
               params.params, params.run_state));
@@ -727,14 +722,14 @@ void SelectFileDialogImpl::ExecuteSelectFile(
   }
 
   if (success) {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(
             this, &SelectFileDialogImpl::FileSelected, path, filter_index,
             params.params, params.run_state));
   } else {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(
             this, &SelectFileDialogImpl::FileNotSelected, params.params,
             params.run_state));
@@ -842,17 +837,41 @@ bool SelectFileDialogImpl::RunOpenFileDialog(
   ofn.hwndOwner = owner;
 
   wchar_t filename[MAX_PATH];
-  base::wcslcpy(filename, path->value().c_str(), arraysize(filename));
+  // According to http://support.microsoft.com/?scid=kb;en-us;222003&x=8&y=12,
+  // The lpstrFile Buffer MUST be NULL Terminated.
+  filename[0] = 0;
+  // Define the dir in here to keep the string buffer pointer pointed to
+  // ofn.lpstrInitialDir available during the period of running the
+  // GetOpenFileName.
+  FilePath dir;
+  // Use lpstrInitialDir to specify the initial directory
+  if (!path->empty()) {
+    bool is_dir;
+    base::PlatformFileInfo file_info;
+    if (file_util::GetFileInfo(*path, &file_info))
+      is_dir = file_info.is_directory;
+    else
+      is_dir = file_util::EndsWithSeparator(*path);
+    if (is_dir) {
+      ofn.lpstrInitialDir = path->value().c_str();
+    } else {
+      dir = path->DirName();
+      ofn.lpstrInitialDir = dir.value().c_str();
+      // Only pure filename can be put in lpstrFile field.
+      base::wcslcpy(filename, path->BaseName().value().c_str(),
+                    arraysize(filename));
+    }
+  }
 
   ofn.lpstrFile = filename;
   ofn.nMaxFile = MAX_PATH;
+
   // We use OFN_NOCHANGEDIR so that the user can rename or delete the directory
   // without having to close Chrome first.
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
-  if (!filter.empty()) {
+  if (!filter.empty())
     ofn.lpstrFilter = filter.c_str();
-  }
   bool success = !!GetOpenFileName(&ofn);
   DisableOwner(owner);
   if (success)
@@ -1007,14 +1026,14 @@ void SelectFontDialogImpl::ExecuteSelectFont(RunState run_state, void* params) {
   bool success = !!ChooseFont(&cf);
   DisableOwner(run_state.owner);
   if (success) {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(
             this, &SelectFontDialogImpl::FontSelected, logfont, params,
             run_state));
   } else {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(
             this, &SelectFontDialogImpl::FontNotSelected, params, run_state));
   }
@@ -1070,14 +1089,14 @@ void SelectFontDialogImpl::ExecuteSelectFontWithNameSize(
   bool success = !!ChooseFont(&cf);
   DisableOwner(run_state.owner);
   if (success) {
-    ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
           this, &SelectFontDialogImpl::FontSelected, logfont, params,
           run_state));
   } else {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(this, &SelectFontDialogImpl::FontNotSelected, params,
         run_state));
   }
@@ -1089,7 +1108,7 @@ void SelectFontDialogImpl::FontSelected(LOGFONT logfont,
   if (listener_) {
     HFONT font = CreateFontIndirect(&logfont);
     if (font) {
-      listener_->FontSelected(gfx::Font::CreateFont(font), params);
+      listener_->FontSelected(gfx::Font(font), params);
       DeleteObject(font);
     } else {
       listener_->FontSelectionCanceled(params);

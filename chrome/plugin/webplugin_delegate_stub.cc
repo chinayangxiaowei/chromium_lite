@@ -23,6 +23,10 @@
 #include "webkit/glue/plugins/webplugin_delegate_impl.h"
 #include "webkit/glue/webcursor.h"
 
+#if defined(ENABLE_GPU)
+#include "app/gfx/gl/gl_context.h"
+#endif
+
 using WebKit::WebBindings;
 using WebKit::WebCursorInfo;
 using webkit_glue::WebPlugin;
@@ -46,22 +50,6 @@ class FinishDestructionTask : public Task {
   WebPlugin* webplugin_;
 };
 
-#if defined(OS_MACOSX)
-namespace {
-
-void FocusNotifier(WebPluginDelegateImpl *instance) {
-  uint32 process_id = getpid();
-  uint32 instance_id = reinterpret_cast<uint32>(instance);
-  PluginThread* plugin_thread = PluginThread::current();
-  if (plugin_thread) {
-    plugin_thread->Send(
-        new PluginProcessHostMsg_PluginReceivedFocus(process_id, instance_id));
-  }
-}
-
-}
-#endif
-
 WebPluginDelegateStub::WebPluginDelegateStub(
     const std::string& mime_type, int instance_id, PluginChannel* channel) :
     mime_type_(mime_type),
@@ -76,6 +64,13 @@ WebPluginDelegateStub::WebPluginDelegateStub(
 WebPluginDelegateStub::~WebPluginDelegateStub() {
   in_destructor_ = true;
   child_process_logging::SetActiveURL(page_url_);
+
+#if defined(ENABLE_GPU)
+  // Make sure there is no command buffer before destroying the window handle.
+  // The GPU service code might otherwise asynchronously perform an operation
+  // using the window handle.
+  command_buffer_stub_.reset();
+#endif
 
   if (channel_->in_send()) {
     // The delegate or an npobject is in the callstack, so don't delete it
@@ -121,11 +116,14 @@ void WebPluginDelegateStub::OnMessageReceived(const IPC::Message& msg) {
     IPC_MESSAGE_HANDLER(PluginMsg_UpdateGeometrySync, OnUpdateGeometry)
     IPC_MESSAGE_HANDLER(PluginMsg_SendJavaScriptStream,
                         OnSendJavaScriptStream)
+    IPC_MESSAGE_HANDLER(PluginMsg_SetContentAreaFocus, OnSetContentAreaFocus)
 #if defined(OS_MACOSX)
     IPC_MESSAGE_HANDLER(PluginMsg_SetWindowFocus, OnSetWindowFocus)
     IPC_MESSAGE_HANDLER(PluginMsg_ContainerHidden, OnContainerHidden)
     IPC_MESSAGE_HANDLER(PluginMsg_ContainerShown, OnContainerShown)
     IPC_MESSAGE_HANDLER(PluginMsg_WindowFrameChanged, OnWindowFrameChanged)
+    IPC_MESSAGE_HANDLER(PluginMsg_ImeCompositionConfirmed,
+                        OnImeCompositionConfirmed)
 #endif
     IPC_MESSAGE_HANDLER(PluginMsg_DidReceiveManualResponse,
                         OnDidReceiveManualResponse)
@@ -169,11 +167,10 @@ void WebPluginDelegateStub::OnInit(const PluginMsg_Init_Params& params,
   }
 
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
-  FilePath path = FilePath::FromWStringHack(
-      command_line.GetSwitchValue(switches::kPluginPath));
+  FilePath path =
+      command_line.GetSwitchValuePath(switches::kPluginPath);
 
-
-  gfx::PluginWindowHandle parent = NULL;
+  gfx::PluginWindowHandle parent = gfx::kNullPluginWindow;
 #if defined(OS_WIN)
   parent = gfx::NativeViewFromId(params.containing_window);
 #elif defined(OS_LINUX)
@@ -196,12 +193,6 @@ void WebPluginDelegateStub::OnInit(const PluginMsg_Init_Params& params,
                                     params.arg_values,
                                     webplugin_,
                                     params.load_manually);
-#if defined(OS_MACOSX)
-    delegate_->SetFocusNotifier(FocusNotifier);
-    delegate_->WindowFrameChanged(params.containing_window_frame,
-                                  params.containing_content_frame);
-    delegate_->SetWindowHasFocus(params.containing_window_has_focus);
-#endif
   }
 }
 
@@ -258,8 +249,8 @@ void WebPluginDelegateStub::OnDidFinishLoadWithReason(
   delegate_->DidFinishLoadWithReason(url, reason, notify_id);
 }
 
-void WebPluginDelegateStub::OnSetFocus() {
-  delegate_->SetFocus();
+void WebPluginDelegateStub::OnSetFocus(bool focused) {
+  delegate_->SetFocus(focused);
 }
 
 void WebPluginDelegateStub::OnHandleInputEvent(
@@ -347,26 +338,41 @@ void WebPluginDelegateStub::OnSendJavaScriptStream(const GURL& url,
   delegate_->SendJavaScriptStream(url, result, success, notify_id);
 }
 
+void WebPluginDelegateStub::OnSetContentAreaFocus(bool has_focus) {
+  if (delegate_)
+    delegate_->SetContentAreaHasFocus(has_focus);
+}
+
 #if defined(OS_MACOSX)
 void WebPluginDelegateStub::OnSetWindowFocus(bool has_focus) {
-  delegate_->SetWindowHasFocus(has_focus);
+  if (delegate_)
+    delegate_->SetWindowHasFocus(has_focus);
 }
 
 void WebPluginDelegateStub::OnContainerHidden() {
-  delegate_->SetContainerVisibility(false);
+  if (delegate_)
+    delegate_->SetContainerVisibility(false);
 }
 
 void WebPluginDelegateStub::OnContainerShown(gfx::Rect window_frame,
                                              gfx::Rect view_frame,
                                              bool has_focus) {
-  delegate_->WindowFrameChanged(window_frame, view_frame);
-  delegate_->SetContainerVisibility(true);
-  delegate_->SetWindowHasFocus(has_focus);
+  if (delegate_) {
+    delegate_->WindowFrameChanged(window_frame, view_frame);
+    delegate_->SetContainerVisibility(true);
+    delegate_->SetWindowHasFocus(has_focus);
+  }
 }
 
-void WebPluginDelegateStub::OnWindowFrameChanged(gfx::Rect window_frame,
-                                                 gfx::Rect view_frame) {
-  delegate_->WindowFrameChanged(window_frame, view_frame);
+void WebPluginDelegateStub::OnWindowFrameChanged(const gfx::Rect& window_frame,
+                                                 const gfx::Rect& view_frame) {
+  if (delegate_)
+    delegate_->WindowFrameChanged(window_frame, view_frame);
+}
+
+void WebPluginDelegateStub::OnImeCompositionConfirmed(const string16& text) {
+  if (delegate_)
+    delegate_->ImeCompositionConfirmed(text);
 }
 #endif  // OS_MACOSX
 
@@ -397,15 +403,19 @@ void WebPluginDelegateStub::OnInstallMissingPlugin() {
 }
 
 void WebPluginDelegateStub::OnCreateCommandBuffer(int* route_id) {
+  *route_id = 0;
 #if defined(ENABLE_GPU)
+  // Fail to create the command buffer if some GL implementation cannot be
+  // initialized.
+  if (!gfx::GLContext::InitializeOneOff())
+    return;
+
   command_buffer_stub_.reset(new CommandBufferStub(
       channel_,
       instance_id_,
       delegate_->windowed_handle()));
 
   *route_id = command_buffer_stub_->route_id();
-#else
-  *route_id = 0;
 #endif  // ENABLE_GPU
 }
 
@@ -419,7 +429,7 @@ void WebPluginDelegateStub::CreateSharedBuffer(
     uint32 size,
     base::SharedMemory* shared_buf,
     base::SharedMemoryHandle* remote_handle) {
-  if (!shared_buf->Create(std::wstring(), false, false, size)) {
+  if (!shared_buf->Create(std::string(), false, false, size)) {
     NOTREACHED();
     return;
   }

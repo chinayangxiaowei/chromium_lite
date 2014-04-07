@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "base/message_loop.h"
 #include "base/scoped_handle.h"
 #include "base/task.h"
+#include "base/utf_string_conversions.h"  // TODO(viettrungluu): delete me.
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
@@ -28,25 +29,29 @@
 const char SandboxedExtensionUnpacker::kExtensionHeaderMagic[] = "Cr24";
 
 SandboxedExtensionUnpacker::SandboxedExtensionUnpacker(
-    const FilePath& crx_path, ResourceDispatcherHost* rdh,
+    const FilePath& crx_path,
+    const FilePath& temp_path,
+    ResourceDispatcherHost* rdh,
     SandboxedExtensionUnpackerClient* client)
-      : crx_path_(crx_path), thread_identifier_(ChromeThread::ID_COUNT),
-        rdh_(rdh), client_(client), got_response_(false) {
+    : crx_path_(crx_path), temp_path_(temp_path),
+      thread_identifier_(BrowserThread::ID_COUNT),
+      rdh_(rdh), client_(client), got_response_(false) {
 }
 
 void SandboxedExtensionUnpacker::Start() {
   // We assume that we are started on the thread that the client wants us to do
   // file IO on.
-  CHECK(ChromeThread::GetCurrentThreadIdentifier(&thread_identifier_));
+  CHECK(BrowserThread::GetCurrentThreadIdentifier(&thread_identifier_));
 
   // Create a temporary directory to work in.
-  if (!temp_dir_.CreateUniqueTempDir()) {
+  if (!temp_dir_.CreateUniqueTempDirUnderPath(temp_path_)) {
     ReportFailure("Could not create temporary directory.");
     return;
   }
 
   // Initialize the path that will eventually contain the unpacked extension.
-  extension_root_ = temp_dir_.path().AppendASCII("TEMP_INSTALL");
+  extension_root_ = temp_dir_.path().AppendASCII(
+      extension_filenames::kTempExtensionName);
 
   // Extract the public key and validate the package.
   if (!ValidateSignature())
@@ -59,20 +64,46 @@ void SandboxedExtensionUnpacker::Start() {
     return;
   }
 
-  // If we are supposed to use a subprocess, copy the crx to the temp directory
-  // and kick off the subprocess.
+  // If we are supposed to use a subprocess, kick off the subprocess.
   //
   // TODO(asargent) we shouldn't need to do this branch here - instead
   // UtilityProcessHost should handle it for us. (http://crbug.com/19192)
   bool use_utility_process = rdh_ &&
       !CommandLine::ForCurrentProcess()->HasSwitch(switches::kSingleProcess);
   if (use_utility_process) {
-    ChromeThread::PostTask(
-        ChromeThread::IO, FROM_HERE,
+    // The utility process will have access to the directory passed to
+    // SandboxedExtensionUnpacker.  That directory should not contain a
+    // symlink or NTFS reparse point.  When the path is used, following
+    // the link/reparse point will cause file system access outside the
+    // sandbox path, and the sandbox will deny the operation.
+    FilePath link_free_crx_path;
+    if (!file_util::NormalizeFilePath(temp_crx_path, &link_free_crx_path)) {
+      LOG(ERROR) << "Could not get the normalized path of "
+                 << temp_crx_path.value();
+#if defined (OS_WIN)
+      // On windows, it is possible to mount a disk without the root of that
+      // disk having a drive letter.  The sandbox does not support this.
+      // See crbug/49530 .
+      ReportFailure(
+          "Can not unpack extension.  To safely unpack an extension, "
+          "there must be a path to your profile directory that starts "
+          "with a drive letter and does not contain a junction, mount "
+          "point, or symlink.  No such path exists for your profile.");
+#else
+      ReportFailure(
+          "Can not unpack extension.  To safely unpack an extension, "
+          "there must be a path to your profile directory that does "
+          "not contain a symlink.  No such path exists for your profile.");
+#endif
+      return;
+    }
+
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
         NewRunnableMethod(
             this,
             &SandboxedExtensionUnpacker::StartProcessOnIOThread,
-            temp_crx_path));
+            link_free_crx_path));
   } else {
     // Otherwise, unpack the extension in this process.
     ExtensionUnpacker unpacker(temp_crx_path);
@@ -85,6 +116,8 @@ void SandboxedExtensionUnpacker::Start() {
   }
 }
 
+SandboxedExtensionUnpacker::~SandboxedExtensionUnpacker() {}
+
 void SandboxedExtensionUnpacker::StartProcessOnIOThread(
     const FilePath& temp_crx_path) {
   UtilityProcessHost* host = new UtilityProcessHost(
@@ -95,8 +128,8 @@ void SandboxedExtensionUnpacker::StartProcessOnIOThread(
 void SandboxedExtensionUnpacker::OnUnpackExtensionSucceeded(
     const DictionaryValue& manifest) {
   // Skip check for unittests.
-  if (thread_identifier_ != ChromeThread::ID_COUNT)
-    DCHECK(ChromeThread::CurrentlyOn(thread_identifier_));
+  if (thread_identifier_ != BrowserThread::ID_COUNT)
+    DCHECK(BrowserThread::CurrentlyOn(thread_identifier_));
   got_response_ = true;
 
   scoped_ptr<DictionaryValue> final_manifest(RewriteManifestFile(manifest));
@@ -134,7 +167,7 @@ void SandboxedExtensionUnpacker::OnUnpackExtensionSucceeded(
 
 void SandboxedExtensionUnpacker::OnUnpackExtensionFailed(
     const std::string& error) {
-  DCHECK(ChromeThread::CurrentlyOn(thread_identifier_));
+  DCHECK(BrowserThread::CurrentlyOn(thread_identifier_));
   got_response_ = true;
   ReportFailure(error);
 }
@@ -182,6 +215,10 @@ bool SandboxedExtensionUnpacker::ValidateSignature() {
     ReportFailure("Excessively large key or signature");
     return false;
   }
+  if (header.key_size == 0) {
+    ReportFailure("Key length is zero");
+    return false;
+  }
 
   std::vector<uint8> key;
   key.resize(header.key_size);
@@ -200,18 +237,9 @@ bool SandboxedExtensionUnpacker::ValidateSignature() {
     return false;
   }
 
-  // Note: this structure is an ASN.1 which encodes the algorithm used
-  // with its parameters. This is defined in PKCS #1 v2.1 (RFC 3447).
-  // It is encoding: { OID sha1WithRSAEncryption      PARAMETERS NULL }
-  // TODO(aa): This needs to be factored away someplace common.
-  const uint8 signature_algorithm[15] = {
-    0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86,
-    0xf7, 0x0d, 0x01, 0x01, 0x05, 0x05, 0x00
-  };
-
   base::SignatureVerifier verifier;
-  if (!verifier.VerifyInit(signature_algorithm,
-                           sizeof(signature_algorithm),
+  if (!verifier.VerifyInit(extension_misc::kSignatureAlgorithm,
+                           sizeof(extension_misc::kSignatureAlgorithm),
                            &signature.front(),
                            signature.size(),
                            &key.front(),
@@ -254,20 +282,6 @@ DictionaryValue* SandboxedExtensionUnpacker::RewriteManifestFile(
   scoped_ptr<DictionaryValue> final_manifest(
       static_cast<DictionaryValue*>(manifest.DeepCopy()));
   final_manifest->SetString(extension_manifest_keys::kPublicKey, public_key_);
-
-  // Override the origin if appropriate.
-  bool web_content_enabled = false;
-  if (final_manifest->GetBoolean(extension_manifest_keys::kWebContentEnabled,
-                                 &web_content_enabled) &&
-      web_content_enabled &&
-      web_origin_.is_valid()) {
-    // TODO(erikkay): Finalize origin policy.  This is intentionally loose
-    // until we can test from the gallery.  http://crbug.com/40848.
-    if (!final_manifest->Get(extension_manifest_keys::kWebOrigin, NULL)) {
-      final_manifest->SetString(extension_manifest_keys::kWebOrigin,
-                                web_origin_.spec());
-    }
-  }
 
   std::string manifest_json;
   JSONStringValueSerializer serializer(&manifest_json);
@@ -365,7 +379,9 @@ bool SandboxedExtensionUnpacker::RewriteCatalogFiles() {
       return false;
     }
 
-    FilePath relative_path = FilePath::FromWStringHack(*key_it);
+    // TODO(viettrungluu): Fix the |FilePath::FromWStringHack(UTF8ToWide())|
+    // hack and remove the corresponding #include.
+    FilePath relative_path = FilePath::FromWStringHack(UTF8ToWide(*key_it));
     relative_path = relative_path.Append(Extension::kMessagesFilename);
     if (relative_path.IsAbsolute() || relative_path.ReferencesParent()) {
       ReportFailure("Invalid path for catalog.");

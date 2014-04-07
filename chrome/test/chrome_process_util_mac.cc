@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@
 
 #include "base/command_line.h"
 #include "base/process_util.h"
+#include "base/string_number_conversions.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 
 MacChromeProcessInfoList GetRunningMacProcessInfo(
@@ -45,9 +47,11 @@ MacChromeProcessInfoList GetRunningMacProcessInfo(
     SplitString(line, ' ', &values);
     if (values.size() == 3) {
       MacChromeProcessInfo proc_info;
-      proc_info.pid = StringToInt(values[0]);
-      proc_info.rsz_in_kb = StringToInt(values[1]);
-      proc_info.vsz_in_kb = StringToInt(values[2]);
+      int pid;
+      base::StringToInt(values[0], &pid);
+      proc_info.pid = pid;
+      base::StringToInt(values[1], &proc_info.rsz_in_kb);
+      base::StringToInt(values[2], &proc_info.vsz_in_kb);
       if (proc_info.pid && proc_info.rsz_in_kb && proc_info.vsz_in_kb)
         result.push_back(proc_info);
     }

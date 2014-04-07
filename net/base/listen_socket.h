@@ -10,6 +10,7 @@
 
 #ifndef NET_BASE_LISTEN_SOCKET_H_
 #define NET_BASE_LISTEN_SOCKET_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -51,7 +52,9 @@ class ListenSocket : public base::RefCountedThreadSafe<ListenSocket>,
     // Socket that was created.  Ownership of connection is transferred
     // to the delegate with this call.
     virtual void DidAccept(ListenSocket *server, ListenSocket *connection) = 0;
-    virtual void DidRead(ListenSocket *connection, const std::string& data) = 0;
+    virtual void DidRead(ListenSocket *connection,
+                         const char* data,
+                         int len) = 0;
     virtual void DidClose(ListenSocket *sock) = 0;
   };
 

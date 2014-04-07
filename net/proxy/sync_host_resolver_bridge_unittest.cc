@@ -5,12 +5,17 @@
 #include "net/proxy/sync_host_resolver_bridge.h"
 
 #include "base/thread.h"
+#include "base/waitable_event.h"
 #include "net/base/address_list.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
+#include "net/proxy/multi_threaded_proxy_resolver.h"
 #include "net/base/test_completion_callback.h"
 #include "net/proxy/proxy_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+// TODO(eroman): This test should be moved into
+//               multi_threaded_proxy_resolver_unittest.cc.
 
 namespace net {
 
@@ -74,7 +79,7 @@ class BlockableHostResolver : public HostResolver {
 // on |host_resolver| in response to GetProxyForURL().
 class SyncProxyResolver : public ProxyResolver {
  public:
-  explicit SyncProxyResolver(HostResolver* host_resolver)
+  explicit SyncProxyResolver(SyncHostResolverBridge* host_resolver)
       : ProxyResolver(false), host_resolver_(host_resolver) {}
 
   virtual int GetProxyForURL(const GURL& url,
@@ -86,7 +91,7 @@ class SyncProxyResolver : public ProxyResolver {
     EXPECT_FALSE(request);
 
     // Do a synchronous host resolve.
-    HostResolver::RequestInfo info(url.host(), 80);
+    HostResolver::RequestInfo info(HostPortPair::FromURL(url));
     AddressList addresses;
     int rv =
         host_resolver_->Resolve(info, &addresses, NULL, NULL, BoundNetLog());
@@ -100,15 +105,34 @@ class SyncProxyResolver : public ProxyResolver {
     NOTREACHED();
   }
 
- private:
-  virtual int SetPacScript(const GURL& pac_url,
-                           const std::string& bytes_utf8,
-                           CompletionCallback* callback) {
-    NOTREACHED();
+  virtual void Shutdown() {
+    host_resolver_->Shutdown();
+  }
+
+  virtual int SetPacScript(
+      const scoped_refptr<ProxyResolverScriptData>& script_data,
+      CompletionCallback* callback) {
     return OK;
   }
 
-  scoped_refptr<HostResolver> host_resolver_;
+ private:
+  SyncHostResolverBridge* const host_resolver_;
+};
+
+class SyncProxyResolverFactory : public ProxyResolverFactory {
+ public:
+  // Takes ownership of |sync_host_resolver|.
+  explicit SyncProxyResolverFactory(SyncHostResolverBridge* sync_host_resolver)
+      : ProxyResolverFactory(false),
+        sync_host_resolver_(sync_host_resolver) {
+  }
+
+  virtual ProxyResolver* CreateProxyResolver() {
+    return new SyncProxyResolver(sync_host_resolver_.get());
+  }
+
+ private:
+  const scoped_ptr<SyncHostResolverBridge> sync_host_resolver_;
 };
 
 // This helper thread is used to create the circumstances for the deadlock.
@@ -116,25 +140,35 @@ class SyncProxyResolver : public ProxyResolver {
 // network stack.
 class IOThread : public base::Thread {
  public:
-  explicit IOThread(HostResolver* async_resolver)
-      : base::Thread("IO-thread"), async_resolver_(async_resolver) {
-  }
+  IOThread() : base::Thread("IO-thread") {}
 
   virtual ~IOThread() {
     Stop();
   }
 
+  BlockableHostResolver* async_resolver() {
+    return async_resolver_.get();
+  }
+
  protected:
   virtual void Init() {
+    async_resolver_.reset(new BlockableHostResolver());
+
     // Create a synchronous host resolver that operates the async host
     // resolver on THIS thread.
-    scoped_refptr<SyncHostResolverBridge> sync_resolver =
-        new SyncHostResolverBridge(async_resolver_, message_loop());
+    SyncHostResolverBridge* sync_resolver =
+        new SyncHostResolverBridge(async_resolver_.get(), message_loop());
 
     proxy_resolver_.reset(
-        new SingleThreadedProxyResolverUsingBridgedHostResolver(
-            new SyncProxyResolver(sync_resolver),
-            sync_resolver));
+        new MultiThreadedProxyResolver(
+            new SyncProxyResolverFactory(sync_resolver),
+            1u));
+
+    // Initialize the resolver.
+    TestCompletionCallback callback;
+    proxy_resolver_->SetPacScript(ProxyResolverScriptData::FromURL(GURL()),
+                                  &callback);
+    EXPECT_EQ(OK, callback.WaitForResult());
 
     // Start an asynchronous request to the proxy resolver
     // (note that it will never complete).
@@ -149,10 +183,21 @@ class IOThread : public base::Thread {
 
     // Delete the single threaded proxy resolver.
     proxy_resolver_.reset();
+
+    // (There may have been a completion posted back to origin thread, avoid
+    // leaking it by running).
+    MessageLoop::current()->RunAllPending();
+
+    // During the teardown sequence of the single threaded proxy resolver,
+    // the outstanding host resolve should have been cancelled.
+    EXPECT_TRUE(async_resolver_->was_request_cancelled());
   }
 
  private:
-  HostResolver* async_resolver_;
+  // This (async) host resolver will outlive the thread that is operating it
+  // synchronously.
+  scoped_ptr<BlockableHostResolver> async_resolver_;
+
   scoped_ptr<ProxyResolver> proxy_resolver_;
 
   // Data for the outstanding request to the single threaded proxy resolver.
@@ -164,36 +209,22 @@ class IOThread : public base::Thread {
 // Test that a deadlock does not happen during shutdown when a host resolve
 // is outstanding on the SyncHostResolverBridge.
 // This is a regression test for http://crbug.com/41244.
-TEST(SingleThreadedProxyResolverWithBridgedHostResolverTest, ShutdownDeadlock) {
-  // This (async) host resolver will outlive the thread that is operating it
-  // synchronously.
-  scoped_refptr<BlockableHostResolver> host_resolver =
-      new BlockableHostResolver();
+TEST(MultiThreadedProxyResolverTest, ShutdownIsCalledBeforeThreadJoin) {
+  IOThread io_thread;
+  base::Thread::Options options;
+  options.message_loop_type = MessageLoop::TYPE_IO;
+  ASSERT_TRUE(io_thread.StartWithOptions(options));
 
-  {
-    IOThread io_thread(host_resolver.get());
-    base::Thread::Options options;
-    options.message_loop_type = MessageLoop::TYPE_IO;
-    ASSERT_TRUE(io_thread.StartWithOptions(options));
+  io_thread.async_resolver()->WaitUntilRequestIsReceived();
 
-    // Wait until the host resolver receives a request (this means that the
-    // PAC thread is now blocked, waiting for the async response from the
-    // host resolver.
-    host_resolver->WaitUntilRequestIsReceived();
-
-    // Now upon exitting this scope, the IOThread is destroyed -- this will
-    // stop the IOThread, which will in turn delete the
-    // SingleThreadedProxyResolver, which in turn will stop its internal
-    // PAC thread (which is currently blocked waiting on the host resolve which
-    // is running on IOThread).
-  }
-
-  // During the teardown sequence of the single threaded proxy resolver,
-  // the outstanding host resolve should have been cancelled.
-  EXPECT_TRUE(host_resolver->was_request_cancelled());
+  // Now upon exitting this scope, the IOThread is destroyed -- this will
+  // stop the IOThread, which will in turn delete the
+  // SingleThreadedProxyResolver, which in turn will stop its internal
+  // PAC thread (which is currently blocked waiting on the host resolve which
+  // is running on IOThread).  The IOThread::Cleanup() will verify that after
+  // the PAC thread is stopped, it cancels the request on the HostResolver.
 }
 
 }  // namespace
 
 }  // namespace net
-

@@ -1,30 +1,37 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/basictypes.h"
 #include "base/command_line.h"
 #include "base/file_path.h"
-#if defined(OS_WIN)
-#include "base/win_util.h"
-#endif
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/url_constants.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/automation/browser_proxy.h"
 #include "chrome/test/automation/window_proxy.h"
 #include "chrome/test/ui/ui_test.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
-#include "net/url_request/url_request_unittest.h"
+#include "net/test/test_server.h"
 
 // http://code.google.com/p/chromium/issues/detail?id=14774
-#if defined(OS_WIN) && !defined(NDEBUG)
+#if (defined(OS_WIN) || defined(OS_CHROMEOS)) && !defined(NDEBUG)
 #define MAYBE_BasicRestoreFromClosedWindow DISABLED_BasicRestoreFromClosedWindow
 #else
 #define MAYBE_BasicRestoreFromClosedWindow BasicRestoreFromClosedWindow
+#endif
+
+// http://crbug.com/
+#if defined(OS_CHROMEOS) && !defined(NDEBUG)
+#define MAYBE_RestoreWindowAndTab DISABLED_RestoreWindowAndTab
+#define MAYBE_RestoreWindow DISABLED_RestoreWindow
+#else
+#define MAYBE_RestoreWindowAndTab RestoreWindowAndTab
+#define MAYBE_RestoreWindow RestoreWindow
 #endif
 
 class TabRestoreUITest : public UITest {
@@ -300,9 +307,7 @@ TEST_F(TabRestoreUITest, MAYBE_BasicRestoreFromClosedWindow) {
 }
 
 // Restore a tab then make sure it doesn't restore again.
-// Disabled because the command updater doesn't know the proper state of
-// the tab restore command. http://crbug.com/14428.
-TEST_F(TabRestoreUITest, DISABLED_DontLoadRestoredTab) {
+TEST_F(TabRestoreUITest, DontLoadRestoredTab) {
   scoped_refptr<BrowserProxy> browser_proxy(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(browser_proxy.get());
   CheckActiveWindow(browser_proxy.get());
@@ -329,15 +334,13 @@ TEST_F(TabRestoreUITest, DISABLED_DontLoadRestoredTab) {
 
   // Make sure that there's nothing else to restore.
   bool enabled;
-  ASSERT_TRUE(browser_proxy->IsPageMenuCommandEnabled(IDC_RESTORE_TAB,
-                                                      &enabled));
+  ASSERT_TRUE(browser_proxy->IsMenuCommandEnabled(IDC_RESTORE_TAB, &enabled));
   EXPECT_FALSE(enabled);
 }
 
 // Open a window with multiple tabs, close a tab, then close the window.
 // Restore both and make sure the tab goes back into the window.
-// This test is flaky. See http://crbug.com/14132
-TEST_F(TabRestoreUITest, FLAKY_RestoreWindowAndTab) {
+TEST_F(TabRestoreUITest, MAYBE_RestoreWindowAndTab) {
   scoped_refptr<BrowserProxy> browser_proxy(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(browser_proxy.get());
   CheckActiveWindow(browser_proxy.get());
@@ -451,13 +454,19 @@ TEST_F(TabRestoreUITest, FLAKY_RestoreIntoSameWindow) {
 
 // Tests that a duplicate history entry is not created when we restore a page
 // to an existing SiteInstance.  (Bug 1230446)
-TEST_F(TabRestoreUITest, RestoreWithExistingSiteInstance) {
-  const wchar_t kDocRoot[] = L"chrome/test/data";
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(kDocRoot, NULL);
-  ASSERT_TRUE(NULL != server.get());
-  GURL http_url1(server->TestServerPageW(L"files/title1.html"));
-  GURL http_url2(server->TestServerPageW(L"files/title2.html"));
+#if defined(OS_WIN)
+// http://crbug.com/55380 - NavigateToURL to making this flaky
+#define MAYBE_RestoreWithExistingSiteInstance FLAKY_RestoreWithExistingSiteInstance
+#else
+#define MAYBE_RestoreWithExistingSiteInstance RestoreWithExistingSiteInstance
+#endif
+TEST_F(TabRestoreUITest, MAYBE_RestoreWithExistingSiteInstance) {
+  net::TestServer test_server(net::TestServer::TYPE_HTTP,
+                              FilePath(FILE_PATH_LITERAL("chrome/test/data")));
+  ASSERT_TRUE(test_server.Start());
+
+  GURL http_url1(test_server.GetURL("files/title1.html"));
+  GURL http_url2(test_server.GetURL("files/title2.html"));
 
   scoped_refptr<BrowserProxy> browser_proxy(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(browser_proxy.get());
@@ -498,13 +507,14 @@ TEST_F(TabRestoreUITest, RestoreWithExistingSiteInstance) {
 // Tests that the SiteInstances used for entries in a restored tab's history
 // are given appropriate max page IDs, even if the renderer for the entry
 // already exists.  (Bug 1204135)
-TEST_F(TabRestoreUITest, RestoreCrossSiteWithExistingSiteInstance) {
-  const wchar_t kDocRoot[] = L"chrome/test/data";
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(kDocRoot, NULL);
-  ASSERT_TRUE(NULL != server.get());
-  GURL http_url1(server->TestServerPageW(L"files/title1.html"));
-  GURL http_url2(server->TestServerPageW(L"files/title2.html"));
+// http://crbug.com/55380 - NavigateToURL to making this flaky on all platforms
+TEST_F(TabRestoreUITest, FLAKY_RestoreCrossSiteWithExistingSiteInstance) {
+  net::TestServer test_server(net::TestServer::TYPE_HTTP,
+                              FilePath(FILE_PATH_LITERAL("chrome/test/data")));
+  ASSERT_TRUE(test_server.Start());
+
+  GURL http_url1(test_server.GetURL("files/title1.html"));
+  GURL http_url2(test_server.GetURL("files/title2.html"));
 
   scoped_refptr<BrowserProxy> browser_proxy(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(browser_proxy.get());
@@ -550,7 +560,7 @@ TEST_F(TabRestoreUITest, RestoreCrossSiteWithExistingSiteInstance) {
   EXPECT_EQ(http_url2, GetActiveTabURL());
 }
 
-TEST_F(TabRestoreUITest, RestoreWindow) {
+TEST_F(TabRestoreUITest, MAYBE_RestoreWindow) {
   // Create a new window.
   int window_count;
   ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
@@ -565,14 +575,12 @@ TEST_F(TabRestoreUITest, RestoreWindow) {
   int initial_tab_count;
   ASSERT_TRUE(browser_proxy->GetTabCount(&initial_tab_count));
   ASSERT_TRUE(browser_proxy->AppendTab(url1_));
-  ASSERT_TRUE(browser_proxy->WaitForTabCountToBecome(initial_tab_count + 1,
-                                                     action_max_timeout_ms()));
+  ASSERT_TRUE(browser_proxy->WaitForTabCountToBecome(initial_tab_count + 1));
   scoped_refptr<TabProxy> new_tab(browser_proxy->GetTab(initial_tab_count));
   ASSERT_TRUE(new_tab.get());
   ASSERT_EQ(AUTOMATION_MSG_NAVIGATION_SUCCESS, new_tab->NavigateToURL(url1_));
   ASSERT_TRUE(browser_proxy->AppendTab(url2_));
-  ASSERT_TRUE(browser_proxy->WaitForTabCountToBecome(initial_tab_count + 2,
-                                                     action_max_timeout_ms()));
+  ASSERT_TRUE(browser_proxy->WaitForTabCountToBecome(initial_tab_count + 2));
   new_tab = browser_proxy->GetTab(initial_tab_count + 1);
   ASSERT_TRUE(new_tab.get());
   ASSERT_EQ(AUTOMATION_MSG_NAVIGATION_SUCCESS, new_tab->NavigateToURL(url2_));
@@ -609,4 +617,71 @@ TEST_F(TabRestoreUITest, RestoreWindow) {
   ASSERT_TRUE(restored_tab_proxy->WaitForTabToBeRestored(action_timeout_ms()));
   ASSERT_TRUE(restored_tab_proxy->GetCurrentURL(&url));
   EXPECT_TRUE(url == url2_);
+}
+
+// Restore tab with special URL about:credits and make sure the page loads
+// properly after restore. See http://crbug.com/31905.
+TEST_F(TabRestoreUITest, RestoreTabWithSpecialURL) {
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  CheckActiveWindow(browser.get());
+
+  // Navigate new tab to a special URL.
+  const GURL special_url(chrome::kAboutCreditsURL);
+  ASSERT_TRUE(browser->AppendTab(special_url));
+  scoped_refptr<TabProxy> tab(browser->GetActiveTab());
+  ASSERT_TRUE(tab.get());
+
+  // Close the tab.
+  ASSERT_TRUE(tab->Close(true));
+
+  // Restore the closed tab.
+  RestoreTab(0, 1);
+  tab = browser->GetTab(1);
+  ASSERT_TRUE(tab.get());
+  ASSERT_TRUE(tab->WaitForTabToBeRestored(action_timeout_ms()));
+
+  // See if content is as expected.
+  EXPECT_TRUE(tab->FindInPage(std::wstring(L"webkit"), FWD, IGNORE_CASE, false,
+                              NULL));
+}
+
+// Restore tab with special URL in its navigation history, go back to that
+// entry and see that it loads properly. See http://crbug.com/31905
+TEST_F(TabRestoreUITest, RestoreTabWithSpecialURLOnBack) {
+  net::TestServer test_server(net::TestServer::TYPE_HTTP,
+                              FilePath(FILE_PATH_LITERAL("chrome/test/data")));
+  ASSERT_TRUE(test_server.Start());
+
+  const GURL http_url(test_server.GetURL("files/title1.html"));
+
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  CheckActiveWindow(browser.get());
+
+  // Navigate new tab to a special URL.
+  const GURL special_url(chrome::kAboutCreditsURL);
+  ASSERT_TRUE(browser->AppendTab(special_url));
+  scoped_refptr<TabProxy> tab(browser->GetActiveTab());
+  ASSERT_TRUE(tab.get());
+
+  // Then navigate to a normal URL.
+  ASSERT_TRUE(tab->NavigateToURL(http_url));
+
+  // Close the tab.
+  ASSERT_TRUE(tab->Close(true));
+
+  // Restore the closed tab.
+  RestoreTab(0, 1);
+  tab = browser->GetTab(1);
+  ASSERT_TRUE(tab.get());
+  ASSERT_TRUE(tab->WaitForTabToBeRestored(action_timeout_ms()));
+  GURL url;
+  ASSERT_TRUE(tab->GetCurrentURL(&url));
+  ASSERT_EQ(http_url, url);
+
+  // Go back, and see if content is as expected.
+  ASSERT_TRUE(tab->GoBack());
+  EXPECT_TRUE(tab->FindInPage(std::wstring(L"webkit"), FWD, IGNORE_CASE, false,
+                              NULL));
 }

@@ -15,7 +15,9 @@
     </script>
     <script type="text/javascript" src="js/api_page_generator.js"></script>
     <script type="text/javascript" src="js/bootstrap.js"></script>
-  <title>Tutorial: Google Analytics - Google Chrome Extensions - Google Code</title></head><body>  <div id="gc-container" class="labs">
+    <script type="text/javascript" src="js/sidebar.js"></script>
+  <title>Tutorial: Google Analytics - Google Chrome Extensions - Google Code</title></head>
+  <body>  <div id="gc-container" class="labs">
       <div id="devModeWarning">
         You are viewing extension docs in chrome via the 'file:' scheme: are you expecting to see local changes when you refresh? You'll need run chrome with --allow-file-access-from-files.
       </div>
@@ -35,6 +37,7 @@
                 <div style="display:inline">
                   (
                     <span class="optional">optional</span>
+                    <span class="enum">enumerated</span>
                     <span id="typeTemplate">
                       <span>
                         <a> Type</a>
@@ -44,6 +47,7 @@
                           array of <span><span></span></span>
                         </span>
                         <span>paramType</span>
+                        <span></span>
                       </span>
                     </span>
                   )
@@ -57,6 +61,15 @@
           <dd>
             Description of this parameter from the json schema.
           </dd>
+          <dd>
+            This parameter was added in version
+            <b><span></span></b>.
+            You must omit this parameter in earlier versions,
+            and you may omit it in any version.  If you require this
+            parameter, the manifest key
+            <a href="manifest.html#minimum_chrome_version">minimum_chrome_version</a>
+            can ensure that your extension won't be run in an earlier browser version.
+          </dd>
 
           <!-- OBJECT PROPERTIES -->
           <dd>
@@ -67,8 +80,23 @@
               </div>
             </dl>
           </dd>
+
+          <!-- FUNCTION PARAMETERS -->
+          <dd>
+            <div></div>
+          </dd>
+
         </div> <!-- /VALUE -->
 
+        <div id="functionParametersTemplate">
+          <h5>Parameters</h5>
+          <dl>
+            <div>
+              <div>
+              </div>
+            </div>
+          </dl>
+        </div>
       </div> <!-- /SUBTEMPLATES -->
 
   <a id="top"></a>
@@ -130,11 +158,13 @@
         <ul>
           <li><a href="getstarted.html">Getting Started</a></li>
           <li><a href="overview.html">Overview</a></li>
+          <li><a href="whats_new.html">What's New?</a></li>
           <li><h2><a href="devguide.html">Developer's Guide</a></h2>
             <ul>
               <li>Browser UI
                 <ul>
                   <li><a href="browserAction.html">Browser Actions</a></li>
+                  <li><a href="contextMenus.html">Context Menus</a></li>
                   <li><a href="notifications.html">Desktop Notifications</a></li>
                   <li><a href="options.html">Options Pages</a></li>
                   <li><a href="override.html">Override Pages</a></li>
@@ -145,8 +175,10 @@
               <li>Browser Interaction
                 <ul>
                   <li><a href="bookmarks.html">Bookmarks</a></li>
+                  <li><a href="cookies.html">Cookies</a></li>
                   <li><a href="events.html">Events</a></li>
                   <li><a href="history.html">History</a></li>
+                  <li><a href="management.html">Management</a></li>
                   <li><a href="tabs.html">Tabs</a></li>
                   <li><a href="windows.html">Windows</a></li>
                 </ul>
@@ -157,6 +189,7 @@
                   <li><a href="background_pages.html">Background Pages</a></li>
                   <li><a href="content_scripts.html">Content Scripts</a></li>
                   <li><a href="xhr.html">Cross-Origin XHR</a></li>
+                  <li><a href="idle.html">Idle</a></li>
                   <li><a href="i18n.html">Internationalization</a></li>
                   <li><a href="messaging.html">Message Passing</a></li>
                   <li><a href="npapi.html">NPAPI Plugins</a></li>
@@ -193,6 +226,9 @@
          <li><h2><a href="samples.html">Samples</a></h2></li>
         </ul>
       </div>
+      <script>
+        initToggles();
+      </script>
 
     <div class="g-unit" id="gc-pagecontent">
       <div id="pageTitle">
@@ -218,6 +254,13 @@
               </ol>
             </li><li>
               <a href="#toc-tracking-pageviews">Tracking page views</a>
+              <ol>
+                <li style="display: none; ">
+                  <a>h3Name</a>
+                </li>
+              </ol>
+            </li><li>
+              <a href="#toc-debugging">Monitoring analytics requests</a>
               <ol>
                 <li style="display: none; ">
                   <a>h3Name</a>
@@ -279,6 +322,11 @@
         </div>
         <!-- /TABLE OF CONTENTS -->
 
+        <!-- Standard content lead-in for experimental API pages -->
+        <p id="classSummary" style="display: none; ">
+          For information on how to use experimental APIs, see the <a href="experimental.html">chrome.experimental.* APIs</a> page.
+        </p>
+
         <!-- STATIC CONTENT PLACEHOLDER -->
         <div id="static"><div id="pageData-name" class="pageData">Tutorial: Google Analytics</div>
 <div id="pageData-showTOC" class="pageData">true</div>
@@ -335,7 +383,7 @@ extension.</p>
 <pre>(function() {
   var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
   <strong>ga.src = 'https://ssl.google-analytics.com/ga.js';</strong>
-  (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(ga);
+  var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
 })();
 </pre>
 
@@ -358,7 +406,7 @@ extension.</p>
      (function() {
        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
        ga.src = 'https://ssl.google-analytics.com/ga.js';
-       (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(ga);
+       var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
      })();
    &lt;/script&gt;
 
@@ -390,6 +438,21 @@ extension.</p>
 
 <p style="text-align: center">
   <img src="images/tut_analytics/screenshot02.png" style="width:300px;height:119px;" alt="Analytics view of the top content for a site.">
+</p>
+
+<h2 id="toc-debugging">Monitoring analytics requests</h2>
+
+<p>
+  To ensure that tracking data from your extension is being sent to Google
+  Analytics, you can inspect the pages of your extension in the
+  Developer Tools window (see the
+  <a href="tut_debugging.html">debugging tutorial</a> for more information).
+  As the following figure shows, you should see requests for a file named
+  <strong>__utm.gif</strong> if everything is set up correctly.
+</p>
+
+<p style="text-align: center">
+  <img src="images/tut_analytics/screenshot04.png" style="width:683px;height:418px;" alt="Developer Tools window showing the __utm.gif request">
 </p>
 
 <h2 id="toc-tracking-events">Tracking events</h2>
@@ -534,7 +597,7 @@ extension.</p>
                   </p>
 
                   <!-- Note: intentionally longer 80 columns -->
-                  <pre>function(<span>Type param1, Type param2</span>) <span class="subdued">{...}</span>);</pre>
+                  <pre>function(<span>Type param1, Type param2</span>) <span class="subdued">{...}</span>;</pre>
                   <dl>
                     <div>
                       <div>
@@ -544,6 +607,13 @@ extension.</p>
                   </div>
                 </div>
 
+                <!-- MIN_VERSION -->
+                <p>
+                  This function was added in version <b><span></span></b>.
+                  If you require this function, the manifest key
+                  <a href="manifest.html#minimum_chrome_version">minimum_chrome_version</a>
+                  can ensure that your extension won't be run in an earlier browser version.
+                </p>
               </div> <!-- /description -->
 
             </div>  <!-- /apiItem -->
@@ -588,7 +658,7 @@ extension.</p>
 
           <!-- TYPES -->
           <div class="apiGroup">
-            <a name="types.sort(sortByName)"></a>
+            <a name="types"></a>
             <h3 id="types">Types</h3>
 
             <!-- iterates over all types -->
@@ -616,7 +686,7 @@ extension.</p>
   <a rel="license" href="http://code.google.com/google_bsd_license.html">BSD License</a>.
   </p>
   <p>
-  ©2010 Google
+  ©2011 Google
   </p>
 
 <!-- begin analytics -->

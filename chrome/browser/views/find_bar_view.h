@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_VIEWS_FIND_BAR_VIEW_H_
 #define CHROME_BROWSER_VIEWS_FIND_BAR_VIEW_H_
+#pragma once
 
 #include "base/string16.h"
 #include "chrome/browser/find_notification_details.h"
@@ -76,7 +77,7 @@ class FindBarView : public DropdownBarView,
   void UpdateMatchCountAppearance(bool no_match);
 
   // Overridden from views::View.
-  virtual void ThemeChanged();
+  virtual void OnThemeChanged();
 
   // We use a hidden view to grab mouse clicks and bring focus to the find
   // text box. This is because although the find text box may look like it
@@ -101,6 +102,15 @@ class FindBarView : public DropdownBarView,
   // Returns the OS-specific view for the find bar that acts as an intermediary
   // between us and the TabContentsView.
   FindBarHost* find_bar_host() const;
+
+#if defined(OS_LINUX)
+  // In gtk we get changed signals if we programatically set the text. If we
+  // don't ignore them we run into problems. For example, switching tabs back
+  // to one with the find bar visible will cause a search to the next found
+  // text. Also if the find bar had been visible and then hidden and the user
+  // switches back, found text will be highlighted again.
+  bool ignore_contents_changed_;
+#endif
 
   // The controls in the window.
   views::Textfield* find_text_;

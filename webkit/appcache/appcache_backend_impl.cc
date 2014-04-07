@@ -12,6 +12,12 @@
 
 namespace appcache {
 
+AppCacheBackendImpl::AppCacheBackendImpl()
+    : service_(NULL),
+      frontend_(NULL),
+      process_id_(0) {
+}
+
 AppCacheBackendImpl::~AppCacheBackendImpl() {
   STLDeleteValues(&hosts_);
   if (service_)
@@ -61,6 +67,26 @@ bool AppCacheBackendImpl::SelectCache(
   return true;
 }
 
+bool AppCacheBackendImpl::SelectCacheForWorker(
+    int host_id, int parent_process_id, int parent_host_id) {
+  AppCacheHost* host = GetHost(host_id);
+  if (!host)
+    return false;
+
+  host->SelectCacheForWorker(parent_process_id, parent_host_id);
+  return true;
+}
+
+bool AppCacheBackendImpl::SelectCacheForSharedWorker(
+    int host_id, int64 appcache_id) {
+  AppCacheHost* host = GetHost(host_id);
+  if (!host)
+    return false;
+
+  host->SelectCacheForSharedWorker(appcache_id);
+  return true;
+}
+
 bool AppCacheBackendImpl::MarkAsForeignEntry(
     int host_id,
     const GURL& document_url,
@@ -101,6 +127,15 @@ bool AppCacheBackendImpl::SwapCacheWithCallback(
 
   host->SwapCacheWithCallback(callback, callback_param);
   return true;
+}
+
+void AppCacheBackendImpl::GetResourceList(
+    int host_id, std::vector<appcache::AppCacheResourceInfo>* resource_infos) {
+  AppCacheHost* host = GetHost(host_id);
+  if (!host)
+    return;
+
+  host->GetResourceList(resource_infos);
 }
 
 }  // namespace appcache

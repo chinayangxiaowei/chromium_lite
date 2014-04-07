@@ -21,6 +21,8 @@
 #include "base/scoped_comptr_win.h"
 #include "base/scoped_variant_win.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
+#include "base/utf_string_conversions.h"
 #include "grit/chrome_frame_resources.h"
 #include "chrome/common/url_constants.h"
 #include "chrome_frame/chrome_frame_plugin.h"
@@ -36,8 +38,6 @@
 // Include without path to make GYP build see it.
 #include "chrome_tab.h"  // NOLINT
 
-static const wchar_t kIexploreProfileName[] = L"iexplore";
-static const wchar_t kRundllProfileName[] = L"rundll32";
 
 // Connection point class to support firing IChromeFrameEvents (dispinterface).
 template<class T>
@@ -71,7 +71,7 @@ class ATL_NO_VTABLE ProxyDIChromeFrameEvents
                                     LOCALE_USER_DEFAULT, DISPATCH_METHOD,
                                     &disp_params, NULL, NULL, NULL);
         DLOG_IF(ERROR, FAILED(hr)) << "invoke(" << dispid << ") failed" <<
-            StringPrintf("0x%08X", hr);
+            base::StringPrintf("0x%08X", hr);
       }
     }
   }
@@ -174,13 +174,17 @@ class ATL_NO_VTABLE ChromeFrameActivexBase :  // NOLINT
 
  public:
   ChromeFrameActivexBase()
-      : ready_state_(READYSTATE_UNINITIALIZED) {
+      : ready_state_(READYSTATE_UNINITIALIZED),
+      url_fetcher_(new UrlmonUrlRequestManager()),
+      failed_to_fetch_in_place_frame_(false),
+      draw_sad_tab_(false),
+      prev_resource_instance_(NULL) {
     m_bWindowOnly = TRUE;
-    url_fetcher_.set_container(static_cast<IDispatch*>(this));
+    url_fetcher_->set_container(static_cast<IDispatch*>(this));
   }
 
   ~ChromeFrameActivexBase() {
-    url_fetcher_.set_container(NULL);
+    url_fetcher_->set_container(NULL);
   }
 
 DECLARE_OLEMISC_STATUS(OLEMISC_RECOMPOSEONRESIZE | OLEMISC_CANTLINKINSIDE |
@@ -205,6 +209,7 @@ BEGIN_COM_MAP(ChromeFrameActivexBase)
   COM_INTERFACE_ENTRY(IQuickActivate)
   COM_INTERFACE_ENTRY(IProvideClassInfo)
   COM_INTERFACE_ENTRY(IProvideClassInfo2)
+  COM_INTERFACE_ENTRY(IConnectionPointContainer)
   COM_INTERFACE_ENTRY_FUNC_BLIND(0, InterfaceNotSupported)
 END_COM_MAP()
 
@@ -240,10 +245,16 @@ END_MSG_MAP()
   DECLARE_PROTECT_FINAL_CONSTRUCT()
 
   virtual void SetResourceModule() {
+    DCHECK(NULL == prev_resource_instance_);
     SimpleResourceLoader* loader_instance = SimpleResourceLoader::instance();
     DCHECK(loader_instance);
-    HINSTANCE res_dll = loader_instance->GetResourceModuleHandle();
-    _AtlBaseModule.SetResourceInstance(res_dll);
+    HMODULE res_dll = loader_instance->GetResourceModuleHandle();
+    prev_resource_instance_ = _AtlBaseModule.SetResourceInstance(res_dll);
+  }
+
+  virtual void ClearResourceModule() {
+    _AtlBaseModule.SetResourceInstance(prev_resource_instance_);
+    prev_resource_instance_ = NULL;
   }
 
   HRESULT FinalConstruct() {
@@ -259,14 +270,21 @@ END_MSG_MAP()
       THREAD_SAFE_UMA_HISTOGRAM_CUSTOM_COUNTS("ChromeFrame.IEVersion",
                                               GetIEVersion(),
                                               IE_INVALID,
-                                              IE_8,
-                                              IE_8 + 1);
+                                              IE_9,
+                                              IE_9 + 1);
     }
+
     return S_OK;
   }
 
   void FinalRelease() {
     Uninitialize();
+
+    ClearResourceModule();
+  }
+
+  void ResetUrlRequestManager() {
+    url_fetcher_.reset(new UrlmonUrlRequestManager());
   }
 
   static HRESULT WINAPI InterfaceNotSupported(void* pv, REFIID riid, void** ppv,
@@ -299,7 +317,23 @@ END_MSG_MAP()
       NOTREACHED();
       return E_FAIL;
     }
-    // Don't draw anything.
+
+    if (draw_sad_tab_) {
+      // TODO(tommi): Draw a proper sad tab.
+      RECT rc = {0};
+      if (draw_info.prcBounds) {
+        rc.top = draw_info.prcBounds->top;
+        rc.bottom = draw_info.prcBounds->bottom;
+        rc.left = draw_info.prcBounds->left;
+        rc.right = draw_info.prcBounds->right;
+      } else {
+        GetClientRect(&rc);
+      }
+      ::DrawTextA(draw_info.hdcDraw, ":-(", -1, &rc,
+          DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    } else {
+      // Don't draw anything.
+    }
     return S_OK;
   }
 
@@ -311,6 +345,10 @@ END_MSG_MAP()
     doc_site_.Release();
     if (client_site) {
       doc_site_.QueryFrom(client_site);
+    }
+
+    if (client_site == NULL) {
+      in_place_frame_.Release();
     }
 
     return CComControlBase::IOleObject_SetClientSite(client_site);
@@ -443,9 +481,35 @@ END_MSG_MAP()
 
   virtual void OnAttachExternalTab(int tab_handle,
       const IPC::AttachExternalTabParams& params) {
-    std::string url;
-    url = StringPrintf("%lsattach_external_tab&%ls&%d", kChromeProtocolPrefix,
-        Uint64ToWString(params.cookie).c_str(), params.disposition);
+    std::wstring wide_url = url_;
+    GURL parsed_url(WideToUTF8(wide_url));
+
+    std::string scheme(parsed_url.scheme());
+    std::string host(parsed_url.host());
+
+    // If Chrome-Frame is presently navigated to an extension page, navigating
+    // the host to a url with scheme chrome-extension will fail, so we
+    // point the host at http:local_host.  Note that this is NOT the URL
+    // to which the host is directed.  It is only used as a temporary message
+    // passing mechanism between this CF instance, and the BHO that will
+    // be constructed in the new IE tab.
+    if (parsed_url.SchemeIs("chrome-extension") &&
+        is_privileged_) {
+      scheme = "http";
+      host = "local_host";
+    }
+
+    std::string url = base::StringPrintf(
+        "%hs://%hs?attach_external_tab&%I64u&%d&%d&%d&%d&%d&%hs",
+        scheme.c_str(),
+        host.c_str(),
+        params.cookie,
+        params.disposition,
+        params.dimensions.x(),
+        params.dimensions.y(),
+        params.dimensions.width(),
+        params.dimensions.height(),
+        params.profile_name.c_str());
     HostNavigate(GURL(url), GURL(), params.disposition);
   }
 
@@ -460,8 +524,13 @@ END_MSG_MAP()
   LRESULT OnCreate(UINT message, WPARAM wparam, LPARAM lparam,
                    BOOL& handled) {  // NO_LINT
     ModifyStyle(0, WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0);
-    url_fetcher_.put_notification_window(m_hWnd);
-    automation_client_->SetParentWindow(m_hWnd);
+    url_fetcher_->put_notification_window(m_hWnd);
+    if (automation_client_.get()) {
+      automation_client_->SetParentWindow(m_hWnd);
+    } else {
+      NOTREACHED() << "No automation server";
+      return -1;
+    }
     // Only fire the 'interactive' ready state if we aren't there already.
     if (ready_state_ < READYSTATE_INTERACTIVE) {
       ready_state_ = READYSTATE_INTERACTIVE;
@@ -478,6 +547,7 @@ END_MSG_MAP()
 
   // ChromeFrameDelegate override
   virtual void OnAutomationServerReady() {
+    draw_sad_tab_ = false;
     ChromeFramePlugin<T>::OnAutomationServerReady();
 
     ready_state_ = READYSTATE_COMPLETE;
@@ -487,6 +557,10 @@ END_MSG_MAP()
   // ChromeFrameDelegate override
   virtual void OnAutomationServerLaunchFailed(
       AutomationLaunchResult reason, const std::string& server_version) {
+    DLOG(INFO) << __FUNCTION__;
+    if (reason == AUTOMATION_SERVER_CRASHED)
+      draw_sad_tab_ = true;
+
     ready_state_ = READYSTATE_UNINITIALIZED;
     FireOnChanged(DISPID_READYSTATE);
   }
@@ -521,9 +595,6 @@ END_MSG_MAP()
     std::string src_utf8;
     WideToUTF8(src, SysStringLen(src), &src_utf8);
     std::string full_url = ResolveURL(GetDocumentUrl(), src_utf8);
-    if (full_url.empty()) {
-      return E_INVALIDARG;
-    }
 
     // We can initiate navigation here even if ready_state is not complete.
     // We do not have to set proxy, and AutomationClient will take care
@@ -851,7 +922,8 @@ END_MSG_MAP()
         hr = E_ACCESSDENIED;
       }
     } else {
-      Error(StringPrintf("Event type '%ls' not found", event_type).c_str());
+      Error(base::StringPrintf(
+          "Event type '%ls' not found", event_type).c_str());
       hr = E_INVALIDARG;
     }
 
@@ -901,7 +973,8 @@ END_MSG_MAP()
     DCHECK_GE(param_count, 0);
     DCHECK(params);
 
-    if (V_VT(&script_object) != VT_DISPATCH) {
+    if (V_VT(&script_object) != VT_DISPATCH ||
+        script_object.pdispVal == NULL) {
       return S_FALSE;
     }
 
@@ -935,15 +1008,40 @@ END_MSG_MAP()
     accel_message.hwnd = ::GetParent(m_hWnd);
     HRESULT hr = S_FALSE;
     ScopedComPtr<IBrowserService2> bs2;
-    // The code below explicitly checks for whether the
-    // IBrowserService2::v_MayTranslateAccelerator function is valid. On IE8
-    // there is one vtable ieframe!c_ImpostorBrowserService2Vtbl where this
-    // function entry is NULL which leads to a crash. We don't know under what
-    // circumstances this vtable is actually used though.
-    if (S_OK == DoQueryService(SID_STopLevelBrowser, m_spInPlaceSite,
-                               bs2.Receive()) && bs2.get() &&
-                               *(*(reinterpret_cast<void***>(bs2.get())) +
-                                   kMayTranslateAcceleratorOffset)) {
+
+    // For non-IE containers, we use the standard IOleInPlaceFrame contract
+    // (which IE does not support). For IE, we try to use IBrowserService2,
+    // but need special handling for IE8 (see below).
+    //
+    // We try to cache an IOleInPlaceFrame for our site.  If we fail, we don't
+    // retry, and we fall back to the IBrowserService2 and PostMessage
+    // approaches below.
+    if (!in_place_frame_ && !failed_to_fetch_in_place_frame_) {
+      ScopedComPtr<IOleInPlaceUIWindow> dummy_ui_window;
+      RECT dummy_pos_rect = {0};
+      RECT dummy_clip_rect = {0};
+      OLEINPLACEFRAMEINFO dummy_frame_info = {0};
+      if (FAILED(m_spInPlaceSite->GetWindowContext(in_place_frame_.Receive(),
+                                                   dummy_ui_window.Receive(),
+                                                   &dummy_pos_rect,
+                                                   &dummy_clip_rect,
+                                                   &dummy_frame_info))) {
+        failed_to_fetch_in_place_frame_ = true;
+      }
+    }
+
+    // The IBrowserService2 code below (second conditional) explicitly checks
+    // for whether the IBrowserService2::v_MayTranslateAccelerator function is
+    // valid. On IE8 there is one vtable ieframe!c_ImpostorBrowserService2Vtbl
+    // where this function entry is NULL which leads to a crash. We don't know
+    // under what circumstances this vtable is actually used though.
+    if (in_place_frame_) {
+      hr = in_place_frame_->TranslateAccelerator(&accel_message, 0);
+    } else if (S_OK == DoQueryService(
+        SID_STopLevelBrowser, m_spInPlaceSite,
+        bs2.Receive()) && bs2.get() &&
+        *(*(reinterpret_cast<void***>(bs2.get())) +
+        kMayTranslateAcceleratorOffset)) {
       hr = bs2->v_MayTranslateAccelerator(&accel_message);
     } else {
       // IE8 doesn't support IBrowserService2 unless you enable a special,
@@ -964,10 +1062,11 @@ END_MSG_MAP()
       // ieframe.dll.  I checked this by scanning for the address of
       // those functions inside the dll and found none, which means that
       // all calls to those functions are relative.
-      // So, for IE8, our approach is very simple.  Just post the message
-      // to our parent window and IE will pick it up if it's an
-      // accelerator. We won't know for sure if the browser handled the
-      // keystroke or not.
+      // So, for IE8 in certain cases, and for other containers that may
+      // support neither IOleInPlaceFrame or IBrowserService2 our approach
+      // is very simple.  Just post the message to our parent window and IE
+      // will pick it up if it's an accelerator. We won't know for sure if
+      // the browser handled the keystroke or not.
       ::PostMessage(accel_message.hwnd, accel_message.message,
                     accel_message.wParam, accel_message.lParam);
     }
@@ -986,7 +1085,7 @@ END_MSG_MAP()
       hr = AllowFrameToTranslateAccelerator(accel_message);
 
     DLOG(INFO) << __FUNCTION__ << " browser response: "
-               << StringPrintf("0x%08x", hr);
+               << base::StringPrintf("0x%08x", hr);
 
     if (hr != S_OK) {
       // The WM_SYSCHAR message is not processed by the IOleControlSite
@@ -1109,11 +1208,29 @@ END_MSG_MAP()
 
     web_browser2->Navigate2(url.AsInput(), &flags, &empty, &empty,
                             http_headers.AsInput());
-    web_browser2->put_Visible(VARIANT_TRUE);
+  }
+
+  void InitializeAutomationSettings() {
+    static const wchar_t kHandleTopLevelRequests[] = L"HandleTopLevelRequests";
+    static const wchar_t kUseChromeNetworking[] = L"UseChromeNetworking";
+
+    // Query and assign the top-level-request routing, and host networking
+    // settings from the registry.
+    bool top_level_requests = GetConfigBool(true, kHandleTopLevelRequests);
+    bool chrome_network = GetConfigBool(false, kUseChromeNetworking);
+    automation_client_->set_handle_top_level_requests(top_level_requests);
+    automation_client_->set_use_chrome_network(chrome_network);
   }
 
   ScopedBstr url_;
   ScopedComPtr<IOleDocumentSite> doc_site_;
+
+  // If false, we tried but failed to fetch an IOleInPlaceFrame from our host.
+  // Cached here so we don't try to fetch it every time if we keep failing.
+  bool failed_to_fetch_in_place_frame_;
+  bool draw_sad_tab_;
+
+  ScopedComPtr<IOleInPlaceFrame> in_place_frame_;
 
   // For more information on the ready_state_ property see:
   // http://msdn.microsoft.com/en-us/library/aa768179(VS.85).aspx#
@@ -1134,7 +1251,9 @@ END_MSG_MAP()
 
   // Handle network requests when host network stack is used. Passed to the
   // automation client on initialization.
-  UrlmonUrlRequestManager url_fetcher_;
+  scoped_ptr<UrlmonUrlRequestManager> url_fetcher_;
+
+  HINSTANCE prev_resource_instance_;
 };
 
 #endif  // CHROME_FRAME_CHROME_FRAME_ACTIVEX_BASE_H_

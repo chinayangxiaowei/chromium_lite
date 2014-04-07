@@ -8,6 +8,7 @@
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tabs/tab_strip_model.h"
 
 // Incognito profiles are not long-lived, so we always want to store a
 // non-incognito profile.
@@ -28,24 +29,23 @@ void HtmlDialogTabContentsDelegate::Detach() {
 
 Browser* HtmlDialogTabContentsDelegate::CreateBrowser() {
   DCHECK(profile_);
-  return Browser::Create(profile_);
+  // Look for an existing browser window matching profile_.
+  // TODO(stevenjb): This code is replaced with Browser::Navigate() in ToT.
+  Browser* browser = Browser::GetOrCreateTabbedBrowser(profile_);
+  if (!browser)
+    browser = Browser::Create(profile_);
+  return browser;
 }
 
 void HtmlDialogTabContentsDelegate::OpenURLFromTab(
     TabContents* source, const GURL& url, const GURL& referrer,
     WindowOpenDisposition disposition, PageTransition::Type transition) {
   if (profile_) {
-    // Force all links to open in a new window, ignoring the incoming
-    // disposition. This is a tabless, modal dialog so we can't just
-    // open it in the current frame.  Code adapted from
-    // Browser::OpenURLFromTab() with disposition == NEW_WINDOW.
     Browser* browser = CreateBrowser();
-    TabContents* new_contents =
-        browser->AddTabWithURL(url, referrer, transition, true, -1, false,
-                               NULL);
-    DCHECK(new_contents);
+    Browser::AddTabWithURLParams params(url, transition);
+    params.referrer = referrer;
+    browser->AddTabWithURL(&params);
     browser->window()->Show();
-    new_contents->Focus();
   }
 }
 
@@ -60,8 +60,6 @@ void HtmlDialogTabContentsDelegate::AddNewContents(
     WindowOpenDisposition disposition, const gfx::Rect& initial_pos,
     bool user_gesture) {
   if (profile_) {
-    // Force this to open in a new window, too.  Code adapted from
-    // Browser::AddNewContents() with disposition == NEW_WINDOW.
     Browser* browser = CreateBrowser();
     static_cast<TabContentsDelegate*>(browser)->
         AddNewContents(source, new_contents, NEW_FOREGROUND_TAB,
@@ -75,6 +73,11 @@ void HtmlDialogTabContentsDelegate::ActivateContents(TabContents* contents) {
   // this frame and we don't have a TabStripModel.
 }
 
+void HtmlDialogTabContentsDelegate::DeactivateContents(TabContents* contents) {
+  // We don't care about this notification (called when a user gesture triggers
+  // a call to window.blur()).
+}
+
 void HtmlDialogTabContentsDelegate::LoadingStateChanged(TabContents* source) {
   // We don't care about this notification.
 }
@@ -84,7 +87,7 @@ void HtmlDialogTabContentsDelegate::CloseContents(TabContents* source) {
   // cleanup somewhere else (namely, HtmlDialogUIDelegate::OnDialogClosed()).
 }
 
-bool HtmlDialogTabContentsDelegate::IsPopup(TabContents* source) {
+bool HtmlDialogTabContentsDelegate::IsPopup(const TabContents* source) const {
   // This needs to return true so that we are allowed to be resized by our
   // contents.
   return true;
@@ -101,7 +104,8 @@ void HtmlDialogTabContentsDelegate::UpdateTargetURL(TabContents* source,
   // Ignored.
 }
 
-bool HtmlDialogTabContentsDelegate::ShouldAddNavigationToHistory() const {
+bool HtmlDialogTabContentsDelegate::ShouldAddNavigationToHistory(
+    const history::HistoryAddPageArgs& add_page_args,
+    NavigationType::Type navigation_type) {
   return false;
 }
-

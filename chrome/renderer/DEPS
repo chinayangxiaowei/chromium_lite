@@ -4,20 +4,18 @@ include_rules = [
   "+grit",  # For generated headers
   "+media/audio",
   "+media/base",
+  "+media/ffmpeg",
   "+media/filters",
+  "+media/video",
   "+sandbox/src",
   "+skia/include",
-  "+webkit/default_plugin",
   "+webkit/extensions",
   "+webkit/glue",
   "+webkit/glue/plugins",
   "+v8/include",
   "+third_party/cld/encodings/compact_lang_det/win",
   "+third_party/npapi/bindings",
-  "+third_party/sqlite/preprocessed",
+  "+third_party/sqlite",
   "+third_party/tcmalloc",
-
-  # FIXME - refactor code and remove these dependencies
-  "+chrome/browser/net",
 ]
 

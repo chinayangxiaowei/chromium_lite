@@ -13,6 +13,7 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/download/download_util.h"
 #include "chrome/browser/download/drag_download_file.h"
 #include "chrome/browser/download/drag_download_util.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
@@ -20,7 +21,7 @@
 #include "chrome/browser/tab_contents/tab_contents_view_mac.h"
 #include "net/base/file_stream.h"
 #include "net/base/net_util.h"
-#import "third_party/mozilla/include/NSPasteboard+Utils.h"
+#import "third_party/mozilla/NSPasteboard+Utils.h"
 #include "webkit/glue/webdropdata.h"
 
 using base::SysNSStringToUTF8;
@@ -209,6 +210,12 @@ void PromiseWriterTask::Run() {
   }
 }
 
+- (NSPoint)convertScreenPoint:(NSPoint)screenPoint {
+  DCHECK([contentsView_ window]);
+  NSPoint basePoint = [[contentsView_ window] convertScreenToBase:screenPoint];
+  return [contentsView_ convertPoint:basePoint fromView:nil];
+}
+
 - (void)startDrag {
   NSEvent* currentEvent = [NSApp currentEvent];
 
@@ -250,7 +257,7 @@ void PromiseWriterTask::Run() {
     rvh->DragSourceSystemDragEnded();
 
     // Convert |screenPoint| to view coordinates and flip it.
-    NSPoint localPoint = [contentsView_ convertPoint:screenPoint fromView:nil];
+    NSPoint localPoint = [self convertScreenPoint:screenPoint];
     NSRect viewFrame = [contentsView_ frame];
     localPoint.y = viewFrame.size.height - localPoint.y;
     // Flip |screenPoint|.
@@ -270,7 +277,7 @@ void PromiseWriterTask::Run() {
   RenderViewHost* rvh = [contentsView_ tabContents]->render_view_host();
   if (rvh) {
     // Convert |screenPoint| to view coordinates and flip it.
-    NSPoint localPoint = [contentsView_ convertPoint:screenPoint fromView:nil];
+    NSPoint localPoint = [self convertScreenPoint:screenPoint];
     NSRect viewFrame = [contentsView_ frame];
     localPoint.y = viewFrame.size.height - localPoint.y;
     // Flip |screenPoint|.
@@ -361,11 +368,11 @@ void PromiseWriterTask::Run() {
               &downloadURL_)) {
         std::string contentDisposition =
             "attachment; filename=" + fileName.value();
-        DownloadManager::GenerateFileName(downloadURL_,
-                                          contentDisposition,
-                                          std::string(),
-                                          UTF16ToUTF8(mimeType),
-                                          &downloadFileName_);
+        download_util::GenerateFileName(downloadURL_,
+                                        contentDisposition,
+                                        std::string(),
+                                        UTF16ToUTF8(mimeType),
+                                        &downloadFileName_);
         fileExtension = SysUTF8ToNSString(downloadFileName_.Extension());
       }
     }

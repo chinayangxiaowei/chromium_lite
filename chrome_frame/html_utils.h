@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/gtest_prod_util.h"
 #include "net/http/http_util.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 // Forward declarations
 class HtmlUtilUnittest;
@@ -88,7 +88,7 @@ class HTMLScanner {
 
  private:
   friend class HtmlUtilUnittest;
-  FRIEND_TEST(HtmlUtilUnittest, BasicTest);
+  FRIEND_TEST_ALL_PREFIXES(HtmlUtilUnittest, BasicTest);
 
   // Given html_string which represents the remaining html range, this method
   // returns the next tag in tag and advances html_string to one character after
@@ -130,6 +130,9 @@ std::string AddChromeFrameToUserAgentValue(const std::string& value);
 // NOTE: The returned string includes the "User-Agent: " header name.
 std::string GetDefaultUserAgentHeaderWithCFTag();
 
+// Returns the User-Agent header as would be used by Chrome itself.
+const char* GetChromeUserAgent();
+
 // Fetches the default user agent string from urlmon.
 // This value does not include the "User-Agent:" header name.
 std::string GetDefaultUserAgent();
@@ -140,9 +143,14 @@ std::string GetDefaultUserAgent();
 const char* GetChromeFrameUserAgent();
 
 // Returns true if there is a frame busting header (other than the do-nothing
-// "X-Frame-Options: ALLOWALL") in the provided header block.
+// "X-Frame-Options: ALLOWALL") in the provided header block.  Note that there
+// may be multiple X-Frame-Options values specified; if there is one anywhere in
+// the list with a value other than ALLOWALL, this returns true.
 bool HasFrameBustingHeader(const std::string& http_headers);
 
+// Returns the header passed in from the headers list.
+std::string GetHttpHeaderFromHeaderList(const std::string& header_name,
+                                        const std::string& headers);
 }  // namespace http_utils
 
 #endif  // CHROME_FRAME_HTML_UTILS_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,19 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/renderer/extensions/bindings_utils.h"
 #include "chrome/renderer/extensions/event_bindings.h"
+#include "chrome/renderer/extensions/extension_process_bindings.h"
+#include "chrome/renderer/extensions/extension_renderer_info.h"
 #include "chrome/renderer/extensions/js_only_v8_extensions.h"
 #include "chrome/renderer/render_thread.h"
 #include "chrome/renderer/render_view.h"
+#include "googleurl/src/gurl.h"
 #include "grit/renderer_resources.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDataSource.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSecurityOrigin.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLRequest.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebView.h"
 
 using bindings_utils::CallFunctionInContext;
 using bindings_utils::ContextInfo;
@@ -27,7 +33,10 @@ using bindings_utils::GetStringResource;
 using bindings_utils::ExtensionBase;
 using bindings_utils::GetPendingRequestMap;
 using bindings_utils::PendingRequestMap;
+using WebKit::WebDataSource;
 using WebKit::WebFrame;
+using WebKit::WebSecurityOrigin;
+using WebKit::WebURL;
 
 static void ContextWeakReferenceCallback(v8::Persistent<v8::Value> context,
                                          void*);
@@ -131,14 +140,36 @@ class ExtensionImpl : public ExtensionBase {
 // Returns true if the extension running in the given |context| has sufficient
 // permissions to access the data.
 static bool HasSufficientPermissions(ContextInfo* context,
-                                     bool requires_incognito_access) {
-  return (!requires_incognito_access ||
-          ExtensionProcessBindings::HasIncognitoEnabled(context->extension_id));
+                                     bool cross_incognito,
+                                     const GURL& event_url) {
+  v8::Context::Scope context_scope(context->context);
+
+  bool cross_profile_ok = (!cross_incognito ||
+      ExtensionProcessBindings::AllowCrossIncognito(context->extension_id));
+  if (!cross_profile_ok)
+    return false;
+
+  // During unit tests, we might be invoked without a v8 context. In these
+  // cases, we only allow empty event_urls and short-circuit before retrieving
+  // the render view from the current context.
+  if (!event_url.is_valid())
+    return true;
+
+  RenderView* renderview = bindings_utils::GetRenderViewForCurrentContext();
+  bool url_permissions_ok = (!event_url.is_valid() ||
+      (renderview &&
+       GURL(renderview->webview()->mainFrame()->url()).SchemeIs(
+           chrome::kExtensionScheme) &&
+       renderview->webview()->mainFrame()->securityOrigin().canRequest(
+          event_url)));
+  return url_permissions_ok;
 }
 
 }  // namespace
 
 const char* EventBindings::kName = "chrome/EventBindings";
+const char* EventBindings::kTestingExtensionId =
+    "oooooooooooooooooooooooooooooooo";
 
 v8::Extension* EventBindings::Get() {
   static v8::Extension* extension = new ExtensionImpl();
@@ -225,21 +256,26 @@ void EventBindings::HandleContextCreated(WebFrame* frame, bool content_script) {
 
   // Figure out the frame's URL.  If the frame is loading, use its provisional
   // URL, since we get this notification before commit.
-  WebKit::WebDataSource* ds = frame->provisionalDataSource();
+  WebDataSource* ds = frame->provisionalDataSource();
   if (!ds)
     ds = frame->dataSource();
   GURL url = ds->request().url();
-  std::string extension_id;
-  if (url.SchemeIs(chrome::kExtensionScheme)) {
-    extension_id = url.host();
-  } else if (!content_script) {
-    // This context is a regular non-extension web page.  Ignore it.  We only
-    // care about content scripts and extension frames.
+  std::string extension_id = ExtensionRendererInfo::GetIdByURL(url);
+
+  if (!ExtensionRendererInfo::ExtensionBindingsAllowed(url) &&
+      !content_script) {
+    // This context is a regular non-extension web page or an unprivileged
+    // chrome app. Ignore it. We only care about content scripts and extension
+    // frames.
     // (Unless we're in unit tests, in which case we don't care what the URL
     // is).
     DCHECK(frame_context.IsEmpty() || frame_context == context);
     if (!in_unit_tests)
       return;
+
+    // For tests, we want the dispatchOnLoad to actually setup our bindings,
+    // so we give a fake extension id;
+    extension_id = kTestingExtensionId;
   }
 
   v8::Persistent<v8::Context> persistent_context =
@@ -262,9 +298,12 @@ void EventBindings::HandleContextCreated(WebFrame* frame, bool content_script) {
       new ContextInfo(persistent_context, extension_id, parent_frame,
                       render_view)));
 
-  v8::Handle<v8::Value> argv[1];
-  argv[0] = v8::String::New(extension_id.c_str());
-  CallFunctionInContext(context, "dispatchOnLoad", arraysize(argv), argv);
+  // Content scripts get initialized in user_script_slave.cc.
+  if (!content_script) {
+    v8::Handle<v8::Value> argv[1];
+    argv[0] = v8::String::New(extension_id.c_str());
+    CallFunctionInContext(context, "dispatchOnLoad", arraysize(argv), argv);
+  }
 }
 
 // static
@@ -299,7 +338,8 @@ void EventBindings::HandleContextDestroyed(WebFrame* frame) {
 void EventBindings::CallFunction(const std::string& function_name,
                                  int argc, v8::Handle<v8::Value>* argv,
                                  RenderView* render_view,
-                                 bool requires_incognito_access) {
+                                 bool cross_incognito,
+                                 const GURL& event_url) {
   // We copy the context list, because calling into javascript may modify it
   // out from under us. We also guard against deleted contexts by checking if
   // they have been cleared first.
@@ -313,7 +353,7 @@ void EventBindings::CallFunction(const std::string& function_name,
     if ((*it)->context.IsEmpty())
       continue;
 
-    if (!HasSufficientPermissions(it->get(), requires_incognito_access))
+    if (!HasSufficientPermissions(it->get(), cross_incognito, event_url))
       continue;
 
     v8::Handle<v8::Value> retval = CallFunctionInContext((*it)->context,

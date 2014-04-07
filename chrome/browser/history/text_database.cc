@@ -8,12 +8,12 @@
 
 #include "chrome/browser/history/text_database.h"
 
-#include "app/sql/connection.h"
 #include "app/sql/statement.h"
 #include "app/sql/transaction.h"
 #include "base/file_util.h"
 #include "base/histogram.h"
 #include "base/logging.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/diagnostics/sqlite_diagnostics.h"
@@ -42,8 +42,10 @@ namespace history {
 
 namespace {
 
-static const int kCurrentVersionNumber = 1;
-static const int kCompatibleVersionNumber = 1;
+// Version 1 uses FTS2 for index files.
+// Version 2 uses FTS3.
+static const int kCurrentVersionNumber = 2;
+static const int kCompatibleVersionNumber = 2;
 
 // Snippet computation relies on the index of the columns in the original
 // create statement. These are the 0-based indices (as strings) of the
@@ -105,8 +107,9 @@ TextDatabase::DBIdent TextDatabase::FileNameToID(const FilePath& file_path) {
     return 0;
   }
 
-  int year = StringToInt(suffix.substr(0, 4));
-  int month = StringToInt(suffix.substr(5, 2));
+  int year, month;
+  base::StringToInt(suffix.substr(0, 4), &year);
+  base::StringToInt(suffix.substr(5, 2), &month);
 
   return year * 100 + month;
 }
@@ -125,7 +128,7 @@ bool TextDatabase::Init() {
   // better performance (we're typically seek rather than bandwidth limited).
   // This only has an effect before any tables have been created, otherwise
   // this is a NOP. Must be a power of 2 and a max of 8192.
-  db_.set_page_size(2096);
+  db_.set_page_size(4096);
 
   // The default cache size is 2000 which give >8MB of data. Since we will often
   // have 2-3 of these objects, each with their own 8MB, this adds up very fast.
@@ -169,7 +172,7 @@ void TextDatabase::CommitTransaction() {
 bool TextDatabase::CreateTables() {
   // FTS table of page contents.
   if (!db_.DoesTableExist("pages")) {
-    if (!db_.Execute("CREATE VIRTUAL TABLE pages USING fts2("
+    if (!db_.Execute("CREATE VIRTUAL TABLE pages USING fts3("
                      "TOKENIZE icu,"
                      "url LONGVARCHAR,"
                      "title LONGVARCHAR,"
@@ -337,7 +340,7 @@ void TextDatabase::GetTextMatches(const std::string& query,
     Match& match = results->at(results->size() - 1);
     match.url.Swap(&url);
 
-    match.title = UTF8ToWide(statement.ColumnString(1));
+    match.title = statement.ColumnString16(1);
     match.time = base::Time::FromInternalValue(statement.ColumnInt64(2));
 
     // Extract any matches in the title.

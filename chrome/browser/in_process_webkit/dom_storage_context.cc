@@ -4,6 +4,8 @@
 
 #include "chrome/browser/in_process_webkit/dom_storage_context.h"
 
+#include <algorithm>
+
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/string_util.h"
@@ -55,42 +57,42 @@ DOMStorageContext::~DOMStorageContext() {
 }
 
 int64 DOMStorageContext::AllocateStorageAreaId() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   return ++last_storage_area_id_;
 }
 
 int64 DOMStorageContext::AllocateSessionStorageNamespaceId() {
-  if (ChromeThread::CurrentlyOn(ChromeThread::UI))
+  if (BrowserThread::CurrentlyOn(BrowserThread::UI))
     return ++last_session_storage_namespace_id_on_ui_thread_;
   return --last_session_storage_namespace_id_on_io_thread_;
 }
 
 int64 DOMStorageContext::CloneSessionStorage(int64 original_id) {
-  DCHECK(!ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   int64 clone_id = AllocateSessionStorageNamespaceId();
-  ChromeThread::PostTask(
-      ChromeThread::WEBKIT, FROM_HERE, NewRunnableFunction(
+  BrowserThread::PostTask(
+      BrowserThread::WEBKIT, FROM_HERE, NewRunnableFunction(
           &DOMStorageContext::CompleteCloningSessionStorage,
           this, original_id, clone_id));
   return clone_id;
 }
 
 void DOMStorageContext::RegisterStorageArea(DOMStorageArea* storage_area) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   int64 id = storage_area->id();
   DCHECK(!GetStorageArea(id));
   storage_area_map_[id] = storage_area;
 }
 
 void DOMStorageContext::UnregisterStorageArea(DOMStorageArea* storage_area) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   int64 id = storage_area->id();
   DCHECK(GetStorageArea(id));
   storage_area_map_.erase(id);
 }
 
 DOMStorageArea* DOMStorageContext::GetStorageArea(int64 id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   StorageAreaMap::iterator iter = storage_area_map_.find(id);
   if (iter == storage_area_map_.end())
     return NULL;
@@ -98,7 +100,7 @@ DOMStorageArea* DOMStorageContext::GetStorageArea(int64 id) {
 }
 
 void DOMStorageContext::DeleteSessionStorageNamespace(int64 namespace_id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   StorageNamespaceMap::iterator iter =
       storage_namespace_map_.find(namespace_id);
   if (iter == storage_namespace_map_.end())
@@ -110,7 +112,7 @@ void DOMStorageContext::DeleteSessionStorageNamespace(int64 namespace_id) {
 
 DOMStorageNamespace* DOMStorageContext::GetStorageNamespace(
     int64 id, bool allocation_allowed) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   StorageNamespaceMap::iterator iter = storage_namespace_map_.find(id);
   if (iter != storage_namespace_map_.end())
     return iter->second;
@@ -123,7 +125,7 @@ DOMStorageNamespace* DOMStorageContext::GetStorageNamespace(
 
 void DOMStorageContext::RegisterDispatcherHost(
     DOMStorageDispatcherHost* dispatcher_host) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   DCHECK(dispatcher_host_set_.find(dispatcher_host) ==
          dispatcher_host_set_.end());
   dispatcher_host_set_.insert(dispatcher_host);
@@ -131,7 +133,7 @@ void DOMStorageContext::RegisterDispatcherHost(
 
 void DOMStorageContext::UnregisterDispatcherHost(
     DOMStorageDispatcherHost* dispatcher_host) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   DCHECK(dispatcher_host_set_.find(dispatcher_host) !=
          dispatcher_host_set_.end());
   dispatcher_host_set_.erase(dispatcher_host);
@@ -139,7 +141,7 @@ void DOMStorageContext::UnregisterDispatcherHost(
 
 const DOMStorageContext::DispatcherHostSet*
 DOMStorageContext::GetDispatcherHostSet() const {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   return &dispatcher_host_set_;
 }
 
@@ -156,7 +158,8 @@ void DOMStorageContext::PurgeMemory() {
 
 void DOMStorageContext::DeleteDataModifiedSince(
     const base::Time& cutoff,
-    const char* url_scheme_to_be_skipped) {
+    const char* url_scheme_to_be_skipped,
+    const std::vector<string16>& protected_origins) {
   // Make sure that we don't delete a database that's currently being accessed
   // by unloading all of the databases temporarily.
   PurgeMemory();
@@ -166,11 +169,18 @@ void DOMStorageContext::DeleteDataModifiedSince(
       file_util::FileEnumerator::FILES);
   for (FilePath path = file_enumerator.Next(); !path.value().empty();
        path = file_enumerator.Next()) {
-    scoped_ptr<WebKit::WebSecurityOrigin> web_security_origin(
+    WebKit::WebSecurityOrigin web_security_origin =
         WebKit::WebSecurityOrigin::createFromDatabaseIdentifier(
-            webkit_glue::FilePathToWebString(path.BaseName())));
-    if (EqualsASCII(web_security_origin->protocol(), url_scheme_to_be_skipped))
+            webkit_glue::FilePathToWebString(path.BaseName()));
+    if (EqualsASCII(web_security_origin.protocol(), url_scheme_to_be_skipped))
       continue;
+
+    std::vector<string16>::const_iterator find_iter =
+        std::find(protected_origins.begin(), protected_origins.end(),
+            web_security_origin.databaseIdentifier());
+    if (find_iter != protected_origins.end())
+      continue;
+
     file_util::FileEnumerator::FindInfo find_info;
     file_enumerator.GetFindInfo(&find_info);
     if (file_util::HasFileBeenModifiedSince(find_info, cutoff))
@@ -179,24 +189,24 @@ void DOMStorageContext::DeleteDataModifiedSince(
 }
 
 void DOMStorageContext::DeleteLocalStorageFile(const FilePath& file_path) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
 
   // Make sure that we don't delete a database that's currently being accessed
   // by unloading all of the databases temporarily.
   // TODO(bulach): both this method and DeleteDataModifiedSince could purge
   // only the memory used by the specific file instead of all memory at once.
-  // See http://code.google.com/p/chromium/issues/detail?id=32000
+  // See http://crbug.com/32000
   PurgeMemory();
   file_util::Delete(file_path, false);
 }
 
 void DOMStorageContext::DeleteLocalStorageForOrigin(const string16& origin_id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   DeleteLocalStorageFile(GetLocalStorageFilePath(origin_id));
 }
 
 void DOMStorageContext::DeleteAllLocalStorageFiles() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
 
   // Make sure that we don't delete a database that's currently being accessed
   // by unloading all of the databases temporarily.
@@ -235,7 +245,7 @@ DOMStorageNamespace* DOMStorageContext::CreateSessionStorage(
 
 void DOMStorageContext::RegisterStorageNamespace(
     DOMStorageNamespace* storage_namespace) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   int64 id = storage_namespace->id();
   DCHECK(!GetStorageNamespace(id, false));
   storage_namespace_map_[id] = storage_namespace;
@@ -244,7 +254,7 @@ void DOMStorageContext::RegisterStorageNamespace(
 /* static */
 void DOMStorageContext::CompleteCloningSessionStorage(
     DOMStorageContext* context, int64 existing_id, int64 clone_id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
   DOMStorageNamespace* existing_namespace =
       context->GetStorageNamespace(existing_id, false);
   // If nothing exists, then there's nothing to clone.
@@ -260,10 +270,10 @@ void DOMStorageContext::ClearLocalState(const FilePath& profile_path,
   for (FilePath file_path = file_enumerator.Next(); !file_path.empty();
        file_path = file_enumerator.Next()) {
     if (file_path.Extension() == kLocalStorageExtension) {
-      scoped_ptr<WebKit::WebSecurityOrigin> web_security_origin(
+      WebKit::WebSecurityOrigin web_security_origin =
           WebKit::WebSecurityOrigin::createFromDatabaseIdentifier(
-              webkit_glue::FilePathToWebString(file_path.BaseName())));
-      if (!EqualsASCII(web_security_origin->protocol(),
+              webkit_glue::FilePathToWebString(file_path.BaseName()));
+      if (!EqualsASCII(web_security_origin.protocol(),
                        url_scheme_to_be_skipped))
         file_util::Delete(file_path, false);
     }

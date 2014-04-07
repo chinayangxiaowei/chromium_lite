@@ -4,13 +4,14 @@
 
 #ifndef CHROME_BROWSER_SESSIONS_SESSION_TYPES_H_
 #define CHROME_BROWSER_SESSIONS_SESSION_TYPES_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
 #include "base/stl_util-inl.h"
 #include "base/string16.h"
-#include "chrome/browser/browser.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/common/page_transition_types.h"
 #include "gfx/rect.h"
@@ -30,36 +31,27 @@ class TabNavigation {
     HAS_POST_DATA = 1
   };
 
-  TabNavigation()
-      : transition_(PageTransition::TYPED),
-        type_mask_(0),
-        index_(-1) {
-  }
-
+  TabNavigation();
   TabNavigation(int index,
-                const GURL& url,
+                const GURL& virtual_url,
                 const GURL& referrer,
                 const string16& title,
                 const std::string& state,
-                PageTransition::Type transition)
-      : url_(url),
-        referrer_(referrer),
-        title_(title),
-        state_(state),
-        transition_(transition),
-        type_mask_(0),
-        index_(index) {}
+                PageTransition::Type transition);
+  TabNavigation(const TabNavigation& tab);
+  ~TabNavigation();
+  TabNavigation& operator=(const TabNavigation& tab);
 
   // Converts this TabNavigation into a NavigationEntry with a page id of
   // |page_id|. The caller owns the returned NavigationEntry.
-  NavigationEntry* ToNavigationEntry(int page_id) const;
+  NavigationEntry* ToNavigationEntry(int page_id, Profile* profile) const;
 
   // Resets this TabNavigation from |entry|.
   void SetFromNavigationEntry(const NavigationEntry& entry);
 
-  // URL of the page.
-  void set_url(const GURL& url) { url_ = url; }
-  const GURL& url() const { return url_; }
+  // Virtual URL of the page. See NavigationEntry::virtual_url() for details.
+  void set_virtual_url(const GURL& url) { virtual_url_ = url; }
+  const GURL& virtual_url() const { return virtual_url_; }
 
   // The referrer.
   const GURL& referrer() const { return referrer_; }
@@ -87,12 +79,12 @@ class TabNavigation {
   // This is used when determining the selected TabNavigation and only useful
   // by BaseSessionService and SessionService.
   void set_index(int index) { index_ = index; }
-  int index() { return index_; }
+  int index() const { return index_; }
 
  private:
   friend class BaseSessionService;
 
-  GURL url_;
+  GURL virtual_url_;
   GURL referrer_;
   string16 title_;
   std::string state_;
@@ -106,10 +98,8 @@ class TabNavigation {
 
 // SessionTab corresponds to a NavigationController.
 struct SessionTab {
-  SessionTab()
-      : tab_visual_index(-1),
-        current_navigation_index(-1),
-        pinned(false) { }
+  SessionTab();
+  ~SessionTab();
 
   // Unique id of the window.
   SessionID window_id;
@@ -137,7 +127,7 @@ struct SessionTab {
   bool pinned;
 
   // If non-empty, this tab is an app tab and this is the id of the extension.
-  std::string app_extension_id;
+  std::string extension_app_id;
 
   std::vector<TabNavigation> navigations;
 
@@ -149,12 +139,8 @@ struct SessionTab {
 
 // Describes a saved window.
 struct SessionWindow {
-  SessionWindow()
-      : selected_tab_index(-1),
-        type(Browser::TYPE_NORMAL),
-        is_constrained(true),
-        is_maximized(false) {}
-  ~SessionWindow() { STLDeleteElements(&tabs); }
+  SessionWindow();
+  ~SessionWindow();
 
   // Identifier of the window.
   SessionID window_id;
@@ -173,7 +159,8 @@ struct SessionWindow {
 
   // Type of the browser. Currently we only store browsers of type
   // TYPE_NORMAL and TYPE_POPUP.
-  Browser::Type type;
+  // This would be Browser::Type, but that would cause a circular dependency.
+  int type;
 
   // If true, the window is constrained.
   //
@@ -191,4 +178,16 @@ struct SessionWindow {
   DISALLOW_COPY_AND_ASSIGN(SessionWindow);
 };
 
+// Defines a foreign session for session sync.  A foreign session is a session
+// on a remote chrome instance.
+struct ForeignSession {
+  ForeignSession();
+  ~ForeignSession();
+
+  // Unique tag for each session.
+  std::string foreign_tession_tag;
+  std::vector<SessionWindow*> windows;
+};
+
 #endif  // CHROME_BROWSER_SESSIONS_SESSION_TYPES_H_
+

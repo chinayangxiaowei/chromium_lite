@@ -6,6 +6,7 @@
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
 #include "base/time.h"
+#include "media/audio/audio_manager.h"
 #include "media/audio/fake_audio_output_stream.h"
 #include "media/audio/simple_sources.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -37,7 +38,7 @@ TEST(SimpleSourcesTest, PushSourceSmallerWrite) {
   // Choose two prime numbers for read and write sizes.
   const uint32 kWriteSize = 283;
   const uint32 kReadSize = 293;
-  scoped_array<char> read_data(new char[kReadSize]);
+  scoped_array<uint8> read_data(new uint8[kReadSize]);
 
   // Create a PushSource.
   PushSource push_source;
@@ -53,7 +54,8 @@ TEST(SimpleSourcesTest, PushSourceSmallerWrite) {
   // Read everything from the push source.
   for (uint32 i = 0; i < kDataSize; i += kReadSize) {
     uint32 size = std::min(kDataSize - i , kReadSize);
-    EXPECT_EQ(size, push_source.OnMoreData(NULL, read_data.get(), size, 0));
+    EXPECT_EQ(size, push_source.OnMoreData(NULL, read_data.get(), size,
+                                           AudioBuffersState()));
     EXPECT_EQ(0, memcmp(data.get() + i, read_data.get(), size));
   }
   EXPECT_EQ(0u, push_source.UnProcessedBytes());
@@ -71,14 +73,14 @@ TEST(SimpleSources, SineWaveAudio16MonoTest) {
   const int freq = 200;
 
   SineWaveAudioSource source(SineWaveAudioSource::FORMAT_16BIT_LINEAR_PCM, 1,
-                             freq, AudioManager::kTelephoneSampleRate);
+                             freq, AudioParameters::kTelephoneSampleRate);
 
   AudioManager* audio_man = AudioManager::GetAudioManager();
   ASSERT_TRUE(NULL != audio_man);
-  AudioOutputStream* oas =
-      audio_man->MakeAudioStream(AudioManager::AUDIO_MOCK, 1,
-                                 AudioManager::kTelephoneSampleRate,
-                                 bytes_per_sample * 2);
+  AudioParameters params(
+      AudioParameters::AUDIO_MOCK, 1, AudioParameters::kTelephoneSampleRate,
+      bytes_per_sample * 2);
+  AudioOutputStream* oas = audio_man->MakeAudioOutputStream(params);
   ASSERT_TRUE(NULL != oas);
   EXPECT_TRUE(oas->Open(samples * bytes_per_sample));
 
@@ -92,7 +94,7 @@ TEST(SimpleSources, SineWaveAudio16MonoTest) {
           FakeAudioOutputStream::GetLastFakeStream()->buffer());
   ASSERT_TRUE(NULL != last_buffer);
 
-  uint32 half_period = AudioManager::kTelephoneSampleRate / (freq * 2);
+  uint32 half_period = AudioParameters::kTelephoneSampleRate / (freq * 2);
 
   // Spot test positive incursion of sine wave.
   EXPECT_EQ(0, last_buffer[0]);

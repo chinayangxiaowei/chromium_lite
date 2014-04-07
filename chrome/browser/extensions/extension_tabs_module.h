@@ -4,11 +4,13 @@
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_TABS_MODULE_H__
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_TABS_MODULE_H__
+#pragma once
 
 #include <string>
 
 #include "chrome/browser/extensions/extension_function.h"
 #include "chrome/common/notification_service.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 
 class BackingStore;
@@ -21,17 +23,9 @@ class TabStripModel;
 
 class ExtensionTabUtil {
  public:
-  // Possible tab states.  These states are used to calculate the "status"
-  // property of the Tab object that is used in the extension tab API.
-  enum TabStatus {
-    TAB_LOADING,  // Waiting for the DOM to load.
-    TAB_COMPLETE  // Tab loading and rendering is complete.
-  };
-
   static int GetWindowId(const Browser* browser);
   static int GetTabId(const TabContents* tab_contents);
-  static TabStatus GetTabStatus(const TabContents* tab_contents);
-  static std::string GetTabStatusText(TabStatus status);
+  static std::string GetTabStatusText(bool is_loading);
   static int GetWindowIdOfTab(const TabContents* tab_contents);
   static ListValue* CreateTabList(const Browser* browser);
   static DictionaryValue* CreateTabValue(const TabContents* tab_contents);
@@ -94,6 +88,11 @@ class GetTabFunction : public SyncExtensionFunction {
   ~GetTabFunction() {}
   virtual bool RunImpl();
   DECLARE_EXTENSION_FUNCTION_NAME("tabs.get")
+};
+class GetCurrentTabFunction : public SyncExtensionFunction {
+  ~GetCurrentTabFunction() {}
+  virtual bool RunImpl();
+  DECLARE_EXTENSION_FUNCTION_NAME("tabs.getCurrent")
 };
 class GetSelectedTabFunction : public SyncExtensionFunction {
   ~GetSelectedTabFunction() {}

@@ -11,7 +11,10 @@
 #include "base/file_util.h"
 #include "base/message_loop.h"
 #include "base/process_util.h"
+#include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/trace_event.h"
+#include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "gfx/native_widget_types.h"
 #include "gfx/point.h"
@@ -19,20 +22,28 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebAccessibilityObject.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebConsoleMessage.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebContextMenuData.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebDeviceOrientationClientMock.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebData.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDataSource.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDragData.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebHistoryItem.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebImage.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebFileError.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebFileSystemCallbacks.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKitClient.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebNode.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebNotificationPresenter.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebPluginParams.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebPoint.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebPopupMenu.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebRange.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebScreenInfo.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSpeechInputController.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSpeechInputControllerMock.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSpeechInputListener.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebStorageNamespace.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
@@ -40,19 +51,26 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebURLRequest.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLResponse.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebView.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebWindowFeatures.h"
 #include "webkit/appcache/web_application_cache_host_impl.h"
 #include "webkit/glue/glue_serialize.h"
+#include "webkit/glue/media/buffered_data_source.h"
+#include "webkit/glue/media/media_resource_loader_bridge_factory.h"
+#include "webkit/glue/media/simple_data_source.h"
+#include "webkit/glue/media/video_renderer_impl.h"
 #include "webkit/glue/plugins/webplugin_impl.h"
 #include "webkit/glue/plugins/plugin_list.h"
 #include "webkit/glue/plugins/webplugin_delegate_impl.h"
 #include "webkit/glue/webdropdata.h"
-#include "webkit/glue/webpreferences.h"
 #include "webkit/glue/webkit_glue.h"
+#include "webkit/glue/webmediaplayer_impl.h"
+#include "webkit/glue/webpreferences.h"
 #include "webkit/glue/window_open_disposition.h"
-#include "webkit/support/webkit_support.h"
 #include "webkit/tools/test_shell/accessibility_controller.h"
 #include "webkit/tools/test_shell/mock_spellcheck.h"
+#include "webkit/tools/test_shell/notification_presenter.h"
 #include "webkit/tools/test_shell/simple_appcache_system.h"
+#include "webkit/tools/test_shell/test_geolocation_service.h"
 #include "webkit/tools/test_shell/test_navigation_controller.h"
 #include "webkit/tools/test_shell/test_shell.h"
 #include "webkit/tools/test_shell/test_web_worker.h"
@@ -75,6 +93,8 @@ using WebKit::WebDataSource;
 using WebKit::WebDragData;
 using WebKit::WebDragOperationsMask;
 using WebKit::WebEditingAction;
+using WebKit::WebFileSystem;
+using WebKit::WebFileSystemCallbacks;
 using WebKit::WebFormElement;
 using WebKit::WebFrame;
 using WebKit::WebHistoryItem;
@@ -84,6 +104,7 @@ using WebKit::WebMediaPlayerClient;
 using WebKit::WebNavigationType;
 using WebKit::WebNavigationPolicy;
 using WebKit::WebNode;
+using WebKit::WebNotificationPresenter;
 using WebKit::WebPlugin;
 using WebKit::WebPluginParams;
 using WebKit::WebPoint;
@@ -103,6 +124,7 @@ using WebKit::WebURLError;
 using WebKit::WebURLRequest;
 using WebKit::WebURLResponse;
 using WebKit::WebWidget;
+using WebKit::WebWindowFeatures;
 using WebKit::WebWorker;
 using WebKit::WebWorkerClient;
 using WebKit::WebView;
@@ -126,8 +148,10 @@ std::string UrlSuitableForTestResult(const std::string& url) {
   if (url.empty() || std::string::npos == url.find("file://"))
     return url;
 
+  // TODO: elsewhere in the codebase we use net::FormatUrl() for this.
   std::string filename =
-      WideToUTF8(file_util::GetFilenameFromPath(UTF8ToWide(url)));
+      WideToUTF8(FilePath::FromWStringHack(UTF8ToWide(url))
+                     .BaseName().ToWStringHack());
   if (filename.empty())
     return "file:";  // A WebKit test has this in its expected output.
   return filename;
@@ -153,7 +177,7 @@ std::string DescriptionSuitableForTestResult(const std::string& url) {
 // Adds a file called "DRTFakeFile" to |data_object| (CF_HDROP).  Use to fake
 // dragging a file.
 void AddDRTFakeFileToDataObject(WebDragData* drag_data) {
-  drag_data->appendToFileNames(WebString::fromUTF8("DRTFakeFile"));
+  drag_data->appendToFilenames(WebString::fromUTF8("DRTFakeFile"));
 }
 
 // Get a debugging string from a WebNavigationType.
@@ -187,9 +211,9 @@ std::string GetResponseDescription(const WebURLResponse& response) {
     return "(null)";
 
   const std::string url = GURL(response.url()).possibly_invalid_spec();
-  return StringPrintf("<NSURLResponse %s, http status code %d>",
-                      DescriptionSuitableForTestResult(url).c_str(),
-                      response.httpStatusCode());
+  return base::StringPrintf("<NSURLResponse %s, http status code %d>",
+                            DescriptionSuitableForTestResult(url).c_str(),
+                            response.httpStatusCode());
 }
 
 std::string GetErrorDescription(const WebURLError& error) {
@@ -217,7 +241,7 @@ std::string GetErrorDescription(const WebURLError& error) {
     DLOG(WARNING) << "Unknown error domain";
   }
 
-  return StringPrintf("<NSError domain %s, code %d, failing URL \"%s\">",
+  return base::StringPrintf("<NSError domain %s, code %d, failing URL \"%s\">",
       domain.c_str(), code, error.unreachableURL.spec().data());
 }
 
@@ -241,13 +265,13 @@ std::string GetRangeDescription(const WebRange& range) {
   int exception = 0;
   std::string str = "range from ";
   int offset = range.startOffset();
-  str.append(IntToString(offset));
+  str.append(base::IntToString(offset));
   str.append(" of ");
   WebNode container = range.startContainer(exception);
   str.append(GetNodeDescription(container, exception));
   str.append(" to ");
   offset = range.endOffset();
-  str.append(IntToString(offset));
+  str.append(base::IntToString(offset));
   str.append(" of ");
   container = range.endContainer(exception);
   str.append(GetNodeDescription(container, exception));
@@ -298,9 +322,17 @@ void TestWebViewDelegate::SetUserStyleSheetLocation(const GURL& location) {
   prefs->Apply(shell_->webView());
 }
 
-// WebViewClient -------------------------------------------------------------
+void TestWebViewDelegate::SetAuthorAndUserStylesEnabled(bool is_enabled) {
+  WebPreferences* prefs = shell_->GetWebPreferences();
+  prefs->author_and_user_styles_enabled = is_enabled;
+  prefs->Apply(shell_->webView());
+}
 
-WebView* TestWebViewDelegate::createView(WebFrame* creator) {
+// WebViewClient -------------------------------------------------------------
+WebView* TestWebViewDelegate::createView(
+    WebFrame* creator,
+    const WebWindowFeatures& window_features,
+    const WebString& frame_name) {
   return shell_->CreateWebView();
 }
 
@@ -310,8 +342,11 @@ WebWidget* TestWebViewDelegate::createPopupMenu(WebPopupType popup_type) {
   return shell_->CreatePopupWidget();
 }
 
-WebStorageNamespace* TestWebViewDelegate::createSessionStorageNamespace() {
-  return WebKit::WebStorageNamespace::createSessionStorageNamespace();
+WebStorageNamespace* TestWebViewDelegate::createSessionStorageNamespace(
+    unsigned quota) {
+  // Enforce quota, ignoring the parameter from WebCore as in Chrome.
+  return WebKit::WebStorageNamespace::createSessionStorageNamespace(
+      WebStorageNamespace::m_sessionStorageQuota);
 }
 
 void TestWebViewDelegate::didAddMessageToConsole(
@@ -548,14 +583,9 @@ void TestWebViewDelegate::setStatusText(const WebString& text) {
   if (WebKit::layoutTestMode() &&
       shell_->layout_test_controller()->ShouldDumpStatusCallbacks()) {
     // When running tests, write to stdout.
-    printf("UI DELEGATE STATUS CALLBACK: setStatusText:%s\n", text.utf8().data());
+    printf("UI DELEGATE STATUS CALLBACK: setStatusText:%s\n",
+           text.utf8().data());
   }
-}
-
-void TestWebViewDelegate::startDragging(
-    const WebPoint& from, const WebDragData& data,
-    WebDragOperationsMask allowed_mask) {
-  startDragging(data, allowed_mask, WebImage(), WebPoint());
 }
 
 void TestWebViewDelegate::startDragging(
@@ -580,7 +610,8 @@ void TestWebViewDelegate::startDragging(
     //if (!drag_delegate_)
     //  drag_delegate_ = new TestDragDelegate(shell_->webViewWnd(),
     //                                        shell_->webView());
-    //const DWORD ok_effect = DROPEFFECT_COPY | DROPEFFECT_LINK | DROPEFFECT_MOVE;
+    //const DWORD ok_effect = DROPEFFECT_COPY | DROPEFFECT_LINK |
+    //                        DROPEFFECT_MOVE;
     //DWORD effect;
     //HRESULT res = DoDragDrop(drop_data.data_object, drag_delegate_.get(),
     //                         ok_effect, &effect);
@@ -609,6 +640,24 @@ void TestWebViewDelegate::focusAccessibilityObject(
   shell_->accessibility_controller()->SetFocusedElement(object);
 }
 
+WebNotificationPresenter* TestWebViewDelegate::notificationPresenter() {
+  return shell_->notification_presenter();
+}
+
+WebKit::WebGeolocationService* TestWebViewDelegate::geolocationService() {
+  return GetTestGeolocationService();
+}
+
+WebKit::WebDeviceOrientationClient*
+TestWebViewDelegate::deviceOrientationClient() {
+  return shell_->device_orientation_client_mock();
+}
+
+WebKit::WebSpeechInputController* TestWebViewDelegate::speechInputController(
+    WebKit::WebSpeechInputListener* listener) {
+  return shell_->CreateSpeechInputControllerMock(listener);
+}
+
 // WebWidgetClient -----------------------------------------------------------
 
 void TestWebViewDelegate::didInvalidateRect(const WebRect& rect) {
@@ -620,6 +669,11 @@ void TestWebViewDelegate::didScrollRect(int dx, int dy,
                                         const WebRect& clip_rect) {
   if (WebWidgetHost* host = GetWidgetHost())
     host->DidScrollRect(dx, dy, clip_rect);
+}
+
+void TestWebViewDelegate::scheduleComposite() {
+  if (WebWidgetHost* host = GetWidgetHost())
+    host->ScheduleComposite();
 }
 
 void TestWebViewDelegate::didFocus() {
@@ -643,7 +697,16 @@ WebScreenInfo TestWebViewDelegate::screenInfo() {
 
 WebPlugin* TestWebViewDelegate::createPlugin(
     WebFrame* frame, const WebPluginParams& params) {
-  return new webkit_glue::WebPluginImpl(frame, params, AsWeakPtr());
+  bool allow_wildcard = true;
+  WebPluginInfo info;
+  std::string actual_mime_type;
+  if (!NPAPI::PluginList::Singleton()->GetPluginInfo(
+          params.url, params.mimeType.utf8(), allow_wildcard, &info,
+          &actual_mime_type) || !info.enabled)
+    return NULL;
+
+  return new webkit_glue::WebPluginImpl(
+      frame, params, info.path, actual_mime_type, AsWeakPtr());
 }
 
 WebWorker* TestWebViewDelegate::createWorker(
@@ -653,7 +716,26 @@ WebWorker* TestWebViewDelegate::createWorker(
 
 WebMediaPlayer* TestWebViewDelegate::createMediaPlayer(
     WebFrame* frame, WebMediaPlayerClient* client) {
-  return webkit_support::CreateMediaPlayer(frame, client);
+  scoped_refptr<media::FilterFactoryCollection> factory =
+      new media::FilterFactoryCollection();
+
+  appcache::WebApplicationCacheHostImpl* appcache_host =
+      appcache::WebApplicationCacheHostImpl::FromFrame(frame);
+
+  // TODO(hclam): this is the same piece of code as in RenderView, maybe they
+  // should be grouped together.
+  webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory =
+      new webkit_glue::MediaResourceLoaderBridgeFactory(
+          GURL(frame->url()),  // referrer
+          "null",  // frame origin
+          "null",  // main_frame_origin
+          base::GetCurrentProcId(),
+          appcache_host ? appcache_host->host_id() : appcache::kNoHostId,
+          0);
+
+  return new webkit_glue::WebMediaPlayerImpl(
+      client, factory, bridge_factory, false,
+      new webkit_glue::VideoRendererImpl::FactoryFactory(false));
 }
 
 WebApplicationCacheHost* TestWebViewDelegate::createApplicationCacheHost(
@@ -818,7 +900,7 @@ void TestWebViewDelegate::didFailProvisionalLoad(
   bool replace = extra_data && extra_data->pending_page_id != -1;
 
   const std::string& error_text =
-      StringPrintf("Error %d when loading url %s", error.reason,
+      base::StringPrintf("Error %d when loading url %s", error.reason,
       failed_ds->request().url().spec().data());
 
   // Make sure we never show errors in view source mode.
@@ -955,7 +1037,8 @@ void TestWebViewDelegate::willSendRequest(
        host != "127.0.0.1" &&
        host != "255.255.255.255" &&  // Used in some tests that expect to get
                                      // back an error.
-       host != "localhost") {
+       host != "localhost" &&
+      !TestShell::allow_external_pages()) {
     printf("Blocked access to external URL %s\n", request_url.c_str());
 
     // To block the request, we set its URL to an empty one.
@@ -978,6 +1061,16 @@ void TestWebViewDelegate::didReceiveResponse(
     printf("%s - didReceiveResponse %s\n",
            GetResourceDescription(identifier).c_str(),
            GetResponseDescription(response).c_str());
+  }
+  if (shell_->ShouldDumpResourceResponseMIMETypes()) {
+    GURL url = response.url();
+    WebString mimeType = response.mimeType();
+    printf("%s has MIME type %s\n",
+        url.ExtractFileName().c_str(),
+        // Simulate NSURLResponse's mapping of empty/unknown MIME types to
+        // application/octet-stream.
+        mimeType.isEmpty() ?
+            "application/octet-stream" : mimeType.utf8().data());
   }
 }
 
@@ -1015,6 +1108,19 @@ void TestWebViewDelegate::didRunInsecureContent(
 bool TestWebViewDelegate::allowScript(WebFrame* frame,
                                       bool enabled_per_settings) {
   return enabled_per_settings && shell_->allow_scripts();
+}
+
+void TestWebViewDelegate::openFileSystem(
+    WebFrame* frame, WebFileSystem::Type type, long long size,
+    WebFileSystemCallbacks* callbacks) {
+  if (shell_->file_system_root().empty()) {
+    // The FileSystem temp directory was not initialized successfully.
+    callbacks->didFail(WebKit::WebFileErrorSecurity);
+  } else {
+    callbacks->didOpenFileSystem(
+        "TestShellFileSystem",
+        webkit_glue::FilePathToWebString(shell_->file_system_root()));
+  }
 }
 
 // WebPluginPageDelegate -----------------------------------------------------
@@ -1095,6 +1201,10 @@ void TestWebViewDelegate::SetCustomPolicyDelegate(bool is_custom,
 void TestWebViewDelegate::WaitForPolicyDelegate() {
   policy_delegate_enabled_ = true;
   policy_delegate_should_notify_done_ = true;
+}
+
+void TestWebViewDelegate::SetGeolocationPermission(bool allowed) {
+  GetTestGeolocationService()->SetGeolocationPermission(allowed);
 }
 
 // Private methods -----------------------------------------------------------
@@ -1215,6 +1325,12 @@ std::wstring TestWebViewDelegate::GetFrameDescription(WebFrame* webframe) {
     else
       return L"frame (anonymous)";
   }
+}
+
+TestGeolocationService* TestWebViewDelegate::GetTestGeolocationService() {
+  if (!test_geolocation_service_.get())
+    test_geolocation_service_.reset(new TestGeolocationService);
+  return test_geolocation_service_.get();
 }
 
 void TestWebViewDelegate::set_fake_window_rect(const WebRect& rect) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/message_loop.h"
+#include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_plugin_lib.h"
 #include "chrome/common/chrome_switches.h"
@@ -129,22 +130,22 @@ CPError CPB_GetCommandLineArgumentsCommon(const char* url,
   std::wstring arguments_w;
 
   // Use the same UserDataDir for new launches that we currently have set.
-  std::wstring user_data_dir = cmd.GetSwitchValue(switches::kUserDataDir);
+  FilePath user_data_dir = cmd.GetSwitchValuePath(switches::kUserDataDir);
   if (!user_data_dir.empty()) {
     // Make sure user_data_dir is an absolute path.
     if (file_util::AbsolutePath(&user_data_dir) &&
-        file_util::PathExists(FilePath::FromWStringHack(user_data_dir))) {
+        file_util::PathExists(user_data_dir)) {
       // TODO(evanm): use CommandLine APIs instead of this.
       arguments_w += std::wstring(L"--") + ASCIIToWide(switches::kUserDataDir) +
-                     L"=\"" + user_data_dir + L"\" ";
+                     L"=\"" + user_data_dir.ToWStringHack() + L"\" ";
     }
   }
 
-#if defined (OS_CHROMEOS)
-  std::wstring profile = cmd.GetSwitchValue(switches::kProfile);
+#if defined(OS_CHROMEOS)
+  FilePath profile = cmd.GetSwitchValuePath(switches::kLoginProfile);
   if (!profile.empty()) {
-    arguments_w += std::wstring(L"--") + ASCIIToWide(switches::kProfile) +
-                   L"=\"" + profile + L"\" ";
+    arguments_w += std::wstring(L"--") + ASCIIToWide(switches::kLoginProfile) +
+        L"=\"" + profile.ToWStringHack() + L"\" ";
   }
 #endif
 

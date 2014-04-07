@@ -4,12 +4,12 @@
 
 #ifndef CHROME_BROWSER_TAB_CONTENTS_LANGUAGE_STATE_H_
 #define CHROME_BROWSER_TAB_CONTENTS_LANGUAGE_STATE_H_
+#pragma once
 
 #include <string>
 
 #include "base/basictypes.h"
-
-class NavigationController;
+#include "chrome/browser/tab_contents/navigation_controller.h"
 
 // This class holds the language state of the current page.
 // There is one LanguageState instance per TabContents.
@@ -27,10 +27,13 @@ class LanguageState {
 
   // Should be called when the page did a new navigation (whether it is a main
   // frame or sub-frame navigation).
-  void DidNavigate(bool reload, bool in_page_navigation);
+  void DidNavigate(const NavigationController::LoadCommittedDetails& details);
 
   // Should be called when the language of the page has been determined.
-  void LanguageDetermined(const std::string& page_language);
+  // |page_translatable| when false indicates that the browser should not offer
+  // to translate the page.
+  void LanguageDetermined(const std::string& page_language,
+                          bool page_translatable);
 
   // Returns the language the current page should be translated to, based on the
   // previous page languages and the transition.  This should be called after
@@ -47,6 +50,8 @@ class LanguageState {
     current_lang_ = language;
   }
   const std::string& current_language() const { return current_lang_; }
+
+  bool page_translatable() const { return page_translatable_; }
 
   // Whether the page is currently in the process of being translated.
   bool translation_pending() const { return translation_pending_; }
@@ -74,6 +79,11 @@ class LanguageState {
 
   // The navigation controller of the tab we are associated with.
   NavigationController* navigation_controller_;
+
+  // Whether it is OK to offer to translate the page.  Some pages explictly
+  // specify that they should not be translated by the browser (this is the case
+  // for GMail for example, which provides its own translation features).
+  bool page_translatable_;
 
   // Whether a translation is currently pending (TabContents waiting for the
   // PAGE_TRANSLATED notification).  This is needed to avoid sending duplicate

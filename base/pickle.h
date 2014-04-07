@@ -4,13 +4,14 @@
 
 #ifndef BASE_PICKLE_H__
 #define BASE_PICKLE_H__
+#pragma once
 
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/gtest_prod_util.h"
 #include "base/logging.h"
 #include "base/string16.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 // This class provides facilities for basic binary value packing and unpacking.
 //
@@ -176,10 +177,12 @@ class Pickle {
   // Returns the address of the byte immediately following the currently valid
   // header + payload.
   char* end_of_payload() {
+    // We must have a valid header_.
     return payload() + payload_size();
   }
   const char* end_of_payload() const {
-    return payload() + payload_size();
+    // This object may be invalid.
+    return header_ ? payload() + payload_size() : NULL;
   }
 
   size_t capacity() const {
@@ -231,9 +234,9 @@ class Pickle {
   size_t capacity_;
   size_t variable_buffer_offset_;  // IF non-zero, then offset to a buffer.
 
-  FRIEND_TEST(PickleTest, Resize);
-  FRIEND_TEST(PickleTest, FindNext);
-  FRIEND_TEST(PickleTest, IteratorHasRoom);
+  FRIEND_TEST_ALL_PREFIXES(PickleTest, Resize);
+  FRIEND_TEST_ALL_PREFIXES(PickleTest, FindNext);
+  FRIEND_TEST_ALL_PREFIXES(PickleTest, IteratorHasRoom);
 };
 
 #endif  // BASE_PICKLE_H__

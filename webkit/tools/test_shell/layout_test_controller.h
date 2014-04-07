@@ -26,6 +26,7 @@ class LayoutTestController : public CppBoundClass {
   // Builds the property and method lists needed to bind this class to a JS
   // object.
   LayoutTestController(TestShell* shell);
+  ~LayoutTestController();
 
   // This function sets a flag that tells the test_shell to dump pages as
   // plain text, rather than as a text representation of the renderer's state.
@@ -102,6 +103,9 @@ class LayoutTestController : public CppBoundClass {
   // Shows DevTools window.
   void showWebInspector(const CppArgumentList& args, CppVariant* result);
 
+  // Close DevTools window.
+  void closeWebInspector(const CppArgumentList& args, CppVariant* result);
+
   // Gives focus to the window.
   void setWindowIsKey(const CppArgumentList& args, CppVariant* result);
 
@@ -113,6 +117,9 @@ class LayoutTestController : public CppBoundClass {
   // style sheet.
   void setUserStyleSheetEnabled(const CppArgumentList& args, CppVariant* result);
   void setUserStyleSheetLocation(const CppArgumentList& args, CppVariant* result);
+
+  // Passes this preference through to WebPreferences.
+  void setAuthorAndUserStylesEnabled(const CppArgumentList& args, CppVariant* result);
 
   // Puts Webkit in "dashboard compatibility mode", which is used in obscure
   // Mac-only circumstances. It's not really necessary, and will most likely
@@ -174,6 +181,8 @@ class LayoutTestController : public CppBoundClass {
                                            CppVariant* result);
   void pauseTransitionAtTimeOnElementWithId(const CppArgumentList& args,
                                             CppVariant* result);
+  void suspendAnimations(const CppArgumentList& args, CppVariant* result);
+  void resumeAnimations(const CppArgumentList& args, CppVariant* result);
   void elementDoesAutoCompleteForElementWithId(const CppArgumentList& args,
                                                CppVariant* result);
   void numberOfActiveAnimations(const CppArgumentList& args,
@@ -187,11 +196,22 @@ class LayoutTestController : public CppBoundClass {
 
   void dumpSelectionRect(const CppArgumentList& args, CppVariant* result);
 
+  // Grants permission for desktop notifications to an origin
+  void grantDesktopNotificationPermission(const CppArgumentList& args,
+                                          CppVariant* result);
+
+  void setDomainRelaxationForbiddenForURLScheme(
+      const CppArgumentList& args, CppVariant* result);
+  void sampleSVGAnimationForElementAtTime(const CppArgumentList& args,
+                                          CppVariant* result);
+  void setEditingBehavior(const CppArgumentList&, CppVariant*);
+
   // The following are only stubs.  TODO(pamg): Implement any of these that
   // are needed to pass the layout tests.
   void dumpAsWebArchive(const CppArgumentList& args, CppVariant* result);
   void dumpTitleChanges(const CppArgumentList& args, CppVariant* result);
   void dumpResourceLoadCallbacks(const CppArgumentList& args, CppVariant* result);
+  void dumpResourceResponseMIMETypes(const CppArgumentList& args, CppVariant* result);
   void setMainFrameIsFirstResponder(const CppArgumentList& args, CppVariant* result);
   void display(const CppArgumentList& args, CppVariant* result);
   void testRepaint(const CppArgumentList& args, CppVariant* result);
@@ -206,11 +226,13 @@ class LayoutTestController : public CppBoundClass {
   void setCallCloseOnWebViews(const CppArgumentList& args, CppVariant* result);
   void setPrivateBrowsingEnabled(const CppArgumentList& args, CppVariant* result);
 
+  void setJavaScriptCanAccessClipboard(const CppArgumentList& args, CppVariant* result);
   void setXSSAuditorEnabled(const CppArgumentList& args, CppVariant* result);
   void evaluateScriptInIsolatedWorld(const CppArgumentList& args, CppVariant* result);
   void overridePreference(const CppArgumentList& args, CppVariant* result);
   void setAllowUniversalAccessFromFileURLs(const CppArgumentList& args, CppVariant* result);
   void setAllowFileAccessFromFileURLs(const CppArgumentList& args, CppVariant* result);
+  void setMockSpeechInputResult(const CppArgumentList& args, CppVariant* result);
 
   // The fallback method is called when a nonexistent method is called on
   // the layout test controller object.
@@ -219,8 +241,11 @@ class LayoutTestController : public CppBoundClass {
   // that case (as the Mac does).
   void fallbackMethod(const CppArgumentList& args, CppVariant* result);
 
-  // Allows layout tests to call SecurityOrigin::whiteListAccessFromOrigin().
-  void whiteListAccessFromOrigin(const CppArgumentList& args, CppVariant* result);
+  // Allows layout tests to manage origins' whitelisting.
+  void addOriginAccessWhitelistEntry(
+      const CppArgumentList& args, CppVariant* result);
+  void removeOriginAccessWhitelistEntry(
+      const CppArgumentList& args, CppVariant* result);
 
   // Clears all databases.
   void clearAllDatabases(const CppArgumentList& args, CppVariant* result);
@@ -242,6 +267,10 @@ class LayoutTestController : public CppBoundClass {
   // Gets the number of pages to be printed.
   void numberOfPages(const CppArgumentList& args, CppVariant* result);
 
+  // Allows layout tests to control JavaScript profiling.
+  void setJavaScriptProfilingEnabled(const CppArgumentList& args,
+                                     CppVariant* result);
+
   // Allows layout tests to start Timeline profiling.
   void setTimelineProfilingEnabled(const CppArgumentList& args,
                                    CppVariant* result);
@@ -253,14 +282,30 @@ class LayoutTestController : public CppBoundClass {
   void forceRedSelectionColors(const CppArgumentList& args,
                                CppVariant* result);
 
-  // Adds a user script to be injected into new documents.
+  // Adds a user script or user style sheet to be injected into new documents.
   void addUserScript(const CppArgumentList& args, CppVariant* result);
+  void addUserStyleSheet(const CppArgumentList& args, CppVariant* result);
+
+  // Geolocation related functions.
+  void setGeolocationPermission(const CppArgumentList& args,
+                                CppVariant* result);
+  void setMockGeolocationPosition(const CppArgumentList& args,
+                                  CppVariant* result);
+  void setMockGeolocationError(const CppArgumentList& args,
+                               CppVariant* result);
+
+  void markerTextForListItem(const CppArgumentList& args,
+                             CppVariant* result);
+
+  void setMockDeviceOrientation(const CppArgumentList& args,
+                                CppVariant* result);
 
  public:
   // The following methods are not exposed to JavaScript.
   void SetWorkQueueFrozen(bool frozen) { work_queue_.set_frozen(frozen); }
 
   bool ShouldDumpAsText() { return dump_as_text_; }
+  bool ShouldGeneratePixelResults() { return generate_pixel_results_; }
   bool ShouldDumpEditingCallbacks() { return dump_editing_callbacks_; }
   bool ShouldDumpFrameLoadCallbacks() { return dump_frame_load_callbacks_; }
   void SetShouldDumpFrameLoadCallbacks(bool value) {
@@ -268,6 +313,9 @@ class LayoutTestController : public CppBoundClass {
   }
   bool ShouldDumpResourceLoadCallbacks() {
     return dump_resource_load_callbacks_;
+  }
+  bool ShouldDumpResourceResponseMIMETypes() {
+    return dump_resource_response_mime_types_;
   }
   bool ShouldDumpStatusCallbacks() {
     return dump_window_status_changes_;
@@ -322,6 +370,7 @@ class LayoutTestController : public CppBoundClass {
   // queueScript.
   class WorkQueue {
    public:
+    WorkQueue();
     virtual ~WorkQueue();
     void ProcessWorkSoon();
 
@@ -361,6 +410,10 @@ class LayoutTestController : public CppBoundClass {
   // text representation of the renderer.
   static bool dump_as_text_;
 
+  // If true, dump pixel results. This can be true even if
+  // dump_as_text_ is true.
+  static bool generate_pixel_results_;
+
   // If true, the test_shell will write a descriptive line for each editing
   // command.
   static bool dump_editing_callbacks_;
@@ -376,6 +429,10 @@ class LayoutTestController : public CppBoundClass {
   // If true, the test_shell will output a descriptive line for each resource
   // load callback.
   static bool dump_resource_load_callbacks_;
+
+  // If true, the test_shell will output a line with the MIME type for each
+  // resource that is loaded.
+  static bool dump_resource_response_mime_types_;
 
   // If true, the test_shell will produce a dump of the back forward list as
   // well.

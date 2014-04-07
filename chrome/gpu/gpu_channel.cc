@@ -2,39 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/gpu/gpu_channel.h"
+
 #if defined(OS_WIN)
 #include <windows.h>
 #endif
-
-#include "chrome/gpu/gpu_channel.h"
 
 #include "base/command_line.h"
 #include "base/lock.h"
 #include "base/process_util.h"
 #include "base/string_util.h"
-#include "base/waitable_event.h"
-#include "build/build_config.h"
 #include "chrome/common/child_process.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/gpu_messages.h"
 #include "chrome/gpu/gpu_thread.h"
+#include "chrome/gpu/gpu_video_service.h"
 
 #if defined(OS_POSIX)
 #include "ipc/ipc_channel_posix.h"
 #endif
-
-namespace {
-class GpuReleaseTask : public Task {
- public:
-  void Run() {
-    ChildProcess::current()->ReleaseProcess();
-  }
-};
-
-// How long we wait before releasing the GPU process.
-const int kGpuReleaseTimeMS = 10000;
-}  // namespace anonymous
 
 GpuChannel::GpuChannel(int renderer_id)
     : renderer_id_(renderer_id)
@@ -42,7 +29,6 @@ GpuChannel::GpuChannel(int renderer_id)
     , renderer_fd_(-1)
 #endif
 {
-  ChildProcess::current()->AddRefProcess();
   const CommandLine* command_line = CommandLine::ForCurrentProcess();
   log_messages_ = command_line->HasSwitch(switches::kLogPluginMessages);
 }
@@ -54,10 +40,6 @@ GpuChannel::~GpuChannel() {
     close(renderer_fd_);
   }
 #endif
-  ChildProcess::current()->io_message_loop()->PostDelayedTask(
-      FROM_HERE,
-      new GpuReleaseTask(),
-      kGpuReleaseTimeMS);
 }
 
 void GpuChannel::OnChannelConnected(int32 peer_pid) {
@@ -75,29 +57,14 @@ void GpuChannel::OnMessageReceived(const IPC::Message& message) {
   if (message.routing_id() == MSG_ROUTING_CONTROL) {
     OnControlMessageReceived(message);
   } else {
-    // The sender should know not to route messages to an object after it
-    // has been destroyed.
-    CHECK(router_.RouteMessage(message));
+    // Fail silently if the GPU process has destroyed while the IPC message was
+    // en-route.
+    router_.RouteMessage(message);
   }
 }
 
 void GpuChannel::OnChannelError() {
-  // Destroy channel. This will cause the channel to be recreated if another
-  // attempt is made to establish a connection from the corresponding renderer.
-  channel_.reset();
-
-  // Close renderer process handle.
-  renderer_process_.Close();
-
-#if defined(ENABLE_GPU)
-  // Destroy all the stubs on this channel.
-  for (StubMap::const_iterator iter = stubs_.begin();
-       iter != stubs_.end();
-       ++iter) {
-    router_.RemoveRoute(iter->second->route_id());
-  }
-  stubs_.clear();
-#endif
+  static_cast<GpuThread*>(ChildThread::current())->RemoveChannel(renderer_id_);
 }
 
 bool GpuChannel::Send(IPC::Message* message) {
@@ -122,6 +89,10 @@ void GpuChannel::OnControlMessageReceived(const IPC::Message& msg) {
         OnCreateOffscreenCommandBuffer)
     IPC_MESSAGE_HANDLER(GpuChannelMsg_DestroyCommandBuffer,
         OnDestroyCommandBuffer)
+    IPC_MESSAGE_HANDLER(GpuChannelMsg_CreateVideoDecoder,
+        OnCreateVideoDecoder)
+    IPC_MESSAGE_HANDLER(GpuChannelMsg_DestroyVideoDecoder,
+        OnDestroyVideoDecoder)
     IPC_MESSAGE_UNHANDLED_ERROR()
   IPC_END_MESSAGE_MAP()
 }
@@ -132,11 +103,13 @@ int GpuChannel::GenerateRouteID() {
 }
 
 void GpuChannel::OnCreateViewCommandBuffer(gfx::NativeViewId view_id,
+                                           int32 render_view_id,
                                            int32* route_id) {
   *route_id = 0;
 
 #if defined(ENABLE_GPU)
 
+  gfx::PluginWindowHandle handle = gfx::kNullPluginWindow;
 #if defined(OS_WIN)
   gfx::NativeView view = gfx::NativeViewFromId(view_id);
 
@@ -146,44 +119,63 @@ void GpuChannel::OnCreateViewCommandBuffer(gfx::NativeViewId view_id,
       GetProp(view, chrome::kChromiumRendererIdProperty));
   if (view_renderer_id != renderer_id_)
     return;
+  handle = view;
+#elif defined(OS_LINUX)
+  ChildThread* gpu_thread = ChildThread::current();
+  // Ask the browser for the view's XID.
+  // TODO(piman): This assumes that it doesn't change. It can change however
+  // when tearing off tabs. This needs a fix in the browser UI code. A possible
+  // alternative would be to add a socket/plug pair like with plugins but that
+  // has issues with events and focus.
+  gpu_thread->Send(new GpuHostMsg_GetViewXID(view_id, &handle));
+#elif defined(OS_MACOSX)
+  // On Mac OS X we currently pass a (fake) PluginWindowHandle for the
+  // NativeViewId. We could allocate fake NativeViewIds on the browser
+  // side as well, and map between those and PluginWindowHandles, but
+  // this seems excessive.
+  handle = static_cast<gfx::PluginWindowHandle>(
+      static_cast<intptr_t>(view_id));
 #else
   // TODO(apatrick): This needs to be something valid for mac and linux.
   // Offscreen rendering will work on these platforms but not rendering to the
   // window.
   DCHECK_EQ(view_id, 0);
-  gfx::NativeView view = 0;
 #endif
 
   *route_id = GenerateRouteID();
-  scoped_refptr<GpuCommandBufferStub> stub = new GpuCommandBufferStub(
-      this, view, NULL, gfx::Size(), 0, *route_id);
-  router_.AddRoute(*route_id, stub);
-  stubs_[*route_id] = stub;
+  // TODO(enne): implement context creation attributes for view buffers
+  std::vector<int32> attribs;
+  scoped_ptr<GpuCommandBufferStub> stub(new GpuCommandBufferStub(
+      this, handle, NULL, gfx::Size(), attribs, 0, *route_id,
+      renderer_id_, render_view_id));
+  router_.AddRoute(*route_id, stub.get());
+  stubs_.AddWithID(stub.release(), *route_id);
 #endif  // ENABLE_GPU
 }
 
-void GpuChannel::OnCreateOffscreenCommandBuffer(int32 parent_route_id,
-                                                const gfx::Size& size,
-                                                uint32 parent_texture_id,
-                                                int32* route_id) {
+void GpuChannel::OnCreateOffscreenCommandBuffer(
+    int32 parent_route_id,
+    const gfx::Size& size,
+    const std::vector<int32>& attribs,
+    uint32 parent_texture_id,
+    int32* route_id) {
 #if defined(ENABLE_GPU)
   *route_id = GenerateRouteID();
-  scoped_refptr<GpuCommandBufferStub> parent_stub;
-  if (parent_route_id != 0) {
-    StubMap::iterator it = stubs_.find(parent_route_id);
-    DCHECK(it != stubs_.end());
-    parent_stub = it->second;
-  }
+  GpuCommandBufferStub* parent_stub = NULL;
+  if (parent_route_id != 0)
+    parent_stub = stubs_.Lookup(parent_route_id);
 
-  scoped_refptr<GpuCommandBufferStub> stub = new GpuCommandBufferStub(
+  scoped_ptr<GpuCommandBufferStub> stub(new GpuCommandBufferStub(
       this,
-      NULL,
-      parent_stub.get(),
+      gfx::kNullPluginWindow,
+      parent_stub,
       size,
+      attribs,
       parent_texture_id,
-      *route_id);
-  router_.AddRoute(*route_id, stub);
-  stubs_[*route_id] = stub;
+      *route_id,
+      0, 0));
+  router_.AddRoute(*route_id, stub.get());
+  stubs_.AddWithID(stub.release(), *route_id);
 #else
   *route_id = 0;
 #endif
@@ -191,10 +183,41 @@ void GpuChannel::OnCreateOffscreenCommandBuffer(int32 parent_route_id,
 
 void GpuChannel::OnDestroyCommandBuffer(int32 route_id) {
 #if defined(ENABLE_GPU)
-  StubMap::iterator it = stubs_.find(route_id);
-  DCHECK(it != stubs_.end());
-  stubs_.erase(it);
   router_.RemoveRoute(route_id);
+  stubs_.Remove(route_id);
+#endif
+}
+
+void GpuChannel::OnCreateVideoDecoder(int32 context_route_id,
+                                      int32 decoder_host_id) {
+#if defined(ENABLE_GPU)
+  LOG(INFO) << "GpuChannel::OnCreateVideoDecoder";
+  GpuVideoService* service = GpuVideoService::get();
+  if (service == NULL) {
+    // TODO(hclam): Need to send a failure message.
+    return;
+  }
+
+  // The context ID corresponds to the command buffer used.
+  GpuCommandBufferStub* stub = stubs_.Lookup(context_route_id);
+  int32 decoder_id = GenerateRouteID();
+
+  // TODO(hclam): Need to be careful about the lifetime of the command buffer
+  // decoder.
+  bool ret = service->CreateVideoDecoder(
+      this, &router_, decoder_host_id, decoder_id,
+      stub->processor()->decoder());
+  DCHECK(ret) << "Failed to create a GpuVideoDecoder";
+#endif
+}
+
+void GpuChannel::OnDestroyVideoDecoder(int32 decoder_id) {
+#if defined(ENABLE_GPU)
+  LOG(ERROR) << "GpuChannel::OnDestroyVideoDecoder";
+  GpuVideoService* service = GpuVideoService::get();
+  if (service == NULL)
+    return;
+  service->DestroyVideoDecoder(&router_, decoder_id);
 #endif
 }
 
@@ -218,6 +241,7 @@ bool GpuChannel::Init() {
       channel_name, IPC::Channel::MODE_SERVER, this, NULL,
       ChildProcess::current()->io_message_loop(), false,
       ChildProcess::current()->GetShutDownEvent()));
+
   return true;
 }
 

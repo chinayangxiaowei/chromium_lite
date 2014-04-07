@@ -1,12 +1,13 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "app/text_elider.h"
-#include "app/l10n_util.h"
 #include "base/file_path.h"
 #include "base/i18n/rtl.h"
+#include "base/scoped_ptr.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "gfx/font.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -55,7 +56,7 @@ TEST(TextEliderTest, TestGeneralEliding) {
   const std::wstring kEllipsisStr(kEllipsis);
   Testcase testcases[] = {
     {"http://www.google.com/intl/en/ads/",
-     L"http://www.google.com/intl/en/ads/"},
+     L"www.google.com/intl/en/ads/"},
     {"http://www.google.com/intl/en/ads/", L"www.google.com/intl/en/ads/"},
 // TODO(port): make this test case work on mac.
 #if !defined(OS_MACOSX)
@@ -73,7 +74,7 @@ TEST(TextEliderTest, TestGeneralEliding) {
     {"http://subdomain.foo.com/bar/filename.html",
      kEllipsisStr + L"foo.com/" + kEllipsisStr + L"/filename.html"},
     {"http://www.google.com/intl/en/ads/?aLongQueryWhichIsNotRequired",
-     L"http://www.google.com/intl/en/ads/?aLongQ" + kEllipsisStr},
+     L"www.google.com/intl/en/ads/?aLongQ" + kEllipsisStr},
   };
 
   RunTest(testcases, arraysize(testcases));
@@ -83,7 +84,7 @@ TEST(TextEliderTest, TestGeneralEliding) {
 TEST(TextEliderTest, TestMoreEliding) {
   const std::wstring kEllipsisStr(kEllipsis);
   Testcase testcases[] = {
-    {"http://www.google.com/foo?bar", L"http://www.google.com/foo?bar"},
+    {"http://www.google.com/foo?bar", L"www.google.com/foo?bar"},
     {"http://xyz.google.com/foo?bar", L"xyz.google.com/foo?" + kEllipsisStr},
     {"http://xyz.google.com/foo?bar", L"xyz.google.com/foo" + kEllipsisStr},
     {"http://xyz.google.com/foo?bar", L"xyz.google.com/fo" + kEllipsisStr},
@@ -91,11 +92,11 @@ TEST(TextEliderTest, TestMoreEliding) {
     {"", L""},
     {"http://foo.bar..example.com...hello/test/filename.html",
      L"foo.bar..example.com...hello/" + kEllipsisStr + L"/filename.html"},
-    {"http://foo.bar../", L"http://foo.bar../"},
-    {"http://xn--1lq90i.cn/foo", L"http://\x5317\x4eac.cn/foo"},
+    {"http://foo.bar../", L"foo.bar.."},
+    {"http://xn--1lq90i.cn/foo", L"\x5317\x4eac.cn/foo"},
     {"http://me:mypass@secrethost.com:99/foo?bar#baz",
-     L"http://secrethost.com:99/foo?bar#baz"},
-    {"http://me:mypass@ss%xxfdsf.com/foo", L"http://ss%25xxfdsf.com/foo"},
+     L"secrethost.com:99/foo?bar#baz"},
+    {"http://me:mypass@ss%xxfdsf.com/foo", L"ss%25xxfdsf.com/foo"},
     {"mailto:elgoato@elgoato.com", L"mailto:elgoato@elgoato.com"},
     {"javascript:click(0)", L"javascript:click(0)"},
     {"https://chess.eecs.berkeley.edu:4430/login/arbitfilename",
@@ -105,13 +106,13 @@ TEST(TextEliderTest, TestMoreEliding) {
 
     // Unescaping.
     {"http://www/%E4%BD%A0%E5%A5%BD?q=%E4%BD%A0%E5%A5%BD#\xe4\xbd\xa0",
-     L"http://www/\x4f60\x597d?q=\x4f60\x597d#\x4f60"},
+     L"www/\x4f60\x597d?q=\x4f60\x597d#\x4f60"},
 
     // Invalid unescaping for path. The ref will always be valid UTF-8. We don't
     // bother to do too many edge cases, since these are handled by the escaper
     // unittest.
     {"http://www/%E4%A0%E5%A5%BD?q=%E4%BD%A0%E5%A5%BD#\xe4\xbd\xa0",
-     L"http://www/%E4%A0%E5%A5%BD?q=\x4f60\x597d#\x4f60"},
+     L"www/%E4%A0%E5%A5%BD?q=\x4f60\x597d#\x4f60"},
   };
 
   RunTest(testcases, arraysize(testcases));
@@ -178,9 +179,8 @@ TEST(TextEliderTest, TestFilenameEliding) {
   static const gfx::Font font;
   for (size_t i = 0; i < arraysize(testcases); ++i) {
     FilePath filepath(testcases[i].input);
-    std::wstring expected = testcases[i].output;
-    if (base::i18n::IsRTL())
-      base::i18n::WrapStringWithLTRFormatting(&expected);
+    string16 expected = WideToUTF16(testcases[i].output);
+    expected = base::i18n::GetDisplayStringInLTRDirectionality(expected);
     EXPECT_EQ(expected, ElideFilename(filepath,
         font,
         font.GetStringWidth(testcases[i].output)));
@@ -190,6 +190,7 @@ TEST(TextEliderTest, TestFilenameEliding) {
 TEST(TextEliderTest, ElideTextLongStrings) {
   const std::wstring kEllipsisStr(kEllipsis);
   std::wstring data_scheme(L"data:text/plain,");
+  size_t data_scheme_length = data_scheme.length();
 
   std::wstring ten_a(10, L'a');
   std::wstring hundred_a(100, L'a');
@@ -198,38 +199,61 @@ TEST(TextEliderTest, ElideTextLongStrings) {
   std::wstring hundred_thousand_a(100000, L'a');
   std::wstring million_a(1000000, L'a');
 
-  WideTestcase testcases[] = {
-     {data_scheme + ten_a,
-      data_scheme + ten_a},
-     {data_scheme + hundred_a,
-      data_scheme + hundred_a},
-     {data_scheme + thousand_a,
-      data_scheme + std::wstring(156, L'a') + kEllipsisStr},
-     {data_scheme + ten_thousand_a,
-      data_scheme + std::wstring(156, L'a') + kEllipsisStr},
-     {data_scheme + hundred_thousand_a,
-      data_scheme + std::wstring(156, L'a') + kEllipsisStr},
-     {data_scheme + million_a,
-      data_scheme + std::wstring(156, L'a') + kEllipsisStr},
+  size_t number_of_as = 156;
+  std::wstring long_string_end(
+      data_scheme + std::wstring(number_of_as, L'a') + kEllipsisStr);
+  WideTestcase testcases_end[] = {
+     {data_scheme + ten_a,              data_scheme + ten_a},
+     {data_scheme + hundred_a,          data_scheme + hundred_a},
+     {data_scheme + thousand_a,         long_string_end},
+     {data_scheme + ten_thousand_a,     long_string_end},
+     {data_scheme + hundred_thousand_a, long_string_end},
+     {data_scheme + million_a,          long_string_end},
   };
 
   const gfx::Font font;
   int ellipsis_width = font.GetStringWidth(kEllipsisStr);
-  for (size_t i = 0; i < arraysize(testcases); ++i) {
+  for (size_t i = 0; i < arraysize(testcases_end); ++i) {
     // Compare sizes rather than actual contents because if the test fails,
     // output is rather long.
-    EXPECT_EQ(testcases[i].output.size(),
-              ElideText(testcases[i].input, font,
-                        font.GetStringWidth(testcases[i].output)).size());
+    EXPECT_EQ(testcases_end[i].output.size(),
+              ElideText(testcases_end[i].input, font,
+                        font.GetStringWidth(testcases_end[i].output),
+                        false).size());
     EXPECT_EQ(kEllipsisStr,
-              ElideText(testcases[i].input, font, ellipsis_width));
+              ElideText(testcases_end[i].input, font, ellipsis_width, false));
+  }
+
+  size_t number_of_trailing_as = (data_scheme_length + number_of_as) / 2;
+  std::wstring long_string_middle(data_scheme +
+      std::wstring(number_of_as - number_of_trailing_as, L'a') + kEllipsisStr +
+      std::wstring(number_of_trailing_as, L'a'));
+  WideTestcase testcases_middle[] = {
+     {data_scheme + ten_a,              data_scheme + ten_a},
+     {data_scheme + hundred_a,          data_scheme + hundred_a},
+     {data_scheme + thousand_a,         long_string_middle},
+     {data_scheme + ten_thousand_a,     long_string_middle},
+     {data_scheme + hundred_thousand_a, long_string_middle},
+     {data_scheme + million_a,          long_string_middle},
+  };
+
+  for (size_t i = 0; i < arraysize(testcases_middle); ++i) {
+    // Compare sizes rather than actual contents because if the test fails,
+    // output is rather long.
+    EXPECT_EQ(testcases_middle[i].output.size(),
+              ElideText(testcases_middle[i].input, font,
+                        font.GetStringWidth(testcases_middle[i].output),
+                        false).size());
+    EXPECT_EQ(kEllipsisStr,
+              ElideText(testcases_middle[i].input, font, ellipsis_width,
+                        false));
   }
 }
 
 // Verifies display_url is set correctly.
 TEST(TextEliderTest, SortedDisplayURL) {
-  gfx::SortedDisplayURL d_url(GURL("http://www.google.com/"), std::wstring());
-  EXPECT_EQ("http://www.google.com/", UTF16ToASCII(d_url.display_url()));
+  gfx::SortedDisplayURL d_url(GURL("http://www.google.com"), std::wstring());
+  EXPECT_EQ("www.google.com", UTF16ToASCII(d_url.display_url()));
 }
 
 // Verifies DisplayURL::Compare works correctly.

@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_APP_CONTROLLER_MAC_H_
 #define CHROME_BROWSER_APP_CONTROLLER_MAC_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 #include <vector>
@@ -14,7 +15,6 @@
 @class AboutWindowController;
 class BookmarkMenuBridge;
 class CommandUpdater;
-@class CrApplication;
 class GURL;
 class HistoryMenuBridge;
 @class PreferencesWindowController;
@@ -49,6 +49,9 @@ class Profile;
   // Outlet for the help menu so we can bless it so Cocoa adds the search item
   // to it.
   IBOutlet NSMenu* helpMenu_;
+
+  // Outlet for the tabpose menu item so we can hide it.
+  IBOutlet NSMenuItem* tabposeMenuItem_;
 }
 
 @property(readonly, nonatomic) BOOL startupComplete;
@@ -62,6 +65,12 @@ class Profile;
 // Stop trying to terminate the application. That is, prevent the final browser
 // window closure from causing the application to quit.
 - (void)stopTryingToTerminateApplication:(NSApplication*)app;
+
+// Returns true if there is not a modal window (either window- or application-
+// modal) blocking the active browser. Note that tab modal dialogs (HTTP auth
+// sheets) will not count as blocking the browser. But things like open/save
+// dialogs that are window modal will block the browser.
+- (BOOL)keyWindowIsNotModal;
 
 // Show the preferences window, or bring it to the front if it's already
 // visible.

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SHELL_DIALOGS_H_
 #define CHROME_BROWSER_SHELL_DIALOGS_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -17,6 +18,12 @@ namespace gfx {
 class Font;
 }
 
+// This function is declared extern such that it is accessible for unit tests
+// in /chrome/browser/views/shell_dialogs_win_unittest.cc
+extern std::wstring AppendExtensionIfNeeded(const std::wstring& filename,
+                                            const std::wstring& filter_selected,
+                                            const std::wstring& suggested_ext);
+
 // A base class for shell dialogs.
 class BaseShellDialog {
  public:
@@ -27,6 +34,9 @@ class BaseShellDialog {
   // Notifies the dialog box that the listener has been destroyed and it should
   // no longer be sent notifications.
   virtual void ListenerDestroyed() = 0;
+
+ protected:
+  virtual ~BaseShellDialog() {}
 };
 
 // Shows a dialog box for selecting a file or a folder.
@@ -62,6 +72,9 @@ class SelectFileDialog
     // the  user canceling or closing the selection dialog box, for example).
     // |params| is contextual passed to SelectFile.
     virtual void FileSelectionCanceled(void* params) {}
+
+   protected:
+    virtual ~Listener() {}
   };
 
   // Creates a dialog box helper. This object is ref-counted, but the returned
@@ -116,6 +129,9 @@ class SelectFileDialog
                           gfx::NativeWindow owning_window,
                           void* params) = 0;
 
+  // browser_mode is true when running inside the browser.
+  virtual void set_browser_mode(bool value) {}
+
  protected:
   friend class base::RefCountedThreadSafe<SelectFileDialog>;
 
@@ -142,6 +158,9 @@ class SelectFontDialog
     // canceling or closing the selection dialog box, for example). |params| is
     // contextual passed to SelectFont.
     virtual void FontSelectionCanceled(void* params) {}
+
+   protected:
+    virtual ~Listener() {}
   };
 
   // Creates a dialog box helper. This object is ref-counted, but the returned

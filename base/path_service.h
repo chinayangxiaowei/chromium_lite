@@ -4,6 +4,7 @@
 
 #ifndef BASE_PATH_SERVICE_H_
 #define BASE_PATH_SERVICE_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -45,6 +46,8 @@ class PathService {
   static bool Override(int key, const FilePath& path);
 
   // Return whether a path was overridden.
+  // TODO(evan): temporarily restoring this to quick-fix a regression.
+  // Remove me again once it's fixed properly.
   static bool IsOverridden(int key);
 
   // To extend the set of supported keys, you can register a path provider,
@@ -64,6 +67,7 @@ class PathService {
                                int key_end);
  private:
   static bool GetFromCache(int key, FilePath* path);
+  static bool GetFromOverrides(int key, FilePath* path);
   static void AddToCache(int key, const FilePath& path);
 };
 

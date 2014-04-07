@@ -4,10 +4,12 @@
 
 #include "chrome/browser/importer/firefox_importer_unittest_utils.h"
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/debug_on_start.h"
 #include "base/file_path.h"
 #include "base/message_loop.h"
+#include "base/test/test_timeouts.h"
 #include "chrome/browser/importer/firefox_importer_utils.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_descriptors.h"
@@ -16,10 +18,15 @@
 #include "ipc/ipc_switches.h"
 #include "testing/multiprocess_func_list.h"
 
-// Definition of IPC Messages used for this test.
+// Declaration of IPC Messages used for this test.
 #define MESSAGES_INTERNAL_FILE \
     "chrome/browser/importer/firefox_importer_unittest_messages_internal.h"
 #include "ipc/ipc_message_macros.h"
+
+// Definition of IPC Messages used for this test.
+#define MESSAGES_INTERNAL_IMPL_FILE \
+  "chrome/browser/importer/firefox_importer_unittest_messages_internal.h"
+#include "ipc/ipc_message_impl_macros.h"
 
 namespace {
 
@@ -34,7 +41,7 @@ const char kTestChannelID[] = "T1";
 bool LaunchNSSDecrypterChildProcess(const std::wstring& nss_path,
     const IPC::Channel& channel, base::ProcessHandle* handle) {
   CommandLine cl(*CommandLine::ForCurrentProcess());
-  cl.AppendSwitchWithValue("client", "NSSDecrypterChildProcess");
+  cl.AppendSwitchASCII(switches::kTestChildProcess, "NSSDecrypterChildProcess");
 
   FilePath ff_dylib_dir = FilePath::FromWStringHack(nss_path);
   // Set env variable needed for FF encryption libs to load.
@@ -164,8 +171,6 @@ class CancellableQuitMsgLoop : public base::RefCounted<CancellableQuitMsgLoop> {
 
 // Spin until either a client response arrives or a timeout occurs.
 bool FFUnitTestDecryptorProxy::WaitForClientResponse() {
-  const int64 kLoopTimeoutMS = 10 * 1000;  // 10 seconds.
-
   // What we're trying to do here is to wait for an RPC message to go over the
   // wire and the client to reply.  If the client does not replyy by a given
   // timeout we kill the message loop.
@@ -175,8 +180,10 @@ bool FFUnitTestDecryptorProxy::WaitForClientResponse() {
   // a message comes in.
   scoped_refptr<CancellableQuitMsgLoop> quit_task =
       new CancellableQuitMsgLoop();
-  MessageLoop::current()->PostDelayedTask(FROM_HERE, NewRunnableMethod(
-      quit_task.get(), &CancellableQuitMsgLoop::QuitNow), kLoopTimeoutMS);
+  MessageLoop::current()->PostDelayedTask(
+      FROM_HERE,
+      NewRunnableMethod(quit_task.get(), &CancellableQuitMsgLoop::QuitNow),
+      TestTimeouts::action_max_timeout_ms());
 
   message_loop_->Run();
   bool ret = !quit_task->cancelled_;

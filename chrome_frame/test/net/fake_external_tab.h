@@ -42,7 +42,6 @@ class FakeExternalTab {
   scoped_ptr<BrowserProcess> browser_process_;
   FilePath overridden_user_dir_;
   FilePath user_data_dir_;
-  ScopedOleInitializer ole_initializer_;  // For RegisterDropTarget etc to work.
   scoped_ptr<ProcessSingleton> process_singleton_;
 };
 
@@ -97,7 +96,7 @@ class CFUrlRequestUnittestRunner
   // on the main thread.
   FakeExternalTab fake_chrome_;
   scoped_ptr<ProcessSingletonSubclass> pss_subclass_;
-  scoped_ptr<ChromeThread> main_thread_;
+  scoped_ptr<BrowserThread> main_thread_;
 };
 
 #endif  // CHROME_FRAME_TEST_NET_FAKE_EXTERNAL_TAB_H_

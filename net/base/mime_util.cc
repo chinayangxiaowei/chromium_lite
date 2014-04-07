@@ -1,7 +1,8 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <map>
 #include <string>
 
 #include "net/base/mime_util.h"
@@ -10,6 +11,7 @@
 #include "base/hash_tables.h"
 #include "base/logging.h"
 #include "base/singleton.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 
@@ -41,7 +43,12 @@ class MimeUtil : public PlatformMimeUtil {
   bool AreSupportedMediaCodecs(const std::vector<std::string>& codecs) const;
 
   void ParseCodecString(const std::string& codecs,
-                        std::vector<std::string>* codecs_out);
+                        std::vector<std::string>* codecs_out,
+                        bool strip);
+
+  bool IsStrictMediaMimeType(const std::string& mime_type) const;
+  bool IsSupportedStrictMediaMimeType(const std::string& mime_type,
+      const std::vector<std::string>& codecs) const;
 
  private:
   friend struct DefaultSingletonTraits<MimeUtil>;
@@ -59,6 +66,9 @@ class MimeUtil : public PlatformMimeUtil {
   MimeMappings javascript_map_;
   MimeMappings view_source_map_;
   MimeMappings codecs_map_;
+
+  typedef std::map<std::string, base::hash_set<std::string> > StrictMappings;
+  StrictMappings strict_format_map_;
 };  // class MimeUtil
 
 struct MimeInfo {
@@ -78,6 +88,9 @@ static const MimeInfo primary_mappings[] = {
   { "audio/mp3", "mp3" },
   { "video/ogg", "ogv,ogm" },
   { "audio/ogg", "ogg,oga" },
+  { "video/webm", "webm" },
+  { "audio/webm", "webm" },
+  { "audio/wav", "wav" },
   { "application/xhtml+xml", "xhtml,xht" },
   { "application/x-chrome-extension", "crx" }
 };
@@ -193,8 +206,12 @@ static const char* const supported_media_types[] = {
   "video/ogg",
   "audio/ogg",
   "application/ogg",
+  "video/webm",
+  "audio/webm",
+  "audio/wav",
+  "audio/x-wav",
 
-#if defined(GOOGLE_CHROME_BUILD)
+#if defined(GOOGLE_CHROME_BUILD) || defined(USE_PROPRIETARY_CODECS)
   // MPEG-4.
   "video/mp4",
   "video/x-m4v",
@@ -213,12 +230,14 @@ static const char* const supported_media_types[] = {
 // Refer to http://wiki.whatwg.org/wiki/Video_type_parameters#Browser_Support
 // for more information.
 static const char* const supported_media_codecs[] = {
-#if defined(GOOGLE_CHROME_BUILD)
+#if defined(GOOGLE_CHROME_BUILD) || defined(USE_PROPRIETARY_CODECS)
   "avc1",
   "mp4a",
 #endif
   "theora",
   "vorbis",
+  "vp8",
+  "1"  // PCM for WAV.
 };
 
 // Note: does not include javascript types list (see supported_javascript_types)
@@ -282,6 +301,17 @@ static const char* const view_source_types[] = {
   "image/svg+xml"
 };
 
+struct MediaFormatStrict {
+  const char* mime_type;
+  const char* codecs_list;
+};
+
+static const MediaFormatStrict format_codec_mappings[] = {
+  { "video/webm", "vorbis,vp8,vp8.0" },
+  { "audio/webm", "vorbis" },
+  { "audio/wav", "1" }
+};
+
 void MimeUtil::InitializeMimeTypeMaps() {
   for (size_t i = 0; i < arraysize(supported_image_types); ++i)
     image_map_.insert(supported_image_types[i]);
@@ -306,6 +336,19 @@ void MimeUtil::InitializeMimeTypeMaps() {
 
   for (size_t i = 0; i < arraysize(supported_media_codecs); ++i)
     codecs_map_.insert(supported_media_codecs[i]);
+
+  // Initialize the strict supported media types.
+  for (size_t i = 0; i < arraysize(format_codec_mappings); ++i) {
+    std::vector<std::string> mime_type_codecs;
+    ParseCodecString(format_codec_mappings[i].codecs_list,
+                     &mime_type_codecs,
+                     false);
+
+    MimeMappings codecs;
+    for (size_t j = 0; j < mime_type_codecs.size(); ++j)
+      codecs.insert(mime_type_codecs[j]);
+    strict_format_map_[format_codec_mappings[i].mime_type] = codecs;
+  }
 }
 
 bool MimeUtil::IsSupportedImageMimeType(const char* mime_type) const {
@@ -383,12 +426,16 @@ bool MimeUtil::AreSupportedMediaCodecs(
 }
 
 void MimeUtil::ParseCodecString(const std::string& codecs,
-                                std::vector<std::string>* codecs_out) {
+                                std::vector<std::string>* codecs_out,
+                                bool strip) {
   std::string no_quote_codecs;
   TrimString(codecs, "\"", &no_quote_codecs);
   SplitString(no_quote_codecs, ',', codecs_out);
 
-  // Truncate each string at the '.'
+  if (!strip)
+    return;
+
+  // Strip everything past the first '.'
   for (std::vector<std::string>::iterator it = codecs_out->begin();
        it != codecs_out->end();
        ++it) {
@@ -396,6 +443,28 @@ void MimeUtil::ParseCodecString(const std::string& codecs,
     if (found != std::string::npos)
       it->resize(found);
   }
+}
+
+bool MimeUtil::IsStrictMediaMimeType(const std::string& mime_type) const {
+  if (strict_format_map_.find(mime_type) == strict_format_map_.end())
+    return false;
+  return true;
+}
+
+bool MimeUtil::IsSupportedStrictMediaMimeType(const std::string& mime_type,
+    const std::vector<std::string>& codecs) const {
+  StrictMappings::const_iterator it = strict_format_map_.find(mime_type);
+
+  if (it == strict_format_map_.end())
+    return false;
+
+  const MimeMappings strict_codecs_map = it->second;
+  for (size_t i = 0; i < codecs.size(); ++i) {
+    if (strict_codecs_map.find(codecs[i]) == strict_codecs_map.end()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 //----------------------------------------------------------------------------
@@ -453,9 +522,194 @@ bool AreSupportedMediaCodecs(const std::vector<std::string>& codecs) {
   return GetMimeUtil()->AreSupportedMediaCodecs(codecs);
 }
 
+bool IsStrictMediaMimeType(const std::string& mime_type) {
+  return GetMimeUtil()->IsStrictMediaMimeType(mime_type);
+}
+
+bool IsSupportedStrictMediaMimeType(const std::string& mime_type,
+                                    const std::vector<std::string>& codecs) {
+  return GetMimeUtil()->IsSupportedStrictMediaMimeType(mime_type, codecs);
+}
+
 void ParseCodecString(const std::string& codecs,
-                      std::vector<std::string>* codecs_out) {
-  GetMimeUtil()->ParseCodecString(codecs, codecs_out);
+                      std::vector<std::string>* codecs_out,
+                      const bool strip) {
+  GetMimeUtil()->ParseCodecString(codecs, codecs_out, strip);
+}
+
+namespace {
+
+// From http://www.w3schools.com/media/media_mimeref.asp and
+// http://plugindoc.mozdev.org/winmime.php
+static const char* kStandardImageTypes[] = {
+  "image/bmp",
+  "image/cis-cod",
+  "image/gif",
+  "image/ief",
+  "image/jpeg",
+  "image/pict",
+  "image/pipeg",
+  "image/png",
+  "image/svg+xml",
+  "image/tiff",
+  "image/x-cmu-raster",
+  "image/x-cmx",
+  "image/x-icon",
+  "image/x-portable-anymap",
+  "image/x-portable-bitmap",
+  "image/x-portable-graymap",
+  "image/x-portable-pixmap",
+  "image/x-rgb",
+  "image/x-xbitmap",
+  "image/x-xpixmap",
+  "image/x-xwindowdump"
+};
+static const char* kStandardAudioTypes[] = {
+  "audio/aac",
+  "audio/aiff",
+  "audio/amr",
+  "audio/basic",
+  "audio/midi",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/mpeg3",
+  "audio/ogg",
+  "audio/vorbis",
+  "audio/wav",
+  "audio/webm",
+  "audio/x-m4a",
+  "audio/x-ms-wma",
+  "audio/vnd.rn-realaudio",
+  "audio/vnd.wave"
+};
+static const char* kStandardVideoTypes[] = {
+  "video/avi",
+  "video/divx",
+  "video/flc",
+  "video/mp4",
+  "video/mpeg",
+  "video/ogg",
+  "video/quicktime",
+  "video/sd-video",
+  "video/webm",
+  "video/x-dv",
+  "video/x-m4v",
+  "video/x-mpeg",
+  "video/x-ms-asf",
+  "video/x-ms-wmv"
+};
+
+void GetExtensionsFromHardCodedMappings(
+    const MimeInfo* mappings,
+    size_t mappings_len,
+    const std::string& leading_mime_type,
+    base::hash_set<FilePath::StringType>* extensions) {
+  FilePath::StringType extension;
+  for (size_t i = 0; i < mappings_len; ++i) {
+    if (StartsWithASCII(mappings[i].mime_type, leading_mime_type, false)) {
+      std::vector<string> this_extensions;
+      base::SplitStringUsingSubstr(mappings[i].extensions,
+                                   ",",
+                                   &this_extensions);
+      for (size_t j = 0; j < this_extensions.size(); ++j) {
+#if defined(OS_WIN)
+        FilePath::StringType extension(UTF8ToWide(this_extensions[j]));
+#else
+        FilePath::StringType extension(this_extensions[j]);
+#endif
+        extensions->insert(extension);
+      }
+    }
+  }
+}
+
+void GetExtensionsHelper(
+    const char** standard_types,
+    size_t standard_types_len,
+    const std::string& leading_mime_type,
+    base::hash_set<FilePath::StringType>* extensions) {
+  FilePath::StringType extension;
+  for (size_t i = 0; i < standard_types_len; ++i) {
+    if (net::GetPreferredExtensionForMimeType(standard_types[i], &extension))
+      extensions->insert(extension);
+  }
+
+  // Also look up the extensions from hard-coded mappings in case that some
+  // supported extensions are not registered in the system registry, like ogg.
+  GetExtensionsFromHardCodedMappings(primary_mappings,
+                                     arraysize(primary_mappings),
+                                     leading_mime_type,
+                                     extensions);
+
+  GetExtensionsFromHardCodedMappings(secondary_mappings,
+                                     arraysize(secondary_mappings),
+                                     leading_mime_type,
+                                     extensions);
+}
+
+// Note that the elements in the source set will be appended to the target
+// vector.
+template<class T>
+void HashSetToVector(base::hash_set<T>* source, std::vector<T>* target) {
+  size_t old_target_size = target->size();
+  target->resize(old_target_size + source->size());
+  size_t i = 0;
+  for (typename base::hash_set<T>::iterator iter = source->begin();
+       iter != source->end(); ++iter, ++i) {
+    target->at(old_target_size + i) = *iter;
+  }
+}
+
+}
+
+void GetImageExtensions(std::vector<FilePath::StringType>* extensions) {
+  base::hash_set<FilePath::StringType> unique_extensions;
+  GetExtensionsHelper(kStandardImageTypes,
+                      arraysize(kStandardImageTypes),
+                      "image/",
+                      &unique_extensions);
+  HashSetToVector(&unique_extensions, extensions);
+}
+
+void GetAudioExtensions(std::vector<FilePath::StringType>* extensions) {
+  base::hash_set<FilePath::StringType> unique_extensions;
+  GetExtensionsHelper(kStandardAudioTypes,
+                      arraysize(kStandardAudioTypes),
+                      "audio/",
+                      &unique_extensions);
+  HashSetToVector(&unique_extensions, extensions);
+}
+
+void GetVideoExtensions(std::vector<FilePath::StringType>* extensions) {
+  base::hash_set<FilePath::StringType> unique_extensions;
+  GetExtensionsHelper(kStandardVideoTypes,
+                      arraysize(kStandardVideoTypes),
+                      "video/",
+                      &unique_extensions);
+  HashSetToVector(&unique_extensions, extensions);
+}
+
+void GetExtensionsForMimeType(const std::string& mime_type,
+                              std::vector<FilePath::StringType>* extensions) {
+  base::hash_set<FilePath::StringType> unique_extensions;
+  FilePath::StringType extension;
+  if (net::GetPreferredExtensionForMimeType(mime_type, &extension))
+    unique_extensions.insert(extension);
+
+  // Also look up the extensions from hard-coded mappings in case that some
+  // supported extensions are not registered in the system registry, like ogg.
+  GetExtensionsFromHardCodedMappings(primary_mappings,
+                                     arraysize(primary_mappings),
+                                     mime_type,
+                                     &unique_extensions);
+
+  GetExtensionsFromHardCodedMappings(secondary_mappings,
+                                     arraysize(secondary_mappings),
+                                     mime_type,
+                                     &unique_extensions);
+
+  HashSetToVector(&unique_extensions, extensions);
 }
 
 }  // namespace net

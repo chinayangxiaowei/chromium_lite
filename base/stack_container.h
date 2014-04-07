@@ -4,6 +4,7 @@
 
 #ifndef BASE_STACK_CONTAINER_H_
 #define BASE_STACK_CONTAINER_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -168,7 +169,7 @@ class StackContainer {
   Allocator allocator_;
   ContainerType container_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(StackContainer);
+  DISALLOW_COPY_AND_ASSIGN(StackContainer);
 };
 
 // StackString
@@ -187,7 +188,7 @@ class StackString : public StackContainer<
   }
 
  private:
-  DISALLOW_EVIL_CONSTRUCTORS(StackString);
+  DISALLOW_COPY_AND_ASSIGN(StackString);
 };
 
 // StackWString
@@ -206,7 +207,7 @@ class StackWString : public StackContainer<
   }
 
  private:
-  DISALLOW_EVIL_CONSTRUCTORS(StackWString);
+  DISALLOW_COPY_AND_ASSIGN(StackWString);
 };
 
 // StackVector

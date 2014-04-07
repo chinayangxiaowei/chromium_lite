@@ -8,6 +8,7 @@
 
 #include "base/task.h"
 #include "base/time.h"
+#include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/autofill/autofill_profile.h"
 #include "chrome/browser/chrome_thread.h"
@@ -32,23 +33,20 @@ static const int kMaxNumAttemptsToFindUniqueLabel = 100;
 AutofillModelAssociator::AutofillModelAssociator(
     ProfileSyncService* sync_service,
     WebDatabase* web_database,
-    PersonalDataManager* personal_data,
-    UnrecoverableErrorHandler* error_handler)
+    PersonalDataManager* personal_data)
     : sync_service_(sync_service),
       web_database_(web_database),
       personal_data_(personal_data),
-      error_handler_(error_handler),
       autofill_node_id_(sync_api::kInvalidId),
       abort_association_pending_(false) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
   DCHECK(sync_service_);
   DCHECK(web_database_);
-  DCHECK(error_handler_);
   DCHECK(personal_data_);
 }
 
 AutofillModelAssociator::~AutofillModelAssociator() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
 }
 
 bool AutofillModelAssociator::TraverseAndAssociateChromeAutofillEntries(
@@ -96,7 +94,7 @@ bool AutofillModelAssociator::TraverseAndAssociateChromeAutofillEntries(
         LOG(ERROR) << "Failed to create autofill sync node.";
         return false;
       }
-      node.SetTitle(UTF16ToWide(ix->key().name() + ix->key().value()));
+      node.SetTitle(UTF8ToWide(tag));
       AutofillChangeProcessor::WriteAutofillEntry(*ix, &node);
       Associate(&tag, node.GetId());
     }
@@ -127,7 +125,7 @@ bool AutofillModelAssociator::TraverseAndAssociateChromeAutoFillProfiles(
       int64 sync_id = node.GetId();
       if (id_map_.find(tag) != id_map_.end()) {
         // We just looked up something we already associated.  Move aside.
-        label = MakeUniqueLabel(label, write_trans);
+        label = MakeUniqueLabel(label, string16(), write_trans);
         if (label.empty()) {
           return false;
         }
@@ -161,11 +159,18 @@ bool AutofillModelAssociator::TraverseAndAssociateChromeAutoFillProfiles(
 
 // static
 string16 AutofillModelAssociator::MakeUniqueLabel(
-    const string16& non_unique_label, sync_api::BaseTransaction* trans) {
+    const string16& non_unique_label,
+    const string16& existing_unique_label,
+    sync_api::BaseTransaction* trans) {
+  if (!non_unique_label.empty() && non_unique_label == existing_unique_label) {
+    return existing_unique_label;
+  }
   int unique_id = 1;  // Priming so we start by appending "2".
   while (unique_id++ < kMaxNumAttemptsToFindUniqueLabel) {
-    string16 suffix(UTF8ToUTF16(IntToString(unique_id)));
+    string16 suffix(base::IntToString16(unique_id));
     string16 unique_label = non_unique_label + suffix;
+    if (unique_label == existing_unique_label)
+      return unique_label;  // We'll use the one we already have.
     sync_api::ReadNode node(trans);
     if (node.InitByClientTagLookup(syncable::AUTOFILL,
                                    ProfileLabelToTag(unique_label))) {
@@ -211,7 +216,7 @@ bool AutofillModelAssociator::LoadAutofillData(
 
 bool AutofillModelAssociator::AssociateModels() {
   LOG(INFO) << "Associating Autofill Models";
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
   {
     AutoLock lock(abort_association_pending_lock_);
     abort_association_pending_ = false;
@@ -258,13 +263,13 @@ bool AutofillModelAssociator::AssociateModels() {
     return false;
   }
 
-  ChromeThread::PostTask(ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
       new DoOptimisticRefreshTask(personal_data_));
   return true;
 }
 
 bool AutofillModelAssociator::SaveChangesToWebData(const DataBundle& bundle) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
 
   if (IsAbortPending())
     return false;
@@ -294,7 +299,7 @@ bool AutofillModelAssociator::TraverseAndAssociateAllSyncNodes(
     sync_api::WriteTransaction* write_trans,
     const sync_api::ReadNode& autofill_root,
     DataBundle* bundle) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
 
   int64 sync_child_id = autofill_root.GetFirstChildId();
   while (sync_child_id != sync_api::kInvalidId) {
@@ -321,7 +326,7 @@ bool AutofillModelAssociator::TraverseAndAssociateAllSyncNodes(
 void AutofillModelAssociator::AddNativeEntryIfNeeded(
     const sync_pb::AutofillSpecifics& autofill, DataBundle* bundle,
     const sync_api::ReadNode& node) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
   AutofillKey key(UTF8ToUTF16(autofill.name()), UTF8ToUTF16(autofill.value()));
 
   if (bundle->current_entries.find(key) == bundle->current_entries.end()) {
@@ -340,7 +345,7 @@ void AutofillModelAssociator::AddNativeEntryIfNeeded(
 void AutofillModelAssociator::AddNativeProfileIfNeeded(
     const sync_pb::AutofillProfileSpecifics& profile, DataBundle* bundle,
     const sync_api::ReadNode& node) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
   if (bundle->current_profiles.find(UTF8ToUTF16(profile.label())) ==
       bundle->current_profiles.end()) {
     std::string tag(ProfileLabelToTag(UTF8ToUTF16(profile.label())));
@@ -383,15 +388,8 @@ bool AutofillModelAssociator::SyncModelHasUserCreatedNodes(bool* has_nodes) {
   return true;
 }
 
-bool AutofillModelAssociator::ChromeModelHasUserCreatedNodes(bool* has_nodes) {
-  DCHECK(has_nodes);
-  // Assume the autofill model always have user-created nodes.
-  *has_nodes = true;
-  return true;
-}
-
 void AutofillModelAssociator::AbortAssociation() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   AutoLock lock(abort_association_pending_lock_);
   abort_association_pending_ = true;
 }
@@ -404,7 +402,7 @@ int64 AutofillModelAssociator::GetSyncIdFromChromeId(
 
 void AutofillModelAssociator::Associate(
     const std::string* autofill, int64 sync_id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
   DCHECK_NE(sync_api::kInvalidId, sync_id);
   DCHECK(id_map_.find(*autofill) == id_map_.end());
   DCHECK(id_map_inverse_.find(sync_id) == id_map_inverse_.end());
@@ -413,7 +411,7 @@ void AutofillModelAssociator::Associate(
 }
 
 void AutofillModelAssociator::Disassociate(int64 sync_id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::DB));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
   SyncIdToAutofillMap::iterator iter = id_map_inverse_.find(sync_id);
   if (iter == id_map_inverse_.end())
     return;

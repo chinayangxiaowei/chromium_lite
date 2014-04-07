@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_POPUP_VIEW_MAC_H_
 #define CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_POPUP_VIEW_MAC_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -20,6 +21,7 @@
 class AutocompletePopupModel;
 class AutocompleteEditModel;
 class AutocompleteEditViewMac;
+@class NSImage;
 class Profile;
 
 // Implements AutocompletePopupView using a raw NSWindow containing an
@@ -32,7 +34,6 @@ class AutocompletePopupViewMac : public AutocompletePopupView {
  public:
   AutocompletePopupViewMac(AutocompleteEditViewMac* edit_view,
                            AutocompleteEditModel* edit_model,
-                           const BubblePositioner* bubble_positioner,
                            Profile* profile,
                            NSTextField* field);
   virtual ~AutocompletePopupViewMac();
@@ -61,6 +62,9 @@ class AutocompletePopupViewMac : public AutocompletePopupView {
   }
   virtual void UpdatePopupAppearance();
 
+  // Set |line| to be selected.
+  void SetSelectedLine(size_t line);
+
   // This is only called by model in SetSelectedLine() after updating
   // everything.  Popup should already be visible.
   virtual void PaintUpdatesNow();
@@ -69,6 +73,8 @@ class AutocompletePopupViewMac : public AutocompletePopupView {
 
   // Returns the popup's model.
   virtual AutocompletePopupModel* GetModel();
+
+  virtual int GetMaxYCoordinate();
 
   // Opens the URL corresponding to the given |row|.  If |force_background| is
   // true, forces the URL to open in a background tab.  Otherwise, determines
@@ -107,13 +113,24 @@ class AutocompletePopupViewMac : public AutocompletePopupView {
   // Create the popup_ instance if needed.
   void CreatePopupIfNeeded();
 
+  // Calculate the appropriate position for the popup based on the
+  // field's screen position and the given target for the matrix
+  // height, and makes the popup visible.  Animates to the new frame
+  // if the popup shrinks, snaps to the new frame if the popup grows,
+  // allows existing animations to continue if the size doesn't
+  // change.
+  void PositionPopup(const CGFloat matrixHeight);
+
+  // Returns the NSImage that should be used as an icon for the given match.
+  NSImage* ImageForMatch(const AutocompleteMatch& match);
+
   scoped_ptr<AutocompletePopupModel> model_;
   AutocompleteEditViewMac* edit_view_;
-  const BubblePositioner* bubble_positioner_;  // owned by toolbar controller
   NSTextField* field_;  // owned by tab controller
 
   // Child window containing a matrix which implements the popup.
   scoped_nsobject<NSWindow> popup_;
+  NSRect targetPopupFrame_;
 
   DISALLOW_COPY_AND_ASSIGN(AutocompletePopupViewMac);
 };

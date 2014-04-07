@@ -7,14 +7,16 @@
 
 #ifndef CHROME_BROWSER_IMPORTER_TOOLBAR_IMPORTER_H_
 #define CHROME_BROWSER_IMPORTER_TOOLBAR_IMPORTER_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
+#include "base/gtest_prod_util.h"
+#include "base/string16.h"
 #include "chrome/browser/importer/importer.h"
 #include "chrome/browser/importer/importer_data_types.h"
-#include "chrome/browser/net/url_fetcher.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
+#include "chrome/common/net/url_fetcher.h"
 
 class ImporterBridge;
 class XmlReader;
@@ -58,7 +60,7 @@ class Toolbar5Importer : public URLFetcher::Delegate, public Importer {
                           const std::string& data);
 
  private:
-  FRIEND_TEST(Toolbar5ImporterTest, BookmarkParse);
+  FRIEND_TEST_ALL_PREFIXES(Toolbar5ImporterTest, BookmarkParse);
 
   virtual ~Toolbar5Importer();
 
@@ -121,7 +123,8 @@ class Toolbar5Importer : public URLFetcher::Delegate, public Importer {
 
   static bool ParseBookmarksFromReader(
       XmlReader* reader,
-      std::vector<ProfileWriter::BookmarkEntry>* bookmarks);
+      std::vector<ProfileWriter::BookmarkEntry>* bookmarks,
+      const string16& bookmark_group_string);
 
   static bool LocateNextOpenTag(XmlReader* reader);
   static bool LocateNextTagByName(XmlReader* reader, const std::string& tag);
@@ -133,7 +136,8 @@ class Toolbar5Importer : public URLFetcher::Delegate, public Importer {
   static bool ExtractBookmarkInformation(
       XmlReader* reader,
       ProfileWriter::BookmarkEntry* bookmark_entry,
-      std::vector<BookmarkFolderType>* bookmark_folders);
+      std::vector<BookmarkFolderType>* bookmark_folders,
+      const string16& bookmark_group_string);
   static bool ExtractNamedValueFromXmlReader(XmlReader* reader,
                                              const std::string& name,
                                              std::string* buffer);
@@ -145,7 +149,8 @@ class Toolbar5Importer : public URLFetcher::Delegate, public Importer {
                                        ProfileWriter::BookmarkEntry* entry);
   static bool ExtractFoldersFromXmlReader(
       XmlReader* reader,
-      std::vector<BookmarkFolderType>* bookmark_folders);
+      std::vector<BookmarkFolderType>* bookmark_folders,
+      const string16& bookmark_group_string);
 
   // Bookmark creation is done by the method below.
   void AddBookmarksToChrome(

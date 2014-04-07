@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_COMMON_NOTIFICATION_TYPE_H_
 #define CHROME_COMMON_NOTIFICATION_TYPE_H_
+#pragma once
 
 // This file describes various types used to describe and filter notifications
 // that pass through the NotificationService.
@@ -85,6 +86,10 @@ class NotificationType {
 
     // Other load-related (not from NavigationController) ----------------------
 
+    // Corresponds to ViewHostMsg_DocumentOnLoadCompletedInMainFrame. The source
+    // is the TabContents and the details the page_id.
+    LOAD_COMPLETED_MAIN_FRAME,
+
     // A content load is starting.  The source will be a
     // Source<NavigationController> corresponding to the tab in which the load
     // is occurring.  No details are expected for this notification.
@@ -98,9 +103,16 @@ class NotificationType {
 
     // A frame is staring a provisional load.  The source is a
     // Source<NavigationController> corresponding to the tab in which the load
-    // occurs.  Details is a bool specifying if the load occurs in the main
-    // frame (or a sub-frame if false).
+    // occurs.  Details is a ProvisionalLoadDetails object.
     FRAME_PROVISIONAL_LOAD_START,
+
+    // The provisional load for a frame was committed. The source is a
+    // NavigationController corresponding to the tab in which the load occured.
+    // Details is a ProvisionalLoadDetails object. In contrast to
+    // NAV_ENTRY_COMMITTED, this notification is sent when the load was
+    // committed, even if no navigation entry was committed (such as
+    // AUTO_SUBFRAME navigations).
+    FRAME_PROVISIONAL_LOAD_COMMITTED,
 
     // Content was loaded from an in-memory cache.  The source will be a
     // Source<NavigationController> corresponding to the tab in which the load
@@ -131,16 +143,15 @@ class NotificationType {
     // Updating the SSL security indicators (the lock icon and such) proceeds
     // in two phases:
     //
-    // 1) An SSLManager changes the SSLHostState (which hangs off the profile
-    //    object).  When this happens, the SSLManager broadcasts an
-    //    SSL_INTERNAL_STATE_CHANGED notification.
+    // 1) The internal SSL state for a host or tab changes.  When this happens,
+    //    the SSLManager broadcasts an SSL_INTERNAL_STATE_CHANGED notification.
     //
     // 2) The SSLManager for each tab receives this notification and might or
     //    might not update the navigation entry for its tab, depending on
-    //    whether the change in SSLHostState affects that tab.  If the
-    //    SSLManager does change the navigation entry, then the SSLManager
-    //    broadcasts an SSL_VISIBLE_STATE_CHANGED notification to the user
-    //    interface can redraw properly.
+    //    whether the change in state affects that tab.  If the SSLManager does
+    //    change the navigation entry, then the SSLManager broadcasts an
+    //    SSL_VISIBLE_STATE_CHANGED notification to the user interface can
+    //    redraw properly.
 
     // The SSL state of a page has changed in some visible way.  For example,
     // if an insecure resource is loaded on a secure page.  Note that a
@@ -149,9 +160,7 @@ class NotificationType {
     // case.  Listen to this notification if you need to refresh SSL-related UI
     // elements.
     //
-    // The source will be the navigation controller associated with the load.
-    // There are no details.  The entry changed will be the active entry of the
-    // controller.
+    // There is no source or details.
     SSL_VISIBLE_STATE_CHANGED,
 
     // The SSL state of the browser has changed in some internal way.  For
@@ -201,10 +210,11 @@ class NotificationType {
 
     // This message is sent after a window has been closed.  The source is a
     // Source<Browser> containing the affected Browser.  Details is a boolean
-    // that if true indicates that the application will be closed as a result of
-    // this browser window closure (i.e. this was the last opened browser
-    // window on win/linux).  Note that the boolean pointed to by details is
-    // only valid for the duration of this call.
+    // that if true indicates that the last browser window has closed - this
+    // does not indicate that the application is exiting (observers should
+    // listen for APP_TERMINATING if they want to detect when the application
+    // will shut down). Note that the boolean pointed to by details is only
+    // valid for the duration of this call.
     BROWSER_CLOSED,
 
     // This message is sent when the last window considered to be an
@@ -217,10 +227,20 @@ class NotificationType {
     // This message is sent when the application is made active (Mac OS X only
     // at present). No source or details are passed.
     APP_ACTIVATED,
+#endif
 
-    // This message is sent when the application is terminating (Mac OS X only
-    // at present). No source or details are passed.
+    // This message is sent when the application is terminating (the last
+    // browser window has shutdown as part of an explicit user-initiated exit,
+    // or the user closed the last browser window on Windows/Linux and there are
+    // no BackgroundContents keeping the browser running). No source or details
+    // are passed.
     APP_TERMINATING,
+
+#if defined(OS_MACOSX)
+    // This notification is sent when the app has no key window, such as when
+    // all windows are closed but the app is still active. No source or details
+    // are provided.
+    NO_KEY_WINDOW,
 #endif
 
     // This is sent when the user has chosen to exit the app, but before any
@@ -253,6 +273,9 @@ class NotificationType {
     PAGE_TRANSLATED,
 
     // Sent after the renderer returns a snapshot of tab contents.
+    // The source (Source<RenderViewHost>) is the RenderViewHost for which the
+    // snapshot was generated and the details (Details<const SkBitmap>) is the
+    // actual snapshot.
     TAB_SNAPSHOT_TAKEN,
 
     // Send after the code is run in specified tab.
@@ -270,10 +293,6 @@ class NotificationType {
     // Sent after an application-modal dialog has been shown. The source
     // is the dialog.
     APP_MODAL_DIALOG_SHOWN,
-
-    // Sent after an application-modal dialog has been closed. The source
-    // is the dialog.
-    APP_MODAL_DIALOG_CLOSED,
 
     // Tabs --------------------------------------------------------------------
 
@@ -315,6 +334,11 @@ class NotificationType {
     // renderer process.  The source is a Source<TabContents> with a pointer to
     // the TabContents (the pointer is usable).  No details are expected.
     TAB_CONTENTS_DISCONNECTED,
+
+    // This notification is sent after TabContents' title is updated. The source
+    // is a Source<TabContents> with a pointer to the TabContents. No details
+    // are expected.
+    TAB_CONTENTS_TITLE_UPDATED,
 
     // This message is sent when a new InfoBar has been added to a TabContents.
     // The source is a Source<TabContents> with a pointer to the TabContents
@@ -410,12 +434,25 @@ class NotificationType {
     // first RenderViewHost is set).
     RENDER_VIEW_HOST_CHANGED,
 
+    // Indicates that the render view host has received an accessibility tree
+    // update, either partial or full, from the render view.  The source is the
+    // RenderViewHost, the details are not used.
+    RENDER_VIEW_HOST_ACCESSIBILITY_TREE_UPDATED,
+
     // This is sent when a RenderWidgetHost is being destroyed. The source is
     // the RenderWidgetHost, the details are not used.
     RENDER_WIDGET_HOST_DESTROYED,
 
     // Sent from ~RenderViewHost. The source is the TabContents.
     RENDER_VIEW_HOST_DELETED,
+
+    // Sent from RenderViewHost::ClosePage.  The hosted RenderView has
+    // processed the onbeforeunload handler and is about to be sent a
+    // ViewMsg_ClosePage message to complete the tear-down process.  The source
+    // is the RenderViewHost sending the message, and no details are provided.
+    // Note:  This message is not sent in response to RenderView closure
+    // initiated by window.close().
+    RENDER_VIEW_HOST_WILL_CLOSE_RENDER_VIEW,
 
     // Indicates a RenderWidgetHost has been hidden or restored. The source is
     // the RWH whose visibility changed, the details is a bool set to true if
@@ -442,11 +479,6 @@ class NotificationType {
     // NoDetails.
     BOOKMARK_BAR_VISIBILITY_PREF_CHANGED,
 
-    // This is sent when the user's preference (for when the extension shelf
-    // should be shown) changes. The source is the profile, and the details are
-    // NoDetails.
-    EXTENSION_SHELF_VISIBILITY_PREF_CHANGED,
-
     // Sent just before the installation confirm dialog is shown. The source
     // is the ExtensionInstallUI, the details are NoDetails.
     EXTENSION_WILL_SHOW_CONFIRM_DIALOG,
@@ -461,6 +493,35 @@ class NotificationType {
     // The focused element inside a page has changed.  The source is the render
     // view host for the page, there are no details.
     FOCUS_CHANGED_IN_PAGE,
+
+    // Notification posted from ExecuteJavascriptInWebFrameNotifyResult. The
+    // source is the RenderViewHost ExecuteJavascriptInWebFrameNotifyResult was
+    // invoked on. The details are a std::pair<int, Value*> with the int giving
+    // the id returned from ExecuteJavascriptInWebFrameNotifyResult and the
+    // Value the results of the javascript expression. The Value is owned by
+    // RenderViewHost.
+    EXECUTE_JAVASCRIPT_RESULT,
+
+    // BackgroundContents ------------------------------------------------------
+
+    // A new background contents was opened by script. The source is the parent
+    // profile and the details are BackgroundContentsOpenedDetails.
+    BACKGROUND_CONTENTS_OPENED,
+
+    // The background contents navigated to a new location. The source is the
+    // parent Profile, and the details are the BackgroundContents that was
+    // navigated.
+    BACKGROUND_CONTENTS_NAVIGATED,
+
+    // The background contents were closed by someone invoking window.close()
+    // or the parent application was uninstalled.
+    // The source is the parent profile, and the details are the
+    // BackgroundContents.
+    BACKGROUND_CONTENTS_CLOSED,
+
+    // The background contents is being deleted. The source is the
+    // parent Profile, and the details are the BackgroundContents being deleted.
+    BACKGROUND_CONTENTS_DELETED,
 
     // Child Processes ---------------------------------------------------------
 
@@ -497,6 +558,14 @@ class NotificationType {
     // thread or the plugin thread. The source is the plugin that is disabling
     // interception.  No details are expected.
     CHROME_PLUGIN_UNLOADED,
+
+    // This is sent in the RenderView when previously blocked plugins on a page
+    // should be loaded. The source is the RenderView. No details are expected.
+    SHOULD_LOAD_PLUGINS,
+
+    // Sent by the PluginUpdater when there is a change of plugin
+    // enable/disable status.
+    PLUGIN_ENABLE_STATUS_CHANGED,
 
     // This is sent when a login prompt is shown.  The source is the
     // Source<NavigationController> for the tab in which the prompt is shown.
@@ -572,15 +641,22 @@ class NotificationType {
     // browser window should notify the user of this error.
     PROFILE_ERROR,
 
+    // Sent after an incognito profile has been created. The details are none
+    // and the source is the new profile.
+    OTR_PROFILE_CREATED,
+
     // Sent before a Profile is destroyed. The details are
     // none and the source is a Profile*.
     PROFILE_DESTROYED,
 
     // Thumbnails---------------------------------------------------------------
 
-    // Set by ThumbnailStore when it was finished loading data from disk on
-    // startup.
-    THUMBNAIL_STORE_READY,
+    // Sent by the ThumbnailGenerator whenever a render widget host
+    // updates its backing store.  The source is the
+    // ThumbnailGenerator, and the details are the RenderWidgetHost
+    // that notified the ThumbnailGenerator that its backing store was
+    // updated.
+    THUMBNAIL_GENERATOR_SNAPSHOT_CHANGED,
 
     // Bookmarks ---------------------------------------------------------------
 
@@ -624,7 +700,8 @@ class NotificationType {
     // the profile. No details are provided.
     WEB_APP_INSTALL_CHANGED,
 
-    // This is sent to a pref observer when a pref is changed.
+    // This is sent to a pref observer when a pref is changed. The source is the
+    // PrefService and the details a std::string of the changed path.
     PREF_CHANGED,
 
     // Sent when a default request context has been created, so calling
@@ -632,6 +709,10 @@ class NotificationType {
     // on the thread where Profile::GetRequestContext() is first called, which
     // should be the UI thread.
     DEFAULT_REQUEST_CONTEXT_AVAILABLE,
+
+    // A new web resource has been made available. Source is the
+    // WebResourceService, and the details are NoDetails.
+    WEB_RESOURCE_AVAILABLE,
 
     // Autocomplete ------------------------------------------------------------
 
@@ -654,6 +735,9 @@ class NotificationType {
 
     // Sent by the autocomplete edit when it is destroyed.
     AUTOCOMPLETE_EDIT_DESTROYED,
+
+    // Sent by the autocomplete edit when it is focused.
+    AUTOCOMPLETE_EDIT_FOCUSED,
 
     // Sent when the main Google URL has been updated.  Some services cache
     // this value and need to update themselves when it changes.  See
@@ -714,8 +798,7 @@ class NotificationType {
     // manager and the details are the download url.
     EXTENSION_READY_FOR_INSTALL,
 
-    // Sent on ExtensionOverinstallAttempted when no theme is detected. The
-    // source is a Profile.
+    // Sent when an extension install turns out to not be a theme.
     NO_THEME_DETECTED,
 
     // Sent when a new theme is installed. The details are an Extension, and the
@@ -730,9 +813,9 @@ class NotificationType {
     // details about why the install failed.
     EXTENSION_INSTALL_ERROR,
 
-    // An overinstall error occured during extension install. The details are a
-    // FilePath to the extension that was attempted to install.
-    EXTENSION_OVERINSTALL_ERROR,
+    // Sent when an extension has been uninstalled.  The details are
+    // an UninstalledExtensionInfo struct and the source is a Profile.
+    EXTENSION_UNINSTALLED,
 
     // Sent when an extension is unloaded. This happens when an extension is
     // uninstalled or disabled. The details are an Extension, and the source is
@@ -744,6 +827,10 @@ class NotificationType {
 
     // Same as above, but for a disabled extension.
     EXTENSION_UNLOADED_DISABLED,
+
+    // Sent when an extension has updated its user scripts. The details are an
+    // Extension, and the source is a Profile.
+    EXTENSION_USER_SCRIPTS_UPDATED,
 
     // Sent after a new ExtensionFunctionDispatcher is created. The details are
     // an ExtensionFunctionDispatcher* and the source is a Profile*. This is
@@ -783,14 +870,14 @@ class NotificationType {
     // during browser shutdown.
     EXTENSION_PROCESS_TERMINATED,
 
-    // Sent when the contents or order of toolstrips in the shelf model change.
-    EXTENSION_SHELF_MODEL_CHANGED,
-
     // Sent when a background page is ready so other components can load.
     EXTENSION_BACKGROUND_PAGE_READY,
 
     // Sent when a pop-up extension view is ready, so that notification may
-    // be sent to pending callbacks.
+    // be sent to pending callbacks.  Note that this notification is sent
+    // after all onload callbacks have been invoked in the main frame.
+    // The details is the ExtensionHost* hosted within the popup, and the source
+    // is a Profile*.
     EXTENSION_POPUP_VIEW_READY,
 
     // Sent when a browser action's state has changed. The source is the
@@ -811,23 +898,30 @@ class NotificationType {
     EXTENSION_TEST_PASSED,
     EXTENSION_TEST_FAILED,
 
+    // Sent by extension test javascript code, typically in a browser test. The
+    // sender is a std::string representing the extension id, and the details
+    // are a std::string with some message. This is particularly useful when you
+    // want to have C++ code wait for javascript code to do something.
+    EXTENSION_TEST_MESSAGE,
+
     // Sent when an bookmarks extensions API function was successfully invoked.
     // The source is the id of the extension that invoked the function, and the
     // details are a pointer to the const BookmarksFunction in question.
     EXTENSION_BOOKMARKS_API_INVOKED,
 
-    // Privacy Blacklist -------------------------------------------------------
+    // Sent when an omnibox extension has sent back omnibox suggestions. The
+    // source is the profile, and the details are an ExtensionOmniboxSuggestions
+    // object.
+    EXTENSION_OMNIBOX_SUGGESTIONS_READY,
 
-    // Sent on the IO thread when a non-visual resource (like a cookie)
-    // is blocked by a privacy blacklist. The details are a const URLRequest,
-    // and the source is a const ChromeURLRequestContext.
-    BLACKLIST_NONVISUAL_RESOURCE_BLOCKED,
+    // Sent when the user accepts the input in an extension omnibox keyword
+    // session. The source is the profile.
+    EXTENSION_OMNIBOX_INPUT_ENTERED,
 
-    // Debugging ---------------------------------------------------------------
-
-    // TODO(mpcomplete): Sent to diagnose a bug. Remove when fixed.
-    // http://code.google.com/p/chromium/issues/detail?id=21201
-    EXTENSION_PORT_DELETED_DEBUG,
+    // Sent when an extension changes a preference value. The source is the
+    // profile, and the details are an ExtensionPrefStore::ExtensionPrefDetails
+    // object.
+    EXTENSION_PREF_CHANGED,
 
     // Desktop Notifications ---------------------------------------------------
 
@@ -870,6 +964,20 @@ class NotificationType {
     // memory in use, no source or details are passed. See memory_purger.h .cc.
     PURGE_MEMORY,
 
+    // Upgrade notifications ---------------------------------------------------
+
+    // Sent when Chrome detects that it has been upgraded behind the scenes.
+    // NOTE: The detection mechanism is asynchronous, so this event may arrive
+    // quite some time after the upgrade actually happened. No details are
+    // expected.
+    UPGRADE_DETECTED,
+
+    // Sent when Chrome believes an update has been installed and available for
+    // long enough with the user shutting down to let it take effect. See
+    // upgrade_detector.cc for details on how long it waits. No details are
+    // expected.
+    UPGRADE_RECOMMENDED,
+
     // Accessibility Notifications ---------------------------------------------
 
     // Notification that a window in the browser UI (not the web content)
@@ -910,6 +1018,19 @@ class NotificationType {
     // object, the details are ContentSettingsNotificationsDetails.
     CONTENT_SETTINGS_CHANGED,
 
+    // Sent when the collect cookies dialog is shown. The source is a
+    // TabSpecificContentSettings object, there are no details.
+    COLLECTED_COOKIES_SHOWN,
+
+    // Sent when the default setting for desktop notifications has changed.
+    // The source is the DesktopNotificationService, the details are None.
+    DESKTOP_NOTIFICATION_DEFAULT_CHANGED,
+
+    // Sent when a non-default setting in the the notification content settings
+    // map has changed. The source is the DesktopNotificationService, the
+    // details are None.
+    DESKTOP_NOTIFICATION_SETTINGS_CHANGED,
+
     // Sync --------------------------------------------------------------------
 
     // Sent when the sync backend has been paused.
@@ -924,15 +1045,103 @@ class NotificationType {
     // The sync service is finished the configuration process.
     SYNC_CONFIGURE_DONE,
 
+    // The session service has been saved.  This notification type is only sent
+    // if there were new SessionService commands to save, and not for no-op save
+    // operations.
+    SESSION_SERVICE_SAVED,
+
+    // A foreign session has been updated.  If a new tab page is open, the
+    // foreign session handler needs to update the new tab page's foreign
+    // session data.
+    FOREIGN_SESSION_UPDATED,
+
+    // A foreign session has been deleted.  If a new tab page is open, the
+    // foreign session handler needs to update the new tab page's foreign
+    // session data.
+    FOREIGN_SESSION_DELETED,
+
+    // The syncer requires a passphrase to decrypt sensitive updates. This
+    // notification is sent when the first sensitive data type is setup by the
+    // user as well as anytime any the passphrase is changed in another synced
+    // client.  The source is the SyncBackendHost wanting a passphrase.  No
+    // details.
+    SYNC_PASSPHRASE_REQUIRED,
+
+    // Sent when the passphrase provided by the user is accepted. After this
+    // notification is sent, updates to sensitive nodes are encrypted using the
+    // accepted passphrase.  The source is the SyncBackendHost that accepted
+    // the passphrase.  No details.
+    SYNC_PASSPHRASE_ACCEPTED,
+
+    // Sent when the set of data types that should be synced has been modified
+    // externally (eg. by the dom_ui options screen).
+    // The source is the Profile, there are no details.
+    SYNC_DATA_TYPES_UPDATED,
+
     // Cookies -----------------------------------------------------------------
 
     // Sent when a cookie changes. The source is a Profile object, the details
     // are a ChromeCookieDetails object.
     COOKIE_CHANGED,
 
+    // Sidebar -----------------------------------------------------------------
+
+    // Sent when the sidebar state is changed.
+    // The source is a SidebarManager instance, the details are the changed
+    // SidebarContainer object.
+    SIDEBAR_CHANGED,
+
+    // Token Service -----------------------------------------------------------
+
+    // When the token service has a new token available for a service, one of
+    // these notifications is issued per new token.
+    // The source is a TokenService on the Profile. The details are a
+    // TokenAvailableDetails object.
+    TOKEN_AVAILABLE,
+
+    // When there aren't any additional tokens left to load, this notification
+    // is sent.
+    // The source is a TokenService on the profile. There are no details.
+    TOKEN_LOADING_FINISHED,
+
+    // If a token request failed, one of these is issued per failed request.
+    // The source is a TokenService on the Profile. The details are a
+    // TokenRequestFailedDetails object.
+    TOKEN_REQUEST_FAILED,
+
+    // When a service has a new token they got from a frontend that the
+    // TokenService should know about, fire this notification. The details
+    // are a TokenAvailableDetails object.
+    TOKEN_UPDATED,
+
+    // Sent when a user signs into Google services such as sync.
+    // The source is the Profile. The details are a GoogleServiceSignin object.
+    GOOGLE_SIGNIN_SUCCESSFUL,
+
+    // Sent when a user fails to sign into Google services such as sync.
+    // The source is the Profile. The details are a GoogleServiceAuthError
+    // object.
+    GOOGLE_SIGNIN_FAILED,
+
+    // AutoFill Notifications --------------------------------------------------
+
+    // Sent when a popup with AutoFill suggestions is shown in the renderer.
+    // The source is the corresponding RenderViewHost. There are not details.
+    AUTOFILL_DID_SHOW_SUGGESTIONS,
+
+    // Sent when a form is previewed or filled with AutoFill suggestions.
+    // The source is the corresponding RenderViewHost. There are not details.
+    AUTOFILL_DID_FILL_FORM_DATA,
+
+
+    // Misc --------------------------------------------------------------------
+
 #if defined(OS_CHROMEOS)
     // Sent when a chromium os user logs in.
     LOGIN_USER_CHANGED,
+
+    // Sent when user image is updated.
+    LOGIN_USER_IMAGE_CHANGED,
 
     // Sent when a chromium os user attempts to log in.  The source is
     // all and the details are AuthenticationNotificationDetails.
@@ -940,6 +1149,36 @@ class NotificationType {
 
     // Sent when a panel state changed.
     PANEL_STATE_CHANGED,
+
+    // Sent when the wizard's content view is destroyed. The source and details
+    // are not used.
+    WIZARD_CONTENT_VIEW_DESTROYED,
+
+    // Sent when the screen lock state has changed. The source is
+    // ScreenLocker and the details is a bool specifing that the
+    // screen is locked. When details is a false, the source object
+    // is being deleted, so the receiver shouldn't use the screen locker
+    // object.
+    SCREEN_LOCK_STATE_CHANGED,
+
+    // Sent when the network state has changed on UI thread.
+    // The source is AllSources and the details is NetworkStateDetails defined
+    // in chrome/browser/chromeos/network_state_notifier.h.
+    // TODO(oshima): Port this to all platforms.
+    NETWORK_STATE_CHANGED,
+
+    // Sent when an attempt to acquire the public key of the owner of a chromium
+    // os device has succeeded.
+    OWNER_KEY_FETCH_ATTEMPT_SUCCEEDED,
+
+    // Sent when an attempt to acquire the public key of the owner of a chromium
+    // os device has failed.
+    OWNER_KEY_FETCH_ATTEMPT_FAILED,
+
+    // This is sent to a ChromeOS settings observer when a system setting is
+    // changed. The source is the CrosSettings and the details a std::string of
+    // the changed setting.
+    SYSTEM_SETTING_CHANGED,
 #endif
 
     // Sent before the repost form warning is brought up.
@@ -951,6 +1190,28 @@ class NotificationType {
     // tests that the context menu has been created and shown.
     BOOKMARK_CONTEXT_MENU_SHOWN,
 #endif
+
+    // Sent when the zoom level changes. The source is the profile.
+    ZOOM_LEVEL_CHANGED,
+
+    // Sent when the tab's closeable state has changed due to increase/decrease
+    // in number of tabs in browser or increase/decrease in number of browsers.
+    // Details<bool> contain the closeable flag while source is AllSources.
+    // This is only sent from ChromeOS's TabCloseableStateWatcher.
+    TAB_CLOSEABLE_STATE_CHANGED,
+
+    // Password Store ----------------------------------------------------------
+    // This notification is sent whenenever login entries stored in the password
+    // store are changed. The detail of this notification is a list of changes
+    // represented by a vector of PasswordStoreChange. Each change includes a
+    // change type (ADD, UPDATE, or REMOVE) as well as the
+    // |webkit_glue::PasswordForm|s that were affected.
+    LOGINS_CHANGED,
+
+    // Configuration Policy ----------------------------------------------------
+    // This notification is sent whenever the administrator changes policy.
+    // The detail of this notification is not used.
+    POLICY_CHANGED,
 
     // Count (must be last) ----------------------------------------------------
     // Used to determine the number of notification types.  Not valid as

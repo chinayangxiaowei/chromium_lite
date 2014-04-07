@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -73,7 +73,8 @@ SOCKSClientSocket::SOCKSClientSocket(ClientSocketHandle* transport_socket,
       bytes_sent_(0),
       bytes_received_(0),
       host_resolver_(host_resolver),
-      host_request_info_(req_info) {
+      host_request_info_(req_info),
+      net_log_(transport_socket->socket()->NetLog()) {
 }
 
 SOCKSClientSocket::SOCKSClientSocket(ClientSocket* transport_socket,
@@ -89,7 +90,8 @@ SOCKSClientSocket::SOCKSClientSocket(ClientSocket* transport_socket,
       bytes_sent_(0),
       bytes_received_(0),
       host_resolver_(host_resolver),
-      host_request_info_(req_info) {
+      host_request_info_(req_info),
+      net_log_(transport_socket->NetLog()) {
   transport_->set_socket(transport_socket);
 }
 
@@ -97,11 +99,9 @@ SOCKSClientSocket::~SOCKSClientSocket() {
   Disconnect();
 }
 
-int SOCKSClientSocket::Connect(CompletionCallback* callback,
-                               const BoundNetLog& net_log) {
+int SOCKSClientSocket::Connect(CompletionCallback* callback) {
   DCHECK(transport_.get());
   DCHECK(transport_->socket());
-  DCHECK(transport_->socket()->IsConnected());
   DCHECK_EQ(STATE_NONE, next_state_);
   DCHECK(!user_callback_);
 
@@ -110,16 +110,14 @@ int SOCKSClientSocket::Connect(CompletionCallback* callback,
     return OK;
 
   next_state_ = STATE_RESOLVE_HOST;
-  net_log_ = net_log;
 
-  net_log.BeginEvent(NetLog::TYPE_SOCKS_CONNECT);
+  net_log_.BeginEvent(NetLog::TYPE_SOCKS_CONNECT, NULL);
 
   int rv = DoLoop(OK);
   if (rv == ERR_IO_PENDING) {
     user_callback_ = callback;
   } else {
-    net_log.EndEvent(NetLog::TYPE_SOCKS_CONNECT);
-    net_log_ = BoundNetLog();
+    net_log_.EndEvent(NetLog::TYPE_SOCKS_CONNECT, NULL);
   }
   return rv;
 }
@@ -133,7 +131,6 @@ void SOCKSClientSocket::Disconnect() {
   // These are the states initialized by Connect().
   next_state_ = STATE_NONE;
   user_callback_ = NULL;
-  net_log_ = BoundNetLog();
 }
 
 bool SOCKSClientSocket::IsConnected() const {
@@ -142,6 +139,30 @@ bool SOCKSClientSocket::IsConnected() const {
 
 bool SOCKSClientSocket::IsConnectedAndIdle() const {
   return completed_handshake_ && transport_->socket()->IsConnectedAndIdle();
+}
+
+void SOCKSClientSocket::SetSubresourceSpeculation() {
+  if (transport_.get() && transport_->socket()) {
+    transport_->socket()->SetSubresourceSpeculation();
+  } else {
+    NOTREACHED();
+  }
+}
+
+void SOCKSClientSocket::SetOmniboxSpeculation() {
+  if (transport_.get() && transport_->socket()) {
+    transport_->socket()->SetOmniboxSpeculation();
+  } else {
+    NOTREACHED();
+  }
+}
+
+bool SOCKSClientSocket::WasEverUsed() const {
+  if (transport_.get() && transport_->socket()) {
+    return transport_->socket()->WasEverUsed();
+  }
+  NOTREACHED();
+  return false;
 }
 
 // Read is called by the transport layer above to read. This can only be done
@@ -190,8 +211,7 @@ void SOCKSClientSocket::OnIOComplete(int result) {
   DCHECK_NE(STATE_NONE, next_state_);
   int rv = DoLoop(result);
   if (rv != ERR_IO_PENDING) {
-    net_log_.EndEvent(NetLog::TYPE_SOCKS_CONNECT);
-    net_log_ = BoundNetLog();
+    net_log_.EndEvent(NetLog::TYPE_SOCKS_CONNECT, NULL);
     DoCallback(rv);
   }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,11 @@
 #include "base/process_util.h"
 #include "base/scoped_bstr_win.h"
 #include "base/singleton.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
+#include "base/trace_event.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/automation/tab_proxy.h"
@@ -112,6 +116,7 @@ HHOOK InstallLocalWindowHook(HWND window) {
 
 ChromeFrameActivex::ChromeFrameActivex()
     : chrome_wndproc_hook_(NULL) {
+  TRACE_EVENT_BEGIN("chromeframe.createactivex", this, "");
 }
 
 HRESULT ChromeFrameActivex::FinalConstruct() {
@@ -126,11 +131,11 @@ HRESULT ChromeFrameActivex::FinalConstruct() {
 
 ChromeFrameActivex::~ChromeFrameActivex() {
   // We expect these to be released during a call to SetClientSite(NULL).
-  DCHECK_EQ(0, onmessage_.size());
-  DCHECK_EQ(0, onloaderror_.size());
-  DCHECK_EQ(0, onload_.size());
-  DCHECK_EQ(0, onreadystatechanged_.size());
-  DCHECK_EQ(0, onextensionready_.size());
+  DCHECK_EQ(0u, onmessage_.size());
+  DCHECK_EQ(0u, onloaderror_.size());
+  DCHECK_EQ(0u, onload_.size());
+  DCHECK_EQ(0u, onreadystatechanged_.size());
+  DCHECK_EQ(0u, onextensionready_.size());
 
   if (chrome_wndproc_hook_) {
     BOOL unhook_success = ::UnhookWindowsHookEx(chrome_wndproc_hook_);
@@ -139,6 +144,8 @@ ChromeFrameActivex::~ChromeFrameActivex() {
 
   // ChromeFramePlugin::Uninitialize()
   Base::Uninitialize();
+
+  TRACE_EVENT_END("chromeframe.createactivex", this, "");
 }
 
 LRESULT ChromeFrameActivex::OnCreate(UINT message, WPARAM wparam, LPARAM lparam,
@@ -266,7 +273,7 @@ void ChromeFrameActivex::OnGetEnabledExtensionsComplete(
   for (size_t i = 0; i < extension_directories.size(); ++i) {
     LONG index = static_cast<LONG>(i);
     ::SafeArrayPutElement(sa, &index, reinterpret_cast<void*>(
-        CComBSTR(extension_directories[i].ToWStringHack().c_str()).Detach()));
+        CComBSTR(extension_directories[i].value().c_str()).Detach()));
   }
 
   Fire_ongetenabledextensionscomplete(sa);
@@ -324,10 +331,11 @@ STDMETHODIMP ChromeFrameActivex::Load(IPropertyBag* bag, IErrorLog* error_log) {
           FAILED(hr = CreateScriptBlockForEvent(element, object_id,
                                                 V_BSTR(&value), prop))) {
         DLOG(ERROR) << "Failed to create script block for " << prop
-                    << StringPrintf(L"hr=0x%08X, vt=%i", hr, value.type());
+                    << base::StringPrintf(L"hr=0x%08X, vt=%i", hr,
+                                         value.type());
       } else {
         DLOG(INFO) << "script block created for event " << prop <<
-            StringPrintf(" (0x%08X)", hr) << " connections: " <<
+            base::StringPrintf(" (0x%08X)", hr) << " connections: " <<
             ProxyDIChromeFrameEvents<ChromeFrameActivex>::m_vec.GetSize();
       }
     } else {
@@ -356,12 +364,12 @@ STDMETHODIMP ChromeFrameActivex::Load(IPropertyBag* bag, IErrorLog* error_log) {
   }
 
   DLOG_IF(ERROR, FAILED(hr))
-      << StringPrintf("Failed to load property bag: 0x%08X", hr);
+      << base::StringPrintf("Failed to load property bag: 0x%08X", hr);
 
   return hr;
 }
 
-const wchar_t g_activex_mixed_content_error[] = {
+const wchar_t g_activex_insecure_content_error[] = {
     L"data:text/html,<html><body><b>ChromeFrame Security Error<br><br>"
     L"Cannot navigate to HTTP url when document URL is HTTPS</body></html>"};
 
@@ -370,7 +378,7 @@ STDMETHODIMP ChromeFrameActivex::put_src(BSTR src) {
   if (document_url.SchemeIsSecure()) {
     GURL source_url(src);
     if (!source_url.SchemeIsSecure()) {
-      Base::put_src(ScopedBstr(g_activex_mixed_content_error));
+      Base::put_src(ScopedBstr(g_activex_insecure_content_error));
       return E_ACCESSDENIED;
     }
   }
@@ -405,8 +413,9 @@ HRESULT ChromeFrameActivex::IOleObject_SetClientSite(
 
     // Probe to see whether the host implements the privileged service.
     ScopedComPtr<IChromeFramePrivileged> service;
-    HRESULT service_hr = DoQueryService(SID_ChromeFramePrivileged, client_site,
-                                service.Receive());
+    HRESULT service_hr = DoQueryService(SID_ChromeFramePrivileged,
+                                        m_spClientSite,
+                                        service.Receive());
     if (SUCCEEDED(service_hr) && service) {
       // Does the host want privileged mode?
       boolean wants_privileged = false;
@@ -415,7 +424,7 @@ HRESULT ChromeFrameActivex::IOleObject_SetClientSite(
       if (SUCCEEDED(service_hr) && wants_privileged)
         is_privileged_ = true;
 
-      url_fetcher_.set_privileged_mode(is_privileged_);
+      url_fetcher_->set_privileged_mode(is_privileged_);
     }
 
     std::wstring chrome_extra_arguments;
@@ -448,12 +457,24 @@ HRESULT ChromeFrameActivex::IOleObject_SetClientSite(
         profile_name.assign(profile_name_arg, profile_name_arg.Length());
     }
 
-    url_fetcher_.set_frame_busting(!is_privileged_);
-    automation_client_->SetUrlFetcher(&url_fetcher_);
+    std::string utf8_url;
+    if (url_.Length()) {
+      WideToUTF8(url_, url_.Length(), &utf8_url);
+    }
+
+    InitializeAutomationSettings();
+
+    url_fetcher_->set_frame_busting(!is_privileged_);
+    automation_client_->SetUrlFetcher(url_fetcher_.get());
     if (!InitializeAutomation(profile_name, chrome_extra_arguments,
-                              IsIEInPrivate(), true)) {
+                              IsIEInPrivate(), true, GURL(utf8_url),
+                              GURL(), false)) {
+      DLOG(ERROR) << "Failed to navigate to url:" << utf8_url;
       return E_FAIL;
     }
+
+    // Log a metric that Chrome Frame is being used in Widget mode
+    THREAD_SAFE_UMA_LAUNCH_TYPE_COUNT(RENDERER_TYPE_CHROME_WIDGET);
   }
 
   return hr;
@@ -555,7 +576,7 @@ void ChromeFrameActivex::FireEvent(const EventHandlers& handlers,
     // 0x80020101 == SCRIPT_E_REPORTED.
     // When the script we're invoking has an error, we get this error back.
     DLOG_IF(ERROR, FAILED(hr) && hr != 0x80020101)
-        << StringPrintf(L"Failed to invoke script: 0x%08X", hr);
+        << base::StringPrintf(L"Failed to invoke script: 0x%08X", hr);
   }
 }
 
@@ -576,7 +597,7 @@ void ChromeFrameActivex::FireEvent(const EventHandlers& handlers,
     // 0x80020101 == SCRIPT_E_REPORTED.
     // When the script we're invoking has an error, we get this error back.
     DLOG_IF(ERROR, FAILED(hr) && hr != 0x80020101)
-        << StringPrintf(L"Failed to invoke script: 0x%08X", hr);
+        << base::StringPrintf(L"Failed to invoke script: 0x%08X", hr);
   }
 }
 
@@ -617,7 +638,7 @@ HRESULT ChromeFrameActivex::registerBhoIfNeeded() {
                               web_browser2.Receive());
   if (FAILED(hr) || web_browser2.get() == NULL) {
     DLOG(WARNING) << "Failed to get IWebBrowser2 from client site. Error:"
-                  << StringPrintf(" 0x%08X", hr);
+                  << base::StringPrintf(" 0x%08X", hr);
     return hr;
   }
 
@@ -629,14 +650,14 @@ HRESULT ChromeFrameActivex::registerBhoIfNeeded() {
   hr = bho.CreateInstance(CLSID_ChromeFrameBHO, NULL, CLSCTX_INPROC_SERVER);
   if (FAILED(hr)) {
     NOTREACHED() << "Failed to register ChromeFrame BHO. Error:"
-                 << StringPrintf(" 0x%08X", hr);
+                 << base::StringPrintf(" 0x%08X", hr);
     return hr;
   }
 
   hr = bho->SetSite(web_browser2);
   if (FAILED(hr)) {
     NOTREACHED() << "ChromeFrame BHO SetSite failed. Error:"
-                 << StringPrintf(" 0x%08X", hr);
+                 << base::StringPrintf(" 0x%08X", hr);
     return hr;
   }
 

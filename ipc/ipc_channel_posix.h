@@ -4,6 +4,7 @@
 
 #ifndef IPC_IPC_CHANNEL_POSIX_H_
 #define IPC_IPC_CHANNEL_POSIX_H_
+#pragma once
 
 #include "ipc/ipc_channel.h"
 
@@ -39,7 +40,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
  public:
   // Mirror methods of Channel, see ipc_channel.h for description.
   ChannelImpl(const std::string& channel_id, Mode mode, Listener* listener);
-  ~ChannelImpl() { Close(); }
+  ~ChannelImpl();
   bool Connect();
   void Close();
   void set_listener(Listener* listener) { listener_ = listener; }
@@ -86,8 +87,8 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   // pipe_ that is passed to the client.
   int client_pipe_;
 
-#if defined(OS_LINUX)
-  // Linux uses a dedicated socketpair() for passing file descriptors.
+#if !defined(OS_MACOSX)
+  // Linux/BSD use a dedicated socketpair() for passing file descriptors.
   int fd_pipe_;
   int remote_fd_pipe_;
 #endif

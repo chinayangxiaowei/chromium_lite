@@ -4,8 +4,7 @@
 
 #ifndef CHROME_BROWSER_IDLE_H_
 #define CHROME_BROWSER_IDLE_H_
-
-#include "base/task.h"
+#pragma once
 
 enum IdleState {
   IDLE_STATE_ACTIVE = 0,

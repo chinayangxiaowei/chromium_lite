@@ -15,7 +15,9 @@
     </script>
     <script type="text/javascript" src="js/api_page_generator.js"></script>
     <script type="text/javascript" src="js/bootstrap.js"></script>
-  <title>Accessibility (a11y) - Google Chrome Extensions - Google Code</title></head><body>  <div id="gc-container" class="labs">
+    <script type="text/javascript" src="js/sidebar.js"></script>
+  <title>Accessibility (a11y) - Google Chrome Extensions - Google Code</title></head>
+  <body>  <div id="gc-container" class="labs">
       <div id="devModeWarning">
         You are viewing extension docs in chrome via the 'file:' scheme: are you expecting to see local changes when you refresh? You'll need run chrome with --allow-file-access-from-files.
       </div>
@@ -35,6 +37,7 @@
                 <div style="display:inline">
                   (
                     <span class="optional">optional</span>
+                    <span class="enum">enumerated</span>
                     <span id="typeTemplate">
                       <span>
                         <a> Type</a>
@@ -44,6 +47,7 @@
                           array of <span><span></span></span>
                         </span>
                         <span>paramType</span>
+                        <span></span>
                       </span>
                     </span>
                   )
@@ -57,6 +61,15 @@
           <dd>
             Description of this parameter from the json schema.
           </dd>
+          <dd>
+            This parameter was added in version
+            <b><span></span></b>.
+            You must omit this parameter in earlier versions,
+            and you may omit it in any version.  If you require this
+            parameter, the manifest key
+            <a href="manifest.html#minimum_chrome_version">minimum_chrome_version</a>
+            can ensure that your extension won't be run in an earlier browser version.
+          </dd>
 
           <!-- OBJECT PROPERTIES -->
           <dd>
@@ -67,8 +80,23 @@
               </div>
             </dl>
           </dd>
+
+          <!-- FUNCTION PARAMETERS -->
+          <dd>
+            <div></div>
+          </dd>
+
         </div> <!-- /VALUE -->
 
+        <div id="functionParametersTemplate">
+          <h5>Parameters</h5>
+          <dl>
+            <div>
+              <div>
+              </div>
+            </div>
+          </dl>
+        </div>
       </div> <!-- /SUBTEMPLATES -->
 
   <a id="top"></a>
@@ -130,11 +158,13 @@
         <ul>
           <li><a href="getstarted.html">Getting Started</a></li>
           <li><a href="overview.html">Overview</a></li>
+          <li><a href="whats_new.html">What's New?</a></li>
           <li><h2><a href="devguide.html">Developer's Guide</a></h2>
             <ul>
               <li>Browser UI
                 <ul>
                   <li><a href="browserAction.html">Browser Actions</a></li>
+                  <li><a href="contextMenus.html">Context Menus</a></li>
                   <li><a href="notifications.html">Desktop Notifications</a></li>
                   <li><a href="options.html">Options Pages</a></li>
                   <li><a href="override.html">Override Pages</a></li>
@@ -145,8 +175,10 @@
               <li>Browser Interaction
                 <ul>
                   <li><a href="bookmarks.html">Bookmarks</a></li>
+                  <li><a href="cookies.html">Cookies</a></li>
                   <li><a href="events.html">Events</a></li>
                   <li><a href="history.html">History</a></li>
+                  <li><a href="management.html">Management</a></li>
                   <li><a href="tabs.html">Tabs</a></li>
                   <li><a href="windows.html">Windows</a></li>
                 </ul>
@@ -157,6 +189,7 @@
                   <li><a href="background_pages.html">Background Pages</a></li>
                   <li><a href="content_scripts.html">Content Scripts</a></li>
                   <li><a href="xhr.html">Cross-Origin XHR</a></li>
+                  <li><a href="idle.html">Idle</a></li>
                   <li><a href="i18n.html">Internationalization</a></li>
                   <li><a href="messaging.html">Message Passing</a></li>
                   <li><a href="npapi.html">NPAPI Plugins</a></li>
@@ -193,6 +226,9 @@
          <li><h2><a href="samples.html">Samples</a></h2></li>
         </ul>
       </div>
+      <script>
+        initToggles();
+      </script>
 
     <div class="g-unit" id="gc-pagecontent">
       <div id="pageTitle">
@@ -283,6 +319,11 @@
           </ol>
         </div>
         <!-- /TABLE OF CONTENTS -->
+
+        <!-- Standard content lead-in for experimental API pages -->
+        <p id="classSummary" style="display: none; ">
+          For information on how to use experimental APIs, see the <a href="experimental.html">chrome.experimental.* APIs</a> page.
+        </p>
 
         <!-- STATIC CONTENT PLACEHOLDER -->
         <div id="static"><div id="pageData-name" class="pageData">Accessibility (a11y)</div>
@@ -519,13 +560,25 @@ Also check that any popups on page actions or browser actions
 are keyboard navigable. 
 </p>
 
+<p id="builtin">
+On Windows, you can use <b>Shift+Alt+T</b>
+to switch the keyboard focus to the toolbar,
+which lets you navigate to the icons of page actions and browser actions.
+The help topic
+<a href="http://www.google.com/support/chrome/bin/static.py?hl=en&amp;page=guide.cs&amp;guide=25799&amp;from=25799&amp;rd=1">Keyboard and mouse shortcuts</a>
+lists all of Google Chrome's keyboard shortcuts;
+details about toolbar navigation
+are in the section <b>Google Chrome feature shortcuts</b>.
+</p>
+
 <p class="note">
 <b>Note:</b>
-We're improving keyboard accessibility to Google Chrome's interface;
-keyboard navigation to the icons of page actions and browser actions
-is expected in Google Chrome 6.
-For details, see
-<a href="#builtin">Built-in toolbar navigation</a>.
+The Windows version of Google Chrome 6 was the first
+to support keyboard navigation to the toolbar.
+Support is also planned for Linux.
+On Mac OS X,
+access to the toolbar is provided through VoiceOver,
+Apple's screenreader.
 </p>
 
 <p>
@@ -540,48 +593,6 @@ Two examples of focus outline follow.
 <img src="images/a11y/focus-outline-2.png" width="200" height="75" alt="A focus outline on a Search button">
 <br>
 <img src="images/a11y/focus-outline.png" width="400" height="40" alt="A focus outline on one of a series of links">
-
-<h4 id="builtin"> Built-in toolbar navigation </h4>
-
-<p>
-Here are the keyboard shortcuts that we expect to be in Google Chrome 6.
-You can try them out now in the Dev channel.
-</p>
-
-<p>
-</p><table>
-  <tbody><tr>
-    <td> <b>Alt+Shift+T</b> </td>
-    <td> Focus on the first tool in the main toolbar. </td></tr>
-
-  <tr><td> <b>Tab</b>, <b>Shift+Tab</b>, <b>Home</b>, <b>End</b> </td>
-    <td> Move around in the toolbar,
-         including focusing on page actions and browser actions. </td></tr>
-
-  <tr><td> <b>Left&nbsp;arrow</b>, <b>Right&nbsp;arrow</b> </td>
-    <td> Move around in the toolbar,
-         unless you're in an edit box like the location bar,
-         where those keys are used for text editing. </td></tr>
-
-  <tr><td> <b>Space</b>, <b>Enter</b> </td>
-    <td> Activate toolbar buttons,
-         including page actions and browser actions. </td></tr>
-
-  <tr><td> <b>Context&nbsp;menu&nbsp;key</b>, <b>Shift+F10</b> </td>
-    <td> Open a toolbar button's context menu. </td></tr>
-
-  <tr><td> <b>Escape</b> </td>
-    <td> Return focus from the toolbar to the previous location. </td></tr>
-
-  <tr><td> <b>F6</b>, <b>Shift+F6</b> </td>
-    <td> Switch focus to the next keyboard-accessible pane,
-         where panes include the
-         main web content,
-         toolbar,
-         and bookmarks bar (if visible). </td></tr>
-
-</tbody></table>
-<p></p>
 
 
 <h3 id="shortcuts"> Shortcuts </h3>
@@ -847,7 +858,7 @@ see <a href="samples.html">Samples</a>.
                   </p>
 
                   <!-- Note: intentionally longer 80 columns -->
-                  <pre>function(<span>Type param1, Type param2</span>) <span class="subdued">{...}</span>);</pre>
+                  <pre>function(<span>Type param1, Type param2</span>) <span class="subdued">{...}</span>;</pre>
                   <dl>
                     <div>
                       <div>
@@ -857,6 +868,13 @@ see <a href="samples.html">Samples</a>.
                   </div>
                 </div>
 
+                <!-- MIN_VERSION -->
+                <p>
+                  This function was added in version <b><span></span></b>.
+                  If you require this function, the manifest key
+                  <a href="manifest.html#minimum_chrome_version">minimum_chrome_version</a>
+                  can ensure that your extension won't be run in an earlier browser version.
+                </p>
               </div> <!-- /description -->
 
             </div>  <!-- /apiItem -->
@@ -929,7 +947,7 @@ see <a href="samples.html">Samples</a>.
   <a rel="license" href="http://code.google.com/google_bsd_license.html">BSD License</a>.
   </p>
   <p>
-  ©2010 Google
+  ©2011 Google
   </p>
 
 <!-- begin analytics -->

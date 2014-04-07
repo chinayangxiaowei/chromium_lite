@@ -13,7 +13,6 @@
 
 #include "base/basictypes.h"
 #include "base/string16.h"
-#include "base/values.h"
 #include "chrome/common/content_settings.h"
 #include "chrome/common/navigation_types.h"
 #include "chrome/test/automation/autocomplete_edit_proxy.h"
@@ -21,6 +20,7 @@
 #include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_message_macros.h"
+#include "net/url_request/url_request_status.h"
 
 // NOTE: All IPC messages have either a routing_id of 0 (for asynchronous
 //       messages), or one that's been assigned by the proxy (for calls
@@ -40,7 +40,7 @@ IPC_BEGIN_MESSAGES(Automation)
   // in the app (the app is not fully up at this point). The parameter to this
   // message is the version string of the automation provider. This parameter
   // is defined to be the version string as returned by
-  // FileVersionInfo::file_version().
+  // chrome::VersionInfo::Version().
   // The client can choose to use this version string to decide whether or not
   // it can talk to the provider.
   IPC_MESSAGE_ROUTED1(AutomationMsg_Hello, std::string)
@@ -419,7 +419,7 @@ IPC_BEGIN_MESSAGES(Automation)
   // This message requests that a key press be performed.
   // Request:
   //   int - the handle of the window that's the context for this click
-  //   int - the base::KeyboardCode of the key that was pressed.
+  //   int - the app::KeyboardCode of the key that was pressed.
   //   int - the flags which identify the modifiers (shift, ctrl, alt)
   //         associated for, as defined in chrome/views/event.h
   IPC_MESSAGE_ROUTED3(AutomationMsg_WindowKeyPress, int, int, int)
@@ -596,7 +596,7 @@ IPC_BEGIN_MESSAGES(Automation)
   //  - SecurityStyle: the security style of the tab.
   //  - int: the status of the server's ssl cert (0 means no errors or no ssl
   //         was used).
-  //  - int: the mixed content state, 0 means no mixed/unsafe contents.
+  //  - int: the insecure content state, 0 means no insecure contents.
 
   IPC_SYNC_MESSAGE_ROUTED1_4(AutomationMsg_GetSecurityState,
                              int,
@@ -635,15 +635,14 @@ IPC_BEGIN_MESSAGES(Automation)
   IPC_SYNC_MESSAGE_ROUTED1_1(AutomationMsg_BringBrowserToFront, int, bool)
 
   // Message to request whether a certain item is enabled of disabled in the
-  // "Page" menu in the browser window
+  // menu in the browser window
   //
   // Request:
   //   - int: handle of the browser window.
   //   - int: IDC message identifier to query if enabled
   // Response:
-  //   - bool: True if the command is enabled on the Page menu
-  IPC_SYNC_MESSAGE_ROUTED2_1(AutomationMsg_IsPageMenuCommandEnabled, int, int,
-                             bool)
+  //   - bool: True if the command is enabled on the menu
+  IPC_SYNC_MESSAGE_ROUTED2_1(AutomationMsg_IsMenuCommandEnabled, int, int, bool)
 
   // This message notifies the AutomationProvider to print the tab with given
   // handle. The first parameter is the handle to the tab resource.  The
@@ -813,7 +812,7 @@ IPC_BEGIN_MESSAGES(Automation)
   // This messages sets an int-value preference.
   IPC_SYNC_MESSAGE_ROUTED3_1(AutomationMsg_SetIntPreference,
                              int /* browser handle */,
-                             std::wstring /* pref name */,
+                             std::string /* pref name */,
                              int /* value */,
                              bool /* success */)
 
@@ -832,21 +831,21 @@ IPC_BEGIN_MESSAGES(Automation)
   // This messages sets a string-value preference.
   IPC_SYNC_MESSAGE_ROUTED3_1(AutomationMsg_SetStringPreference,
                              int /* browser handle */,
-                             std::wstring /* pref name */,
-                             std::wstring /* pref value */,
+                             std::string /* pref name */,
+                             std::string /* pref value */,
                              bool)
 
   // This messages gets a boolean-value preference.
   IPC_SYNC_MESSAGE_ROUTED2_2(AutomationMsg_GetBooleanPreference,
                              int /* browser handle */,
-                             std::wstring /* pref name */,
+                             std::string /* pref name */,
                              bool /* success */,
                              bool /* pref value */)
 
   // This messages sets a boolean-value preference.
   IPC_SYNC_MESSAGE_ROUTED3_1(AutomationMsg_SetBooleanPreference,
                              int /* browser handle */,
-                             std::wstring /* pref name */,
+                             std::string /* pref name */,
                              bool /* pref value */,
                              bool /* success */)
 
@@ -1100,9 +1099,10 @@ IPC_BEGIN_MESSAGES(Automation)
                       IPC::AttachExternalTabParams)
 
   // Sent when the automation client connects to an existing tab.
-  IPC_SYNC_MESSAGE_ROUTED2_3(AutomationMsg_ConnectExternalTab,
+  IPC_SYNC_MESSAGE_ROUTED3_3(AutomationMsg_ConnectExternalTab,
                              uint64 /* cookie */,
                              bool   /* allow/block tab*/,
+                             gfx::NativeWindow  /* parent window */,
                              gfx::NativeWindow  /* Tab container window */,
                              gfx::NativeWindow  /* Tab window */,
                              int  /* Handle to the new tab */)
@@ -1167,12 +1167,11 @@ IPC_BEGIN_MESSAGES(Automation)
 
   // Retrieves a list of the root directories of all enabled extensions
   // that have been installed into Chrome by dropping a .crx file onto
-  // Chrome or an equivalent action.  Other types of extensions are not
-  // included on the list (e.g. "component" extensions, "external"
-  // extensions or extensions loaded via --load-extension since the first
-  // two are generally not useful for testing (e.g. an external extension
-  // could mess with an automated test if it's present on some systems only)
-  // and the last would generally be explicitly loaded by tests.
+  // Chrome or an equivalent action (including loaded extensions).
+  // Other types of extensions are not included on the list (e.g. "component"
+  // or "external" extensions) since they are generally not useful for testing
+  // (e.g. an external extension could mess with an automated test if it's
+  // present on some systems only).
   IPC_SYNC_MESSAGE_ROUTED0_1(AutomationMsg_GetEnabledExtensions,
                              std::vector<FilePath>)
 
@@ -1327,8 +1326,9 @@ IPC_BEGIN_MESSAGES(Automation)
 
   // Installs an extension from the crx file and returns its id.
   // On error, |extension handle| will be 0.
-  IPC_SYNC_MESSAGE_ROUTED1_1(AutomationMsg_InstallExtensionAndGetHandle,
+  IPC_SYNC_MESSAGE_ROUTED2_1(AutomationMsg_InstallExtensionAndGetHandle,
                              FilePath     /* full path to crx file */,
+                             bool         /* with UI */,
                              int          /* extension handle */)
 
   // Waits for the next extension test result. Sets |test result| as the
@@ -1376,5 +1376,69 @@ IPC_BEGIN_MESSAGES(Automation)
       AutomationMsg_ExtensionProperty  /* property type */,
       bool                             /* success */,
       std::string                      /* property value */)
+
+  // Resets to the default theme.
+  IPC_SYNC_MESSAGE_ROUTED0_0(AutomationMsg_ResetToDefaultTheme)
+
+  // Navigates asynchronously to a URL with a certain disposition,
+  // like in a new tab.
+  IPC_SYNC_MESSAGE_ROUTED3_1(AutomationMsg_NavigationAsyncWithDisposition,
+                             int /* tab handle */,
+                             GURL,
+                             WindowOpenDisposition,
+                             bool /* result */)
+
+
+  // This message requests the cookie be deleted for given url in the
+  // profile of the tab identified by the first parameter.  The second
+  // parameter is the cookie name.
+  IPC_SYNC_MESSAGE_ROUTED3_1(AutomationMsg_DeleteCookie, GURL, std::string,
+                             int /* tab handle */,
+                             bool /* result */)
+
+  // This message triggers the collected cookies dialog for a specific tab.
+  IPC_SYNC_MESSAGE_ROUTED1_1(AutomationMsg_ShowCollectedCookiesDialog,
+                             int /* tab handle */,
+                             bool /* result */)
+
+  // This message requests the external tab identified by the tab handle
+  // passed in be closed.
+  // Request:
+  //   -int: Tab handle
+  // Response:
+  //   None expected
+  IPC_MESSAGE_ROUTED1(AutomationMsg_CloseExternalTab, int)
+
+  // This message requests that the external tab identified by the tab handle
+  // runs unload handlers if any on the current page.
+  // Request:
+  //   -int: Tab handle
+  //   -bool: result: true->unload, false->don't unload
+  IPC_SYNC_MESSAGE_ROUTED1_1(AutomationMsg_RunUnloadHandlers, int, bool)
+
+  // This message sets the current zoom level on the tab
+  // Request:
+  //   -int: Tab handle
+  //   -int: Zoom level. Values ZOOM_OUT = -1, RESET = 0, ZOOM_IN  = 1
+  // Response:
+  //   None expected
+  IPC_MESSAGE_ROUTED2(AutomationMsg_SetZoomLevel, int, int)
+
+  // Waits for tab count to reach target value.
+  IPC_SYNC_MESSAGE_ROUTED2_1(AutomationMsg_WaitForTabCountToBecome,
+                             int /* browser handle */,
+                             int /* target tab count */,
+                             bool /* success */)
+
+  // Waits for the infobar count to reach given number.
+  IPC_SYNC_MESSAGE_ROUTED2_1(AutomationMsg_WaitForInfoBarCount,
+                             int /* tab handle */,
+                             int /* target count */,
+                             bool /* success */)
+
+  // Waits for the autocomplete edit to receive focus.
+  IPC_SYNC_MESSAGE_ROUTED1_1(AutomationMsg_WaitForAutocompleteEditFocus,
+                             int /* autocomplete edit handle */,
+                             bool /* success */)
 
 IPC_END_MESSAGES(Automation)

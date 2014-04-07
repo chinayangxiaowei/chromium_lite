@@ -1,4 +1,4 @@
-# Copyright (c) 2009 The Chromium Authors. All rights reserved.
+# Copyright (c) 2010 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -31,6 +31,9 @@
         ['include', '/win/'],
         ['include', '/win_[^/]*\\.cc$'],
       ]}],
+      ['touchui==0', {'sources/': [
+        ['exclude', 'touchui/'],
+      ]}],
     ],
   },
   'targets': [
@@ -61,6 +64,8 @@
         'background.h',
         'border.cc',
         'border.h',
+        'box_layout.h',
+        'box_layout.cc',
         'controls/button/button.cc',
         'controls/button/button.h',
         'controls/button/button_dropdown.cc',
@@ -97,6 +102,11 @@
         'controls/label.h',
         'controls/link.cc',
         'controls/link.h',
+        'controls/listbox/native_listbox_wrapper.h',
+        'controls/listbox/native_listbox_win.cc',
+        'controls/listbox/native_listbox_win.h',
+        'controls/listbox/listbox.cc',
+        'controls/listbox/listbox.h',
         'controls/menu/controller.h',
         'controls/menu/menu.cc',
         'controls/menu/menu.h',
@@ -111,6 +121,7 @@
         'controls/menu/menu_delegate.h',
         'controls/menu/menu_gtk.cc',
         'controls/menu/menu_gtk.h',
+        'controls/menu/menu_host.h',
         'controls/menu/menu_host_root_view.cc',
         'controls/menu/menu_host_root_view.h',
         'controls/menu/menu_host_win.cc',
@@ -135,6 +146,10 @@
         'controls/menu/native_menu_gtk.h',
         'controls/menu/native_menu_win.cc',
         'controls/menu/native_menu_win.h',
+        'controls/menu/nested_dispatcher_gtk.cc',
+        'controls/menu/nested_dispatcher_gtk.h',
+        'controls/menu/radio_button_image_gtk.cc',
+        'controls/menu/radio_button_image_gtk.h',
         'controls/menu/submenu_view.cc',
         'controls/menu/submenu_view.h',
         'controls/menu/view_menu_delegate.h',
@@ -155,8 +170,8 @@
         'controls/native/native_view_host_wrapper.h',
         'controls/progress_bar.h',
         'controls/progress_bar.cc',
-        'controls/resize_gripper.cc',
-        'controls/resize_gripper.h',
+        'controls/resize_area.cc',
+        'controls/resize_area.h',
         'controls/scroll_view.cc',
         'controls/scroll_view.h',
         'controls/scrollbar/bitmap_scroll_bar.cc',
@@ -200,6 +215,8 @@
         'controls/table/table_view_observer.h',
         'controls/textfield/gtk_views_entry.cc',
         'controls/textfield/gtk_views_entry.h',
+        'controls/textfield/gtk_views_textview.cc',
+        'controls/textfield/gtk_views_textview.h',
         'controls/textfield/textfield.cc',
         'controls/textfield/textfield.h',
         'controls/textfield/native_textfield_gtk.cc',
@@ -230,6 +247,8 @@
         'focus/focus_manager_win.cc',
         'focus/focus_manager.cc',
         'focus/focus_manager.h',
+        'focus/focus_search.cc',
+        'focus/focus_search.h',
         'focus/focus_util_win.cc',
         'focus/focus_util_win.h',
         'focus/view_storage.cc',
@@ -238,6 +257,8 @@
         'grid_layout.h',
         'layout_manager.cc',
         'layout_manager.h',
+        'mouse_watcher.cc',
+        'mouse_watcher.h',
         'painter.cc',
         'painter.h',
         'repeat_controller.cc',
@@ -246,14 +267,17 @@
         'screen_gtk.cc',
         'screen_win.cc',
         'standard_layout.h',
+        'touchui/gesture_manager.h',
+        'touchui/gesture_manager.cc',
         'view.cc',
         'view.h',
         'view_constants.cc',
         'view_constants.h',
+        'view_gtk.cc',
         'view_text_utils.cc',
         'view_text_utils.h',
-        'view_gtk.cc',
         'view_win.cc',
+        'views_delegate.h',
         'widget/aero_tooltip_manager.cc',
         'widget/aero_tooltip_manager.h',
         'widget/default_theme_provider.cc',
@@ -266,6 +290,8 @@
         'widget/drop_target_win.h',
         'widget/gtk_views_fixed.cc',
         'widget/gtk_views_fixed.h',
+        'widget/gtk_views_window.cc',
+        'widget/gtk_views_window.h',
         'widget/root_view.cc',
         'widget/root_view.h',
         'widget/root_view_gtk.cc',
@@ -276,6 +302,8 @@
         'widget/tooltip_manager_win.h',
         'widget/tooltip_manager.cc',
         'widget/tooltip_manager.h',
+        'widget/tooltip_window_gtk.cc',
+        'widget/tooltip_window_gtk.h',
         'widget/widget.h',
         'widget/widget_gtk.cc',
         'widget/widget_gtk.h',
@@ -300,6 +328,8 @@
         'window/window_resources.h',
         'window/window_gtk.cc',
         'window/window_gtk.h',
+        'window/window_shape.cc',
+        'window/window_shape.h',
         'window/window_win.cc',
         'window/window_win.h',
       ],
@@ -320,8 +350,11 @@
             'controls/scrollbar/bitmap_scroll_bar.cc',
             'controls/combo_box.cc',
             'controls/hwnd_view.cc',
-            'controls/table/group_table_view.cc',
+            'controls/listbox/native_listbox_wrapper.h',
+            'controls/listbox/listbox.cc',
+            'controls/listbox/listbox.h',
             'controls/native_control.cc',
+            'controls/table/group_table_view.cc',
             'controls/table/table_model.cc',
             'controls/table/table_view.cc',
             'controls/table/group_table_view.cc',
@@ -335,17 +368,82 @@
             'widget/widget_win.cc',
           ],
         }],
+        ['touchui==1', {
+          'defines': ['TOUCH_UI=1'],
+        }],
         ['OS=="win"', {
-          'defines': [
-            '__STD_C',
-            '_CRT_SECURE_NO_DEPRECATE',
-            '_SCL_SECURE_NO_DEPRECATE',
-          ],
           'sources!': [
             'controls/slider/slider.cc',
             'controls/slider/slider.h',
             'controls/slider/native_slider_wrapper.h',
           ],
+          'include_dirs': [
+            '<(DEPTH)/third_party/wtl/include',
+          ],
+        }],
+      ],
+    },
+    {
+      'target_name': 'view_unit_tests',
+      'type': 'executable',
+      'dependencies': [
+        '../app/app.gyp:app_resources',
+        '../app/app.gyp:app_strings',
+        '../base/base.gyp:base',
+        '../base/base.gyp:test_support_base',
+        '../skia/skia.gyp:skia',
+        '../testing/gmock.gyp:gmock',
+        '../testing/gtest.gyp:gtest',
+        '../third_party/icu/icu.gyp:icui18n',
+        '../third_party/icu/icu.gyp:icuuc',
+        'views',
+      ],
+      'include_dirs': [
+        '..',
+      ],
+      'sources': [
+        'animation/bounds_animator_unittest.cc',
+        'box_layout_unittest.cc',
+        'controls/label_unittest.cc',
+        'controls/progress_bar_unittest.cc',
+        'controls/tabbed_pane/tabbed_pane_unittest.cc',
+        'controls/table/table_view_unittest.cc',
+        'focus/accelerator_handler_gtk_unittest.cc',
+        'focus/focus_manager_unittest.cc',
+        'grid_layout_unittest.cc',
+        'run_all_unittests.cc',
+        'view_unittest.cc',
+
+        '<(SHARED_INTERMEDIATE_DIR)/app/app_resources/app_resources.rc',
+      ],
+      'conditions': [
+        ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
+          'dependencies': [
+            '../build/linux/system.gyp:gtk',
+            '../chrome/chrome.gyp:packed_resources',
+          ],
+          'conditions': [
+            ['linux_use_tcmalloc==1', {
+               'dependencies': [
+                 '../base/allocator/allocator.gyp:allocator',
+               ],
+            }],
+          ],
+        },
+        ],
+        ['OS=="win"', {
+          'dependencies': [
+            # TODO(jcivelli): ideally the resource needed by views would be
+            #                 factored out. (for some reason it pulls in a bunch
+            #                 unrelated things like v8, sqlite nss...).
+            '../chrome/app/locales/locales.gyp:en-US',
+          ],
+          'link_settings': {
+            'libraries': [
+              '-limm32.lib',
+              '-loleacc.lib',
+            ]
+          },
           'include_dirs': [
             '<(DEPTH)/third_party/wtl/include',
           ],
@@ -380,6 +478,8 @@
         'examples/slider_example.h',
         'examples/tabbed_pane_example.h',
         'examples/textfield_example.h',
+        'examples/throbber_example.cc',
+        'examples/throbber_example.h',
         'examples/widget_example.h',
 
         '<(SHARED_INTERMEDIATE_DIR)/app/app_resources/app_resources.rc',

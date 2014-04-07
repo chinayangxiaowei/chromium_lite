@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
 #include "base/test/test_file_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/automation/tab_proxy.h"
@@ -47,45 +48,44 @@ void UILayoutTest::InitializeForLayoutTest(const FilePath& test_parent_dir,
   FilePath src_dir;
   PathService::Get(base::DIR_SOURCE_ROOT, &src_dir);
 
+  src_dir = src_dir.AppendASCII("chrome");
+  src_dir = src_dir.AppendASCII("test");
+  src_dir = src_dir.AppendASCII("data");
+  src_dir = src_dir.AppendASCII("layout_tests");
+  src_dir = src_dir.AppendASCII("LayoutTests");
+
   // Gets the file path to WebKit ui layout tests, that is,
   //   chrome/test/data/ui_tests/LayoutTests/...
   // Note that we have to use our own copy of WebKit layout tests because our
   // build machines do not have WebKit layout tests added.
-  layout_test_dir_ = src_dir.AppendASCII("chrome");
-  layout_test_dir_ = layout_test_dir_.AppendASCII("test");
-  layout_test_dir_ = layout_test_dir_.AppendASCII("data");
-  layout_test_dir_ = layout_test_dir_.AppendASCII("layout_tests");
-  layout_test_dir_ = layout_test_dir_.AppendASCII("LayoutTests");
-  layout_test_dir_ = layout_test_dir_.Append(test_parent_dir);
+  layout_test_dir_ = src_dir.Append(test_parent_dir);
   layout_test_dir_ = layout_test_dir_.Append(test_case_dir);
   ASSERT_TRUE(file_util::DirectoryExists(layout_test_dir_));
 
   // Gets the file path to rebased expected result directory for the current
   // platform.
   //   chrome/test/data/layout_tests/LayoutTests/platform/chromium_***/...
-  rebase_result_dir_ = src_dir.AppendASCII("chrome");
-  rebase_result_dir_ = rebase_result_dir_.AppendASCII("test");
-  rebase_result_dir_ = rebase_result_dir_.AppendASCII("data");
-  rebase_result_dir_ = rebase_result_dir_.AppendASCII("layout_tests");
-  rebase_result_dir_ = rebase_result_dir_.AppendASCII("LayoutTests");
-  rebase_result_dir_ = rebase_result_dir_.AppendASCII("platform");
+  rebase_result_dir_ = src_dir.AppendASCII("platform");
   rebase_result_dir_ = rebase_result_dir_.AppendASCII(kPlatformName);
   rebase_result_dir_ = rebase_result_dir_.Append(test_parent_dir);
   rebase_result_dir_ = rebase_result_dir_.Append(test_case_dir);
+
+  // Generic chromium expected results. Not OS-specific. For example,
+  // v8-specific differences go here.
+  // chrome/test/data/layout_tests/LayoutTests/platform/chromium/...
+  rebase_result_chromium_dir_ = src_dir.AppendASCII("platform")
+                                       .AppendASCII("chromium")
+                                       .Append(test_parent_dir)
+                                       .Append(test_case_dir);
 
   // Gets the file path to rebased expected result directory under the
   // win32 platform. This is used by other non-win32 platform to use the same
   // rebased expected results.
 #if !defined(OS_WIN)
-  rebase_result_win_dir_ = src_dir.AppendASCII("chrome");
-  rebase_result_win_dir_ = rebase_result_win_dir_.AppendASCII("test");
-  rebase_result_win_dir_ = rebase_result_win_dir_.AppendASCII("data");
-  rebase_result_win_dir_ = rebase_result_win_dir_.AppendASCII("layout_tests");
-  rebase_result_win_dir_ = rebase_result_win_dir_.AppendASCII("LayoutTests");
-  rebase_result_win_dir_ = rebase_result_win_dir_.AppendASCII("platform");
-  rebase_result_win_dir_ = rebase_result_win_dir_.AppendASCII("chromium-win");
-  rebase_result_win_dir_ = rebase_result_win_dir_.Append(test_parent_dir);
-  rebase_result_win_dir_ = rebase_result_win_dir_.Append(test_case_dir);
+  rebase_result_win_dir_ = src_dir.AppendASCII("platform")
+                                  .AppendASCII("chromium-win")
+                                  .Append(test_parent_dir)
+                                  .Append(test_case_dir);
 #endif
 
   // Creates the temporary directory.
@@ -137,28 +137,45 @@ void UILayoutTest::InitializeForLayoutTest(const FilePath& test_parent_dir,
 }
 
 void UILayoutTest::AddResourceForLayoutTest(const FilePath& parent_dir,
-                                            const FilePath& resource_dir) {
+                                            const FilePath& resource_name) {
   FilePath root_dir;
   PathService::Get(base::DIR_SOURCE_ROOT, &root_dir);
 
-  FilePath src_dir = root_dir.AppendASCII("chrome");
-  src_dir = src_dir.AppendASCII("test");
-  src_dir = src_dir.AppendASCII("data");
-  src_dir = src_dir.AppendASCII("layout_tests");
-  src_dir = src_dir.AppendASCII("LayoutTests");
-  src_dir = src_dir.Append(parent_dir);
-  src_dir = src_dir.Append(resource_dir);
-  ASSERT_TRUE(file_util::DirectoryExists(src_dir));
+  FilePath source = root_dir.AppendASCII("chrome");
+  source = source.AppendASCII("test");
+  source = source.AppendASCII("data");
+  source = source.AppendASCII("layout_tests");
+  source = source.AppendASCII("LayoutTests");
+  source = source.Append(parent_dir);
+  source = source.Append(resource_name);
+
+  ASSERT_TRUE(file_util::PathExists(source));
 
   FilePath dest_parent_dir = temp_test_dir_.
       AppendASCII("LayoutTests").Append(parent_dir);
   ASSERT_TRUE(file_util::CreateDirectory(dest_parent_dir));
-  FilePath dest_dir = dest_parent_dir.Append(resource_dir);
-  ASSERT_TRUE(file_util::CopyDirectory(src_dir, dest_dir, true));
+  FilePath dest = dest_parent_dir.Append(resource_name);
+
+  if (file_util::DirectoryExists(source)) {
+    ASSERT_TRUE(file_util::CopyDirectory(source, dest, true));
+  } else {
+    ASSERT_TRUE(file_util::CopyFile(source, dest));
+  }
+}
+
+static size_t FindInsertPosition(const std::string& html) {
+  size_t tag_start = html.find("<html");
+  if (tag_start == std::string::npos)
+    return 0;
+  size_t tag_end = html.find(">", tag_start);
+  if (tag_end == std::string::npos)
+    return 0;
+  return tag_end + 1;
 }
 
 void UILayoutTest::RunLayoutTest(const std::string& test_case_file_name,
                                  int port) {
+  base::Time start = base::Time::Now();
   SCOPED_TRACE(test_case_file_name.c_str());
 
   ASSERT_TRUE(!layout_test_controller_.empty());
@@ -166,7 +183,7 @@ void UILayoutTest::RunLayoutTest(const std::string& test_case_file_name,
   // Creates a new cookie name. We will have to use a new cookie because
   // this function could be called multiple times.
   std::string status_cookie(kTestCompleteCookie);
-  status_cookie += IntToString(test_count_);
+  status_cookie += base::IntToString(test_count_);
   test_count_++;
 
   // Reads the layout test HTML file.
@@ -176,9 +193,10 @@ void UILayoutTest::RunLayoutTest(const std::string& test_case_file_name,
   ASSERT_TRUE(file_util::ReadFileToString(test_file_path, &test_html));
 
   // Injects the layout test controller into the test HTML.
-  test_html.insert(0, layout_test_controller_);
-  ReplaceSubstringsAfterOffset(
-      &test_html, 0, "%COOKIE%", status_cookie.c_str());
+  size_t insertion_position = FindInsertPosition(test_html);
+  test_html.insert(insertion_position, layout_test_controller_);
+  ReplaceFirstSubstringAfterOffset(
+      &test_html, insertion_position, "%COOKIE%", status_cookie.c_str());
 
   // Creates the new layout test HTML file.
   FilePath new_test_file_path(new_layout_test_dir_);
@@ -217,6 +235,9 @@ void UILayoutTest::RunLayoutTest(const std::string& test_case_file_name,
   std::string expected_result_value;
   if (!ReadExpectedResult(rebase_result_dir_,
                           test_case_file_name,
+                          &expected_result_value) &&
+      !ReadExpectedResult(rebase_result_chromium_dir_,
+                          test_case_file_name,
                           &expected_result_value)) {
     if (rebase_result_win_dir_.empty() ||
         !ReadExpectedResult(rebase_result_win_dir_,
@@ -233,6 +254,9 @@ void UILayoutTest::RunLayoutTest(const std::string& test_case_file_name,
 
   // Compares the results.
   EXPECT_STREQ(expected_result_value.c_str(), value.c_str());
+
+  LOG(INFO) << "Test " << test_case_file_name << " took "
+            << (base::Time::Now() - start).InMilliseconds() << "ms";
 }
 
 bool UILayoutTest::ReadExpectedResult(const FilePath& result_dir_path,

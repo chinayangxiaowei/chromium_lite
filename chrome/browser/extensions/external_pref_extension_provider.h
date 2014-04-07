@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTERNAL_PREF_EXTENSION_PROVIDER_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTERNAL_PREF_EXTENSION_PROVIDER_H_
+#pragma once
 
 #include <set>
 #include <string>
@@ -11,6 +12,7 @@
 #include "chrome/browser/extensions/external_extension_provider.h"
 
 class DictionaryValue;
+class ValueSerializer;
 class Version;
 
 // A specialization of the ExternalExtensionProvider that uses a json file to
@@ -28,8 +30,11 @@ class ExternalPrefExtensionProvider : public ExternalExtensionProvider {
   virtual void VisitRegisteredExtension(
       Visitor* visitor, const std::set<std::string>& ids_to_ignore) const;
 
-  virtual Version* RegisteredVersion(const std::string& id,
-                                     Extension::Location* location) const;
+  virtual bool HasExtension(const std::string& id) const;
+
+  virtual bool GetExtensionDetails(const std::string& id,
+                                   Extension::Location* location,
+                                   scoped_ptr<Version>* version) const;
  protected:
   scoped_ptr<DictionaryValue> prefs_;
 

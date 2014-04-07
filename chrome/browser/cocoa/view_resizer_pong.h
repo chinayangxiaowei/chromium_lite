@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_VIEW_RESIZER_PONG_H_
 #define CHROME_BROWSER_COCOA_VIEW_RESIZER_PONG_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -13,7 +14,7 @@
  @private
   CGFloat height_;
 }
-@property CGFloat height;
+@property (nonatomic) CGFloat height;
 
 - (void)resizeView:(NSView*)view newHeight:(CGFloat)height;
 @end

@@ -10,7 +10,7 @@
 
 #include <string>
 
-#include "base/keyboard_codes.h"
+#include "app/keyboard_codes.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "gfx/insets.h"
@@ -19,7 +19,7 @@
 #include "views/widget/widget.h"
 
 #if defined(OS_LINUX)
-#include "base/keyboard_code_conversion_gtk.h"
+#include "app/keyboard_code_conversion_gtk.h"
 #elif defined(OS_WIN)
 #include "app/win_util.h"
 #include "base/win_util.h"
@@ -48,7 +48,9 @@ Textfield::Textfield()
       background_color_(SK_ColorWHITE),
       use_default_background_color_(true),
       num_lines_(1),
-      initialized_(false) {
+      initialized_(false),
+      horizontal_margins_were_set_(false),
+      vertical_margins_were_set_(false) {
   SetFocusable(true);
 }
 
@@ -64,7 +66,9 @@ Textfield::Textfield(StyleFlags style)
       background_color_(SK_ColorWHITE),
       use_default_background_color_(true),
       num_lines_(1),
-      initialized_(false) {
+      initialized_(false),
+      horizontal_margins_were_set_(false),
+      vertical_margins_were_set_(false) {
   SetFocusable(true);
 }
 
@@ -163,16 +167,29 @@ void Textfield::SetFont(const gfx::Font& font) {
   font_ = font;
   if (native_wrapper_)
     native_wrapper_->UpdateFont();
+  PreferredSizeChanged();
 }
 
 void Textfield::SetHorizontalMargins(int left, int right) {
+  margins_.Set(margins_.top(), left, margins_.bottom(), right);
+  horizontal_margins_were_set_ = true;
   if (native_wrapper_)
-    native_wrapper_->SetHorizontalMargins(left, right);
+    native_wrapper_->UpdateHorizontalMargins();
+  PreferredSizeChanged();
+}
+
+void Textfield::SetVerticalMargins(int top, int bottom) {
+  margins_.Set(top, margins_.left(), bottom, margins_.right());
+  vertical_margins_were_set_ = true;
+  if (native_wrapper_)
+    native_wrapper_->UpdateVerticalMargins();
+  PreferredSizeChanged();
 }
 
 void Textfield::SetHeightInLines(int num_lines) {
   DCHECK(IsMultiLine());
   num_lines_ = num_lines;
+  PreferredSizeChanged();
 }
 
 void Textfield::RemoveBorder() {
@@ -182,6 +199,22 @@ void Textfield::RemoveBorder() {
   draw_border_ = false;
   if (native_wrapper_)
     native_wrapper_->UpdateBorder();
+}
+
+bool Textfield::GetHorizontalMargins(int* left, int* right) {
+  if (!horizontal_margins_were_set_)
+    return false;
+  *left = margins_.left();
+  *right = margins_.right();
+  return true;
+}
+
+bool Textfield::GetVerticalMargins(int* top, int* bottom) {
+  if (!vertical_margins_were_set_)
+    return false;
+  *top = margins_.top();
+  *bottom = margins_.bottom();
+  return true;
 }
 
 void Textfield::UpdateAllProperties() {
@@ -194,6 +227,8 @@ void Textfield::UpdateAllProperties() {
     native_wrapper_->UpdateEnabled();
     native_wrapper_->UpdateBorder();
     native_wrapper_->UpdateIsPassword();
+    native_wrapper_->UpdateHorizontalMargins();
+    native_wrapper_->UpdateVerticalMargins();
   }
 }
 
@@ -222,7 +257,7 @@ gfx::Size Textfield::GetPreferredSize() {
     insets = native_wrapper_->CalculateInsets();
   return gfx::Size(font_.GetExpectedTextWidth(default_width_in_chars_) +
                        insets.width(),
-                   num_lines_ * font_.height() + insets.height());
+                   num_lines_ * font_.GetHeight() + insets.height());
 }
 
 bool Textfield::IsFocusable() const {
@@ -236,14 +271,14 @@ void Textfield::AboutToRequestFocusFromTabTraversal(bool reverse) {
 bool Textfield::SkipDefaultKeyEventProcessing(const KeyEvent& e) {
   // TODO(hamaji): Figure out which keyboard combinations we need to add here,
   //               similar to LocationBarView::SkipDefaultKeyEventProcessing.
-  base::KeyboardCode key = e.GetKeyCode();
-  if (key == base::VKEY_BACK)
+  app::KeyboardCode key = e.GetKeyCode();
+  if (key == app::VKEY_BACK)
     return true;  // We'll handle BackSpace ourselves.
 
 #if defined(OS_WIN)
   // We don't translate accelerators for ALT + NumPad digit on Windows, they are
   // used for entering special characters.  We do translate alt-home.
-  if (e.IsAltDown() && (key != base::VKEY_HOME) &&
+  if (e.IsAltDown() && (key != app::VKEY_HOME) &&
       win_util::IsNumPadDigit(key, e.IsExtendedKey()))
     return true;
 #endif
@@ -255,33 +290,23 @@ void Textfield::PaintFocusBorder(gfx::Canvas* canvas) {
     View::PaintFocusBorder(canvas);
 }
 
-bool Textfield::GetAccessibleRole(AccessibilityTypes::Role* role) {
-  DCHECK(role);
-
-  *role = AccessibilityTypes::ROLE_TEXT;
-  return true;
+AccessibilityTypes::Role Textfield::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_TEXT;
 }
 
-bool Textfield::GetAccessibleState(AccessibilityTypes::State* state) {
-  DCHECK(state);
-
-  *state = 0;
-
+AccessibilityTypes::State Textfield::GetAccessibleState() {
+  int state = 0;
   if (read_only())
-    *state |= AccessibilityTypes::STATE_READONLY;
+    state |= AccessibilityTypes::STATE_READONLY;
   if (IsPassword())
-    *state |= AccessibilityTypes::STATE_PROTECTED;
-  return true;
+    state |= AccessibilityTypes::STATE_PROTECTED;
+  return state;
 }
 
-bool Textfield::GetAccessibleValue(std::wstring* value) {
-  DCHECK(value);
-
-  if (!text_.empty()) {
-    *value = UTF16ToWide(text_);
-    return true;
-  }
-  return false;
+std::wstring Textfield::GetAccessibleValue() {
+  if (!text_.empty())
+    return UTF16ToWide(text_);
+  return std::wstring();
 }
 
 void Textfield::SetEnabled(bool enabled) {
@@ -329,12 +354,12 @@ std::string Textfield::GetClassName() const {
   return kViewClassName;
 }
 
-base::KeyboardCode Textfield::Keystroke::GetKeyboardCode() const {
+app::KeyboardCode Textfield::Keystroke::GetKeyboardCode() const {
 #if defined(OS_WIN)
-  return static_cast<base::KeyboardCode>(key_);
+  return static_cast<app::KeyboardCode>(key_);
 #else
-  return static_cast<base::KeyboardCode>(
-      base::WindowsKeyCodeForGdkKeyCode(event_.keyval));
+  return static_cast<app::KeyboardCode>(
+      app::WindowsKeyCodeForGdkKeyCode(event_.keyval));
 #endif
 }
 

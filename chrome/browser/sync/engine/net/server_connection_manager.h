@@ -1,24 +1,21 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_ENGINE_NET_SERVER_CONNECTION_MANAGER_H_
 #define CHROME_BROWSER_SYNC_ENGINE_NET_SERVER_CONNECTION_MANAGER_H_
+#pragma once
 
 #include <iosfwd>
 #include <string>
-#include <vector>
 
 #include "base/atomicops.h"
 #include "base/lock.h"
-#include "base/logging.h"
-#include "base/scoped_ptr.h"
 #include "base/string_util.h"
-#include "chrome/browser/sync/engine/net/http_return.h"
 #include "chrome/browser/sync/syncable/syncable_id.h"
-#include "chrome/browser/sync/util/event_sys.h"
-#include "chrome/browser/sync/util/signin.h"
-#include "chrome/browser/sync/util/sync_types.h"
+#include "chrome/common/deprecated/event_sys.h"
+#include "chrome/common/deprecated/event_sys-inl.h"
+#include "chrome/common/net/http_return.h"
 
 namespace syncable {
 class WriteTransaction;
@@ -38,6 +35,10 @@ class ClientToServerMessage;
 // How many connection errors are accepted before network handles are closed
 // and reopened.
 static const int32 kMaxConnectionErrorsBeforeReset = 10;
+
+static const int32 kUnsetResponseCode = -1;
+static const int32 kUnsetContentLength = -1;
+static const int32 kUnsetPayloadLength = -1;
 
 // HttpResponse gathers the relevant output properties of an HTTP request.
 // Depending on the value of the server_status code, response_code, and
@@ -94,6 +95,12 @@ struct HttpResponse {
 
   // Identifies the type of failure, if any.
   ServerConnectionCode server_status;
+
+  HttpResponse()
+      : response_code(kUnsetResponseCode),
+        content_length(kUnsetContentLength),
+        payload_length(kUnsetPayloadLength),
+        server_status(NONE) {}
 };
 
 inline bool IsGoodReplyFromServer(HttpResponse::ServerConnectionCode code) {
@@ -205,8 +212,7 @@ class ServerConnectionManager {
   ServerConnectionManager(const std::string& server,
                           int port,
                           bool use_ssl,
-                          const std::string& user_agent,
-                          const std::string& client_id);
+                          const std::string& user_agent);
 
   virtual ~ServerConnectionManager();
 
@@ -216,14 +222,6 @@ class ServerConnectionManager {
   // Returns true if executed successfully.
   virtual bool PostBufferWithCachedAuth(const PostBufferParams* params,
                                         ScopedServerStatusWatcher* watcher);
-
-  // POSTS buffer_in and reads a response into buffer_out. Add a specific auth
-  // token to http headers.
-  //
-  // Returns true if executed successfully.
-  virtual bool PostBufferWithAuth(const PostBufferParams* params,
-                                  const std::string& auth_token,
-                                  ScopedServerStatusWatcher* watcher);
 
   // Checks the time on the server. Returns false if the request failed. |time|
   // is an out parameter that stores the value returned from the server.
@@ -239,10 +237,6 @@ class ServerConnectionManager {
   // Updates status and broadcasts events on change.
   bool CheckServerReachable();
 
-  // Updates server status to "unreachable" and broadcasts events if
-  // necessary.
-  void SetServerUnreachable();
-
   // Signal the shutdown event to notify listeners.
   virtual void kill();
 
@@ -257,8 +251,6 @@ class ServerConnectionManager {
   inline bool server_reachable() const { return server_reachable_; }
 
   const std::string client_id() const { return client_id_; }
-
-  void SetDomainFromSignIn(SignIn signin_type, const std::string& signin);
 
   // This changes the server info used by the connection manager. This allows
   // a single client instance to talk to different backing servers. This is
@@ -286,6 +278,11 @@ class ServerConnectionManager {
   virtual Post* MakePost() {
     return NULL;  // For testing.
   };
+
+  void set_client_id(const std::string& client_id) {
+    DCHECK(client_id_.empty());
+    client_id_.assign(client_id);
+  }
 
   void set_auth_token(const std::string& auth_token) {
     // TODO(chron): Consider adding a message loop check here.
@@ -331,7 +328,7 @@ class ServerConnectionManager {
   int sync_server_port_;
 
   // The unique id of the user's client.
-  const std::string client_id_;
+  std::string client_id_;
 
   // The user-agent string for HTTP.
   std::string user_agent_;
@@ -379,9 +376,8 @@ bool FillMessageWithShareDetails(sync_pb::ClientToServerMessage* csm,
                                  syncable::DirectoryManager* manager,
                                  const std::string& share);
 
-}  // namespace browser_sync
+std::ostream& operator<<(std::ostream& s, const struct HttpResponse& hr);
 
-std::ostream& operator<<(std::ostream& s,
-    const struct browser_sync::HttpResponse& hr);
+}  // namespace browser_sync
 
 #endif  // CHROME_BROWSER_SYNC_ENGINE_NET_SERVER_CONNECTION_MANAGER_H_

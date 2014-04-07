@@ -6,7 +6,7 @@
 
 #include "app/gtk_dnd_util.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/download/download_item.h"
 #include "chrome/browser/gtk/bookmark_utils_gtk.h"
 #include "gfx/gtk_util.h"
 #include "googleurl/src/gurl.h"
@@ -43,7 +43,6 @@ void OnDragDataGetStandalone(GtkWidget* widget, GdkDragContext* context,
 CustomDrag::CustomDrag(SkBitmap* icon, int code_mask, GdkDragAction action)
     : drag_widget_(gtk_invisible_new()),
       pixbuf_(icon ? gfx::GdkPixbufFromSkBitmap(icon) : NULL) {
-  g_object_ref_sink(drag_widget_);
   g_signal_connect(drag_widget_, "drag-data-get",
                    G_CALLBACK(OnDragDataGetThunk), this);
   g_signal_connect(drag_widget_, "drag-begin",
@@ -62,7 +61,7 @@ CustomDrag::CustomDrag(SkBitmap* icon, int code_mask, GdkDragAction action)
 CustomDrag::~CustomDrag() {
   if (pixbuf_)
     g_object_unref(pixbuf_);
-  g_object_unref(drag_widget_);
+  gtk_widget_destroy(drag_widget_);
 }
 
 void CustomDrag::OnDragBegin(GtkWidget* widget, GdkDragContext* drag_context) {
@@ -93,12 +92,27 @@ void DownloadItemDrag::OnDragDataGet(
 }
 
 // static
-void DownloadItemDrag::SetSource(GtkWidget* widget, DownloadItem* item) {
+void DownloadItemDrag::SetSource(GtkWidget* widget,
+                                 DownloadItem* item,
+                                 SkBitmap* icon) {
   gtk_drag_source_set(widget, GDK_BUTTON1_MASK, NULL, 0,
                       kDownloadItemDragAction);
   gtk_dnd_util::SetSourceTargetListFromCodeMask(widget, kDownloadItemCodeMask);
+
+  // Disconnect previous signal handlers, if any.
+  g_signal_handlers_disconnect_by_func(
+      widget,
+      reinterpret_cast<gpointer>(OnDragDataGetStandalone),
+      item);
+  // Connect new signal handlers.
   g_signal_connect(widget, "drag-data-get",
                    G_CALLBACK(OnDragDataGetStandalone), item);
+
+  GdkPixbuf* pixbuf = icon ? gfx::GdkPixbufFromSkBitmap(icon) : NULL;
+  if (pixbuf) {
+    gtk_drag_source_set_icon_pixbuf(widget, pixbuf);
+    g_object_unref(pixbuf);
+  }
 }
 
 // static

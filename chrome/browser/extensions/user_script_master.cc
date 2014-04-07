@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,10 +14,12 @@
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "base/thread.h"
+#include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
 #include "net/base/net_util.h"
@@ -43,7 +45,7 @@ static bool GetDeclarationValue(const base::StringPiece& line,
 
 UserScriptMaster::ScriptReloader::ScriptReloader(UserScriptMaster* master)
     : master_(master) {
-  CHECK(ChromeThread::GetCurrentThreadIdentifier(&master_thread_id_));
+  CHECK(BrowserThread::GetCurrentThreadIdentifier(&master_thread_id_));
 }
 
 // static
@@ -52,11 +54,6 @@ bool UserScriptMaster::ScriptReloader::ParseMetadataHeader(
   // http://wiki.greasespot.net/Metadata_block
   base::StringPiece line;
   size_t line_start = 0;
-
-  // Skip UTF-8's BOM.
-  if (script_text.starts_with(kUtf8ByteOrderMark))
-    line_start += strlen(kUtf8ByteOrderMark);
-
   size_t line_end = line_start;
   bool in_metadata = false;
 
@@ -64,6 +61,7 @@ bool UserScriptMaster::ScriptReloader::ParseMetadataHeader(
   static const base::StringPiece kUserScriptEng("// ==/UserScript==");
   static const base::StringPiece kNamespaceDeclaration("// @namespace");
   static const base::StringPiece kNameDeclaration("// @name");
+  static const base::StringPiece kVersionDeclaration("// @version");
   static const base::StringPiece kDescriptionDeclaration("// @description");
   static const base::StringPiece kIncludeDeclaration("// @include");
   static const base::StringPiece kExcludeDeclaration("// @exclude");
@@ -90,7 +88,7 @@ bool UserScriptMaster::ScriptReloader::ParseMetadataHeader(
 
       std::string value;
       if (GetDeclarationValue(line, kIncludeDeclaration, &value)) {
-        // We escape some characters that MatchPatternASCII() considers special.
+        // We escape some characters that MatchPattern() considers special.
         ReplaceSubstringsAfterOffset(&value, 0, "\\", "\\\\");
         ReplaceSubstringsAfterOffset(&value, 0, "?", "\\?");
         script->add_glob(value);
@@ -102,10 +100,14 @@ bool UserScriptMaster::ScriptReloader::ParseMetadataHeader(
         script->set_name_space(value);
       } else if (GetDeclarationValue(line, kNameDeclaration, &value)) {
         script->set_name(value);
+      } else if (GetDeclarationValue(line, kVersionDeclaration, &value)) {
+        scoped_ptr<Version> version(Version::GetVersionFromString(value));
+        if (version.get())
+          script->set_version(version->GetString());
       } else if (GetDeclarationValue(line, kDescriptionDeclaration, &value)) {
         script->set_description(value);
       } else if (GetDeclarationValue(line, kMatchDeclaration, &value)) {
-        URLPattern pattern;
+        URLPattern pattern(UserScript::kValidUserScriptSchemes);
         if (!pattern.Parse(value))
           return false;
         script->add_url_pattern(pattern);
@@ -135,8 +137,8 @@ void UserScriptMaster::ScriptReloader::StartScan(
   // Add a reference to ourselves to keep ourselves alive while we're running.
   // Balanced by NotifyMaster().
   AddRef();
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(
           this, &UserScriptMaster::ScriptReloader::RunScan, script_dir,
           lone_scripts));
@@ -164,11 +166,18 @@ static bool LoadScriptContent(UserScript::File* script_file) {
     return false;
   }
 
-  script_file->set_content(content);
-  LOG(INFO) << "Loaded user script file: " << path.value();
+  // Remove BOM from the content.
+  std::string::size_type index = content.find(kUtf8ByteOrderMark);
+  if (index == 0) {
+    script_file->set_content(content.substr(strlen(kUtf8ByteOrderMark)));
+  } else {
+    script_file->set_content(content);
+  }
+
   return true;
 }
 
+// static
 void UserScriptMaster::ScriptReloader::LoadScriptsFromDirectory(
     const FilePath& script_dir, UserScriptList* result) {
   // Clear the list. We will populate it with the scripts found in script_dir.
@@ -244,7 +253,7 @@ static base::SharedMemory* Serialize(const UserScriptList& scripts) {
   // Create the shared memory object.
   scoped_ptr<base::SharedMemory> shared_memory(new base::SharedMemory());
 
-  if (!shared_memory->Create(std::wstring(),  // anonymous
+  if (!shared_memory->Create(std::string(),  // anonymous
                              false,  // read-only
                              false,  // open existing
                              pickle.size()))
@@ -278,7 +287,7 @@ void UserScriptMaster::ScriptReloader::RunScan(
   // Scripts now contains list of up-to-date scripts. Load the content in the
   // shared memory and let the master know it's ready. We need to post the task
   // back even if no scripts ware found to balance the AddRef/Release calls
-  ChromeThread::PostTask(
+  BrowserThread::PostTask(
       master_thread_id_, FROM_HERE,
       NewRunnableMethod(
           this, &ScriptReloader::NotifyMaster, Serialize(scripts)));
@@ -295,6 +304,8 @@ UserScriptMaster::UserScriptMaster(const FilePath& script_dir, Profile* profile)
   registrar_.Add(this, NotificationType::EXTENSION_LOADED,
                  Source<Profile>(profile_));
   registrar_.Add(this, NotificationType::EXTENSION_UNLOADED,
+                 Source<Profile>(profile_));
+  registrar_.Add(this, NotificationType::EXTENSION_USER_SCRIPTS_UPDATED,
                  Source<Profile>(profile_));
 }
 
@@ -338,11 +349,14 @@ void UserScriptMaster::Observe(NotificationType type,
       Extension* extension = Details<Extension>(details).ptr();
       bool incognito_enabled = profile_->GetExtensionsService()->
           IsIncognitoEnabled(extension);
+      bool allow_file_access = profile_->GetExtensionsService()->
+          AllowFileAccess(extension);
       const UserScriptList& scripts = extension->content_scripts();
       for (UserScriptList::const_iterator iter = scripts.begin();
            iter != scripts.end(); ++iter) {
         lone_scripts_.push_back(*iter);
         lone_scripts_.back().set_incognito_enabled(incognito_enabled);
+        lone_scripts_.back().set_allow_file_access(allow_file_access);
       }
       if (extensions_service_ready_)
         StartScan();
@@ -363,6 +377,23 @@ void UserScriptMaster::Observe(NotificationType type,
       // TODO(aa): Do we want to do something smarter for the scripts that have
       // already been injected?
 
+      break;
+    }
+    case NotificationType::EXTENSION_USER_SCRIPTS_UPDATED: {
+      Extension* extension = Details<Extension>(details).ptr();
+      UserScriptList new_lone_scripts;
+      bool incognito_enabled = profile_->GetExtensionsService()->
+          IsIncognitoEnabled(extension);
+      bool allow_file_access = profile_->GetExtensionsService()->
+          AllowFileAccess(extension);
+      for (UserScriptList::iterator iter = lone_scripts_.begin();
+           iter != lone_scripts_.end(); ++iter) {
+        if (iter->extension_id() == extension->id()) {
+          iter->set_incognito_enabled(incognito_enabled);
+          iter->set_allow_file_access(allow_file_access);
+        }
+      }
+      StartScan();
       break;
     }
 

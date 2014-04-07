@@ -34,6 +34,9 @@ extern const char kCheckLayoutTestSystemDeps[];
 extern const char kGDB[];
 extern const char kProfiler[];
 extern const char kHeapProfiler[];
+extern const char kAllowExternalPages[];
+extern const char kEnableAccel2DCanvas[];
+extern const char kEnableAccelCompositing[];
 
 }  // namespace test_shell
 

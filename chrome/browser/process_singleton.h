@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PROCESS_SINGLETON_H_
 #define CHROME_BROWSER_PROCESS_SINGLETON_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -12,13 +13,19 @@
 #endif
 
 #include "base/basictypes.h"
+#if defined(USE_X11)
 #include "base/file_path.h"
+#endif
 #include "base/logging.h"
 #include "base/non_thread_safe.h"
 #include "base/ref_counted.h"
 #include "gfx/native_widget_types.h"
+#if defined(USE_X11)
+#include "base/scoped_temp_dir.h"
+#endif
 
 class CommandLine;
+class FilePath;
 
 // ProcessSingleton ----------------------------------------------------------
 //
@@ -37,6 +44,7 @@ class ProcessSingleton : public NonThreadSafe {
     PROCESS_NONE,
     PROCESS_NOTIFIED,
     PROFILE_IN_USE,
+    LOCK_ERROR,
   };
 
   explicit ProcessSingleton(const FilePath& user_data_dir);
@@ -52,11 +60,20 @@ class ProcessSingleton : public NonThreadSafe {
   // first one, so this function won't find it.
   NotifyResult NotifyOtherProcess();
 
+  // Notify another process, if available.  Otherwise sets ourselves as the
+  // singleton instance.  Returns PROCESS_NONE if we became the singleton
+  // instance.
+  NotifyResult NotifyOtherProcessOrCreate();
+
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
   // Exposed for testing.  We use a timeout on Linux, and in tests we want
   // this timeout to be short.
   NotifyResult NotifyOtherProcessWithTimeout(const CommandLine& command_line,
-                                             int timeout_seconds);
+                                             int timeout_seconds,
+                                             bool kill_unresponsive);
+  NotifyResult NotifyOtherProcessWithTimeoutOrCreate(
+      const CommandLine& command_line,
+      int timeout_seconds);
 #endif
 
   // Sets ourself up as the singleton instance.  Returns true on success.  If
@@ -118,12 +135,18 @@ class ProcessSingleton : public NonThreadSafe {
 
   HWND remote_window_;  // The HWND_MESSAGE of another browser.
   HWND window_;  // The HWND_MESSAGE window.
-#elif !defined(OS_MACOSX)
+#elif defined(USE_X11)
   // Path in file system to the socket.
   FilePath socket_path_;
 
   // Path in file system to the lock.
   FilePath lock_path_;
+
+  // Path in file system to the cookie file.
+  FilePath cookie_path_;
+
+  // Temporary directory to hold the socket.
+  ScopedTempDir socket_dir_;
 
   // Helper class for linux specific messages.  LinuxWatcher is ref counted
   // because it posts messages between threads.

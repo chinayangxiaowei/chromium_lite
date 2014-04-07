@@ -8,13 +8,14 @@
 
 #ifndef CHROME_BROWSER_GTK_FIRST_RUN_BUBBLE_H_
 #define CHROME_BROWSER_GTK_FIRST_RUN_BUBBLE_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
 #include <vector>
 
 #include "base/basictypes.h"
-#include "chrome/browser/first_run.h"
+#include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/gtk/info_bubble_gtk.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/notification_observer.h"
@@ -43,23 +44,22 @@ class FirstRunBubble : public InfoBubbleGtkDelegate,
  private:
   FirstRunBubble(Profile* profile,
                  GtkWidget* anchor,
-                 const gfx::Rect& rect);
-  ~FirstRunBubble() { }
+                 const gfx::Rect& rect,
+                 FirstRun::BubbleType bubble_type);
+  virtual ~FirstRunBubble();
 
-  static void HandleChangeButtonThunk(GtkWidget* widget, gpointer user_data) {
-    reinterpret_cast<FirstRunBubble*>(user_data)->HandleChangeButton();
-  }
-  void HandleChangeButton();
+  // Create and pack widgets for different bubble types.
+  void InitializeContentForLarge();
+  void InitializeContentForOEM();
+  void InitializeContentForMinimal();
 
-  static void HandleDestroyThunk(GtkWidget* widget, gpointer userdata) {
-    reinterpret_cast<FirstRunBubble*>(userdata)->HandleDestroy();
-  }
-  void HandleDestroy();
+  // Contains some common set up for the labels in the bubble. |width| is a
+  // resource that holds the desired width for the labels.
+  void InitializeLabels(int width_resource);
 
-  static void HandleKeepButtonThunk(GtkWidget* widget, gpointer user_data) {
-    reinterpret_cast<FirstRunBubble*>(user_data)->HandleKeepButton();
-  }
-  void HandleKeepButton();
+  CHROMEGTK_CALLBACK_0(FirstRunBubble, void, HandleDestroy);
+  CHROMEGTK_CALLBACK_0(FirstRunBubble, void, HandleKeepButton);
+  CHROMEGTK_CALLBACK_0(FirstRunBubble, void, HandleChangeButton);
 
   // Our current profile.
   Profile* profile_;

@@ -4,24 +4,23 @@
 
 #ifndef NET_BASE_HOST_RESOLVER_H_
 #define NET_BASE_HOST_RESOLVER_H_
+#pragma once
 
 #include <string>
 
-#include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/address_family.h"
 #include "net/base/completion_callback.h"
+#include "net/base/host_port_pair.h"
 #include "net/base/request_priority.h"
-
-class MessageLoop;
 
 namespace net {
 
 class AddressList;
 class BoundNetLog;
-class HostCache;
 class HostResolverImpl;
-class NetworkChangeNotifier;
+class NetLog;
 
 // This class represents the task of resolving hostnames (or IP address
 // literal) to an AddressList object.
@@ -32,30 +31,21 @@ class NetworkChangeNotifier;
 // request at a time is to create a SingleRequestHostResolver wrapper around
 // HostResolver (which will automatically cancel the single request when it
 // goes out of scope).
-class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
+class HostResolver {
  public:
-  // The parameters for doing a Resolve(). |hostname| and |port| are required,
+  // The parameters for doing a Resolve(). A hostname and port are required,
   // the rest are optional (and have reasonable defaults).
   class RequestInfo {
    public:
-    RequestInfo(const std::string& hostname, int port)
-        : hostname_(hostname),
-          address_family_(ADDRESS_FAMILY_UNSPECIFIED),
-          host_resolver_flags_(0),
-          port_(port),
-          allow_cached_response_(true),
-          is_speculative_(false),
-          priority_(MEDIUM) {}
+    explicit RequestInfo(const HostPortPair& host_port_pair);
 
-    int port() const { return port_; }
-    void set_port(int port) {
-      port_ = port;
+    const HostPortPair& host_port_pair() const { return host_port_pair_; }
+    void set_host_port_pair(const HostPortPair& host_port_pair) {
+      host_port_pair_ = host_port_pair;
     }
 
-    const std::string& hostname() const { return hostname_; }
-    void set_hostname(const std::string& hostname) {
-      hostname_ = hostname;
-    }
+    int port() const { return host_port_pair_.port(); }
+    const std::string& hostname() const { return host_port_pair_.host(); }
 
     AddressFamily address_family() const { return address_family_; }
     void set_address_family(AddressFamily address_family) {
@@ -82,17 +72,14 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
     void set_referrer(const GURL& referrer) { referrer_ = referrer; }
 
    private:
-    // The hostname to resolve.
-    std::string hostname_;
+    // The hostname to resolve, and the port to use in resulting sockaddrs.
+    HostPortPair host_port_pair_;
 
     // The address family to restrict results to.
     AddressFamily address_family_;
 
     // Flags to use when resolving this request.
     HostResolverFlags host_resolver_flags_;
-
-    // The port number to set in the result's sockaddrs.
-    int port_;
 
     // Whether it is ok to return a result from the host cache.
     bool allow_cached_response_;
@@ -131,6 +118,16 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
 
   // Opaque type used to cancel a request.
   typedef void* RequestHandle;
+
+  // This value can be passed into CreateSystemHostResolver as the
+  // |max_concurrent_resolves| parameter. It will select a default level of
+  // concurrency.
+  static const size_t kDefaultParallelism = 0;
+
+  // If any completion callbacks are pending when the resolver is destroyed,
+  // the host resolutions are cancelled, and the completion callbacks will not
+  // be called.
+  virtual ~HostResolver();
 
   // Resolves the given hostname (or IP address literal), filling out the
   // |addresses| object upon success.  The |info.port| parameter will be set as
@@ -172,21 +169,20 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
   // results to AF_INET by passing in ADDRESS_FAMILY_IPV4, or to
   // AF_INET6 by passing in ADDRESS_FAMILY_IPV6.
   virtual void SetDefaultAddressFamily(AddressFamily address_family) {}
+  virtual AddressFamily GetDefaultAddressFamily() const {
+    return net::ADDRESS_FAMILY_UNSPECIFIED;
+  }
 
   // Returns |this| cast to a HostResolverImpl*, or NULL if the subclass
   // is not compatible with HostResolverImpl. Used primarily to expose
   // additional functionality on the about:net-internals page.
   virtual HostResolverImpl* GetAsHostResolverImpl() { return NULL; }
 
+  // Does additional cleanup prior to destruction.
+  virtual void Shutdown() {}
+
  protected:
-  friend class base::RefCountedThreadSafe<HostResolver>;
-
-  HostResolver() { }
-
-  // If any completion callbacks are pending when the resolver is destroyed,
-  // the host resolutions are cancelled, and the completion callbacks will not
-  // be called.
-  virtual ~HostResolver() {}
+  HostResolver();
 
  private:
   DISALLOW_COPY_AND_ASSIGN(HostResolver);
@@ -197,6 +193,7 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
 // single hostname at a time and cancels this request when going out of scope.
 class SingleRequestHostResolver {
  public:
+  // |resolver| must remain valid for the lifetime of |this|.
   explicit SingleRequestHostResolver(HostResolver* resolver);
 
   // If a completion callback is pending when the resolver is destroyed, the
@@ -221,7 +218,7 @@ class SingleRequestHostResolver {
   void OnResolveCompletion(int result);
 
   // The actual host resolver that will handle the request.
-  scoped_refptr<HostResolver> resolver_;
+  HostResolver* const resolver_;
 
   // The current request (if any).
   HostResolver::RequestHandle cur_request_;
@@ -236,10 +233,11 @@ class SingleRequestHostResolver {
 // Creates a HostResolver implementation that queries the underlying system.
 // (Except if a unit-test has changed the global HostResolverProc using
 // ScopedHostResolverProc to intercept requests to the system).
-// |network_change_notifier| must outlive HostResolver.  It can optionally be
-// NULL, in which case HostResolver will not respond to network changes.
-HostResolver* CreateSystemHostResolver(
-    NetworkChangeNotifier* network_change_notifier);
+// |max_concurrent_resolves| is how many resolve requests will be allowed to
+// run in parallel. Pass HostResolver::kDefaultParallelism to choose a
+// default value.
+HostResolver* CreateSystemHostResolver(size_t max_concurrent_resolves,
+                                       NetLog* net_log);
 
 }  // namespace net
 

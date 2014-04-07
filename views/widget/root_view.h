@@ -4,11 +4,13 @@
 
 #ifndef VIEWS_WIDGET_ROOT_VIEW_H_
 #define VIEWS_WIDGET_ROOT_VIEW_H_
+#pragma once
 
 #include <string>
 
 #include "base/ref_counted.h"
 #include "views/focus/focus_manager.h"
+#include "views/focus/focus_search.h"
 #include "views/view.h"
 
 #if defined(OS_LINUX)
@@ -19,6 +21,10 @@ namespace views {
 
 class PaintTask;
 class Widget;
+
+#if defined(TOUCH_UI)
+class GestureManager;
+#endif
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -78,7 +84,11 @@ class RootView : public View,
 
   // Public API for broadcasting theme change notifications to this View
   // hierarchy.
-  virtual void ThemeChanged();
+  void NotifyThemeChanged();
+
+  // Public API for broadcasting locale change notifications to this View
+  // hierarchy.
+  void NotifyLocaleChanged();
 
   // The following event methods are overridden to propagate event to the
   // control tree
@@ -87,6 +97,9 @@ class RootView : public View,
   virtual void OnMouseReleased(const MouseEvent& e, bool canceled);
   virtual void OnMouseMoved(const MouseEvent& e);
   virtual void SetMouseHandler(View* new_mouse_handler);
+#if defined(TOUCH_UI)
+  virtual bool OnTouchEvent(const TouchEvent& e);
+#endif
 
   // Invoked By the Widget if the mouse drag is interrupted by
   // the system. Invokes OnMouseReleased with a value of true for canceled.
@@ -98,10 +111,6 @@ class RootView : public View,
 
   // Make the provided view focused. Also make sure that our Widget is focused.
   void FocusView(View* view);
-
-  // Check whether the provided view is in the focus path. The focus path is the
-  // path between the focused view (included) to the root view.
-  bool IsInFocusPath(View* view);
 
   // Returns the View in this RootView hierarchy that has the focus, or NULL if
   // no View currently has the focus.
@@ -133,12 +142,7 @@ class RootView : public View,
   virtual bool IsVisibleInRootView() const;
 
   // FocusTraversable implementation.
-  virtual View* FindNextFocusableView(View* starting_view,
-                                      bool reverse,
-                                      Direction direction,
-                                      bool check_starting_view,
-                                      FocusTraversable** focus_traversable,
-                                      View** focus_traversable_view);
+  virtual FocusSearch* GetFocusSearch();
   virtual FocusTraversable* GetFocusTraversableParent();
   virtual View* GetFocusTraversableParentView();
 
@@ -176,7 +180,13 @@ class RootView : public View,
                                       int operation);
 
   // Accessibility accessors/mutators, overridden from View.
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+
+#if defined(TOUCH_UI) && defined(UNIT_TEST)
+  // For unit testing purposes, we use this method to set a mock
+  // GestureManager
+  void SetGestureManager(GestureManager* g) { gesture_manager_ = g; }
+#endif
 
  protected:
 
@@ -191,6 +201,12 @@ class RootView : public View,
  private:
   friend class View;
   friend class PaintTask;
+
+#if defined(TOUCH_UI)
+  // Required so the GestureManager can call the Process* entry points
+  // with synthetic events as necessary.
+  friend class GestureManager;
+#endif
 
   RootView();
 
@@ -267,6 +283,9 @@ class RootView : public View,
   // The host Widget
   Widget* widget_;
 
+  // The focus search algorithm.
+  FocusSearch focus_search_;
+
   // The rectangle that should be painted
   gfx::Rect invalid_rect_;
 
@@ -314,9 +333,6 @@ class RootView : public View,
   // wrapped inside native components, and is used for the focus traversal.
   View* focus_traversable_parent_view_;
 
-  // Storage of strings needed for accessibility.
-  std::wstring accessible_name_;
-
   // Tracks drag state for a view.
   View::DragInfo drag_info;
 
@@ -324,14 +340,20 @@ class RootView : public View,
   // view the drag started from.
   View* drag_view_;
 
+#if defined(TOUCH_UI)
+  // The gesture_manager_ for this.
+  GestureManager* gesture_manager_;
+
+  // The view currently handling touch events.
+  View *touch_pressed_handler_;
+#endif
+
 #ifndef NDEBUG
   // True if we're currently processing paint.
   bool is_processing_paint_;
 #endif
-
   DISALLOW_COPY_AND_ASSIGN(RootView);
 };
-
 }  // namespace views
 
 #endif  // VIEWS_WIDGET_ROOT_VIEW_H_

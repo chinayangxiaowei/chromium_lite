@@ -4,9 +4,7 @@
 
 #include "views/controls/menu/menu_2.h"
 
-#include "app/l10n_util.h"
 #include "base/compiler_specific.h"
-#include "base/logging.h"
 #include "views/controls/menu/menu_wrapper.h"
 
 namespace views {
@@ -52,6 +50,10 @@ void Menu2::AddMenuListener(MenuListener* listener) {
 
 void Menu2::RemoveMenuListener(MenuListener* listener) {
   wrapper_->RemoveMenuListener(listener);
+}
+
+void Menu2::SetMinimumWidth(int width) {
+  wrapper_->SetMinimumWidth(width);
 }
 
 }  // namespace

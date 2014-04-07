@@ -4,6 +4,7 @@
 
 #ifndef NET_URL_REQUEST_URL_REQUEST_TEST_JOB_H_
 #define NET_URL_REQUEST_URL_REQUEST_TEST_JOB_H_
+#pragma once
 
 #include <string>
 
@@ -93,6 +94,7 @@ class URLRequestTestJob : public URLRequestJob {
   virtual void Kill();
   virtual bool GetMimeType(std::string* mime_type) const;
   virtual void GetResponseInfo(net::HttpResponseInfo* info);
+  virtual int GetResponseCode() const;
   virtual bool IsRedirectResponse(GURL* location, int* http_status_code);
 
  protected:

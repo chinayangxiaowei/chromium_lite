@@ -4,17 +4,19 @@
 
 #ifndef CHROME_BROWSER_DOM_UI_MOST_VISITED_HANDLER_H_
 #define CHROME_BROWSER_DOM_UI_MOST_VISITED_HANDLER_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
 #include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/dom_ui/dom_ui.h"
+#include "chrome/browser/history/history_types.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
-#include "googleurl/src/gurl.h"
 
 class DictionaryValue;
+class GURL;
 class ListValue;
 class PageUsageData;
 class PrefService;
@@ -24,39 +26,31 @@ class Value;
 class MostVisitedHandler : public DOMMessageHandler,
                            public NotificationObserver {
  public:
-  // This struct is used when getting the pre-populated pages in case the user
-  // hasn't filled up his most visited pages.
-  struct MostVisitedPage {
-    std::wstring title;
-    GURL url;
-    GURL thumbnail_url;
-    GURL favicon_url;
-  };
 
   MostVisitedHandler();
-  virtual ~MostVisitedHandler() { }
+  virtual ~MostVisitedHandler();
 
   // DOMMessageHandler override and implementation.
   virtual DOMMessageHandler* Attach(DOMUI* dom_ui);
   virtual void RegisterMessages();
 
   // Callback for the "getMostVisited" message.
-  void HandleGetMostVisited(const Value* value);
+  void HandleGetMostVisited(const ListValue* args);
 
   // Callback for the "blacklistURLFromMostVisited" message.
-  void HandleBlacklistURL(const Value* url);
+  void HandleBlacklistURL(const ListValue* args);
 
   // Callback for the "removeURLsFromMostVisitedBlacklist" message.
-  void HandleRemoveURLsFromBlacklist(const Value* url);
+  void HandleRemoveURLsFromBlacklist(const ListValue* args);
 
   // Callback for the "clearMostVisitedURLsBlacklist" message.
-  void HandleClearBlacklist(const Value* url);
+  void HandleClearBlacklist(const ListValue* args);
 
   // Callback for the "addPinnedURL" message.
-  void HandleAddPinnedURL(const Value* value);
+  void HandleAddPinnedURL(const ListValue* args);
 
   // Callback for the "removePinnedURL" message.
-  void HandleRemovePinnedURL(const Value* value);
+  void HandleRemovePinnedURL(const ListValue* args);
 
   // NotificationObserver implementation.
   virtual void Observe(NotificationType type,
@@ -70,6 +64,8 @@ class MostVisitedHandler : public DOMMessageHandler,
   static void RegisterUserPrefs(PrefService* prefs);
 
  private:
+  struct MostVisitedPage;
+
   // Send a request to the HistoryService to get the most visited pages.
   void StartQueryForMostVisited();
 
@@ -77,12 +73,21 @@ class MostVisitedHandler : public DOMMessageHandler,
   void OnSegmentUsageAvailable(CancelableRequestProvider::Handle handle,
                                std::vector<PageUsageData*>* data);
 
+  // Sets pages_value_ from a vector of URLs.
+  void SetPagesValue(std::vector<PageUsageData*>* data);
+
+  // Sets pages_value_ from a format produced by TopSites.
+  void SetPagesValueFromTopSites(const history::MostVisitedURLList& data);
+
+  // Callback for TopSites.
+  void OnMostVisitedURLsAvailable(history::MostVisitedURLList data);
+
   // Puts the passed URL in the blacklist (so it does not show as a thumbnail).
   void BlacklistURL(const GURL& url);
 
   // Returns the key used in url_blacklist_ and pinned_urls_ for the passed
   // |url|.
-  std::wstring GetDictionaryKeyForURL(const std::string& url);
+  std::string GetDictionaryKeyForURL(const std::string& url);
 
   // Gets the page data for a pinned URL at a given index. This returns
   // true if found.
@@ -91,8 +96,16 @@ class MostVisitedHandler : public DOMMessageHandler,
   void AddPinnedURL(const MostVisitedPage& page, int index);
   void RemovePinnedURL(const GURL& url);
 
+  // Sends pages_value_ to the javascript side to and resets page_value_.
+  void SendPagesValue();
+
   // Returns true if we should treat this as the first run of the new tab page.
   bool IsFirstRun();
+
+  // Adds the fields in the page to the dictionary.
+  static void SetMostVisistedPage(
+      DictionaryValue* dict,
+      const MostVisitedHandler::MostVisitedPage& page);
 
   static const std::vector<MostVisitedPage>& GetPrePopulatedPages();
 
@@ -100,6 +113,7 @@ class MostVisitedHandler : public DOMMessageHandler,
 
   // Our consumer for the history service.
   CancelableRequestConsumerTSimple<PageUsageData*> cancelable_consumer_;
+  CancelableRequestConsumer topsites_consumer_;
 
   // The most visited URLs, in priority order.
   // Only used for matching up clicks on the page to which most visited entry

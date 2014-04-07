@@ -9,14 +9,36 @@
 #include "app/gtk_dnd_util.h"
 #include "base/file_path.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/bookmarks/bookmark_drag_data.h"
 #include "chrome/browser/gtk/bookmark_utils_gtk.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/url_constants.h"
 #include "net/base/net_util.h"
 
 using WebKit::WebDragOperation;
 using WebKit::WebDragOperationNone;
+
+namespace {
+
+// Returns the bookmark target atom, based on the underlying toolkit.
+//
+// For GTK, bookmark drag data is encoded as pickle and associated with
+// gtk_dnd_util::CHROME_BOOKMARK_ITEM. See
+// bookmark_utils::WriteBookmarksToSelection() for details.
+// For Views, bookmark drag data is encoded in the same format, and
+// associated with a custom format. See BookmarkDragData::Write() for
+// details.
+GdkAtom GetBookmarkTargetAtom() {
+#if defined(TOOLKIT_VIEWS)
+  return BookmarkDragData::GetBookmarkCustomFormat();
+#else
+  return gtk_dnd_util::GetAtomForTarget(gtk_dnd_util::CHROME_BOOKMARK_ITEM);
+#endif
+}
+
+}  // namespace
 
 WebDragDestGtk::WebDragDestGtk(TabContents* tab_contents, GtkWidget* widget)
     : tab_contents_(tab_contents),
@@ -76,22 +98,29 @@ gboolean WebDragDestGtk::OnDragMotion(GtkWidget* sender,
     bookmark_drag_data_.Clear();
     is_drop_target_ = false;
 
+    // text/plain must come before text/uri-list. This is a hack that works in
+    // conjunction with OnDragDataReceived. Since some file managers populate
+    // text/plain with file URLs when dragging files, we want to handle
+    // text/uri-list after text/plain so that the plain text can be cleared if
+    // it's a file drag.
     static int supported_targets[] = {
       gtk_dnd_util::TEXT_PLAIN,
       gtk_dnd_util::TEXT_URI_LIST,
       gtk_dnd_util::TEXT_HTML,
       gtk_dnd_util::NETSCAPE_URL,
       gtk_dnd_util::CHROME_NAMED_URL,
-      gtk_dnd_util::CHROME_BOOKMARK_ITEM,
       // TODO(estade): support image drags?
     };
 
-    data_requests_ = arraysize(supported_targets);
+    // Add the bookmark target as well.
+    data_requests_ = arraysize(supported_targets) + 1;
     for (size_t i = 0; i < arraysize(supported_targets); ++i) {
       gtk_drag_get_data(widget_, context,
                         gtk_dnd_util::GetAtomForTarget(supported_targets[i]),
                         time);
     }
+
+    gtk_drag_get_data(widget_, context, GetBookmarkTargetAtom(), time);
   } else if (data_requests_ == 0) {
     tab_contents_->render_view_host()->
         DragTargetDragOver(
@@ -135,15 +164,26 @@ void WebDragDestGtk::OnDragDataReceived(
                gtk_dnd_util::GetAtomForTarget(gtk_dnd_util::TEXT_URI_LIST)) {
       gchar** uris = gtk_selection_data_get_uris(data);
       if (uris) {
+        drop_data_->url = GURL();
         for (gchar** uri_iter = uris; *uri_iter; uri_iter++) {
+          // Most file managers populate text/uri-list with file URLs when
+          // dragging files. To avoid exposing file system paths to web content,
+          // file URLs are never set as the URL content for the drop.
           // TODO(estade): Can the filenames have a non-UTF8 encoding?
+          GURL url(*uri_iter);
           FilePath file_path;
-          if (net::FileURLToFilePath(GURL(*uri_iter), &file_path))
+          if (url.SchemeIs(chrome::kFileScheme) &&
+              net::FileURLToFilePath(url, &file_path)) {
             drop_data_->filenames.push_back(UTF8ToUTF16(file_path.value()));
+            // This is a hack. Some file managers also populate text/plain with
+            // a file URL when dragging files, so we clear it to avoid exposing
+            // it to the web content.
+            drop_data_->plain_text.clear();
+          } else if (!drop_data_->url.is_valid()) {
+            // Also set the first non-file URL as the URL content for the drop.
+            drop_data_->url = url;
+          }
         }
-        // Also, write the first URI as the URL.
-        if (uris[0])
-          drop_data_->url = GURL(uris[0]);
         g_strfreev(uris);
       }
     } else if (data->target ==
@@ -173,8 +213,9 @@ void WebDragDestGtk::OnDragDataReceived(
   // For CHROME_BOOKMARK_ITEM, we have to handle the case where the drag source
   // doesn't have any data available for us. In this case we try to synthesize a
   // URL bookmark.
-  if (data->target ==
-      gtk_dnd_util::GetAtomForTarget(gtk_dnd_util::CHROME_BOOKMARK_ITEM))  {
+  // Note that bookmark drag data is encoded in the same format for both
+  // GTK and Views, hence we can share the same logic here.
+  if (data->target == GetBookmarkTargetAtom()) {
     if (data->data && data->length > 0) {
       bookmark_drag_data_.ReadFromVector(
           bookmark_utils::GetNodesFromSelection(

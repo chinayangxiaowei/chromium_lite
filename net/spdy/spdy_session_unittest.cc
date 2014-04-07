@@ -1,55 +1,26 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "net/spdy/spdy_io_buffer.h"
-
-#include "googleurl/src/gurl.h"
-#include "net/base/mock_host_resolver.h"
-#include "net/base/ssl_config_service_defaults.h"
-#include "net/base/test_completion_callback.h"
-#include "net/http/http_network_session.h"
-#include "net/proxy/proxy_service.h"
-#include "net/socket/socket_test_util.h"
 #include "net/spdy/spdy_session.h"
-#include "net/spdy/spdy_session_pool.h"
+
+#include "net/spdy/spdy_io_buffer.h"
 #include "net/spdy/spdy_stream.h"
+#include "net/spdy/spdy_test_util.h"
 #include "testing/platform_test.h"
 
 namespace net {
 
-namespace {
-
-// Helper to manage the lifetimes of the dependencies for a
-// SpdyNetworkTransaction.
-class SessionDependencies {
+// TODO(cbentzel): Expose compression setter/getter in public SpdySession
+//                 interface rather than going through all these contortions.
+class SpdySessionTest : public PlatformTest {
  public:
-  // Default set of dependencies -- "null" proxy service.
-  SessionDependencies()
-      : host_resolver(new MockHostResolver),
-        proxy_service(ProxyService::CreateNull()),
-        ssl_config_service(new SSLConfigServiceDefaults),
-        spdy_session_pool(new SpdySessionPool) {
+  static void TurnOffCompression() {
+    spdy::SpdyFramer::set_enable_compression_default(false);
   }
-
-  scoped_refptr<MockHostResolverBase> host_resolver;
-  scoped_refptr<ProxyService> proxy_service;
-  scoped_refptr<SSLConfigService> ssl_config_service;
-  MockClientSocketFactory socket_factory;
-  scoped_refptr<SpdySessionPool> spdy_session_pool;
 };
 
-HttpNetworkSession* CreateSession(SessionDependencies* session_deps) {
-  return new HttpNetworkSession(NULL,
-                                session_deps->host_resolver,
-                                session_deps->proxy_service,
-                                &session_deps->socket_factory,
-                                session_deps->ssl_config_service,
-                                session_deps->spdy_session_pool,
-                                NULL);
-}
-
-typedef PlatformTest SpdySessionTest;
+namespace {
 
 // Test the SpdyIOBuffer class.
 TEST_F(SpdySessionTest, SpdyIOBuffer) {
@@ -88,52 +59,270 @@ TEST_F(SpdySessionTest, SpdyIOBuffer) {
   }
 }
 
-static const unsigned char kGoAway[] = {
-  0x80, 0x01, 0x00, 0x07,  // header
-  0x00, 0x00, 0x00, 0x04,  // flags, len
-  0x00, 0x00, 0x00, 0x00,  // last-accepted-stream-id
-};
-
 TEST_F(SpdySessionTest, GoAway) {
-  SessionDependencies session_deps;
+  SpdySessionDependencies session_deps;
   session_deps.host_resolver->set_synchronous_mode(true);
 
   MockConnect connect_data(false, OK);
+  scoped_ptr<spdy::SpdyFrame> goaway(ConstructSpdyGoAway());
   MockRead reads[] = {
-    MockRead(false, reinterpret_cast<const char*>(kGoAway),
-             arraysize(kGoAway)),
+    CreateMockRead(*goaway),
     MockRead(false, 0, 0)  // EOF
   };
   StaticSocketDataProvider data(reads, arraysize(reads), NULL, 0);
   data.set_connect_data(connect_data);
-  session_deps.socket_factory.AddSocketDataProvider(&data);
+  session_deps.socket_factory->AddSocketDataProvider(&data);
 
   SSLSocketDataProvider ssl(false, OK);
-  session_deps.socket_factory.AddSSLSocketDataProvider(&ssl);
+  session_deps.socket_factory->AddSSLSocketDataProvider(&ssl);
 
-  scoped_refptr<HttpNetworkSession> http_session(CreateSession(&session_deps));
+  scoped_refptr<HttpNetworkSession> http_session(
+      SpdySessionDependencies::SpdyCreateSession(&session_deps));
 
   const std::string kTestHost("www.foo.com");
   const int kTestPort = 80;
-  HostPortPair test_host_port_pair;
-  test_host_port_pair.host = kTestHost;
-  test_host_port_pair.port = kTestPort;
+  HostPortPair test_host_port_pair(kTestHost, kTestPort);
+  HostPortProxyPair pair(test_host_port_pair, ProxyServer::Direct());
 
-  scoped_refptr<SpdySessionPool> spdy_session_pool(
-      http_session->spdy_session_pool());
-  EXPECT_FALSE(spdy_session_pool->HasSession(test_host_port_pair));
+  SpdySessionPool* spdy_session_pool(http_session->spdy_session_pool());
+  EXPECT_FALSE(spdy_session_pool->HasSession(pair));
   scoped_refptr<SpdySession> session =
-      spdy_session_pool->Get(test_host_port_pair, http_session.get());
-  EXPECT_TRUE(spdy_session_pool->HasSession(test_host_port_pair));
+      spdy_session_pool->Get(pair, http_session->mutable_spdy_settings(),
+                             BoundNetLog());
+  EXPECT_TRUE(spdy_session_pool->HasSession(pair));
 
-  TCPSocketParams tcp_params(kTestHost, kTestPort, MEDIUM, GURL(), false);
-  int rv = session->Connect(kTestHost, tcp_params, MEDIUM, NULL);
-  ASSERT_EQ(OK, rv);
+  scoped_refptr<TCPSocketParams> tcp_params =
+      new TCPSocketParams(kTestHost, kTestPort, MEDIUM, GURL(), false);
+  scoped_ptr<ClientSocketHandle> connection(new ClientSocketHandle);
+  EXPECT_EQ(OK,
+            connection->Init(test_host_port_pair.ToString(), tcp_params, MEDIUM,
+                              NULL, http_session->tcp_socket_pool(),
+                              BoundNetLog()));
+  EXPECT_EQ(OK, session->InitializeWithSocket(connection.release(), false, OK));
 
   // Flush the SpdySession::OnReadComplete() task.
   MessageLoop::current()->RunAllPending();
 
-  EXPECT_FALSE(spdy_session_pool->HasSession(test_host_port_pair));
+  EXPECT_FALSE(spdy_session_pool->HasSession(pair));
+
+  scoped_refptr<SpdySession> session2 =
+      spdy_session_pool->Get(pair, http_session->mutable_spdy_settings(),
+                             BoundNetLog());
+
+  // Delete the first session.
+  session = NULL;
+
+  // Delete the second session.
+  spdy_session_pool->Remove(session2);
+  session2 = NULL;
+}
+
+class StreamReleaserCallback : public CallbackRunner<Tuple1<int> > {
+ public:
+  StreamReleaserCallback(SpdySession* session,
+                         SpdyStream* first_stream)
+      : session_(session), first_stream_(first_stream) {}
+  ~StreamReleaserCallback() {}
+
+  int WaitForResult() { return callback_.WaitForResult(); }
+
+  virtual void RunWithParams(const Tuple1<int>& params) {
+    session_->CloseSessionOnError(ERR_FAILED, false);
+    session_ = NULL;
+    first_stream_->Cancel();
+    first_stream_ = NULL;
+    stream_->Cancel();
+    stream_ = NULL;
+    callback_.RunWithParams(params);
+  }
+
+  scoped_refptr<SpdyStream>* stream() { return &stream_; }
+
+ private:
+  scoped_refptr<SpdySession> session_;
+  scoped_refptr<SpdyStream> first_stream_;
+  scoped_refptr<SpdyStream> stream_;
+  TestCompletionCallback callback_;
+};
+
+// Start with max concurrent streams set to 1.  Request two streams.  Receive a
+// settings frame setting max concurrent streams to 2.  Have the callback
+// release the stream, which releases its reference (the last) to the session.
+// Make sure nothing blows up.
+// http://crbug.com/57331
+TEST_F(SpdySessionTest, OnSettings) {
+  SpdySessionDependencies session_deps;
+  session_deps.host_resolver->set_synchronous_mode(true);
+
+  spdy::SpdySettings new_settings;
+  spdy::SettingsFlagsAndId id(spdy::SETTINGS_MAX_CONCURRENT_STREAMS);
+  id.set_id(spdy::SETTINGS_MAX_CONCURRENT_STREAMS);
+  const size_t max_concurrent_streams = 2;
+  new_settings.push_back(spdy::SpdySetting(id, max_concurrent_streams));
+
+  // Set up the socket so we read a SETTINGS frame that raises max concurrent
+  // streams to 2.
+  MockConnect connect_data(false, OK);
+  scoped_ptr<spdy::SpdyFrame> settings_frame(
+      ConstructSpdySettings(new_settings));
+  MockRead reads[] = {
+    CreateMockRead(*settings_frame),
+    MockRead(false, 0, 0)  // EOF
+  };
+
+  StaticSocketDataProvider data(reads, arraysize(reads), NULL, 0);
+  data.set_connect_data(connect_data);
+  session_deps.socket_factory->AddSocketDataProvider(&data);
+
+  SSLSocketDataProvider ssl(false, OK);
+  session_deps.socket_factory->AddSSLSocketDataProvider(&ssl);
+
+  scoped_refptr<HttpNetworkSession> http_session(
+      SpdySessionDependencies::SpdyCreateSession(&session_deps));
+
+  const std::string kTestHost("www.foo.com");
+  const int kTestPort = 80;
+  HostPortPair test_host_port_pair(kTestHost, kTestPort);
+  HostPortProxyPair pair(test_host_port_pair, ProxyServer::Direct());
+
+  // Initialize the SpdySettingsStorage with 1 max concurrent streams.
+  spdy::SpdySettings old_settings;
+  id.set_flags(spdy::SETTINGS_FLAG_PLEASE_PERSIST);
+  old_settings.push_back(spdy::SpdySetting(id, 1));
+  http_session->mutable_spdy_settings()->Set(
+      test_host_port_pair, old_settings);
+
+  // Create a session.
+  SpdySessionPool* spdy_session_pool(http_session->spdy_session_pool());
+  EXPECT_FALSE(spdy_session_pool->HasSession(pair));
+  scoped_refptr<SpdySession> session =
+      spdy_session_pool->Get(pair, http_session->mutable_spdy_settings(),
+                             BoundNetLog());
+  ASSERT_TRUE(spdy_session_pool->HasSession(pair));
+
+  scoped_refptr<TCPSocketParams> tcp_params =
+      new TCPSocketParams(kTestHost, kTestPort, MEDIUM, GURL(), false);
+  scoped_ptr<ClientSocketHandle> connection(new ClientSocketHandle);
+  EXPECT_EQ(OK,
+            connection->Init(test_host_port_pair.ToString(), tcp_params, MEDIUM,
+                              NULL, http_session->tcp_socket_pool(),
+                              BoundNetLog()));
+  EXPECT_EQ(OK, session->InitializeWithSocket(connection.release(), false, OK));
+
+  // Create 2 streams.  First will succeed.  Second will be pending.
+  scoped_refptr<SpdyStream> spdy_stream1;
+  TestCompletionCallback callback1;
+  GURL url("http://www.google.com");
+  EXPECT_EQ(OK,
+            session->CreateStream(url,
+                                  MEDIUM, /* priority, not important */
+                                  &spdy_stream1,
+                                  BoundNetLog(),
+                                  &callback1));
+
+  StreamReleaserCallback stream_releaser(session, spdy_stream1);
+
+  ASSERT_EQ(ERR_IO_PENDING,
+            session->CreateStream(url,
+                                  MEDIUM, /* priority, not important */
+                                  stream_releaser.stream(),
+                                  BoundNetLog(),
+                                  &stream_releaser));
+
+  // Make sure |stream_releaser| holds the last refs.
+  session = NULL;
+  spdy_stream1 = NULL;
+
+  EXPECT_EQ(OK, stream_releaser.WaitForResult());
+}
+
+// Start with max concurrent streams set to 1.  Request two streams.  When the
+// first completes, have the callback close itself, which should trigger the
+// second stream creation.  Then cancel that one immediately.  Don't crash.
+// http://crbug.com/63532
+TEST_F(SpdySessionTest, CancelPendingCreateStream) {
+  SpdySessionDependencies session_deps;
+  session_deps.host_resolver->set_synchronous_mode(true);
+
+  // Set up the socket so we read a SETTINGS frame that raises max concurrent
+  // streams to 2.
+  MockRead reads[] = {
+    MockRead(false, ERR_IO_PENDING)  // Stall forever.
+  };
+
+  StaticSocketDataProvider data(reads, arraysize(reads), NULL, 0);
+  MockConnect connect_data(false, OK);
+
+  data.set_connect_data(connect_data);
+  session_deps.socket_factory->AddSocketDataProvider(&data);
+
+  SSLSocketDataProvider ssl(false, OK);
+  session_deps.socket_factory->AddSSLSocketDataProvider(&ssl);
+
+  scoped_refptr<HttpNetworkSession> http_session(
+      SpdySessionDependencies::SpdyCreateSession(&session_deps));
+
+  const std::string kTestHost("www.foo.com");
+  const int kTestPort = 80;
+  HostPortPair test_host_port_pair(kTestHost, kTestPort);
+  HostPortProxyPair pair(test_host_port_pair, ProxyServer::Direct());
+
+  // Initialize the SpdySettingsStorage with 1 max concurrent streams.
+  spdy::SpdySettings settings;
+  spdy::SettingsFlagsAndId id(spdy::SETTINGS_MAX_CONCURRENT_STREAMS);
+  id.set_id(spdy::SETTINGS_MAX_CONCURRENT_STREAMS);
+  id.set_flags(spdy::SETTINGS_FLAG_PLEASE_PERSIST);
+  settings.push_back(spdy::SpdySetting(id, 1));
+  http_session->mutable_spdy_settings()->Set(test_host_port_pair, settings);
+
+  // Create a session.
+  SpdySessionPool* spdy_session_pool(http_session->spdy_session_pool());
+  EXPECT_FALSE(spdy_session_pool->HasSession(pair));
+  scoped_refptr<SpdySession> session =
+      spdy_session_pool->Get(pair, http_session->mutable_spdy_settings(),
+                             BoundNetLog());
+  ASSERT_TRUE(spdy_session_pool->HasSession(pair));
+
+  scoped_refptr<TCPSocketParams> tcp_params(
+      new TCPSocketParams(kTestHost, kTestPort, MEDIUM, GURL(), false));
+  scoped_ptr<ClientSocketHandle> connection(new ClientSocketHandle);
+  EXPECT_EQ(OK,
+            connection->Init(test_host_port_pair.ToString(), tcp_params, MEDIUM,
+                              NULL, http_session->tcp_socket_pool(),
+                              BoundNetLog()));
+  EXPECT_EQ(OK, session->InitializeWithSocket(connection.release(), false, OK));
+
+  // Use scoped_ptr to let us invalidate the memory when we want to, to trigger
+  // a valgrind error if the callback is invoked when it's not supposed to be.
+  scoped_ptr<TestCompletionCallback> callback(new TestCompletionCallback);
+
+  // Create 2 streams.  First will succeed.  Second will be pending.
+  scoped_refptr<SpdyStream> spdy_stream1;
+  GURL url("http://www.google.com");
+  ASSERT_EQ(OK,
+            session->CreateStream(url,
+                                  MEDIUM, /* priority, not important */
+                                  &spdy_stream1,
+                                  BoundNetLog(),
+                                  callback.get()));
+
+  scoped_refptr<SpdyStream> spdy_stream2;
+  ASSERT_EQ(ERR_IO_PENDING,
+            session->CreateStream(url,
+                                  MEDIUM, /* priority, not important */
+                                  &spdy_stream2,
+                                  BoundNetLog(),
+                                  callback.get()));
+
+  // Release the first one, this will allow the second to be created.
+  spdy_stream1->Cancel();
+  spdy_stream1 = NULL;
+
+  session->CancelPendingCreateStreams(&spdy_stream2);
+  callback.reset();
+
+  // Should not crash when running the pending callback.
+  MessageLoop::current()->RunAllPending();
 }
 
 }  // namespace

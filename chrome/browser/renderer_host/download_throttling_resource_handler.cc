@@ -29,7 +29,7 @@ DownloadThrottlingResourceHandler::DownloadThrottlingResourceHandler(
       ignore_on_read_complete_(in_complete) {
   // Pause the request.
   host_->PauseRequest(render_process_host_id_, request_id_, true);
-  host_->download_request_manager()->CanDownloadOnIOThread(
+  host_->download_request_limiter()->CanDownloadOnIOThread(
       render_process_host_id_, render_view_id, this);
  }
 
@@ -91,8 +91,6 @@ bool DownloadThrottlingResourceHandler::OnWillRead(int request_id,
     min_size = 2 * net::kMaxBytesToSniff;
   tmp_buffer_ = new net::IOBuffer(min_size);
   *buf = tmp_buffer_.get();
-  // TODO(willchan): Remove after debugging bug 16371.
-  CHECK((*buf)->data());
   *buf_size = min_size;
   return true;
 }

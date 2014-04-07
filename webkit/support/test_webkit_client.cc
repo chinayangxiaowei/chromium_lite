@@ -7,16 +7,23 @@
 #include "base/scoped_temp_dir.h"
 #include "base/stats_counters.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "net/base/cookie_monster.h"
 #include "net/http/http_cache.h"
-#include "net/socket/ssl_test_util.h"
+#include "net/test/test_server.h"
 #include "media/base/media.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebData.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDatabase.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebFileSystem.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebGraphicsContext3D.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebIDBFactory.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebIDBKey.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebIDBKeyPath.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebRuntimeFeatures.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebScriptController.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebSecurityPolicy.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSerializedScriptValue.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebStorageArea.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebStorageEventDispatcher.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebStorageNamespace.h"
@@ -26,31 +33,35 @@
 #include "webkit/database/vfs_backend.h"
 #include "webkit/extensions/v8/gc_extension.h"
 #include "webkit/extensions/v8/gears_extension.h"
-#include "webkit/extensions/v8/interval_extension.h"
 #include "webkit/glue/simple_webmimeregistry_impl.h"
 #include "webkit/glue/webclipboard_impl.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/webkitclient_impl.h"
 #include "webkit/support/test_webkit_client.h"
+#include "webkit/support/weburl_loader_mock_factory.h"
 #include "webkit/tools/test_shell/mock_webclipboard_impl.h"
 #include "webkit/tools/test_shell/simple_appcache_system.h"
 #include "webkit/tools/test_shell/simple_database_system.h"
+#include "webkit/tools/test_shell/simple_file_system.h"
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 #include "webkit/tools/test_shell/simple_webcookiejar_impl.h"
 #include "webkit/tools/test_shell/test_shell_request_context.h"
+#include "webkit/tools/test_shell/test_shell_webblobregistry_impl.h"
 #include "v8/include/v8.h"
 
 #if defined(OS_WIN)
 #include "third_party/WebKit/WebKit/chromium/public/win/WebThemeEngine.h"
 #include "webkit/tools/test_shell/test_shell_webthemeengine.h"
-#endif
-#if defined(OS_MACOSX)
+#elif defined(OS_LINUX)
+#include "third_party/WebKit/WebKit/chromium/public/linux/WebThemeEngine.h"
+#elif defined(OS_MACOSX)
 #include "base/mac_util.h"
 #endif
 
 using WebKit::WebScriptController;
 
-TestWebKitClient::TestWebKitClient() {
+TestWebKitClient::TestWebKitClient(bool unit_test_mode)
+      : unit_test_mode_(unit_test_mode) {
   v8::V8::SetCounterFunction(StatsTable::FindLocation);
 
   WebKit::initialize(this);
@@ -62,11 +73,13 @@ TestWebKitClient::TestWebKitClient() {
   WebScriptController::enableV8SingleThreadMode();
   WebScriptController::registerExtension(
       extensions_v8::GearsExtension::Get());
-  WebScriptController::registerExtension(
-      extensions_v8::IntervalExtension::Get());
   WebKit::WebRuntimeFeatures::enableSockets(true);
   WebKit::WebRuntimeFeatures::enableApplicationCache(true);
   WebKit::WebRuntimeFeatures::enableDatabase(true);
+  WebKit::WebRuntimeFeatures::enableWebGL(true);
+  WebKit::WebRuntimeFeatures::enablePushState(true);
+  WebKit::WebRuntimeFeatures::enableNotifications(true);
+  WebKit::WebRuntimeFeatures::enableTouch(true);
 
   // Load libraries for media and enable the media player.
   bool enable_media = false;
@@ -99,6 +112,10 @@ TestWebKitClient::TestWebKitClient() {
 
   WebKit::WebDatabase::setObserver(&database_system_);
 
+  blob_registry_ = new TestShellWebBlobRegistryImpl();
+
+  file_utilities_.set_sandbox_enabled(false);
+
 #if defined(OS_WIN)
   // Ensure we pick up the default theme engine.
   SetThemeEngine(NULL);
@@ -109,11 +126,10 @@ TestWebKitClient::TestWebKitClient() {
 
   // Initializing with a default context, which means no on-disk cookie DB,
   // and no support for directory listings.
-  SimpleResourceLoaderBridge::Init(
-      new TestShellRequestContext(FilePath(), cache_mode, true));
+  SimpleResourceLoaderBridge::Init(FilePath(), cache_mode, true);
 
   // Test shell always exposes the GC.
-  webkit_glue::SetJavaScriptFlags(L" --expose-gc");
+  webkit_glue::SetJavaScriptFlags(" --expose-gc");
   // Expose GCController to JavaScript.
   WebScriptController::registerExtension(extensions_v8::GCExtension::Get());
 }
@@ -132,6 +148,10 @@ WebKit::WebClipboard* TestWebKitClient::clipboard() {
   return &mock_clipboard_;
 }
 
+WebKit::WebFileUtilities* TestWebKitClient::fileUtilities() {
+  return &file_utilities_;
+}
+
 WebKit::WebSandboxSupport* TestWebKitClient::sandboxSupport() {
   return NULL;
 }
@@ -140,15 +160,22 @@ WebKit::WebCookieJar* TestWebKitClient::cookieJar() {
   return &cookie_jar_;
 }
 
+WebKit::WebBlobRegistry* TestWebKitClient::blobRegistry() {
+  return blob_registry_.get();
+}
+
+WebKit::WebFileSystem* TestWebKitClient::fileSystem() {
+  return &file_system_;
+}
+
 bool TestWebKitClient::sandboxEnabled() {
   return true;
 }
 
 WebKit::WebKitClient::FileHandle TestWebKitClient::databaseOpenFile(
-    const WebKit::WebString& vfs_file_name, int desired_flags,
-    WebKit::WebKitClient::FileHandle* dir_handle) {
+    const WebKit::WebString& vfs_file_name, int desired_flags) {
   return SimpleDatabaseSystem::GetInstance()->OpenFile(
-      vfs_file_name, desired_flags, dir_handle);
+      vfs_file_name, desired_flags);
 }
 
 int TestWebKitClient::databaseDeleteFile(const WebKit::WebString& vfs_file_name,
@@ -167,12 +194,6 @@ long long TestWebKitClient::databaseGetFileSize(
   return SimpleDatabaseSystem::GetInstance()->GetFileSize(vfs_file_name);
 }
 
-bool TestWebKitClient::getFileSize(const WebKit::WebString& path, long long& result) {
-  return file_util::GetFileSize(
-      webkit_glue::WebStringToFilePath(path),
-      reinterpret_cast<int64*>(&result));
-}
-
 unsigned long long TestWebKitClient::visitedLinkHash(const char* canonicalURL,
                                                      size_t length) {
   return 0;
@@ -187,6 +208,13 @@ WebKit::WebMessagePortChannel* TestWebKitClient::createMessagePortChannel() {
 }
 
 void TestWebKitClient::prefetchHostName(const WebKit::WebString&) {
+}
+
+WebKit::WebURLLoader* TestWebKitClient::createURLLoader() {
+  if (!unit_test_mode_)
+    return webkit_glue::WebKitClientImpl::createURLLoader();
+  return url_loader_factory_.CreateURLLoader(
+      webkit_glue::WebKitClientImpl::createURLLoader());
 }
 
 WebKit::WebData TestWebKitClient::loadResource(const char* name) {
@@ -225,9 +253,20 @@ void TestWebKitClient::dispatchStorageEvent(const WebKit::WebString& key,
   // The event is dispatched by the proxy.
 }
 
-WebKit::WebApplicationCacheHost* TestWebKitClient::createApplicationCacheHost(
-    WebKit::WebApplicationCacheHostClient* client) {
-  return SimpleAppCacheSystem::CreateApplicationCacheHost(client);
+WebKit::WebIDBFactory* TestWebKitClient::idbFactory() {
+  return WebKit::WebIDBFactory::create();
+}
+
+void TestWebKitClient::createIDBKeysFromSerializedValuesAndKeyPath(
+      const WebKit::WebVector<WebKit::WebSerializedScriptValue>& values,
+      const WebKit::WebString& keyPath,
+      WebKit::WebVector<WebKit::WebIDBKey>& keys_out) {
+  WebKit::WebVector<WebKit::WebIDBKey> keys(values.size());
+  for (size_t i = 0; i < values.size(); ++i) {
+    keys[i] = WebKit::WebIDBKey::createFromValueAndKeyPath(
+        values[i], WebKit::WebIDBKeyPath::create(keyPath));
+  }
+  keys_out.swap(keys);
 }
 
 #if defined(OS_WIN)
@@ -242,4 +281,8 @@ WebKit::WebThemeEngine* TestWebKitClient::themeEngine() {
 
 WebKit::WebSharedWorkerRepository* TestWebKitClient::sharedWorkerRepository() {
   return NULL;
+}
+
+WebKit::WebGraphicsContext3D* TestWebKitClient::createGraphicsContext3D() {
+  return WebKit::WebGraphicsContext3D::createDefault();
 }

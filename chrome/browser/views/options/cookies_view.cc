@@ -7,13 +7,13 @@
 #include <algorithm>
 
 #include "app/l10n_util.h"
-#include "base/i18n/time_formatting.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/views/appcache_info_view.h"
 #include "chrome/browser/views/cookie_info_view.h"
 #include "chrome/browser/views/database_info_view.h"
+#include "chrome/browser/views/indexed_db_info_view.h"
 #include "chrome/browser/views/local_storage_info_view.h"
 #include "gfx/canvas.h"
 #include "gfx/color_utils.h"
@@ -146,9 +146,9 @@ void CookiesView::ContentsChanged(views::Textfield* sender,
 
 bool CookiesView::HandleKeystroke(views::Textfield* sender,
                                   const views::Textfield::Keystroke& key) {
-  if (key.GetKeyboardCode() == base::VKEY_ESCAPE) {
+  if (key.GetKeyboardCode() == app::VKEY_ESCAPE) {
     ResetSearchQuery();
-  } else if (key.GetKeyboardCode() == base::VKEY_RETURN) {
+  } else if (key.GetKeyboardCode() == app::VKEY_RETURN) {
     search_update_factory_.RevokeAll();
     UpdateSearchResults();
   }
@@ -215,8 +215,8 @@ void CookiesView::OnTreeViewSelectionChanged(views::TreeView* tree_view) {
       GetDetailedInfo();
   if (detailed_info.node_type == CookieTreeNode::DetailedInfo::TYPE_COOKIE) {
     UpdateVisibleDetailedInfo(cookie_info_view_);
-    cookie_info_view_->SetCookie(detailed_info.cookie->first,
-                                 detailed_info.cookie->second);
+    cookie_info_view_->SetCookie(detailed_info.cookie->Domain(),
+                                 *detailed_info.cookie);
   } else if (detailed_info.node_type ==
              CookieTreeNode::DetailedInfo::TYPE_DATABASE) {
     UpdateVisibleDetailedInfo(database_info_view_);
@@ -230,14 +230,18 @@ void CookiesView::OnTreeViewSelectionChanged(views::TreeView* tree_view) {
              CookieTreeNode::DetailedInfo::TYPE_APPCACHE) {
     UpdateVisibleDetailedInfo(appcache_info_view_);
     appcache_info_view_->SetAppCacheInfo(detailed_info.appcache_info);
+  } else if (detailed_info.node_type ==
+             CookieTreeNode::DetailedInfo::TYPE_INDEXED_DB) {
+    UpdateVisibleDetailedInfo(indexed_db_info_view_);
+    indexed_db_info_view_->SetIndexedDBInfo(*detailed_info.indexed_db_info);
   } else {
     UpdateVisibleDetailedInfo(cookie_info_view_);
     cookie_info_view_->ClearCookieDisplay();
   }
 }
 
-void CookiesView::OnTreeViewKeyDown(base::KeyboardCode keycode) {
-  if (keycode == base::VKEY_DELETE)
+void CookiesView::OnTreeViewKeyDown(app::KeyboardCode keycode) {
+  if (keycode == app::VKEY_DELETE)
     cookies_tree_->RemoveSelectedItems();
 }
 
@@ -264,6 +268,7 @@ CookiesView::CookiesView(Profile* profile)
       database_info_view_(NULL),
       local_storage_info_view_(NULL),
       appcache_info_view_(NULL),
+      indexed_db_info_view_(NULL),
       remove_button_(NULL),
       remove_all_button_(NULL),
       profile_(profile),
@@ -281,10 +286,13 @@ void CookiesView::Init() {
   description_label_ = new views::Label(
       l10n_util::GetString(IDS_COOKIES_INFO_LABEL));
   description_label_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
-  cookies_tree_model_.reset(new CookiesTreeModel(profile_,
+  cookies_tree_model_.reset(new CookiesTreeModel(
+      profile_->GetRequestContext()->GetCookieStore()->GetCookieMonster(),
       new BrowsingDataDatabaseHelper(profile_),
       new BrowsingDataLocalStorageHelper(profile_),
-      new BrowsingDataAppCacheHelper(profile_)));
+      NULL,
+      new BrowsingDataAppCacheHelper(profile_),
+      BrowsingDataIndexedDBHelper::Create(profile_)));
   cookies_tree_model_->AddObserver(this);
 
   info_panel_ = new InfoPanelView;
@@ -292,10 +300,12 @@ void CookiesView::Init() {
   database_info_view_ = new DatabaseInfoView;
   local_storage_info_view_ = new LocalStorageInfoView;
   appcache_info_view_ = new AppCacheInfoView;
+  indexed_db_info_view_ = new IndexedDBInfoView;
   info_panel_->AddChildView(cookie_info_view_);
   info_panel_->AddChildView(database_info_view_);
   info_panel_->AddChildView(local_storage_info_view_);
   info_panel_->AddChildView(appcache_info_view_);
+  info_panel_->AddChildView(indexed_db_info_view_);
 
   cookies_tree_ = new CookiesTreeView(cookies_tree_model_.get());
   remove_button_ = new views::NativeButton(
@@ -383,4 +393,5 @@ void CookiesView::UpdateVisibleDetailedInfo(views::View* view) {
   database_info_view_->SetVisible(view == database_info_view_);
   local_storage_info_view_->SetVisible(view == local_storage_info_view_);
   appcache_info_view_->SetVisible(view == appcache_info_view_);
+  indexed_db_info_view_->SetVisible(view == indexed_db_info_view_);
 }

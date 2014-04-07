@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_SOCKET_SSL_CLIENT_SOCKET_MAC_H_
 #define NET_SOCKET_SSL_CLIENT_SOCKET_MAC_H_
+#pragma once
 
 #include <Security/Security.h>
 
@@ -20,15 +21,16 @@
 namespace net {
 
 class CertVerifier;
+class ClientSocketHandle;
 
 // An SSL client socket implemented with Secure Transport.
 class SSLClientSocketMac : public SSLClientSocket {
  public:
-  // Takes ownership of the transport_socket, which may already be connected.
+  // Takes ownership of the |transport_socket|, which must already be connected.
   // The given hostname will be compared with the name(s) in the server's
   // certificate during the SSL handshake. ssl_config specifies the SSL
   // settings.
-  SSLClientSocketMac(ClientSocket* transport_socket,
+  SSLClientSocketMac(ClientSocketHandle* transport_socket,
                      const std::string& hostname,
                      const SSLConfig& ssl_config);
   ~SSLClientSocketMac();
@@ -39,11 +41,15 @@ class SSLClientSocketMac : public SSLClientSocket {
   virtual NextProtoStatus GetNextProto(std::string* proto);
 
   // ClientSocket methods:
-  virtual int Connect(CompletionCallback* callback, const BoundNetLog& net_log);
+  virtual int Connect(CompletionCallback* callback);
   virtual void Disconnect();
   virtual bool IsConnected() const;
   virtual bool IsConnectedAndIdle() const;
   virtual int GetPeerAddress(AddressList* address) const;
+  virtual const BoundNetLog& NetLog() const { return net_log_; }
+  virtual void SetSubresourceSpeculation();
+  virtual void SetOmniboxSpeculation();
+  virtual bool WasEverUsed() const;
 
   // Socket methods:
   virtual int Read(IOBuffer* buf, int buf_len, CompletionCallback* callback);
@@ -52,10 +58,11 @@ class SSLClientSocketMac : public SSLClientSocket {
   virtual bool SetSendBufferSize(int32 size);
 
  private:
+  bool completed_handshake() const {
+    return next_handshake_state_ == STATE_COMPLETED_HANDSHAKE;
+  }
   // Initializes the SSLContext.  Returns a net error code.
   int InitializeSSLContext();
-
-  OSStatus EnableBreakOnAuth(bool enabled);
 
   void DoConnectCallback(int result);
   void DoReadCallback(int result);
@@ -68,11 +75,13 @@ class SSLClientSocketMac : public SSLClientSocket {
 
   int DoPayloadRead();
   int DoPayloadWrite();
-  int DoHandshakeStart();
+  int DoHandshake();
   int DoVerifyCert();
   int DoVerifyCertComplete(int result);
-  int DoHandshakeFinish();
-  void HandshakeFinished();
+  int DoCompletedRenegotiation(int result);
+
+  void DidCompleteRenegotiation();
+  int DidCompleteHandshake();
 
   int SetClientCert();
 
@@ -87,7 +96,7 @@ class SSLClientSocketMac : public SSLClientSocket {
   CompletionCallbackImpl<SSLClientSocketMac> transport_read_callback_;
   CompletionCallbackImpl<SSLClientSocketMac> transport_write_callback_;
 
-  scoped_ptr<ClientSocket> transport_;
+  scoped_ptr<ClientSocketHandle> transport_;
   std::string hostname_;
   SSLConfig ssl_config_;
 
@@ -105,10 +114,21 @@ class SSLClientSocketMac : public SSLClientSocket {
 
   enum State {
     STATE_NONE,
-    STATE_HANDSHAKE_START,
+    STATE_HANDSHAKE,
     STATE_VERIFY_CERT,
     STATE_VERIFY_CERT_COMPLETE,
-    STATE_HANDSHAKE_FINISH,
+    STATE_COMPLETED_RENEGOTIATION,
+    STATE_COMPLETED_HANDSHAKE,
+    // After the handshake, the socket remains in the
+    // STATE_COMPLETED_HANDSHAKE state until renegotiation is requested by
+    // the server. When renegotiation is requested, the state machine
+    // restarts at STATE_HANDSHAKE, advances through to
+    // STATE_VERIFY_CERT_COMPLETE, and then continues to
+    // STATE_COMPLETED_RENEGOTIATION. After STATE_COMPLETED_RENEGOTIATION
+    // has been processed, it goes back to STATE_COMPLETED_HANDSHAKE and
+    // will remain there until the server requests renegotiation again.
+    // During the initial handshake, STATE_COMPLETED_RENEGOTIATION is
+    // skipped.
   };
   State next_handshake_state_;
 
@@ -116,8 +136,9 @@ class SSLClientSocketMac : public SSLClientSocket {
   scoped_ptr<CertVerifier> verifier_;
   CertVerifyResult server_cert_verify_result_;
 
-  bool completed_handshake_;
-  bool handshake_interrupted_;
+  // The initial handshake has already completed, and the current handshake
+  // is server-initiated renegotiation.
+  bool renegotiating_;
   bool client_cert_requested_;
   SSLContextRef ssl_context_;
 

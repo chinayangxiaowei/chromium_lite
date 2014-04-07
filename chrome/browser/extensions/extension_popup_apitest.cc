@@ -6,11 +6,17 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/common/chrome_switches.h"
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Popup) {
+// Times out. See http://crbug.com/46601.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_Popup) {
   CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kEnableExperimentalExtensionApis);
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableExtensionToolstrips);
 
-  ASSERT_TRUE(RunExtensionTest("popup")) << message_;
+  ASSERT_TRUE(RunExtensionTest("popup/popup_main")) << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, PopupFromInfobar) {
+  CommandLine::ForCurrentProcess()->AppendSwitch(
+    switches::kEnableExperimentalExtensionApis);
+
+  ASSERT_TRUE(RunExtensionTest("popup/popup_from_infobar")) << message_;
 }

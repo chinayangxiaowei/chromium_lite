@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,14 @@
 #include "base/histogram.h"
 
 #include <math.h>
+
+#include <algorithm>
 #include <string>
 
+#include "base/lock.h"
 #include "base/logging.h"
 #include "base/pickle.h"
-#include "base/string_util.h"
+#include "base/stringprintf.h"
 
 using base::TimeDelta;
 
@@ -30,16 +33,9 @@ scoped_refptr<Histogram> Histogram::FactoryGet(const std::string& name,
   if (maximum >= kSampleType_MAX)
     maximum = kSampleType_MAX - 1;
 
-  if (StatisticsRecorder::FindHistogram(name, &histogram)) {
-    DCHECK(histogram.get() != NULL);
-  } else {
+  if (!StatisticsRecorder::FindHistogram(name, &histogram)) {
     histogram = new Histogram(name, minimum, maximum, bucket_count);
-    scoped_refptr<Histogram> registered_histogram(NULL);
-    StatisticsRecorder::FindHistogram(name, &registered_histogram);
-    // Allow a NULL return to mean that the StatisticsRecorder was not started.
-    if (registered_histogram.get() != NULL &&
-        registered_histogram.get() != histogram.get())
-      histogram = registered_histogram;
+    StatisticsRecorder::FindHistogram(name, &histogram);
   }
 
   DCHECK(HISTOGRAM == histogram->histogram_type());
@@ -48,7 +44,7 @@ scoped_refptr<Histogram> Histogram::FactoryGet(const std::string& name,
   return histogram;
 }
 
-scoped_refptr<Histogram> Histogram::FactoryGet(const std::string& name,
+scoped_refptr<Histogram> Histogram::FactoryTimeGet(const std::string& name,
     base::TimeDelta minimum, base::TimeDelta maximum, size_t bucket_count,
     Flags flags) {
   return FactoryGet(name, minimum.InMilliseconds(), maximum.InMilliseconds(),
@@ -90,6 +86,10 @@ Histogram::~Histogram() {
   DCHECK(ValidateBucketRanges());
 }
 
+bool Histogram::PrintEmptyBucket(size_t index) const {
+  return true;
+}
+
 void Histogram::Add(int value) {
   if (value >= kSampleType_MAX)
     value = kSampleType_MAX - 1;
@@ -101,8 +101,16 @@ void Histogram::Add(int value) {
   Accumulate(value, 1, index);
 }
 
+void Histogram::AddBoolean(bool value) {
+  DCHECK(false);
+}
+
 void Histogram::AddSampleSet(const SampleSet& sample) {
   sample_.Add(sample);
+}
+
+void Histogram::SetRangeDescriptions(const DescriptionPair descriptions[]) {
+  DCHECK(false);
 }
 
 // The following methods provide a graphical histogram display.
@@ -180,7 +188,7 @@ void Histogram::WriteAscii(bool graph_it, const std::string& newline,
 bool Histogram::ValidateBucketRanges() const {
   // Standard assertions that all bucket ranges should satisfy.
   DCHECK(ranges_.size() == bucket_count_ + 1);
-  DCHECK_EQ(0, ranges_[0]);
+  DCHECK_EQ(ranges_[0], 0);
   DCHECK(declared_min() == ranges_[1]);
   DCHECK(declared_max() == ranges_[bucket_count_ - 1]);
   DCHECK(kSampleType_MAX == ranges_[bucket_count_]);
@@ -194,10 +202,10 @@ void Histogram::Initialize() {
   if (declared_max_ >= kSampleType_MAX)
     declared_max_ = kSampleType_MAX - 1;
   DCHECK(declared_min_ <= declared_max_);
-  DCHECK_LT(1u, bucket_count_);
+  DCHECK_GT(bucket_count_, 1u);
   size_t maximal_bucket_count = declared_max_ - declared_min_ + 2;
   DCHECK(bucket_count_ <= maximal_bucket_count);
-  DCHECK_EQ(0, ranges_[0]);
+  DCHECK_EQ(ranges_[0], 0);
   ranges_[bucket_count_] = kSampleType_MAX;
   InitializeBucketRange();
   DCHECK(ValidateBucketRanges());
@@ -296,6 +304,20 @@ void Histogram::SnapshotSample(SampleSet* sample) const {
   *sample = sample_;
 }
 
+bool Histogram::HasConstructorArguments(Sample minimum, Sample maximum,
+                                        size_t bucket_count) {
+  return ((minimum == declared_min_) && (maximum == declared_max_) &&
+          (bucket_count == bucket_count_));
+}
+
+bool Histogram::HasConstructorTimeDeltaArguments(base::TimeDelta minimum,
+                                                 base::TimeDelta maximum,
+                                                 size_t bucket_count) {
+  return ((minimum.InMilliseconds() == declared_min_) &&
+          (maximum.InMilliseconds() == declared_max_) &&
+          (bucket_count == bucket_count_));
+}
+
 //------------------------------------------------------------------------------
 // Accessor methods
 
@@ -320,24 +342,25 @@ double Histogram::GetPeakBucketSize(const SampleSet& snapshot) const {
 void Histogram::WriteAsciiHeader(const SampleSet& snapshot,
                                  Count sample_count,
                                  std::string* output) const {
-  StringAppendF(output,
-                "Histogram: %s recorded %d samples",
-                histogram_name().c_str(),
-                sample_count);
+  base::StringAppendF(output,
+                      "Histogram: %s recorded %d samples",
+                      histogram_name().c_str(),
+                      sample_count);
   if (0 == sample_count) {
-    DCHECK_EQ(0, snapshot.sum());
+    DCHECK_EQ(snapshot.sum(), 0);
   } else {
     double average = static_cast<float>(snapshot.sum()) / sample_count;
     double variance = static_cast<float>(snapshot.square_sum())/sample_count
                       - average * average;
     double standard_deviation = sqrt(variance);
 
-    StringAppendF(output,
-                  ", average = %.1f, standard deviation = %.1f",
-                  average, standard_deviation);
+    base::StringAppendF(output,
+                        ", average = %.1f, standard deviation = %.1f",
+                        average, standard_deviation);
   }
   if (flags_ & ~kHexRangePrintingFlag )
-    StringAppendF(output, " (flags = 0x%x)", flags_ & ~kHexRangePrintingFlag);
+    base::StringAppendF(output, " (flags = 0x%x)",
+                        flags_ & ~kHexRangePrintingFlag);
 }
 
 void Histogram::WriteAsciiBucketContext(const int64 past,
@@ -349,22 +372,22 @@ void Histogram::WriteAsciiBucketContext(const int64 past,
   WriteAsciiBucketValue(current, scaled_sum, output);
   if (0 < i) {
     double percentage = past / scaled_sum;
-    StringAppendF(output, " {%3.1f%%}", percentage);
+    base::StringAppendF(output, " {%3.1f%%}", percentage);
   }
 }
 
 const std::string Histogram::GetAsciiBucketRange(size_t i) const {
   std::string result;
   if (kHexRangePrintingFlag & flags_)
-    StringAppendF(&result, "%#x", ranges(i));
+    base::StringAppendF(&result, "%#x", ranges(i));
   else
-    StringAppendF(&result, "%d", ranges(i));
+    base::StringAppendF(&result, "%d", ranges(i));
   return result;
 }
 
 void Histogram::WriteAsciiBucketValue(Count current, double scaled_sum,
                                       std::string* output) const {
-  StringAppendF(output, " (%d = %3.1f%%)", current, current/scaled_sum);
+  base::StringAppendF(output, " (%d = %3.1f%%)", current, current/scaled_sum);
 }
 
 void Histogram::WriteAsciiBucketGraph(double current_size, double max_size,
@@ -440,7 +463,7 @@ bool Histogram::DeserializeHistogramInfo(const std::string& histogram_info) {
 
   scoped_refptr<Histogram> render_histogram(NULL);
 
-  if (histogram_type ==  HISTOGRAM) {
+  if (histogram_type == HISTOGRAM) {
     render_histogram = Histogram::FactoryGet(
         histogram_name, declared_min, declared_max, bucket_count, flags);
   } else if (histogram_type == LINEAR_HISTOGRAM) {
@@ -478,6 +501,9 @@ Histogram::SampleSet::SampleSet()
     : counts_(),
       sum_(0),
       square_sum_(0) {
+}
+
+Histogram::SampleSet::~SampleSet() {
 }
 
 void Histogram::SampleSet::Resize(const Histogram& histogram) {
@@ -584,15 +610,9 @@ scoped_refptr<Histogram> LinearHistogram::FactoryGet(
   if (maximum >= kSampleType_MAX)
     maximum = kSampleType_MAX - 1;
 
-  if (StatisticsRecorder::FindHistogram(name, &histogram)) {
-    DCHECK(histogram.get() != NULL);
-  } else {
+  if (!StatisticsRecorder::FindHistogram(name, &histogram)) {
     histogram = new LinearHistogram(name, minimum, maximum, bucket_count);
-    scoped_refptr<Histogram> registered_histogram(NULL);
-    StatisticsRecorder::FindHistogram(name, &registered_histogram);
-    if (registered_histogram.get() != NULL &&
-        registered_histogram.get() != histogram.get())
-      histogram = registered_histogram;
+    StatisticsRecorder::FindHistogram(name, &histogram);
   }
 
   DCHECK(LINEAR_HISTOGRAM == histogram->histogram_type());
@@ -601,11 +621,14 @@ scoped_refptr<Histogram> LinearHistogram::FactoryGet(
   return histogram;
 }
 
-scoped_refptr<Histogram> LinearHistogram::FactoryGet(const std::string& name,
-    base::TimeDelta minimum, base::TimeDelta maximum, size_t bucket_count,
-    Flags flags) {
+scoped_refptr<Histogram> LinearHistogram::FactoryTimeGet(
+    const std::string& name, base::TimeDelta minimum, base::TimeDelta maximum,
+    size_t bucket_count, Flags flags) {
   return FactoryGet(name, minimum.InMilliseconds(), maximum.InMilliseconds(),
                     bucket_count, flags);
+}
+
+LinearHistogram::~LinearHistogram() {
 }
 
 LinearHistogram::LinearHistogram(const std::string& name, Sample minimum,
@@ -623,6 +646,10 @@ LinearHistogram::LinearHistogram(const std::string& name,
   // Do a "better" (different) job at init than a base classes did...
   InitializeBucketRange();
   DCHECK(ValidateBucketRanges());
+}
+
+Histogram::ClassType LinearHistogram::histogram_type() const {
+  return LINEAR_HISTOGRAM;
 }
 
 void LinearHistogram::SetRangeDescriptions(
@@ -646,7 +673,7 @@ bool LinearHistogram::PrintEmptyBucket(size_t index) const {
 
 
 void LinearHistogram::InitializeBucketRange() {
-  DCHECK_LT(0, declared_min());  // 0 is the underflow bucket here.
+  DCHECK_GT(declared_min(), 0);  // 0 is the underflow bucket here.
   double min = declared_min();
   double max = declared_max();
   size_t i;
@@ -673,15 +700,9 @@ scoped_refptr<Histogram> BooleanHistogram::FactoryGet(const std::string& name,
                                                       Flags flags) {
   scoped_refptr<Histogram> histogram(NULL);
 
-  if (StatisticsRecorder::FindHistogram(name, &histogram)) {
-    DCHECK(histogram.get() != NULL);
-  } else {
+  if (!StatisticsRecorder::FindHistogram(name, &histogram)) {
     histogram = new BooleanHistogram(name);
-    scoped_refptr<Histogram> registered_histogram(NULL);
-    StatisticsRecorder::FindHistogram(name, &registered_histogram);
-    if (registered_histogram.get() != NULL &&
-        registered_histogram.get() != histogram.get())
-      histogram = registered_histogram;
+    StatisticsRecorder::FindHistogram(name, &histogram);
   }
 
   DCHECK(BOOLEAN_HISTOGRAM == histogram->histogram_type());
@@ -689,6 +710,78 @@ scoped_refptr<Histogram> BooleanHistogram::FactoryGet(const std::string& name,
   return histogram;
 }
 
+Histogram::ClassType BooleanHistogram::histogram_type() const {
+  return BOOLEAN_HISTOGRAM;
+}
+
+void BooleanHistogram::AddBoolean(bool value) {
+  Add(value ? 1 : 0);
+}
+
+BooleanHistogram::BooleanHistogram(const std::string& name)
+    : LinearHistogram(name, 1, 2, 3) {
+}
+
+//------------------------------------------------------------------------------
+// CustomHistogram:
+//------------------------------------------------------------------------------
+
+scoped_refptr<Histogram> CustomHistogram::FactoryGet(
+    const std::string& name, const std::vector<int>& custom_ranges,
+    Flags flags) {
+  scoped_refptr<Histogram> histogram(NULL);
+
+  // Remove the duplicates in the custom ranges array.
+  std::vector<int> ranges = custom_ranges;
+  ranges.push_back(0);  // Ensure we have a zero value.
+  std::sort(ranges.begin(), ranges.end());
+  ranges.erase(std::unique(ranges.begin(), ranges.end()), ranges.end());
+  if (ranges.size() <= 1) {
+    DCHECK(false);
+    // Note that we pushed a 0 in above, so for defensive code....
+    ranges.push_back(1);  // Put in some data so we can index to [1].
+  }
+
+  DCHECK_LT(ranges.back(), kSampleType_MAX);
+
+  if (!StatisticsRecorder::FindHistogram(name, &histogram)) {
+    histogram = new CustomHistogram(name, ranges);
+    StatisticsRecorder::FindHistogram(name, &histogram);
+  }
+
+  DCHECK_EQ(histogram->histogram_type(), CUSTOM_HISTOGRAM);
+  DCHECK(histogram->HasConstructorArguments(ranges[1], ranges.back(),
+                                            ranges.size()));
+  histogram->SetFlags(flags);
+  return histogram;
+}
+
+Histogram::ClassType CustomHistogram::histogram_type() const {
+  return CUSTOM_HISTOGRAM;
+}
+
+CustomHistogram::CustomHistogram(const std::string& name,
+    const std::vector<int>& custom_ranges)
+    : Histogram(name, custom_ranges[1], custom_ranges.back(),
+                custom_ranges.size()) {
+  DCHECK_GT(custom_ranges.size(), 1u);
+  DCHECK_EQ(custom_ranges[0], 0);
+  ranges_vector_ = &custom_ranges;
+  InitializeBucketRange();
+  ranges_vector_ = NULL;
+  DCHECK(ValidateBucketRanges());
+}
+
+void CustomHistogram::InitializeBucketRange() {
+  DCHECK(ranges_vector_->size() <= bucket_count());
+  for (size_t index = 0; index < ranges_vector_->size(); ++index) {
+    SetBucketRange(index, (*ranges_vector_)[index]);
+  }
+}
+
+double CustomHistogram::GetBucketSize(Count current, size_t i) const {
+  return 1;
+}
 
 //------------------------------------------------------------------------------
 // The next section handles global (central) support for all histograms, as well
@@ -712,7 +805,6 @@ StatisticsRecorder::~StatisticsRecorder() {
     WriteGraph("", &output);
     LOG(INFO) << output;
   }
-
   // Clean up.
   delete histograms_;
   histograms_ = NULL;
@@ -736,11 +828,9 @@ void StatisticsRecorder::Register(Histogram* histogram) {
     return;
   const std::string name = histogram->histogram_name();
   AutoLock auto_lock(*lock_);
-
-  DCHECK(histograms_->end() == histograms_->find(name));
-
-  (*histograms_)[name] = histogram;
-  return;
+  // Avoid overwriting a previous registration.
+  if (histograms_->end() == histograms_->find(name))
+    (*histograms_)[name] = histogram;
 }
 
 // static
@@ -772,10 +862,12 @@ void StatisticsRecorder::WriteGraph(const std::string& query,
                                     std::string* output) {
   if (!histograms_)
     return;
-  if (query.length())
-    StringAppendF(output, "Collections of histograms for %s\n", query.c_str());
-  else
+  if (query.length()) {
+    base::StringAppendF(output, "Collections of histograms for %s\n",
+                        query.c_str());
+  } else {
     output->append("Collections of all histograms\n");
+  }
 
   Histograms snapshot;
   GetSnapshot(query, &snapshot);
@@ -795,6 +887,7 @@ void StatisticsRecorder::GetHistograms(Histograms* output) {
   for (HistogramMap::iterator it = histograms_->begin();
        histograms_->end() != it;
        ++it) {
+    DCHECK(it->second->histogram_name() == it->first);
     output->push_back(it->second);
   }
 }

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_DIAGNOSTICS_DIAGNOSTICS_TEST_H_
 #define CHROME_BROWSER_DIAGNOSTICS_DIAGNOSTICS_TEST_H_
+#pragma once
 
 #include "base/file_path.h"
 #include "base/path_service.h"
@@ -72,7 +73,7 @@ class DiagnosticTest : public DiagnosticsModel::TestInfo {
     result_ = result;
   }
 
-  FilePath GetUserDefaultProfileDir() {
+  static FilePath GetUserDefaultProfileDir() {
     FilePath path;
     if (!PathService::Get(chrome::DIR_USER_DATA, &path))
       return FilePath();

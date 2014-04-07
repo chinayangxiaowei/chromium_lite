@@ -9,10 +9,13 @@
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <libgen.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/errno.h>
 #include <sys/mman.h>
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -21,6 +24,8 @@
 
 #if defined(OS_MACOSX)
 #include <AvailabilityMacros.h>
+#else
+#include <glib.h>
 #endif
 
 #include <fstream>
@@ -39,6 +44,20 @@
 
 namespace file_util {
 
+namespace {
+
+// Helper for NormalizeFilePath(), defined below.
+bool RealPath(const FilePath& path, FilePath* real_path) {
+  FilePath::CharType buf[PATH_MAX];
+  if (!realpath(path.value().c_str(), buf))
+    return false;
+
+  *real_path = FilePath(buf);
+  return true;
+}
+
+}  // namespace
+
 #if defined(OS_OPENBSD) || defined(OS_FREEBSD) || \
     (defined(OS_MACOSX) && \
      MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_5)
@@ -55,9 +74,9 @@ static int CallStat(const char *path, stat_wrapper_t *sb) {
 
 
 #if defined(GOOGLE_CHROME_BUILD)
-static const char* kTempFileName = "com.google.chrome.XXXXXX";
+static const char* kTempFileName = ".com.google.chrome.XXXXXX";
 #else
-static const char* kTempFileName = "org.chromium.XXXXXX";
+static const char* kTempFileName = ".org.chromium.XXXXXX";
 #endif
 
 bool AbsolutePath(FilePath* path) {
@@ -155,7 +174,6 @@ bool Delete(const FilePath& path, bool recursive) {
     directories.pop();
     success = (rmdir(dir.value().c_str()) == 0);
   }
-
   return success;
 }
 
@@ -289,22 +307,11 @@ bool CopyDirectory(const FilePath& from_path,
 }
 
 bool PathExists(const FilePath& path) {
-  stat_wrapper_t file_info;
-  return CallStat(path.value().c_str(), &file_info) == 0;
+  return access(path.value().c_str(), F_OK) == 0;
 }
 
 bool PathIsWritable(const FilePath& path) {
-  FilePath test_path(path);
-  stat_wrapper_t file_info;
-  if (CallStat(test_path.value().c_str(), &file_info) != 0)
-    return false;
-  if (S_IWOTH & file_info.st_mode)
-    return true;
-  if (getegid() == file_info.st_gid && (S_IWGRP & file_info.st_mode))
-    return true;
-  if (geteuid() == file_info.st_uid && (S_IWUSR & file_info.st_mode))
-    return true;
-  return false;
+  return access(path.value().c_str(), W_OK) == 0;
 }
 
 bool DirectoryExists(const FilePath& path) {
@@ -380,7 +387,7 @@ bool CreateTemporaryFile(FilePath* path) {
 FILE* CreateAndOpenTemporaryShmemFile(FilePath* path) {
   FilePath directory;
   if (!GetShmemTempDir(&directory))
-    return false;
+    return NULL;
 
   return CreateAndOpenTemporaryFileInDir(directory, path);
 }
@@ -398,20 +405,41 @@ bool CreateTemporaryFileInDir(const FilePath& dir, FilePath* temp_file) {
   return ((fd >= 0) && !close(fd));
 }
 
+static bool CreateTemporaryDirInDirImpl(const FilePath& base_dir,
+                                        const FilePath::StringType& name_tmpl,
+                                        FilePath* new_dir) {
+  CHECK(name_tmpl.find("XXXXXX") != FilePath::StringType::npos)
+    << "Directory name template must contain \"XXXXXX\".";
+
+  FilePath sub_dir = base_dir.Append(name_tmpl);
+  std::string sub_dir_string = sub_dir.value();
+
+  // this should be OK since mkdtemp just replaces characters in place
+  char* buffer = const_cast<char*>(sub_dir_string.c_str());
+  char* dtemp = mkdtemp(buffer);
+  if (!dtemp) {
+    DPLOG(ERROR) << "mkdtemp";
+    return false;
+  }
+  *new_dir = FilePath(dtemp);
+  return true;
+}
+
+bool CreateTemporaryDirInDir(const FilePath& base_dir,
+                             const FilePath::StringType& prefix,
+                             FilePath* new_dir) {
+  FilePath::StringType mkdtemp_template = prefix;
+  mkdtemp_template.append(FILE_PATH_LITERAL("XXXXXX"));
+  return CreateTemporaryDirInDirImpl(base_dir, mkdtemp_template, new_dir);
+}
+
 bool CreateNewTempDirectory(const FilePath::StringType& prefix,
                             FilePath* new_temp_path) {
   FilePath tmpdir;
   if (!GetTempDir(&tmpdir))
     return false;
-  tmpdir = tmpdir.Append(kTempFileName);
-  std::string tmpdir_string = tmpdir.value();
-  // this should be OK since mkdtemp just replaces characters in place
-  char* buffer = const_cast<char*>(tmpdir_string.c_str());
-  char* dtemp = mkdtemp(buffer);
-  if (!dtemp)
-    return false;
-  *new_temp_path = FilePath(dtemp);
-  return true;
+
+  return CreateTemporaryDirInDirImpl(tmpdir, kTempFileName, new_temp_path);
 }
 
 bool CreateDirectory(const FilePath& full_path) {
@@ -443,21 +471,16 @@ bool CreateDirectory(const FilePath& full_path) {
   return true;
 }
 
-bool GetFileInfo(const FilePath& file_path, FileInfo* results) {
+bool GetFileInfo(const FilePath& file_path, base::PlatformFileInfo* results) {
   stat_wrapper_t file_info;
   if (CallStat(file_path.value().c_str(), &file_info) != 0)
     return false;
   results->is_directory = S_ISDIR(file_info.st_mode);
   results->size = file_info.st_size;
   results->last_modified = base::Time::FromTimeT(file_info.st_mtime);
+  results->last_accessed = base::Time::FromTimeT(file_info.st_atime);
+  results->creation_time = base::Time::FromTimeT(file_info.st_ctime);
   return true;
-}
-
-bool SetLastModifiedTime(const FilePath& file_path, base::Time last_modified) {
-  struct timeval times[2];
-  times[0] = last_modified.ToTimeVal();
-  times[1] = last_modified.ToTimeVal();
-  return (utimes(file_path.value().c_str(), times) == 0);
 }
 
 bool GetInode(const FilePath& path, ino_t* inode) {
@@ -712,5 +735,100 @@ bool HasFileBeenModifiedSince(const FileEnumerator::FindInfo& find_info,
                               const base::Time& cutoff_time) {
   return find_info.stat.st_mtime >= cutoff_time.ToTimeT();
 }
+
+bool NormalizeFilePath(const FilePath& path, FilePath* normalized_path) {
+  FilePath real_path_result;
+  if (!RealPath(path, &real_path_result))
+    return false;
+
+  // To be consistant with windows, fail if |real_path_result| is a
+  // directory.
+  stat_wrapper_t file_info;
+  if (CallStat(real_path_result.value().c_str(), &file_info) != 0 ||
+      S_ISDIR(file_info.st_mode))
+    return false;
+
+  *normalized_path = real_path_result;
+  return true;
+}
+
+#if !defined(OS_MACOSX)
+bool GetTempDir(FilePath* path) {
+  const char* tmp = getenv("TMPDIR");
+  if (tmp)
+    *path = FilePath(tmp);
+  else
+    *path = FilePath("/tmp");
+  return true;
+}
+
+bool GetShmemTempDir(FilePath* path) {
+  *path = FilePath("/dev/shm");
+  return true;
+}
+
+FilePath GetHomeDir() {
+  const char* home_dir = getenv("HOME");
+  if (home_dir && home_dir[0])
+    return FilePath(home_dir);
+
+  home_dir = g_get_home_dir();
+  if (home_dir && home_dir[0])
+    return FilePath(home_dir);
+
+  FilePath rv;
+  if (file_util::GetTempDir(&rv))
+    return rv;
+
+  // Last resort.
+  return FilePath("/tmp");
+}
+
+bool CopyFile(const FilePath& from_path, const FilePath& to_path) {
+  int infile = open(from_path.value().c_str(), O_RDONLY);
+  if (infile < 0)
+    return false;
+
+  int outfile = creat(to_path.value().c_str(), 0666);
+  if (outfile < 0) {
+    close(infile);
+    return false;
+  }
+
+  const size_t kBufferSize = 32768;
+  std::vector<char> buffer(kBufferSize);
+  bool result = true;
+
+  while (result) {
+    ssize_t bytes_read = HANDLE_EINTR(read(infile, &buffer[0], buffer.size()));
+    if (bytes_read < 0) {
+      result = false;
+      break;
+    }
+    if (bytes_read == 0)
+      break;
+    // Allow for partial writes
+    ssize_t bytes_written_per_read = 0;
+    do {
+      ssize_t bytes_written_partial = HANDLE_EINTR(write(
+          outfile,
+          &buffer[bytes_written_per_read],
+          bytes_read - bytes_written_per_read));
+      if (bytes_written_partial < 0) {
+        result = false;
+        break;
+      }
+      bytes_written_per_read += bytes_written_partial;
+    } while (bytes_written_per_read < bytes_read);
+  }
+
+  if (HANDLE_EINTR(close(infile)) < 0)
+    result = false;
+  if (HANDLE_EINTR(close(outfile)) < 0)
+    result = false;
+
+  return result;
+}
+#endif  // defined(OS_MACOSX)
 
 } // namespace file_util

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,13 +36,13 @@ class KeywordProviderTest : public testing::Test {
 
 void KeywordProviderTest::SetUp() {
   static const TemplateURLModel::Initializer kTestKeywordData[] = {
-    { L"aa", L"aa.com?foo=%s", L"aa" },
-    { L"aaaa", L"http://aaaa/?aaaa=1&b=%s&c", L"aaaa" },
-    { L"aaaaa", L"%s", L"aaaaa" },
-    { L"ab", L"bogus URL %s", L"ab" },
-    { L"weasel", L"weasel%sweasel", L"weasel" },
-    { L"www", L" +%2B?=%sfoo ", L"www" },
-    { L"z", L"%s=z", L"z" },
+    { L"aa", "aa.com?foo=%s", L"aa" },
+    { L"aaaa", "http://aaaa/?aaaa=1&b=%s&c", L"aaaa" },
+    { L"aaaaa", "%s", L"aaaaa" },
+    { L"ab", "bogus URL %s", L"ab" },
+    { L"weasel", "weasel%sweasel", L"weasel" },
+    { L"www", " +%2B?=%sfoo ", L"www" },
+    { L"z", "%s=z", L"z" },
   };
 
   model_.reset(new TemplateURLModel(kTestKeywordData,
@@ -99,14 +99,17 @@ TEST_F(KeywordProviderTest, Edit) {
     {L"aaaa foo",        1, {L"aaaa foo"}},
     {L"www.aaaa foo",    1, {L"aaaa foo"}},
 
-    // Clean up keyword input properly.
+    // Clean up keyword input properly.  "http" and "https" are the only
+    // allowed schemes.
     {L"www",             1, {L"www "}},
     {L"www.",            0, {}},
     {L"www.w w",         2, {L"www w", L"weasel w"}},
     {L"http://www",      1, {L"www "}},
     {L"http://www.",     0, {}},
     {L"ftp: blah",       0, {}},
-    {L"mailto:z",        1, {L"z "}},
+    {L"mailto:z",        0, {}},
+    {L"ftp://z",         0, {}},
+    {L"https://z",       1, {L"z "}},
   };
 
   RunTest<std::wstring>(edit_cases, arraysize(edit_cases),
@@ -165,7 +168,8 @@ TEST_F(KeywordProviderTest, Description) {
     {L"z foo",           1, {L"(Keyword: z)"}},
     {L"a foo",           3, {L"(Keyword: aa)", L"(Keyword: ab)",
                              L"(Keyword: aaaa)"}},
-    {L"ftp://www.www w", 1, {L"(Keyword: www)"}},
+    {L"ftp://www.www w", 0, {}},
+    {L"http://www.ab w", 1, {L"(Keyword: ab)"}},
 
     // Keyword should be returned regardless of query input.
     {L"z",               1, {L"(Keyword: z)"}},
@@ -180,7 +184,7 @@ TEST_F(KeywordProviderTest, Description) {
 TEST_F(KeywordProviderTest, AddKeyword) {
   TemplateURL* template_url = new TemplateURL();
   std::wstring keyword(L"foo");
-  std::wstring url(L"http://www.google.com/foo?q={searchTerms}");
+  std::string url("http://www.google.com/foo?q={searchTerms}");
   template_url->SetURL(url, 0, 0);
   template_url->set_keyword(keyword);
   template_url->set_short_name(L"Test");

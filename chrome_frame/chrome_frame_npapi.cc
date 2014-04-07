@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
-#include "base/win_util.h"
+#include "base/stringprintf.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome_frame/ff_privilege_check.h"
 #include "chrome_frame/np_utils.h"
@@ -123,7 +125,8 @@ ChromeFrameNPAPI::ChromeFrameNPAPI()
     mode_(NP_EMBED),
     force_full_page_plugin_(false),
     ready_state_(READYSTATE_LOADING),
-    enabled_popups_(false) {
+    enabled_popups_(false),
+    navigate_after_initialization_(false) {
 }
 
 ChromeFrameNPAPI::~ChromeFrameNPAPI() {
@@ -244,6 +247,11 @@ bool ChromeFrameNPAPI::Initialize(NPMIMEType mime_type, NPP instance,
       automation_client_->set_use_chrome_network(chrome_network_arg);
   }
 
+  static const wchar_t kHandleTopLevelRequests[] = L"HandleTopLevelRequests";
+  bool top_level_requests = GetConfigBool(true, kHandleTopLevelRequests);
+  automation_client_->set_handle_top_level_requests(top_level_requests);
+  automation_client_->set_route_all_top_level_navigations(true);
+
   // Setup Url fetcher.
   url_fetcher_.set_NPPInstance(instance_);
   url_fetcher_.set_frame_busting(!is_privileged_);
@@ -272,7 +280,8 @@ bool ChromeFrameNPAPI::Initialize(NPMIMEType mime_type, NPP instance,
   // TODO(stoyan): Ask host for specific interface whether to honor
   // host's in-private mode.
   return InitializeAutomation(profile_name, extra_arguments,
-                              GetBrowserIncognitoMode(), true);
+                              GetBrowserIncognitoMode(), true,
+                              GURL(src_), GURL(), true);
 }
 
 void ChromeFrameNPAPI::Uninitialize() {
@@ -417,14 +426,15 @@ void ChromeFrameNPAPI::UrlNotify(const char* url, NPReason reason,
 void ChromeFrameNPAPI::OnAcceleratorPressed(int tab_handle,
                                             const MSG& accel_message) {
   DLOG(INFO) << __FUNCTION__ << " msg:"
-      << StringPrintf("0x%04X", accel_message.message) << " key:"
+      << base::StringPrintf("0x%04X", accel_message.message) << " key:"
       << accel_message.wParam;
 
   // The host browser does call TranslateMessage on messages like WM_KEYDOWN
   // WM_KEYUP, etc, which will result in messages like WM_CHAR, WM_SYSCHAR, etc
   // being posted to the message queue. We don't post these messages here to
   // avoid these messages from getting handled twice.
-  if (accel_message.message != WM_CHAR &&
+  if (!is_privileged_ &&
+      accel_message.message != WM_CHAR &&
       accel_message.message != WM_DEADCHAR &&
       accel_message.message != WM_SYSCHAR &&
       accel_message.message != WM_SYSDEADCHAR) {
@@ -462,7 +472,9 @@ void ChromeFrameNPAPI::OnTabbedOut(int tab_handle, bool reverse) {
 }
 
 void ChromeFrameNPAPI::OnOpenURL(int tab_handle,
-                                 const GURL& url, int open_disposition) {
+                                 const GURL& url,
+                                 const GURL& referrer,
+                                 int open_disposition) {
   std::string target;
   switch (open_disposition) {
     case NEW_FOREGROUND_TAB:
@@ -837,7 +849,8 @@ void ChromeFrameNPAPI::OnAutomationServerReady() {
     automation_client_->SetProxySettings(proxy_settings);
   }
 
-  if (!src_.empty()) {
+  if (navigate_after_initialization_ && !src_.empty()) {
+    navigate_after_initialization_ = false;
     if (!automation_client_->InitiateNavigation(src_,
                                                 GetDocumentUrl(),
                                                 is_privileged_)) {
@@ -1093,17 +1106,25 @@ bool ChromeFrameNPAPI::NavigateToURL(const NPVariant* args, uint32_t arg_count,
   }
 
   std::string url("about:blank");
-
   if (!NPVARIANT_IS_NULL(args[0])) {
     const NPString& str = args[0].value.stringValue;
     if (str.UTF8Length) {
       url.assign(std::string(str.UTF8Characters, str.UTF8Length));
     }
   }
-  DLOG(WARNING) << __FUNCTION__ << " " << url;
+
+  GURL document_url(GetDocumentUrl());
+  if (document_url.SchemeIsSecure()) {
+    GURL source_url(url);
+    if (!source_url.SchemeIsSecure()) {
+      DLOG(WARNING) << __FUNCTION__ << " Prevnting navigation to HTTP url"
+          " since the containing document is HTTPS. URL: " << source_url <<
+          " Document URL: " << document_url;
+      return false;
+    }
+  }
+
   std::string full_url = ResolveURL(GetDocumentUrl(), url);
-  if (full_url.empty())
-    return false;
 
   src_ = full_url;
   // Navigate only if we completed initialization i.e. proxy is set etc.
@@ -1115,6 +1136,8 @@ bool ChromeFrameNPAPI::NavigateToURL(const NPVariant* args, uint32_t arg_count,
       src_.clear();
       return false;
     }
+  } else {
+    navigate_after_initialization_ = true;
   }
   return true;
 }
@@ -1344,7 +1367,7 @@ void ChromeFrameNPAPI::OnGetEnabledExtensionsComplete(
     const std::vector<FilePath>& extension_directories) {
   std::vector<std::wstring> extension_paths;
   for (size_t i = 0; i < extension_directories.size(); ++i) {
-    extension_paths.push_back(extension_directories[i].ToWStringHack());
+    extension_paths.push_back(extension_directories[i].value());
   }
   std::wstring tab_delimited = JoinString(extension_paths, L'\t');
 
@@ -1399,7 +1422,8 @@ NPObject* ChromeFrameNPAPI::GetWindowObject() const {
 bool ChromeFrameNPAPI::GetBrowserIncognitoMode() {
   bool incognito_mode = false;
 
-  // Check disabled for Opera due to bug: http://b/issue?id=1815494
+  // Check disabled for Opera due to bug:
+  // http://code.google.com/p/chromium/issues/detail?id=24287
   if (GetBrowserType() != BROWSER_OPERA) {
     // Check whether host browser is in private mode;
     NPBool private_mode = FALSE;
@@ -1414,6 +1438,16 @@ bool ChromeFrameNPAPI::GetBrowserIncognitoMode() {
   }
 
   return incognito_mode;
+}
+
+bool ChromeFrameNPAPI::PreProcessContextMenu(HMENU menu) {
+  // TODO: Remove this overridden method once HandleContextMenuCommand
+  // implements "About Chrome Frame" handling.
+  if (!is_privileged_) {
+    // Call base class (adds 'About' item).
+    return ChromeFramePlugin::PreProcessContextMenu(menu);
+  }
+  return true;
 }
 
 bool ChromeFrameNPAPI::HandleContextMenuCommand(UINT cmd,

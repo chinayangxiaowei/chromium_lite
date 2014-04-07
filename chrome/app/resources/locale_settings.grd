@@ -18,6 +18,7 @@
     <output filename="locale_settings_es.rc" type="rc_all" lang="es" />
     <output filename="locale_settings_es-419.rc" type="rc_all" lang="es-419" />
     <output filename="locale_settings_et.rc" type="rc_all" lang="et" />
+    <output filename="locale_settings_fa.rc" type="rc_all" lang="fa" />
     <output filename="locale_settings_fi.rc" type="rc_all" lang="fi" />
     <output filename="locale_settings_fil.rc" type="rc_all" lang="fil" />
     <output filename="locale_settings_fr.rc" type="rc_all" lang="fr" />
@@ -72,6 +73,7 @@
     <output filename="locale_settings_es.pak" type="data_package" lang="es" />
     <output filename="locale_settings_es-419.pak" type="data_package" lang="es-419" />
     <output filename="locale_settings_et.pak" type="data_package" lang="et" />
+    <output filename="locale_settings_fa.pak" type="data_package" lang="fa" />
     <output filename="locale_settings_fi.pak" type="data_package" lang="fi" />
     <output filename="locale_settings_fil.pak" type="data_package" lang="fil" />
     <output filename="locale_settings_fr.pak" type="data_package" lang="fr" />
@@ -126,6 +128,7 @@
     <file path="locale_settings_es.xtb" lang="es" />
     <file path="locale_settings_es-419.xtb" lang="es-419" />
     <file path="locale_settings_et.xtb" lang="et" />
+    <file path="locale_settings_fa.xtb" lang="fa" />
     <file path="locale_settings_fi.xtb" lang="fi" />
     <file path="locale_settings_fil.xtb" lang="fil" />
     <file path="locale_settings_fr.xtb" lang="fr" />
@@ -166,58 +169,68 @@
   </translations>
   <release seq="1" allow_pseudo="false">
     <includes>
-      <!-- The HTML for the about:terms page -->
-      <if expr="pp_ifdef('_google_chrome') and 'ar' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ar.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'bg' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_bg.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'bn' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_bn.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'ca' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ca.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'cs' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_cs.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'da' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_da.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'de' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_de.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'el' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_el.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'en-GB' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_en-GB.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'en' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_en.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'es' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_es.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'es-419' == lang"><include name="IDR_TERMS_HTML" file="terms\terms_es-419.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'et' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_et.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'fi' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_fi.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'fil' == lang">   <include name="IDR_TERMS_HTML" file="terms\terms_fil.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'fr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_fr.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'gu' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_gu.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'he' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_he.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'hi' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_hi.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'hr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_hr.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'hu' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_hu.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'id' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_id.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'it' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_it.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'ja' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ja.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'kn' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_kn.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'ko' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ko.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'lt' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_lt.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'lv' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_lv.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'ml' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ml.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'mr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_mr.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'nl' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_nl.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'no' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_nb.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'pl' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_pl.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'pt-BR' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_pt-BR.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'pt-PT' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_pt-PT.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'ro' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ro.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'ru' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ru.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'sk' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sk.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'sl' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sl.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'sr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sr.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'sv' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sv.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'ta' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ta.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'te' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_te.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'th' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_th.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'tr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_tr.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'uk' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_uk.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'vi' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_vi.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'zh-CN' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_zh-CN.html" type="BINDATA" /></if>
-      <if expr="pp_ifdef('_google_chrome') and 'zh-TW' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_zh-TW.html" type="BINDATA" /></if>
+      <!-- The HTML for the about:terms page -->     
+      <if expr="pp_ifdef('chromeos') and pp_ifdef('_google_chrome')">
+        <include name="IDR_TERMS_HTML" file="terms\chromeos\terms_en.html" type="BINDATA" />
+      </if>
+      <if expr="pp_ifdef('chromeos') and not pp_ifdef('_google_chrome')">
+        <include name="IDR_TERMS_HTML" file="terms\terms_chromium.html" type="BINDATA" />
+      </if>
+      
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'am' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_am.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'ar' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ar.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'bg' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_bg.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'bn' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_bn.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'ca' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ca.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'cs' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_cs.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'da' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_da.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'de' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_de.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'el' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_el.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'en-GB' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_en-GB.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'en' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_en.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'es' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_es.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'es-419' == lang"><include name="IDR_TERMS_HTML" file="terms\terms_es-419.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'et' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_et.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'fa' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_fa.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'fi' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_fi.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'fil' == lang">   <include name="IDR_TERMS_HTML" file="terms\terms_fil.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'fr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_fr.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'gu' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_gu.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'he' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_he.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'hi' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_hi.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'hr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_hr.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'hu' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_hu.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'id' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_id.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'it' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_it.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'ja' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ja.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'kn' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_kn.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'ko' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ko.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'lt' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_lt.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'lv' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_lv.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'ml' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ml.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'mr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_mr.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'nl' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_nl.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'no' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_nb.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'pl' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_pl.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'pt-BR' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_pt-BR.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'pt-PT' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_pt-PT.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'ro' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ro.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'ru' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ru.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'sk' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sk.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'sl' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sl.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'sr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sr.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'sv' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sv.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'sw' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_sw.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'ta' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_ta.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'te' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_te.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'th' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_th.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'tr' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_tr.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'uk' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_uk.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'vi' == lang">    <include name="IDR_TERMS_HTML" file="terms\terms_vi.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'zh-CN' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_zh-CN.html" type="BINDATA" /></if>
+      <if expr="not pp_ifdef('chromeos') and pp_ifdef('_google_chrome') and 'zh-TW' == lang"> <include name="IDR_TERMS_HTML" file="terms\terms_zh-TW.html" type="BINDATA" /></if>
 
-      <if expr="not pp_ifdef('_google_chrome')">
+      <if expr="not pp_ifdef('chromeos') and not pp_ifdef('_google_chrome')">
         <include name="IDR_TERMS_HTML" file="terms\terms_chromium.html" type="BINDATA" />
       </if>
     </includes>
@@ -243,18 +256,6 @@
         en-US
       </message>
 
-      <!-- The width of the Options dialog box, in characters (character width = -->
-      <!-- average character width for default dialog box font) -->
-      <message name="IDS_OPTIONS_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        98
-      </message>
-
-      <!-- The height of the Options dialog box, in lines (line height = character -->
-      <!-- height for default dialog box font) -->
-      <message name="IDS_OPTIONS_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        36
-      </message>
-
       <!-- The width of the title column of the Options dialog box, in characters (see -->
       <!-- above for defn of character width) -->
       <message name="IDS_OPTIONS_DIALOG_LEFT_COLUMN_WIDTH_CHARS" use_name_for_id="true">
@@ -277,6 +278,12 @@
       <!-- height for default dialog box font) -->
       <message name="IDS_CONTENT_SETTINGS_DIALOG_HEIGHT_LINES" use_name_for_id="true">
         24
+      </message>
+
+      <!-- The width of the list box in the Content Settings dialog box, in characters (character width = -->
+      <!-- average character width for default list box font) -->
+      <message name="IDS_CONTENT_SETTINGS_DIALOG_LISTBOX_WIDTH_CHARS" use_name_for_id="true">
+        18
       </message>
 
       <!-- The width and height of the URL picker dialog box in characters and lines -->
@@ -310,15 +317,20 @@
       <message name="IDS_CUSTOMIZE_SYNC_DIALOG_HEIGHT_LINES" use_name_for_id="true">
         10
       </message>
-      
+
       <!-- The width and height of the Bug Reporting dialog box in characters and lines -->
       <!-- (See above). -->
       <message name="IDS_BUGREPORT_DIALOG_WIDTH_CHARS" use_name_for_id="true">
         85
       </message>
       <message name="IDS_BUGREPORT_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        17
+        20
       </message>
+      <if expr="pp_ifdef('chromeos')">
+        <message name="IDS_CHROMEOS_BUGREPORT_DIALOG_HEIGHT_LINES" use_name_for_id="true">
+          24
+        </message>
+      </if>
 
       <!-- The width and height of the Clear Browsing Data dialog box in characters and -->
       <!-- lines (See above). -->
@@ -363,6 +375,26 @@
       </message>
       <message name="IDS_PAGEINFO_DIALOG_HEIGHT_LINES" use_name_for_id="true">
         25
+      </message>
+
+      <!-- The URL for the "Learn more" page for the Privacy section under Options. -->
+      <if expr="not pp_ifdef('chromeos')">
+        <message name="IDS_PAGE_INFO_HELP_CENTER" translateable="false">
+          http://www.google.com/support/chrome/bin/answer.py?hl=[GRITLANGCODE]&amp;answer=95617
+        </message> 
+      </if>
+      <if expr="pp_ifdef('chromeos')">
+        <message name="IDS_PAGE_INFO_HELP_CENTER" translateable="false">
+          http://www.google.com/support/chromeos/bin/answer.py?hl=[GRITLANGCODE]&amp;answer=95617
+        </message>
+      </if>
+      
+      <!-- The width and height of the Page Info bubble characters and lines (See above). -->
+      <message name="IDS_PAGEINFOBUBBLE_WIDTH_CHARS" use_name_for_id="true">
+        50
+      </message>
+      <message name="IDS_PAGEINFOBUBBLE_HEIGHT_LINES" use_name_for_id="true">
+        30
       </message>
 
       <!-- The width and height of the Search Engines dialog box in characters and -->
@@ -417,7 +449,7 @@
       </message>
       <if expr="pp_ifdef('_google_chrome')">
         <message name="IDS_FIRSTRUN_SEARCH_ENGINE_SELECTION_HEIGHT_LINES" use_name_for_id="true">
-          20
+          22
         </message>
       </if>
       <!-- With text instead of images, the selection dialog is much smaller. -->
@@ -484,7 +516,7 @@
       <!-- The width and height of the First Run Omnibox Information minimal -->
       <!-- bubble in characters and lines (See above). -->
       <message name="IDS_FIRSTRUN_MINIMAL_BUBBLE_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        62
+        82
       </message>
       <message name="IDS_FIRSTRUN_MINIMAL_BUBBLE_DIALOG_HEIGHT_LINES" use_name_for_id="true">
         5
@@ -506,8 +538,20 @@
       </message>
 
       <!-- The URL for the "Learn more" page for the Privacy section under Options. -->
-      <message name="IDS_LEARN_MORE_PRIVACY_URL" translateable="false">
-        http://www.google.com/support/chrome/bin/answer.py?answer=114836&amp;hl=[GRITLANGCODE]
+      <if expr="not pp_ifdef('chromeos')">
+        <message name="IDS_LEARN_MORE_PRIVACY_URL" translateable="false">
+          http://www.google.com/support/chrome/bin/answer.py?answer=114836&amp;hl=[GRITLANGCODE]
+        </message>
+      </if>
+      <if expr="pp_ifdef('chromeos')">
+        <message name="IDS_LEARN_MORE_PRIVACY_URL" translateable="false">
+          http://www.google.com/support/chromeos/bin/answer.py?answer=1047334&amp;hl=[GRITLANGCODE]
+        </message>
+      </if>
+
+      <!-- The URL for the "Learn more" page for the Chrome Web Apps section under Options.-->
+      <message name="IDS_LEARN_MORE_BACKGROUND_MODE_URL" translateable="false">
+        http://www.google.com/support/chrome/bin/answer.py?answer=188022&amp;hl=[GRITLANGCODE]
       </message>
 
       <!-- The URL for the "Learn more" page for the usage/crash reporting option in the first run dialog. -->
@@ -516,8 +560,20 @@
       </message>
 
       <!-- The URL for the "Learn more" privacy page for the Geolocation permission infobar. -->
-      <message name="IDS_LEARN_MORE_GEOLOCATION_URL" translateable="false">
-        http://www.google.com/support/chrome/bin/answer.py?answer=142065&amp;hl=[GRITLANGCODE]
+      <if expr="not pp_ifdef('chromeos')">
+        <message name="IDS_LEARN_MORE_GEOLOCATION_URL" translateable="false">
+          http://www.google.com/support/chrome/bin/answer.py?answer=142065&amp;hl=[GRITLANGCODE]
+        </message>
+      </if>
+      <if expr="pp_ifdef('chromeos')">
+        <message name="IDS_LEARN_MORE_GEOLOCATION_URL" translateable="false">
+          http://www.google.com/support/chromeos/bin/answer.py?answer=142065&amp;hl=[GRITLANGCODE]
+        </message>
+      </if>
+
+      <!-- The URL for the "Problems installing" page for the Plugins infobar -->
+      <message name="IDS_LEARN_MORE_PLUGININSTALLER_URL" translateable="false">
+	http://www.google.com/support/chrome/bin/answer.py?answer=95697&amp;topic=14687
       </message>
 
       <!-- The width and height of the bookmark manager in characters and lines -->
@@ -534,20 +590,6 @@
         52
       </message>
 
-      <!-- The width and height of the Select Profile dialog in characters and lines -->
-      <!-- (See above). -->
-      <message name="IDS_SELECT_PROFILE_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        60
-      </message>
-      <message name="IDS_SELECT_PROFILE_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        5
-      </message>
-
-      <!-- The width of the New Profile dialog in characters (See above). -->
-      <message name="IDS_NEW_PROFILE_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        60
-      </message>
-
       <!-- The URL for Chromium project used in About dialog. -->
       <message name="IDS_CHROMIUM_PROJECT_URL" translateable="false">
         http://code.google.com/chromium/?hl=[GRITLANGCODE]
@@ -556,6 +598,11 @@
       <!-- The URL for the themes gallery. -->
       <message name="IDS_THEMES_GALLERY_URL" translateable="false">
         https://tools.google.com/chrome/intl/[GRITLANGCODE]/themes/index.html
+      </message>
+
+      <!-- The URL for the privacy dashboard. -->
+      <message name="IDS_PRIVACY_DASHBOARD_URL" translateable="false">
+        https://www.google.com/dashboard
       </message>
 
       <!-- The URL for Google Chrome welcome page. This is used for the pre -->
@@ -581,6 +628,10 @@
         15
       </message>
 
+      <message name="IDS_SYNC_GET_ACCESS_CODE_URL" translateable="false">
+        https://www.google.com/accounts/IssuedAuthSubTokens?hl=[GRITLANGCODE]
+      </message>
+
       <!-- The default width/height for confirmation dialogs. -->
       <message name="IDS_CONFIRM_MESSAGE_BOX_DEFAULT_WIDTH_CHARS" use_name_for_id="true">
         50
@@ -598,9 +649,16 @@
       </message>
 
       <!-- The URL for the "Aw snap" page. -->
-      <message name="IDS_CRASH_REASON_URL" translateable="false">
-        http://www.google.com/support/chrome/bin/answer.py?answer=95669&amp;hl=[GRITLANGCODE]
-      </message>
+      <if expr="not pp_ifdef('chromeos')">
+        <message name="IDS_CRASH_REASON_URL" translateable="false">
+          http://www.google.com/support/chrome/bin/answer.py?answer=95669&amp;hl=[GRITLANGCODE]
+        </message>
+      </if>
+      <if expr="pp_ifdef('chromeos')">
+        <message name="IDS_CRASH_REASON_URL" translateable="false">
+          http://www.google.com/support/chromeos/bin/answer.py?answer=1047340&amp;hl=[GRITLANGCODE]
+        </message>
+      </if>
 
       <!-- The default width and min height for the 'download_in_progress' dialog. -->
       <message name="IDS_DOWNLOAD_IN_PROGRESS_WIDTH_CHARS" use_name_for_id="true">
@@ -612,11 +670,11 @@
 
       <!-- The width for the "create application shortcuts" dialog in characters. -->
       <message name="IDS_CREATE_SHORTCUTS_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        55
+        65
       </message>
 
       <!-- The width and height for the "create application shortcuts error" dialog. -->
-      <if expr="os == 'linux2' or os == 'openbsd4' or os == 'freebsd6'">
+      <if expr="os == 'linux2' or os.find('bsd') != -1">
         <message name="IDS_CREATE_SHORTCUTS_ERROR_DIALOG_WIDTH_CHARS" use_name_for_id="true">
          60
         </message>
@@ -635,10 +693,37 @@
         32
       </message>
 
-      <!-- The URL for About Google Translate. -->
-      <message name="IDS_ABOUT_GOOGLE_TRANSLATE_URL" translateable="false">
-        http://www.google.com/support/chrome/bin/answer.py?answer=173424&amp;hl=[GRITLANGCODE]
+      <!-- The width of the AutoFill edit Address dialog in characters. -->
+      <message name="IDS_AUTOFILL_DIALOG_EDIT_ADDRESS_WIDTH_CHARS" use_name_for_id="true">
+        80
       </message>
+
+      <!-- The height of the AutoFill edit Address dialog in lines. -->
+      <message name="IDS_AUTOFILL_DIALOG_EDIT_ADDRESS_HEIGHT_LINES" use_name_for_id="true">
+        25
+      </message>
+
+      <!-- The width of the AutoFill edit Credit Card dialog in characters. -->
+      <message name="IDS_AUTOFILL_DIALOG_EDIT_CCARD_WIDTH_CHARS" use_name_for_id="true">
+        60
+      </message>
+
+      <!-- The height of the AutoFill edit Credit Card dialog in lines. -->
+      <message name="IDS_AUTOFILL_DIALOG_EDIT_CCARD_HEIGHT_LINES" use_name_for_id="true">
+        9
+      </message>
+
+      <!-- The URL for About Google Translate. -->
+      <if expr="not pp_ifdef('chromeos')">
+        <message name="IDS_ABOUT_GOOGLE_TRANSLATE_URL" translateable="false">
+          http://www.google.com/support/chrome/bin/answer.py?answer=173424&amp;hl=[GRITLANGCODE]
+        </message>
+      </if>
+      <if expr="pp_ifdef('chromeos')">
+        <message name="IDS_ABOUT_GOOGLE_TRANSLATE_URL" translateable="false">
+          http://www.google.com/support/chromeos/bin/answer.py?answer=173424&amp;hl=[GRITLANGCODE]
+        </message>
+      </if>
 
       <!-- The width and height of the Content Settings Exceptions dialog box in -->
       <!-- characters and lines (See above). -->
@@ -649,14 +734,57 @@
         16
       </message>
 
-      <!-- The width and height of the Geolocation Settings Exceptions -->
+      <!-- The width and height of the Simple Content Settings Exceptions -->
       <!-- dialog box in characters and lines (See above). -->
-      <message name="IDS_GEOLOCATION_EXCEPTION_DIALOG_WIDTH_CHARS" use_name_for_id="true">
+      <message name="IDS_SIMPLE_CONTENT_EXCEPTION_DIALOG_WIDTH_CHARS" use_name_for_id="true">
         90
       </message>
-      <message name="IDS_GEOLOCATION_EXCEPTION_DIALOG_HEIGHT_LINES" use_name_for_id="true">
+      <message name="IDS_SIMPLE_CONTENT_EXCEPTION_DIALOG_HEIGHT_LINES" use_name_for_id="true">
         16
       </message>
+
+      <!-- The width of the Instant confirm dialog box in characters. -->
+      <message name="IDS_INSTANT_CONFIRM_DIALOG_WIDTH_CHARS" use_name_for_id="true">
+        95
+      </message>
+
+      <if expr="pp_ifdef('chromeos')">
+        <!-- The width and height of the Languages and Input dialog box in -->
+        <!-- characters and lines (See above). -->
+        <message name="IDS_LANGUAGES_INPUT_DIALOG_WIDTH_CHARS" use_name_for_id="true">
+          127
+        </message>
+        <message name="IDS_LANGUAGES_INPUT_DIALOG_HEIGHT_LINES" use_name_for_id="true">
+          26
+        </message>
+
+        <!-- The width and height of the CAPTCHA challenge dialog box in -->
+        <!-- characters and lines (See above). -->
+        <message name="IDS_CAPTCHA_INPUT_DIALOG_WIDTH_CHARS" use_name_for_id="true">
+          60
+        </message>
+        <message name="IDS_CAPTCHA_INPUT_DIALOG_HEIGHT_LINES" use_name_for_id="true">
+          12
+        </message>
+
+        <!-- The width and height of the TPM setting dialog box in -->
+        <!-- characters and lines (See above). -->
+        <message name="IDS_TPM_INFO_DIALOG_WIDTH_CHARS" use_name_for_id="true">
+          80
+        </message>
+        <message name="IDS_TPM_INFO_DIALOG_HEIGHT_LINES" use_name_for_id="true">
+          10
+        </message>
+
+        <!-- The width and height of the password changed dialog box in -->
+        <!-- characters and lines (See above). -->
+        <message name="IDS_PASSWORD_CHANGED_DIALOG_WIDTH_CHARS" use_name_for_id="true">
+          70
+        </message>
+        <message name="IDS_PASSWORD_CHANGED_DIALOG_HEIGHT_LINES" use_name_for_id="true">
+          14
+        </message>
+      </if>
     </messages>
   </release>
 </grit>

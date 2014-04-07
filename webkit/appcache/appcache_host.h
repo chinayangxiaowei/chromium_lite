@@ -6,14 +6,15 @@
 #define WEBKIT_APPCACHE_APPCACHE_HOST_H_
 
 #include "base/callback.h"
+#include "base/gtest_prod_util.h"
 #include "base/observer_list.h"
 #include "base/ref_counted.h"
 #include "googleurl/src/gurl.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 #include "webkit/appcache/appcache_group.h"
 #include "webkit/appcache/appcache_interfaces.h"
 #include "webkit/appcache/appcache_service.h"
 #include "webkit/appcache/appcache_storage.h"
+#include "webkit/glue/resource_type.h"
 
 class URLRequest;
 
@@ -56,6 +57,9 @@ class AppCacheHost : public AppCacheStorage::Delegate,
   void SelectCache(const GURL& document_url,
                    const int64 cache_document_was_loaded_from,
                    const GURL& manifest_url);
+  void SelectCacheForWorker(int parent_process_id,
+                            int parent_host_id);
+  void SelectCacheForSharedWorker(int64 appcache_id);
   void MarkAsForeignEntry(const GURL& document_url,
                           int64 cache_document_was_loaded_from);
   void GetStatusWithCallback(GetStatusCallback* callback,
@@ -66,9 +70,12 @@ class AppCacheHost : public AppCacheStorage::Delegate,
                              void* callback_param);
 
   // Support for loading resources out of the appcache.
-  // Returns NULL if the host is not associated with a complete cache.
-  AppCacheRequestHandler* CreateRequestHandler(URLRequest* request,
-                                               bool is_main_request);
+  // May return NULL if the request isn't subject to retrieval from an appache.
+  AppCacheRequestHandler* CreateRequestHandler(
+      URLRequest* request, ResourceType::Type resource_type);
+
+  // Support for devtools inspecting appcache resources.
+  void GetResourceList(std::vector<AppCacheResourceInfo>* resource_infos);
 
   // Establishes an association between this host and a cache. 'cache' may be
   // NULL to break any existing association. Associations are established
@@ -84,8 +91,8 @@ class AppCacheHost : public AppCacheStorage::Delegate,
   void LoadMainResourceCache(int64 cache_id);
 
   // Used to notify the host that the main resource was blocked by a policy. To
-  // work properly, this method needs to by invokde prior to cache selection.
-  void NotifyMainResourceBlocked();
+  // work properly, this method needs to by invoked prior to cache selection.
+  void NotifyMainResourceBlocked(const GURL& manifest_url);
 
   // Used by the update job to keep track of which hosts are associated
   // with which pending master entries.
@@ -124,8 +131,25 @@ class AppCacheHost : public AppCacheStorage::Delegate,
   virtual void OnContentBlocked(AppCacheGroup* group);
   virtual void OnUpdateComplete(AppCacheGroup* group);
 
+  // Returns true if this host is for a dedicated worker context.
+  bool is_for_dedicated_worker() const {
+    return parent_host_id_ != kNoHostId;
+  }
+
+  // Returns the parent context's host instance. This is only valid
+  // to call when this instance is_for_dedicated_worker.
+  AppCacheHost* GetParentAppCacheHost() const;
+
   // Identifies the corresponding appcache host in the child process.
   int host_id_;
+
+  // Hosts for dedicated workers are special cased to shunt
+  // request handling off to the dedicated worker's parent.
+  // The scriptable api is not accessible in dedicated workers
+  // so the other aspects of this class are not relevant for
+  // these special case instances.
+  int parent_host_id_;
+  int parent_process_id_;
 
   // The cache associated with this host, if any.
   scoped_refptr<AppCache> associated_cache_;
@@ -176,21 +200,28 @@ class AppCacheHost : public AppCacheStorage::Delegate,
 
   // True if requests for this host were blocked by a policy.
   bool main_resource_blocked_;
+  GURL blocked_manifest_url_;
+
+  // Tells if info about associated cache is pending. Info is pending
+  // when update job has not returned success yet.
+  bool associated_cache_info_pending_;
 
   // List of objects observing us.
   ObserverList<Observer> observers_;
 
   friend class AppCacheRequestHandlerTest;
   friend class AppCacheUpdateJobTest;
-  FRIEND_TEST(AppCacheTest, CleanupUnusedCache);
-  FRIEND_TEST(AppCacheGroupTest, CleanupUnusedGroup);
-  FRIEND_TEST(AppCacheHostTest, Basic);
-  FRIEND_TEST(AppCacheHostTest, SelectNoCache);
-  FRIEND_TEST(AppCacheHostTest, ForeignEntry);
-  FRIEND_TEST(AppCacheHostTest, FailedCacheLoad);
-  FRIEND_TEST(AppCacheHostTest, FailedGroupLoad);
-  FRIEND_TEST(AppCacheHostTest, SetSwappableCache);
-  FRIEND_TEST(AppCacheGroupTest, QueueUpdate);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheTest, CleanupUnusedCache);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheGroupTest, CleanupUnusedGroup);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheHostTest, Basic);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheHostTest, SelectNoCache);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheHostTest, ForeignEntry);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheHostTest, FailedCacheLoad);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheHostTest, FailedGroupLoad);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheHostTest, SetSwappableCache);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheHostTest, ForDedicatedWorker);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheGroupTest, QueueUpdate);
+
   DISALLOW_COPY_AND_ASSIGN(AppCacheHost);
 };
 

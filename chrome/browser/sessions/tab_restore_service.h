@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SESSIONS_TAB_RESTORE_SERVICE_H_
 #define CHROME_BROWSER_SESSIONS_TAB_RESTORE_SERVICE_H_
+#pragma once
 
 #include <list>
 #include <set>
@@ -11,6 +12,7 @@
 
 #include "base/observer_list.h"
 #include "base/time.h"
+#include "chrome/browser/in_process_webkit/session_storage_namespace.h"
 #include "chrome/browser/sessions/base_session_service.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/sessions/session_types.h"
@@ -18,6 +20,7 @@
 class Browser;
 class NavigationController;
 class Profile;
+class TabRestoreServiceObserver;
 struct SessionWindow;
 
 // TabRestoreService is responsible for maintaining the most recently closed
@@ -33,22 +36,10 @@ struct SessionWindow;
 // add an observer.
 class TabRestoreService : public BaseSessionService {
  public:
-  // Observer is notified when the set of entries managed by TabRestoreService
-  // changes in some way.
-  class Observer {
-   public:
-    // Sent when the set of entries changes in some way.
-    virtual void TabRestoreServiceChanged(TabRestoreService* service) = 0;
-
-    // Sent to all remaining Observers when TabRestoreService's
-    // destructor is run.
-    virtual void TabRestoreServiceDestroyed(TabRestoreService* service) = 0;
-  };
-
   // Interface used to allow the test to provide a custom time.
   class TimeFactory {
    public:
-    virtual ~TimeFactory() {}
+    virtual ~TimeFactory();
     virtual base::Time TimeNow() = 0;
   };
 
@@ -61,7 +52,7 @@ class TabRestoreService : public BaseSessionService {
   struct Entry {
     Entry();
     explicit Entry(Type type);
-    virtual ~Entry() {}
+    virtual ~Entry();
 
     // Unique id for this entry. The id is guaranteed to be unique for a
     // session.
@@ -82,6 +73,7 @@ class TabRestoreService : public BaseSessionService {
   // Represents a previously open tab.
   struct Tab : public Entry {
     Tab();
+    virtual ~Tab();
 
     bool has_browser() const { return browser_id > 0; }
 
@@ -102,12 +94,16 @@ class TabRestoreService : public BaseSessionService {
     bool pinned;
 
     // If non-empty gives the id of the extension for the tab.
-    std::string app_extension_id;
+    std::string extension_app_id;
+
+    // The associated session storage namespace (if any).
+    scoped_refptr<SessionStorageNamespace> session_storage_namespace;
   };
 
   // Represents a previously open window.
   struct Window : public Entry {
     Window();
+    virtual ~Window();
 
     // The tabs that comprised the window, in order.
     std::vector<Tab> tabs;
@@ -126,8 +122,8 @@ class TabRestoreService : public BaseSessionService {
 
   // Adds/removes an observer. TabRestoreService does not take ownership of
   // the observer.
-  void AddObserver(Observer* observer);
-  void RemoveObserver(Observer* observer);
+  void AddObserver(TabRestoreServiceObserver* observer);
+  void RemoveObserver(TabRestoreServiceObserver* observer);
 
   // Creates a Tab to represent |tab| and notifies observers the list of
   // entries has changed.
@@ -147,7 +143,7 @@ class TabRestoreService : public BaseSessionService {
 
   // Returns the entries, ordered with most recently closed entries at the
   // front.
-  const Entries& entries() const { return entries_; }
+  virtual const Entries& entries() const;
 
   // Restores the most recently closed entry. Does nothing if there are no
   // entries to restore. If the most recently restored entry is a tab, it is
@@ -169,8 +165,14 @@ class TabRestoreService : public BaseSessionService {
   // Max number of entries we'll keep around.
   static const size_t kMaxEntries;
 
+  // Creates and add entries to |entries| for each of the windows in |windows|.
+  void CreateEntriesFromWindows(std::vector<SessionWindow*>* windows,
+                                std::vector<Entry*>* entries);
+
  protected:
   virtual void Save();
+
+  virtual ~TabRestoreService();
 
  private:
   // Used to indicate what has loaded.
@@ -191,8 +193,6 @@ class TabRestoreService : public BaseSessionService {
     LOADED_LAST_SESSION  = 1 << 4
   };
 
-  virtual ~TabRestoreService();
-
   // Populates the tab's navigations from the NavigationController, and its
   // browser_id and tabstrip_index from the browser.
   void PopulateTab(Tab* tab,
@@ -211,7 +211,10 @@ class TabRestoreService : public BaseSessionService {
   // Prunes entries_ to contain only kMaxEntries and invokes NotifyTabsChanged.
   void PruneAndNotify();
 
-  // Returns an iterator into entries_ whose id matches |id|.
+  // Returns an iterator into entries_ whose id matches |id|. If |id| identifies
+  // a Window, then its iterator position will be returned. If it identifies a
+  // tab, then the iterator position of the Window in which the Tab resides is
+  // returned.
   Entries::iterator GetEntryIteratorById(SessionID::id_type id);
 
   // Schedules the commands for a window close.
@@ -254,6 +257,14 @@ class TabRestoreService : public BaseSessionService {
       scoped_refptr<InternalGetCommandsRequest> request,
       std::vector<Entry*>* loaded_entries);
 
+  // This is a helper function for RestoreEntryById() for restoring a single
+  // tab. If |replace_existing_tab| is true, the newly created tab replaces the
+  // selected tab in |browser|. If |browser| is NULL, this creates a new window
+  // for the entry. This returns the Browser into which the tab was restored.
+  Browser* RestoreTab(const Tab& tab,
+                      Browser* browser,
+                      bool replace_existing_tab);
+
   // Returns true if |tab| has more than one navigation. If |tab| has more
   // than one navigation |tab->current_navigation_index| is constrained based
   // on the number of navigations.
@@ -273,11 +284,6 @@ class TabRestoreService : public BaseSessionService {
   // and invokes LoadStateChanged.
   void OnGotPreviousSession(Handle handle,
                             std::vector<SessionWindow*>* windows);
-
-  // Creates and add entries to |entries| for each of the windows in |windows|.
-  void CreateEntriesFromWindows(
-      std::vector<SessionWindow*>* windows,
-      std::vector<Entry*>* entries);
 
   // Converts a SessionWindow into a Window, returning true on success. We use 0
   // as the timestamp here since we do not know when the window/tab was closed.
@@ -312,7 +318,7 @@ class TabRestoreService : public BaseSessionService {
   // Number of entries we've written.
   int entries_written_;
 
-  ObserverList<Observer> observer_list_;
+  ObserverList<TabRestoreServiceObserver> observer_list_;
 
   // Set of tabs that we've received a BrowserClosing method for but no
   // corresponding BrowserClosed. We cache the set of browsers closing to

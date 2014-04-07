@@ -25,7 +25,7 @@
     'dependencies': [
       '../../chrome.gyp:chrome_strings',
       '../../chrome.gyp:platform_locale_settings',
-      '../../../webkit/webkit.gyp:webkit_strings',
+      '../../../webkit/support/webkit_support.gyp:webkit_strings',
       '../../../app/app.gyp:app_strings',
     ],
     'msvs_settings': {
@@ -228,6 +228,19 @@
             '<(webkit_grit_out_dir)/webkit_strings_et.rc',
             '<(app_strings_out_dir)/app_strings_et.rc',
             '<(app_locale_out_dir)/app_locale_settings_et.rc',
+          ],
+        },
+        {
+          'target_name': 'fa',
+          'msvs_guid': '347C5804-9391-4B91-A301-9D30B5E089BA',
+          'sources': [
+            '<(chrome_grit_out_dir)/platform_locale_settings_fa.rc',
+            '<(chrome_grit_out_dir)/generated_resources_fa.rc',
+            '<(chrome_grit_out_dir)/locale_settings_fa.rc',
+            '<(chrome_grit_out_dir)/<(strings_rc_name)_fa.rc',
+            '<(webkit_grit_out_dir)/webkit_strings_fa.rc',
+            '<(app_strings_out_dir)/app_strings_fa.rc',
+            '<(app_locale_out_dir)/app_locale_settings_fa.rc',
           ],
         },
         {

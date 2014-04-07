@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,18 @@
 
 #include "app/clipboard/clipboard.h"
 #include "app/clipboard/scoped_clipboard_writer.h"
+#include "app/keyboard_codes.h"
 #include "app/l10n_util.h"
 #include "app/l10n_util_win.h"
 #include "app/win_util.h"
 #include "base/i18n/rtl.h"
-#include "base/keyboard_codes.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "base/win_util.h"
 #include "gfx/native_theme_win.h"
 #include "grit/app_strings.h"
 #include "skia/ext/skia_utils_win.h"
+#include "views/controls/label.h"
 #include "views/controls/menu/menu_win.h"
 #include "views/controls/menu/menu_2.h"
 #include "views/controls/native/native_view_host.h"
@@ -56,6 +58,20 @@ NativeTextfieldWin::ScopedFreeze::~ScopedFreeze() {
       edit_->UpdateWindow();
     }
   }
+}
+
+NativeTextfieldWin::ScopedSuspendUndo::ScopedSuspendUndo(
+    ITextDocument* text_object_model)
+    : text_object_model_(text_object_model) {
+  // Suspend Undo processing.
+  if (text_object_model_)
+    text_object_model_->Undo(tomSuspend, NULL);
+}
+
+NativeTextfieldWin::ScopedSuspendUndo::~ScopedSuspendUndo() {
+  // Resume Undo processing.
+  if (text_object_model_)
+    text_object_model_->Undo(tomResume, NULL);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -104,6 +120,8 @@ NativeTextfieldWin::NativeTextfieldWin(Textfield* textfield)
   ole_interface.Attach(GetOleInterface());
   if (ole_interface)
     text_object_model_.QueryFrom(ole_interface);
+
+  InitializeAccessibilityInfo();
 }
 
 NativeTextfieldWin::~NativeTextfieldWin() {
@@ -124,7 +142,13 @@ string16 NativeTextfieldWin::GetText() const {
   int len = GetTextLength() + 1;
   std::wstring str;
   GetWindowText(WriteInto(&str, len), len);
-  return str;
+  // The text get from GetWindowText() might be wrapped with explicit bidi
+  // control characters. Refer to UpdateText() for detail. Without such
+  // wrapping, in RTL chrome, a pure LTR string ending with parenthesis will
+  // not be displayed correctly in a textfield. For example, "Yahoo!" will be
+  // displayed as "!Yahoo", and "Google (by default)" will be displayed as
+  // "(Google (by default".
+  return base::i18n::StripWrappingBidiControlCharacters(WideToUTF16(str));
 }
 
 void NativeTextfieldWin::UpdateText() {
@@ -137,6 +161,7 @@ void NativeTextfieldWin::UpdateText() {
   if (textfield_->style() & Textfield::STYLE_LOWERCASE)
     text_to_set = l10n_util::ToLower(text_to_set);
   SetWindowText(text_to_set.c_str());
+  UpdateAccessibleValue(text_to_set);
 }
 
 void NativeTextfieldWin::AppendText(const string16& text) {
@@ -196,21 +221,25 @@ void NativeTextfieldWin::UpdateBackgroundColor() {
 
 void NativeTextfieldWin::UpdateReadOnly() {
   SendMessage(m_hWnd, EM_SETREADONLY, textfield_->read_only(), 0);
+  UpdateAccessibleState(STATE_SYSTEM_READONLY, textfield_->read_only());
 }
 
 void NativeTextfieldWin::UpdateFont() {
   SendMessage(m_hWnd, WM_SETFONT,
-              reinterpret_cast<WPARAM>(textfield_->font().hfont()), TRUE);
+              reinterpret_cast<WPARAM>(textfield_->font().GetNativeFont()),
+              TRUE);
   // Setting the font blows away any text color we've set, so reset it.
   UpdateTextColor();
 }
 
 void NativeTextfieldWin::UpdateIsPassword() {
   // TODO: Need to implement for Windows.
+  UpdateAccessibleState(STATE_SYSTEM_PROTECTED, textfield_->IsPassword());
 }
 
 void NativeTextfieldWin::UpdateEnabled() {
   SendMessage(m_hWnd, WM_ENABLE, textfield_->IsEnabled(), 0);
+  UpdateAccessibleState(STATE_SYSTEM_UNAVAILABLE, !textfield_->IsEnabled());
 }
 
 gfx::Insets NativeTextfieldWin::CalculateInsets() {
@@ -222,12 +251,29 @@ gfx::Insets NativeTextfieldWin::CalculateInsets() {
   return gfx::Insets(3, 3, 3, 3);
 }
 
-void NativeTextfieldWin::SetHorizontalMargins(int left, int right) {
+void NativeTextfieldWin::UpdateHorizontalMargins() {
+  int left, right;
+  if (!textfield_->GetHorizontalMargins(&left, &right))
+    return;
+
   // SendMessage expects the two values to be packed into one using MAKELONG
   // so we truncate to 16 bits if necessary.
   SendMessage(m_hWnd, EM_SETMARGINS,
               EC_LEFTMARGIN | EC_RIGHTMARGIN,
               MAKELONG(left  & 0xFFFF, right & 0xFFFF));
+}
+
+void NativeTextfieldWin::UpdateVerticalMargins() {
+  int top, bottom;
+  if (!textfield_->GetVerticalMargins(&top, &bottom))
+    return;
+
+  if (top == 0 && bottom == 0) {
+    // Do nothing, default margins are 0 already.
+    return;
+  }
+  // Non-zero margins case.
+  NOTIMPLEMENTED();
 }
 
 void NativeTextfieldWin::SetFocus() {
@@ -284,13 +330,13 @@ bool NativeTextfieldWin::GetAcceleratorForCommandId(int command_id,
   // anywhere so we need to check for them explicitly here.
   switch (command_id) {
     case IDS_APP_CUT:
-      *accelerator = views::Accelerator(base::VKEY_X, false, true, false);
+      *accelerator = views::Accelerator(app::VKEY_X, false, true, false);
       return true;
     case IDS_APP_COPY:
-      *accelerator = views::Accelerator(base::VKEY_C, false, true, false);
+      *accelerator = views::Accelerator(app::VKEY_C, false, true, false);
       return true;
     case IDS_APP_PASTE:
-      *accelerator = views::Accelerator(base::VKEY_V, false, true, false);
+      *accelerator = views::Accelerator(app::VKEY_V, false, true, false);
       return true;
   }
   return container_view_->GetWidget()->GetAccelerator(command_id, accelerator);
@@ -307,7 +353,74 @@ void NativeTextfieldWin::ExecuteCommand(int command_id) {
     case IDS_APP_SELECT_ALL: SelectAll();  break;
     default:                 NOTREACHED(); break;
   }
-  OnAfterPossibleChange();
+  OnAfterPossibleChange(true);
+}
+
+void NativeTextfieldWin::InitializeAccessibilityInfo() {
+  // Set the accessible state.
+  accessibility_state_ = 0;
+
+  ScopedComPtr<IAccPropServices> pAccPropServices;
+  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
+      IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
+  if (!SUCCEEDED(hr))
+    return;
+
+  VARIANT var;
+
+  // Set the accessible role.
+  var.vt = VT_I4;
+  var.lVal = ROLE_SYSTEM_TEXT;
+  hr = pAccPropServices->SetHwndProp(m_hWnd, OBJID_CLIENT,
+      CHILDID_SELF, PROPID_ACC_ROLE, var);
+
+  // Set the accessible name by getting the label text.
+  View* parent = textfield_->GetParent();
+  int label_index = parent->GetChildIndex(textfield_) - 1;
+  if (label_index  >= 0) {
+    // Try to find the name of this text field.
+    // We expect it to be a Label preceeding this view (if it exists).
+    std::wstring name;
+    View* label_view = parent->GetChildViewAt(label_index );
+    if (label_view ->GetClassName() == Label::kViewClassName &&
+        label_view ->GetAccessibleName(&name)) {
+      hr = pAccPropServices->SetHwndPropStr(m_hWnd, OBJID_CLIENT,
+          CHILDID_SELF, PROPID_ACC_NAME, name.c_str());
+    }
+  }
+}
+
+void NativeTextfieldWin::UpdateAccessibleState(uint32 state_flag,
+                                               bool set_value) {
+  ScopedComPtr<IAccPropServices> pAccPropServices;
+  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
+      IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
+  if (!SUCCEEDED(hr))
+    return;
+
+  VARIANT var;
+  var.vt = VT_I4;
+  var.lVal = set_value ? accessibility_state_ | state_flag
+      : accessibility_state_ & ~state_flag;
+  hr = pAccPropServices->SetHwndProp(m_hWnd, OBJID_CLIENT,
+      CHILDID_SELF, PROPID_ACC_STATE, var);
+
+  ::NotifyWinEvent(EVENT_OBJECT_STATECHANGE, m_hWnd, OBJID_CLIENT,
+                   CHILDID_SELF);
+}
+
+void NativeTextfieldWin::UpdateAccessibleValue(const std::wstring& value) {
+  ScopedComPtr<IAccPropServices> pAccPropServices;
+  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
+      IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
+  if (!SUCCEEDED(hr))
+    return;
+
+  hr = pAccPropServices->SetHwndPropStr(m_hWnd, OBJID_CLIENT,
+      CHILDID_SELF, PROPID_ACC_VALUE, value.c_str());
+
+  ::NotifyWinEvent(EVENT_OBJECT_VALUECHANGE, m_hWnd, OBJID_CLIENT,
+                   CHILDID_SELF);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -408,7 +521,11 @@ LRESULT NativeTextfieldWin::OnImeComposition(UINT message,
     }
   }
 
-  OnAfterPossibleChange();
+  // If we allow OnAfterPossibleChange() to redraw the text, it will do this by
+  // setting the edit's text directly, which can cancel the current IME
+  // composition or cause other adverse affects. So we set |should_redraw_text|
+  // to false.
+  OnAfterPossibleChange(false);
   return result;
 }
 
@@ -466,7 +583,7 @@ void NativeTextfieldWin::OnKeyDown(TCHAR key, UINT repeat_count, UINT flags) {
         ScopedFreeze freeze(this, GetTextObjectModel());
         OnBeforePossibleChange();
         Cut();
-        OnAfterPossibleChange();
+        OnAfterPossibleChange(true);
       }
       return;
 
@@ -490,7 +607,7 @@ void NativeTextfieldWin::OnKeyDown(TCHAR key, UINT repeat_count, UINT flags) {
         ScopedFreeze freeze(this, GetTextObjectModel());
         OnBeforePossibleChange();
         Paste();
-        OnAfterPossibleChange();
+        OnAfterPossibleChange(true);
       }
       return;
 
@@ -521,7 +638,7 @@ void NativeTextfieldWin::OnLButtonDblClk(UINT keys, const CPoint& point) {
   OnBeforePossibleChange();
   DefWindowProc(WM_LBUTTONDBLCLK, keys,
                 MAKELPARAM(ClipXCoordToVisibleText(point.x, false), point.y));
-  OnAfterPossibleChange();
+  OnAfterPossibleChange(true);
 }
 
 void NativeTextfieldWin::OnLButtonDown(UINT keys, const CPoint& point) {
@@ -538,7 +655,7 @@ void NativeTextfieldWin::OnLButtonDown(UINT keys, const CPoint& point) {
   DefWindowProc(WM_LBUTTONDOWN, keys,
                 MAKELPARAM(ClipXCoordToVisibleText(point.x, is_triple_click),
                            point.y));
-  OnAfterPossibleChange();
+  OnAfterPossibleChange(true);
 }
 
 void NativeTextfieldWin::OnLButtonUp(UINT keys, const CPoint& point) {
@@ -546,7 +663,7 @@ void NativeTextfieldWin::OnLButtonUp(UINT keys, const CPoint& point) {
   OnBeforePossibleChange();
   DefWindowProc(WM_LBUTTONUP, keys,
                 MAKELPARAM(ClipXCoordToVisibleText(point.x, false), point.y));
-  OnAfterPossibleChange();
+  OnAfterPossibleChange(true);
 }
 
 void NativeTextfieldWin::OnMouseLeave() {
@@ -612,7 +729,7 @@ void NativeTextfieldWin::OnMouseMove(UINT keys, const CPoint& point) {
     GetRect(&r);
     DefWindowProc(WM_MOUSEMOVE, keys,
                   MAKELPARAM(point.x, (r.bottom - r.top) / 2));
-    OnAfterPossibleChange();
+    OnAfterPossibleChange(true);
   }
 }
 
@@ -767,8 +884,37 @@ void NativeTextfieldWin::HandleKeystroke(UINT message,
 
   if (!handled) {
     OnBeforePossibleChange();
-    DefWindowProc(message, key, MAKELPARAM(repeat_count, flags));
-    OnAfterPossibleChange();
+
+    if (key == app::VKEY_HOME || key == app::VKEY_END) {
+      // DefWindowProc() might reset the keyboard layout when it receives a
+      // keydown event for VKEY_HOME or VKEY_END. When the window was created
+      // with WS_EX_LAYOUTRTL and the current keyboard layout is not a RTL one,
+      // if the input text is pure LTR text, the layout changes to the first RTL
+      // keyboard layout in keyboard layout queue; if the input text is
+      // bidirectional text, the layout changes to the keyboard layout of the
+      // first RTL character in input text. When the window was created without
+      // WS_EX_LAYOUTRTL and the current keyboard layout is not a LTR one, if
+      // the input text is pure RTL text, the layout changes to English; if the
+      // input text is bidirectional text, the layout changes to the keyboard
+      // layout of the first LTR character in input text. Such keyboard layout
+      // change behavior is surprising and inconsistent with keyboard behavior
+      // elsewhere, so reset the layout in this case.
+      HKL layout = GetKeyboardLayout(0);
+      DefWindowProc(message, key, MAKELPARAM(repeat_count, flags));
+      ActivateKeyboardLayout(layout, KLF_REORDER);
+    } else {
+      DefWindowProc(message, key, MAKELPARAM(repeat_count, flags));
+    }
+
+    // CRichEditCtrl automatically turns on IMF_AUTOKEYBOARD when the user
+    // inputs an RTL character, making it difficult for the user to control
+    // what language is set as they type. Force this off to make the edit's
+    // behavior more stable.
+    const int lang_options = SendMessage(EM_GETLANGOPTIONS, 0, 0);
+    if (lang_options & IMF_AUTOKEYBOARD)
+      SendMessage(EM_SETLANGOPTIONS, 0, lang_options & ~IMF_AUTOKEYBOARD);
+
+    OnAfterPossibleChange(true);
   }
 }
 
@@ -777,7 +923,7 @@ void NativeTextfieldWin::OnBeforePossibleChange() {
   text_before_change_ = GetText();
 }
 
-void NativeTextfieldWin::OnAfterPossibleChange() {
+void NativeTextfieldWin::OnAfterPossibleChange(bool should_redraw_text) {
   // Prevent the user from selecting the "phantom newline" at the end of the
   // edit.  If they try, we just silently move the end of the selection back to
   // the end of the real text.
@@ -805,8 +951,20 @@ void NativeTextfieldWin::OnAfterPossibleChange() {
         return;
     }
     textfield_->SyncText();
+    UpdateAccessibleValue(textfield_->text());
     if (textfield_->GetController())
       textfield_->GetController()->ContentsChanged(textfield_, new_text);
+
+    if (should_redraw_text) {
+      CHARRANGE original_sel;
+      GetSel(original_sel);
+      std::wstring text = GetText();
+      ScopedSuspendUndo suspend_undo(GetTextObjectModel());
+
+      SelectAll();
+      ReplaceSel(reinterpret_cast<LPCTSTR>(text.c_str()), true);
+      SetSel(original_sel);
+    }
   }
 }
 

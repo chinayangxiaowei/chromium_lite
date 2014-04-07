@@ -84,12 +84,13 @@ class SignalEventTask : public Task {
 class AutofillDataTypeControllerTest : public testing::Test {
  public:
   AutofillDataTypeControllerTest()
-      : ui_thread_(ChromeThread::UI, &message_loop_),
-        db_thread_(ChromeThread::DB) {}
+      : ui_thread_(BrowserThread::UI, &message_loop_),
+        db_thread_(BrowserThread::DB) {}
 
   virtual void SetUp() {
     db_thread_.Start();
     web_data_service_ = new WebDataServiceFake(true);
+    personal_data_manager_ = new PersonalDataManagerMock();
     autofill_dtc_ =
         new AutofillDataTypeController(&profile_sync_factory_,
                                        &profile_,
@@ -104,8 +105,8 @@ class AutofillDataTypeControllerTest : public testing::Test {
  protected:
   void SetStartExpectations() {
     EXPECT_CALL(profile_, GetPersonalDataManager()).
-        WillRepeatedly(Return(&personal_data_manager_));
-    EXPECT_CALL(personal_data_manager_, IsDataLoaded()).
+        WillRepeatedly(Return(personal_data_manager_.get()));
+    EXPECT_CALL(*(personal_data_manager_.get()), IsDataLoaded()).
         WillRepeatedly(Return(true));
     EXPECT_CALL(profile_, GetWebDataService(_)).
         WillOnce(Return(web_data_service_.get()));
@@ -137,19 +138,19 @@ class AutofillDataTypeControllerTest : public testing::Test {
     // Run a task through the DB message loop to ensure that
     // everything before it has been run.
     WaitableEvent done_event(false, false);
-    ChromeThread::PostTask(ChromeThread::DB,
-                           FROM_HERE,
-                           new SignalEventTask(&done_event));
+    BrowserThread::PostTask(BrowserThread::DB,
+                            FROM_HERE,
+                            new SignalEventTask(&done_event));
     done_event.Wait();
   }
 
   MessageLoopForUI message_loop_;
-  ChromeThread ui_thread_;
-  ChromeThread db_thread_;
+  BrowserThread ui_thread_;
+  BrowserThread db_thread_;
   scoped_refptr<AutofillDataTypeController> autofill_dtc_;
   ProfileSyncFactoryMock profile_sync_factory_;
   ProfileMock profile_;
-  PersonalDataManagerMock personal_data_manager_;
+  scoped_refptr<PersonalDataManagerMock> personal_data_manager_;
   scoped_refptr<WebDataService> web_data_service_;
   ProfileSyncServiceMock service_;
   ModelAssociatorMock* model_associator_;
@@ -173,8 +174,8 @@ TEST_F(AutofillDataTypeControllerTest, StartPDMAndWDSReady) {
 
 TEST_F(AutofillDataTypeControllerTest, AbortWhilePDMStarting) {
   EXPECT_CALL(profile_, GetPersonalDataManager()).
-      WillRepeatedly(Return(&personal_data_manager_));
-  EXPECT_CALL(personal_data_manager_, IsDataLoaded()).
+      WillRepeatedly(Return(personal_data_manager_.get()));
+  EXPECT_CALL(*(personal_data_manager_.get()), IsDataLoaded()).
       WillRepeatedly(Return(false));
   autofill_dtc_->Start(NewCallback(&start_callback_, &StartCallback::Run));
   EXPECT_EQ(DataTypeController::MODEL_STARTING, autofill_dtc_->state());
@@ -187,8 +188,8 @@ TEST_F(AutofillDataTypeControllerTest, AbortWhilePDMStarting) {
 
 TEST_F(AutofillDataTypeControllerTest, AbortWhileWDSStarting) {
   EXPECT_CALL(profile_, GetPersonalDataManager()).
-      WillRepeatedly(Return(&personal_data_manager_));
-  EXPECT_CALL(personal_data_manager_, IsDataLoaded()).
+      WillRepeatedly(Return(personal_data_manager_.get()));
+  EXPECT_CALL(*(personal_data_manager_.get()), IsDataLoaded()).
       WillRepeatedly(Return(true));
   scoped_refptr<WebDataServiceFake> web_data_service_not_loaded =
       new WebDataServiceFake(false);

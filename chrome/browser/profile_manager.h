@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,63 +6,19 @@
 
 #ifndef CHROME_BROWSER_PROFILE_MANAGER_H__
 #define CHROME_BROWSER_PROFILE_MANAGER_H__
+#pragma once
 
-#include <map>
-#include <string>
 #include <vector>
 
 #include "app/system_monitor.h"
 #include "base/basictypes.h"
-#include "base/file_path.h"
 #include "base/message_loop.h"
 #include "base/non_thread_safe.h"
-#include "base/values.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 
-// This is a small storage class that simply represents some metadata about
-// profiles that are available in the current user data directory.
-// These are cached in local state so profiles don't need to be scanned
-// for their metadata on every launch.
-class AvailableProfile {
- public:
-  AvailableProfile(const std::wstring& name,
-                   const std::wstring& id,
-                   const FilePath& directory)
-      : name_(name), id_(id), directory_(directory) {}
-
-  // Decodes a DictionaryValue into an AvailableProfile
-  static AvailableProfile* FromValue(DictionaryValue* value) {
-    DCHECK(value);
-    std::wstring name, id;
-    FilePath::StringType directory;
-    value->GetString(L"name", &name);
-    value->GetString(L"id", &id);
-    value->GetString(L"directory", &directory);
-    return new AvailableProfile(name, id, FilePath(directory));
-  }
-
-  // Encodes this AvailableProfile into a new DictionaryValue
-  DictionaryValue* ToValue() {
-    DictionaryValue* value = new DictionaryValue;
-    value->SetString(L"name", name_);
-    value->SetString(L"id", id_);
-    value->SetString(L"directory", directory_.value());
-    return value;
-  }
-
-  std::wstring name() const { return name_; }
-  std::wstring id() const { return id_; }
-  FilePath directory() const { return directory_; }
-
- private:
-  std::wstring name_;  // User-visible profile name
-  std::wstring id_;  // Profile identifier
-  FilePath directory_;  // Subdirectory containing profile (not full path)
-
-  DISALLOW_COPY_AND_ASSIGN(AvailableProfile);
-};
+class FilePath;
 
 class ProfileManager : public NonThreadSafe,
                        public SystemMonitor::PowerObserver,
@@ -83,15 +39,23 @@ class ProfileManager : public NonThreadSafe,
   // Same as instance method but provides the default user_data_dir as well.
   static Profile* GetDefaultProfile();
 
-#if defined(OS_CHROMEOS)
-  // Returns the default profile with extensions turned off
-  static Profile* GetWizardProfile();
-#endif
-
   // Returns a profile for a specific profile directory within the user data
   // dir. This will return an existing profile it had already been created,
   // otherwise it will create and manage it.
   Profile* GetProfile(const FilePath& profile_dir);
+
+  // Returns a profile for a specific profile directory within the user data
+  // dir with the option of controlling whether extensions are initialized
+  // or not.  This will return an existing profile it had already been created,
+  // otherwise it will create and manage it.
+  // Note that if the profile has already been created, extensions may have
+  // been initialized.  If this matters to you, you should call GetProfileByPath
+  // first to see if the profile already exists.
+  Profile* GetProfile(const FilePath& profile_dir, bool init_extensions);
+
+  // Returns the directory where the currently active profile is
+  // stored, relative to the user data directory currently in use..
+  FilePath GetCurrentProfileDir();
 
   // These allow iteration through the current list of profiles.
   typedef std::vector<Profile*> ProfileVector;
@@ -102,8 +66,6 @@ class ProfileManager : public NonThreadSafe,
   const_iterator begin() const { return profiles_.begin(); }
   iterator end() { return profiles_.end(); }
   const_iterator end() const { return profiles_.end(); }
-
-  typedef std::vector<AvailableProfile*> AvailableProfileVector;
 
   // PowerObserver notifications
   void OnSuspend();
@@ -116,10 +78,11 @@ class ProfileManager : public NonThreadSafe,
 
   // ------------------ static utility functions -------------------
 
-  // Returns the path to the profile directory based on the user data directory.
+  // Returns the path to the default profile directory, based on the given
+  // user data directory.
   static FilePath GetDefaultProfileDir(const FilePath& user_data_dir);
 
-// Returns the path to the preferences file given the user profile directory.
+  // Returns the path to the preferences file given the user profile directory.
   static FilePath GetProfilePrefsPath(const FilePath& profile_dir);
 
   // Tries to determine whether the given path represents a profile
@@ -148,13 +111,9 @@ class ProfileManager : public NonThreadSafe,
   // Returns true if the profile was added, false otherwise.
   bool AddProfile(Profile* profile, bool init_extensions);
 
-  Profile* GetProfile(const FilePath& profile_dir, bool init_extensions);
-
   // We keep a simple vector of profiles rather than something fancier
   // because we expect there to be a small number of profiles active.
   ProfileVector profiles_;
-
-  AvailableProfileVector available_profiles_;
 
   NotificationRegistrar registrar_;
 
@@ -163,7 +122,7 @@ class ProfileManager : public NonThreadSafe,
   // default.
   bool logged_in_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(ProfileManager);
+  DISALLOW_COPY_AND_ASSIGN(ProfileManager);
 };
 
 #endif  // CHROME_BROWSER_PROFILE_MANAGER_H__

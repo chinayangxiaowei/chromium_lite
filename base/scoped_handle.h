@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_SCOPED_HANDLE_H_
 #define BASE_SCOPED_HANDLE_H_
+#pragma once
 
 #include <stdio.h>
 
@@ -48,7 +49,7 @@ class ScopedStdioHandle {
  private:
   FILE* handle_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(ScopedStdioHandle);
+  DISALLOW_COPY_AND_ASSIGN(ScopedStdioHandle);
 };
 
 #endif  // BASE_SCOPED_HANDLE_H_

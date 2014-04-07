@@ -41,17 +41,21 @@ WebPluginDelegateImpl::WebPluginDelegateImpl(
     NPAPI::PluginInstance *instance)
     : windowed_handle_(0),
       windowed_did_set_window_(false),
-      windowless_needs_set_window_(true),
       windowless_(false),
       plugin_(NULL),
       instance_(instance),
+      windowless_shm_pixmap_(None),
       pixmap_(NULL),
       first_event_time_(-1.0),
       plug_(NULL),
       socket_(NULL),
       parent_(containing_view),
       quirks_(0),
-      handle_event_depth_(0) {
+      handle_event_depth_(0),
+      first_set_window_call_(true),
+      plugin_has_focus_(false),
+      has_webkit_focus_(false),
+      containing_view_has_focus_(true) {
   memset(&window_, 0, sizeof(window_));
   if (instance_->mime_type() == "application/x-shockwave-flash") {
     // Flash is tied to Firefox's whacky behavior with windowless plugins. See
@@ -233,18 +237,9 @@ void WebPluginDelegateImpl::WindowlessUpdateGeometry(
   if (window_rect == window_rect_ && clip_rect == clip_rect_)
     return;
 
-  // Set this flag before entering the instance in case of side-effects.
-  windowless_needs_set_window_ = true;
-
-  // We will inform the instance of this change when we call NPP_SetWindow.
   clip_rect_ = clip_rect;
-  cutout_rects_.clear();
-
-  if (window_rect_ != window_rect) {
-    window_rect_ = window_rect;
-
-    WindowlessSetWindow(true);
-  }
+  window_rect_ = window_rect;
+  WindowlessSetWindow();
 }
 
 void WebPluginDelegateImpl::EnsurePixmapAtLeastSize(int width, int height) {
@@ -298,11 +293,6 @@ void WebPluginDelegateImpl::WindowlessPaint(cairo_t* context,
 
   // TODO(darin): we should avoid calling NPP_SetWindow here since it may
   // cause page layout to be invalidated.
-
-  // We really don't need to continually call SetWindow.
-  // m_needsSetWindow flags when the geometry has changed.
-  if (windowless_needs_set_window_)
-    WindowlessSetWindow(false);
 
   // The actual dirty region is just the intersection of the plugin window and
   // the clip window with the damage region. However, the plugin wants to draw
@@ -413,50 +403,102 @@ void WebPluginDelegateImpl::WindowlessPaint(cairo_t* context,
                         pixmap_draw_rect.right(),
                         pixmap_draw_rect.bottom());
 
-  EnsurePixmapAtLeastSize(pixmap_rect.width(), pixmap_rect.height());
-
-  // Copy the current image into the pixmap, so the plugin can draw over
-  // this background.
-  cairo_t* cairo = gdk_cairo_create(pixmap_);
-  BlitContextToContext(cairo, pixmap_draw_rect, context, draw_rect.origin());
-  cairo_destroy(cairo);
-
   // Construct the paint message, targeting the pixmap.
   NPEvent np_event = {0};
   XGraphicsExposeEvent &event = np_event.xgraphicsexpose;
   event.type = GraphicsExpose;
-  event.display = GDK_DISPLAY();
-  event.drawable = GDK_PIXMAP_XID(pixmap_);
   event.x = pixmap_draw_rect.x();
   event.y = pixmap_draw_rect.y();
   event.width = pixmap_draw_rect.width();
   event.height = pixmap_draw_rect.height();
+  event.display = GDK_DISPLAY();
 
-  // Tell the plugin to paint into the pixmap.
-  static StatsRate plugin_paint("Plugin.Paint");
-  StatsScope<StatsRate> scope(plugin_paint);
-  NPError err = instance()->NPP_HandleEvent(&np_event);
-  DCHECK_EQ(err, NPERR_NO_ERROR);
+  if (windowless_shm_pixmap_ != None) {
+    Pixmap pixmap = None;
+    GC xgc = NULL;
+    Display* display = event.display;
+    gfx::Rect plugin_draw_rect = draw_rect;
 
-  cairo_save(context);
-  // Now copy the rendered image pixmap back into the drawing buffer.
-  gdk_cairo_set_source_pixmap(context, pixmap_, -offset_x, -offset_y);
-  cairo_rectangle(context, draw_rect.x(), draw_rect.y(),
-                  draw_rect.width(), draw_rect.height());
-  cairo_clip(context);
-  cairo_paint(context);
+    // Make plugin_draw_rect relative to the plugin window.
+    plugin_draw_rect.Offset(-window_rect_.x(), -window_rect_.y());
+
+    // In case the drawing area does not start with the plugin window origin,
+    // we can not let the plugin directly draw over the shared memory pixmap.
+    if (plugin_draw_rect.x() != pixmap_draw_rect.x() ||
+        plugin_draw_rect.y() != pixmap_draw_rect.y()) {
+      pixmap = XCreatePixmap(display, windowless_shm_pixmap_,
+                             std::max(1, pixmap_rect.width()),
+                             std::max(1, pixmap_rect.height()),
+                             DefaultDepth(display, 0));
+      xgc = XCreateGC(display, windowless_shm_pixmap_, 0, NULL);
+      // Copy the current image into the pixmap, so the plugin can draw over it.
+      XCopyArea(display, windowless_shm_pixmap_, pixmap, xgc,
+                plugin_draw_rect.x(), plugin_draw_rect.y(),
+                pixmap_draw_rect.width(), pixmap_draw_rect.height(),
+                pixmap_draw_rect.x(), pixmap_draw_rect.y());
+
+      event.drawable = pixmap;
+    } else {
+      event.drawable = windowless_shm_pixmap_;
+    }
+
+    // Tell the plugin to paint into the pixmap.
+    static StatsRate plugin_paint("Plugin.Paint");
+    StatsScope<StatsRate> scope(plugin_paint);
+    NPError err = instance()->NPP_HandleEvent(&np_event);
+    DCHECK_EQ(err, NPERR_NO_ERROR);
+
+    if (pixmap != None) {
+      // Copy the rendered image pixmap back into the shm pixmap
+      // and thus the drawing buffer.
+      XCopyArea(display, pixmap, windowless_shm_pixmap_, xgc,
+                pixmap_draw_rect.x(), pixmap_draw_rect.y(),
+                pixmap_draw_rect.width(), pixmap_draw_rect.height(),
+                plugin_draw_rect.x(), plugin_draw_rect.y());
+      XSync(display, FALSE);
+      if (xgc)
+        XFreeGC(display, xgc);
+      XFreePixmap(display, pixmap);
+    } else {
+      XSync(display, FALSE);
+    }
+  } else {
+    EnsurePixmapAtLeastSize(pixmap_rect.width(), pixmap_rect.height());
+
+    // Copy the current image into the pixmap, so the plugin can draw over
+    // this background.
+    cairo_t* cairo = gdk_cairo_create(pixmap_);
+    BlitContextToContext(cairo, pixmap_draw_rect, context, draw_rect.origin());
+    cairo_destroy(cairo);
+
+    event.drawable = GDK_PIXMAP_XID(pixmap_);
+
+    // Tell the plugin to paint into the pixmap.
+    static StatsRate plugin_paint("Plugin.Paint");
+    StatsScope<StatsRate> scope(plugin_paint);
+    NPError err = instance()->NPP_HandleEvent(&np_event);
+    DCHECK_EQ(err, NPERR_NO_ERROR);
+
+    cairo_save(context);
+    // Now copy the rendered image pixmap back into the drawing buffer.
+    gdk_cairo_set_source_pixmap(context, pixmap_, -offset_x, -offset_y);
+    cairo_rectangle(context, draw_rect.x(), draw_rect.y(),
+                    draw_rect.width(), draw_rect.height());
+    cairo_clip(context);
+    cairo_paint(context);
 
 #ifdef DEBUG_RECTANGLES
-  // Draw some debugging rectangles.
-  // Pixmap rect = blue.
-  DrawDebugRectangle(context, pixmap_rect, 0, 0, 1);
-  // Drawing rect = red.
-  DrawDebugRectangle(context, draw_rect, 1, 0, 0);
+    // Draw some debugging rectangles.
+    // Pixmap rect = blue.
+    DrawDebugRectangle(context, pixmap_rect, 0, 0, 1);
+    // Drawing rect = red.
+    DrawDebugRectangle(context, draw_rect, 1, 0, 0);
 #endif
-  cairo_restore(context);
+    cairo_restore(context);
+  }
 }
 
-void WebPluginDelegateImpl::WindowlessSetWindow(bool force_set_window) {
+void WebPluginDelegateImpl::WindowlessSetWindow() {
   if (!instance())
     return;
 
@@ -489,9 +531,6 @@ void WebPluginDelegateImpl::WindowlessSetWindow(bool force_set_window) {
   extra->depth = DefaultDepth(GDK_DISPLAY(), 0);
   extra->colormap = DefaultColormap(GDK_DISPLAY(), 0);
 
-  if (!force_set_window)
-    windowless_needs_set_window_ = false;
-
   NPError err = instance()->NPP_SetWindow(&window_);
   DCHECK(err == NPERR_NO_ERROR);
   if (quirks_ & PLUGIN_QUIRK_WINDOWLESS_INVALIDATE_AFTER_SET_WINDOW) {
@@ -502,17 +541,18 @@ void WebPluginDelegateImpl::WindowlessSetWindow(bool force_set_window) {
   }
 }
 
-void WebPluginDelegateImpl::SetFocus() {
+bool WebPluginDelegateImpl::PlatformSetPluginHasFocus(bool focused) {
   DCHECK(instance()->windowless());
 
   NPEvent np_event = {0};
   XFocusChangeEvent &event = np_event.xfocus;
-  event.type = FocusIn;
+  event.type = focused ? FocusIn : FocusOut;
   event.display = GDK_DISPLAY();
   // Same values as Firefox. .serial and .window stay 0.
   event.mode = -1;
   event.detail = NotifyDetailNone;
   instance()->NPP_HandleEvent(&np_event);
+  return true;
 }
 
 // Converts a WebInputEvent::Modifiers bitfield into a

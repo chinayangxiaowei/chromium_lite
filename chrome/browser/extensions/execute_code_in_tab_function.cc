@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,32 @@
 
 #include "base/callback.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/extensions/extension_tabs_module_constants.h"
+#include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/extensions/file_reader.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_error_utils.h"
+#include "chrome/common/notification_service.h"
 
 namespace keys = extension_tabs_module_constants;
 
-bool ExecuteCodeInTabFunction::RunImpl() {
-  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_LIST));
-  const ListValue* args = args_as_list();
+ExecuteCodeInTabFunction::ExecuteCodeInTabFunction()
+    : execute_tab_id_(-1),
+      all_frames_(false) {
+}
 
+ExecuteCodeInTabFunction::~ExecuteCodeInTabFunction() {
+}
+
+bool ExecuteCodeInTabFunction::RunImpl() {
   DictionaryValue* script_info;
-  EXTENSION_FUNCTION_VALIDATE(args->GetDictionary(1, &script_info));
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(1, &script_info));
   size_t number_of_value = script_info->size();
   if (number_of_value == 0) {
     error_ = keys::kNoCodeOrFileToExecuteError;
@@ -46,7 +55,7 @@ bool ExecuteCodeInTabFunction::RunImpl() {
   // If |tab_id| is specified, look for it. Otherwise default to selected tab
   // in the current window.
   Value* tab_value = NULL;
-  EXTENSION_FUNCTION_VALIDATE(args->Get(0, &tab_value));
+  EXTENSION_FUNCTION_VALIDATE(args_->Get(0, &tab_value));
   if (tab_value->IsType(Value::TYPE_NULL)) {
     browser = GetCurrentBrowser();
     if (!browser) {
@@ -69,8 +78,17 @@ bool ExecuteCodeInTabFunction::RunImpl() {
 
   // NOTE: This can give the wrong answer due to race conditions, but it is OK,
   // we check again in the renderer.
-  if (!GetExtension()->CanExecuteScriptOnHost(contents->GetURL(), &error_))
+  Extension* extension = GetExtension();
+  const std::vector<URLPattern> host_permissions =
+      extension->host_permissions();
+  if (!Extension::CanExecuteScriptOnPage(
+        contents->GetURL(),
+        extension->CanExecuteScriptEverywhere(),
+        &host_permissions,
+        NULL,
+        &error_)) {
     return false;
+  }
 
   if (script_info->HasKey(keys::kAllFramesKey)) {
     if (!script_info->GetBoolean(keys::kAllFramesKey, &all_frames_))
@@ -114,6 +132,8 @@ void ExecuteCodeInTabFunction::DidLoadFile(bool success,
     Execute(data);
   } else {
 #if defined(OS_POSIX)
+    // TODO(viettrungluu): bug: there's no particular reason the path should be
+    // UTF-8, in which case this may fail.
     error_ = ExtensionErrorUtils::FormatErrorMessage(keys::kLoadFileError,
         resource_.relative_path().value());
 #elif defined(OS_WIN)
@@ -152,8 +172,7 @@ bool ExecuteCodeInTabFunction::Execute(const std::string& code_string) {
     DCHECK(false);
   }
   if (!contents->ExecuteCode(request_id(), extension->id(),
-                             extension->host_permissions(), is_js_code,
-                             code_string, all_frames_)) {
+                             is_js_code, code_string, all_frames_)) {
     SendResponse(false);
     return false;
   }

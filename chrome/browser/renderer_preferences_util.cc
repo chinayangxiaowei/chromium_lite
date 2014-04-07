@@ -6,7 +6,7 @@
 
 #include "chrome/browser/profile.h"
 
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
 #include "chrome/browser/gtk/gtk_theme_provider.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #endif
@@ -14,7 +14,7 @@
 namespace renderer_preferences_util {
 
 void UpdateFromSystemSettings(RendererPreferences* prefs, Profile* profile) {
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
   gtk_util::UpdateGtkFontSettings(prefs);
 
 #if !defined(TOOLKIT_VIEWS)
@@ -31,7 +31,16 @@ void UpdateFromSystemSettings(RendererPreferences* prefs, Profile* profile) {
   prefs->inactive_selection_fg_color =
       provider->get_inactive_selection_fg_color();
 #endif  // !defined(TOOLKIT_VIEWS)
-#endif  // defined(OS_LINUX)
+
+#if defined(OS_CHROMEOS)
+  prefs->focus_ring_color = SkColorSetARGB(255, 229, 151, 0);
+  prefs->active_selection_bg_color = SkColorSetRGB(0xDC, 0xE4, 0xFA);
+  prefs->active_selection_fg_color = SK_ColorBLACK;
+  prefs->inactive_selection_bg_color = SkColorSetRGB(0xF7, 0xF7, 0xF7);
+  prefs->inactive_selection_fg_color = SK_ColorBLACK;
+#endif  // defined(OS_CHROMEOS)
+
+#endif  // defined(TOOLKIT_USES_GTK)
 }
 
 }  // renderer_preferences_util

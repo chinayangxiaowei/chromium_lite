@@ -1,17 +1,18 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_ENGINE_MODEL_SAFE_WORKER_H_
 #define CHROME_BROWSER_SYNC_ENGINE_MODEL_SAFE_WORKER_H_
+#pragma once
 
 #include <map>
+#include <string>
 #include <vector>
 
+#include "base/callback.h"
 #include "base/ref_counted.h"
 #include "chrome/browser/sync/syncable/model_type.h"
-#include "chrome/browser/sync/util/closure.h"
-#include "chrome/browser/sync/util/sync_types.h"
 
 namespace browser_sync {
 
@@ -23,8 +24,13 @@ enum ModelSafeGroup {
   GROUP_DB,            // Models that live on DB thread and are being synced.
   GROUP_HISTORY,       // Models that live on history thread and are being
                        // synced.
+  GROUP_PASSWORD,      // Models that live on the password thread and are
+                       // being synced.  On windows and linux, this runs on the
+                       // DB thread.
   MODEL_SAFE_GROUP_COUNT,
 };
+
+std::string ModelSafeGroupToString(ModelSafeGroup group);
 
 // The Syncer uses a ModelSafeWorker for all tasks that could potentially
 // modify syncable entries (e.g under a WriteTransaction). The ModelSafeWorker
@@ -35,32 +41,25 @@ enum ModelSafeGroup {
 // syncable::Directory due to a race.
 class ModelSafeWorker : public base::RefCountedThreadSafe<ModelSafeWorker> {
  public:
-  ModelSafeWorker() { }
-  virtual ~ModelSafeWorker() { }
+  ModelSafeWorker();
+  virtual ~ModelSafeWorker();
 
   // Any time the Syncer performs model modifications (e.g employing a
   // WriteTransaction), it should be done by this method to ensure it is done
   // from a model-safe thread.
-  virtual void DoWorkAndWaitUntilDone(Closure* work) {
-    work->Run();  // For GROUP_PASSIVE, we do the work on the current thread.
-  }
+  virtual void DoWorkAndWaitUntilDone(Callback0::Type* work);
 
-  virtual ModelSafeGroup GetModelSafeGroup() {
-    return GROUP_PASSIVE;
-  }
+  virtual ModelSafeGroup GetModelSafeGroup();
 
   // Check the current thread and see if it's the thread associated with
   // this worker.  If this returns true, then it should be safe to operate
   // on models that are in this worker's group.  If this returns false,
   // such work should not be attempted.
-  virtual bool CurrentThreadIsWorkThread() {
-    // The passive group is not the work thread for any browser model.
-    return false;
-  }
+  virtual bool CurrentThreadIsWorkThread();
 
  private:
   friend class base::RefCountedThreadSafe<ModelSafeWorker>;
- 
+
   DISALLOW_COPY_AND_ASSIGN(ModelSafeWorker);
 };
 

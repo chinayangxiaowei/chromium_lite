@@ -1,14 +1,20 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/installer/util/google_update_settings.h"
 
+#include <algorithm>
+
+#include "base/command_line.h"
 #include "base/registry.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/time.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/google_update_constants.h"
+#include "chrome/installer/util/install_util.h"
 
 namespace {
 
@@ -94,21 +100,21 @@ bool GoogleUpdateSettings::SetEULAConsent(bool consented) {
 }
 
 int GoogleUpdateSettings::GetLastRunTime() {
- std::wstring time_s;
- if (!ReadGoogleUpdateStrKey(google_update::kRegLastRunTimeField, &time_s))
-   return -1;
- int64 time_i;
- if (!StringToInt64(time_s, &time_i))
-   return -1;
- base::TimeDelta td =
-    base::Time::NowFromSystemTime() - base::Time::FromInternalValue(time_i);
- return td.InDays();
+  std::wstring time_s;
+  if (!ReadGoogleUpdateStrKey(google_update::kRegLastRunTimeField, &time_s))
+    return -1;
+  int64 time_i;
+  if (!base::StringToInt64(time_s, &time_i))
+    return -1;
+  base::TimeDelta td =
+      base::Time::NowFromSystemTime() - base::Time::FromInternalValue(time_i);
+  return td.InDays();
 }
 
 bool GoogleUpdateSettings::SetLastRunTime() {
   int64 time = base::Time::NowFromSystemTime().ToInternalValue();
   return WriteGoogleUpdateStrKey(google_update::kRegLastRunTimeField,
-                                 Int64ToWString(time));
+                                 base::Int64ToString16(time));
 }
 
 bool GoogleUpdateSettings::RemoveLastRunTime() {
@@ -145,8 +151,11 @@ bool GoogleUpdateSettings::ClearReferral() {
 
 bool GoogleUpdateSettings::GetChromeChannel(bool system_install,
     std::wstring* channel) {
-  HKEY root_key = system_install ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+  if (dist->GetChromeChannel(channel))
+    return true;
+
+  HKEY root_key = system_install ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
   std::wstring reg_path = dist->GetStateKey();
   RegKey key(root_key, reg_path.c_str(), KEY_READ);
   std::wstring update_branch;
@@ -172,4 +181,114 @@ bool GoogleUpdateSettings::GetChromeChannel(bool system_install,
   return true;
 }
 
+void GoogleUpdateSettings::UpdateDiffInstallStatus(bool system_install,
+    bool incremental_install, int install_return_code,
+    const std::wstring& product_guid) {
+  HKEY reg_root = (system_install) ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
 
+  RegKey key;
+  std::wstring ap_key_value;
+  std::wstring reg_key(google_update::kRegPathClientState);
+  reg_key.append(L"\\");
+  reg_key.append(product_guid);
+  if (!key.Open(reg_root, reg_key.c_str(), KEY_ALL_ACCESS) ||
+      !key.ReadValue(google_update::kRegApField, &ap_key_value)) {
+    LOG(INFO) << "Application key not found.";
+    if (!incremental_install || !install_return_code) {
+      LOG(INFO) << "Returning without changing application key.";
+      key.Close();
+      return;
+    } else if (!key.Valid()) {
+      reg_key.assign(google_update::kRegPathClientState);
+      if (!key.Open(reg_root, reg_key.c_str(), KEY_ALL_ACCESS) ||
+          !key.CreateKey(product_guid.c_str(), KEY_ALL_ACCESS)) {
+        LOG(ERROR) << "Failed to create application key.";
+        key.Close();
+        return;
+      }
+    }
+  }
+
+  std::wstring new_value = GetNewGoogleUpdateApKey(
+      incremental_install, install_return_code, ap_key_value);
+  if ((new_value.compare(ap_key_value) != 0) &&
+      !key.WriteValue(google_update::kRegApField, new_value.c_str())) {
+    LOG(ERROR) << "Failed to write value " << new_value
+               << " to the registry field " << google_update::kRegApField;
+  }
+  key.Close();
+}
+
+std::wstring GoogleUpdateSettings::GetNewGoogleUpdateApKey(
+    bool diff_install, int install_return_code, const std::wstring& value) {
+  // Magic suffix that we need to add or remove to "ap" key value.
+  const std::wstring kMagicSuffix = L"-full";
+
+  bool has_magic_string = false;
+  if ((value.length() >= kMagicSuffix.length()) &&
+      (value.rfind(kMagicSuffix) == (value.length() - kMagicSuffix.length()))) {
+    LOG(INFO) << "Incremental installer failure key already set.";
+    has_magic_string = true;
+  }
+
+  std::wstring new_value(value);
+  if ((!diff_install || !install_return_code) && has_magic_string) {
+    LOG(INFO) << "Removing failure key from value " << value;
+    new_value = value.substr(0, value.length() - kMagicSuffix.length());
+  } else if ((diff_install && install_return_code) &&
+             !has_magic_string) {
+    LOG(INFO) << "Incremental installer failed, setting failure key.";
+    new_value.append(kMagicSuffix);
+  }
+
+  return new_value;
+}
+
+int GoogleUpdateSettings::DuplicateGoogleUpdateSystemClientKey() {
+  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+  std::wstring reg_path = dist->GetStateKey();
+
+  // Minimum access needed is to be able to write to this key.
+  RegKey reg_key(HKEY_LOCAL_MACHINE, reg_path.c_str(), KEY_SET_VALUE);
+  if (!reg_key.Valid())
+    return 0;
+
+  HANDLE target_handle = 0;
+  if (!DuplicateHandle(GetCurrentProcess(), reg_key.Handle(),
+                       GetCurrentProcess(), &target_handle, KEY_SET_VALUE,
+                       TRUE, DUPLICATE_SAME_ACCESS)) {
+    return 0;
+  }
+  return reinterpret_cast<int>(target_handle);
+}
+
+bool GoogleUpdateSettings::WriteGoogleUpdateSystemClientKey(
+    int handle, const std::wstring& key, const std::wstring& value) {
+  HKEY reg_key = reinterpret_cast<HKEY>(reinterpret_cast<void*>(handle));
+  DWORD size = static_cast<DWORD>(value.size()) * sizeof(wchar_t);
+  LSTATUS status = RegSetValueEx(reg_key, key.c_str(), 0, REG_SZ,
+      reinterpret_cast<const BYTE*>(value.c_str()), size);
+  return status == ERROR_SUCCESS;
+}
+
+bool GoogleUpdateSettings::IsOrganic(const std::wstring& brand) {
+  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+  if (command_line.HasSwitch(switches::kOrganicInstall))
+    return true;
+
+  static const wchar_t* kBrands[] = {
+      L"CHFO", L"CHFT", L"CHHS", L"CHHM", L"CHMA", L"CHMB", L"CHME", L"CHMF",
+      L"CHMG", L"CHMH", L"CHMI", L"CHMQ", L"CHMV", L"CHNB", L"CHNC", L"CHNG",
+      L"CHNH", L"CHNI", L"CHOA", L"CHOB", L"CHOC", L"CHON", L"CHOO", L"CHOP",
+      L"CHOQ", L"CHOR", L"CHOS", L"CHOT", L"CHOU", L"CHOX", L"CHOY", L"CHOZ",
+      L"CHPD", L"CHPE", L"CHPF", L"CHPG", L"EUBB", L"EUBC", L"GGLA", L"GGLS"
+  };
+  const wchar_t** end = &kBrands[arraysize(kBrands)];
+  const wchar_t** found = std::find(&kBrands[0], end, brand);
+  if (found != end)
+    return true;
+  if (StartsWith(brand, L"EUB", true) || StartsWith(brand, L"EUC", true) ||
+      StartsWith(brand, L"GGR", true))
+    return true;
+  return false;
+}

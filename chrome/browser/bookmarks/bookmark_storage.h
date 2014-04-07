@@ -1,23 +1,22 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_BOOKMARKS_BOOKMARK_STORAGE_H_
 #define CHROME_BROWSER_BOOKMARKS_BOOKMARK_STORAGE_H_
+#pragma once
 
 #include "base/file_path.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/bookmarks/bookmark_index.h"
-#include "chrome/browser/important_file_writer.h"
+#include "chrome/common/important_file_writer.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 
 class BookmarkModel;
 class BookmarkNode;
 class Profile;
-class Task;
-class Value;
 
 // BookmarkLoadDetails is used by BookmarkStorage when loading bookmarks.
 // BookmarkModel creates a BookmarkLoadDetails and passes it (including
@@ -32,23 +31,17 @@ class BookmarkLoadDetails {
   BookmarkLoadDetails(BookmarkNode* bb_node,
                       BookmarkNode* other_folder_node,
                       BookmarkIndex* index,
-                      int64 max_id)
-      : bb_node_(bb_node),
-        other_folder_node_(other_folder_node),
-        index_(index),
-        max_id_(max_id),
-        ids_reassigned_(false) {
-  }
-
-  void release() {
-    bb_node_.release();
-    other_folder_node_.release();
-    index_.release();
-  }
+                      int64 max_id);
+  ~BookmarkLoadDetails();
 
   BookmarkNode* bb_node() { return bb_node_.get(); }
+  BookmarkNode* release_bb_node() { return bb_node_.release(); }
   BookmarkNode* other_folder_node() { return other_folder_node_.get(); }
+  BookmarkNode* release_other_folder_node() {
+    return other_folder_node_.release();
+  }
   BookmarkIndex* index() { return index_.get(); }
+  BookmarkIndex* release_index() { return index_.release(); }
 
   // Max id of the nodes.
   void set_max_id(int64 max_id) { max_id_ = max_id; }

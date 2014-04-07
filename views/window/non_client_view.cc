@@ -4,14 +4,11 @@
 
 #include "views/window/non_client_view.h"
 
-#include "app/theme_provider.h"
 #include "views/widget/root_view.h"
 #include "views/widget/widget.h"
 #include "views/window/window.h"
 
-#if defined(OS_WIN)
-#include "app/win_util.h"
-#else
+#if !defined(OS_WIN)
 #include "views/window/hit_test.h"
 #endif
 
@@ -61,7 +58,7 @@ void NonClientView::WindowClosing() {
 
 void NonClientView::UpdateFrame() {
   SetFrameView(frame_->CreateFrameViewForWindow());
-  GetRootView()->ThemeChanged();
+  GetRootView()->NotifyThemeChanged();
   Layout();
   SchedulePaint();
   frame_->UpdateFrameAfterFrameChange();
@@ -177,9 +174,8 @@ views::View* NonClientView::GetViewForPoint(const gfx::Point& point) {
   return View::GetViewForPoint(point);
 }
 
-bool NonClientView::GetAccessibleRole(AccessibilityTypes::Role* role) {
-  *role = AccessibilityTypes::ROLE_WINDOW;
-  return true;
+AccessibilityTypes::Role NonClientView::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_WINDOW;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -251,6 +247,10 @@ int NonClientFrameView::GetHTComponentForFrame(const gfx::Point& point,
 
 bool NonClientFrameView::ShouldPaintAsActive() const {
   return GetWindow()->IsActive() || paint_as_active_;
+}
+
+AccessibilityTypes::Role NonClientFrameView::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_WINDOW;
 }
 
 }  // namespace views

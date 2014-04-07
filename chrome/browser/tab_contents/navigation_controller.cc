@@ -1,20 +1,19 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/tab_contents/navigation_controller.h"
 
-#include "app/resource_bundle.h"
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/string_util.h"
 #include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_about_handler.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_url_handler.h"
-#include "chrome/browser/in_process_webkit/dom_storage_context.h"
-#include "chrome/browser/in_process_webkit/webkit_context.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/in_process_webkit/session_storage_namespace.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/sessions/session_types.h"
@@ -26,7 +25,7 @@
 #include "chrome/common/navigation_types.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "chrome/common/url_constants.h"
 #include "grit/app_resources.h"
 #include "net/base/escape.h"
@@ -37,8 +36,7 @@
 namespace {
 
 const int kInvalidateAllButShelves =
-    0xFFFFFFFF & ~(TabContents::INVALIDATE_BOOKMARK_BAR |
-                   TabContents::INVALIDATE_EXTENSION_SHELF);
+    0xFFFFFFFF & ~TabContents::INVALIDATE_BOOKMARK_BAR;
 
 // Invoked when entries have been pruned, or removed. For example, if the
 // current entries are [google, digg, yahoo], with the current entry google,
@@ -104,12 +102,6 @@ bool AreURLsInPageNavigation(const GURL& existing_url, const GURL& new_url) {
       new_url.ReplaceComponents(replacements);
 }
 
-// Navigation within this limit since the last document load is considered to
-// be automatic (i.e., machine-initiated) rather than user-initiated unless
-// a user gesture has been observed.
-const base::TimeDelta kMaxAutoNavigationTimeDelta =
-    base::TimeDelta::FromSeconds(5);
-
 }  // namespace
 
 // NavigationController ---------------------------------------------------
@@ -121,22 +113,10 @@ size_t NavigationController::max_entry_count_ =
 // static
 bool NavigationController::check_for_repost_ = true;
 
-// Creates a new NavigationEntry for each TabNavigation in navigations, adding
-// the NavigationEntry to entries. This is used during session restore.
-static void CreateNavigationEntriesFromTabNavigations(
-    const std::vector<TabNavigation>& navigations,
-    std::vector<linked_ptr<NavigationEntry> >* entries) {
-  // Create a NavigationEntry for each of the navigations.
-  int page_id = 0;
-  for (std::vector<TabNavigation>::const_iterator i =
-           navigations.begin(); i != navigations.end(); ++i, ++page_id) {
-    entries->push_back(
-        linked_ptr<NavigationEntry>(i->ToNavigationEntry(page_id)));
-  }
-}
-
-NavigationController::NavigationController(TabContents* contents,
-                                           Profile* profile)
+NavigationController::NavigationController(
+    TabContents* contents,
+    Profile* profile,
+    SessionStorageNamespace* session_storage_namespace)
     : profile_(profile),
       pending_entry_(NULL),
       last_committed_entry_index_(-1),
@@ -146,11 +126,11 @@ NavigationController::NavigationController(TabContents* contents,
       max_restored_page_id_(-1),
       ALLOW_THIS_IN_INITIALIZER_LIST(ssl_manager_(this)),
       needs_reload_(false),
-      user_gesture_observed_(false),
-      session_storage_namespace_id_(profile->GetWebKitContext()->
-          dom_storage_context()->AllocateSessionStorageNamespaceId()),
+      session_storage_namespace_(session_storage_namespace),
       pending_reload_(NO_RELOAD) {
   DCHECK(profile_);
+  if (!session_storage_namespace_)
+    session_storage_namespace_ = new SessionStorageNamespace(profile_);
 }
 
 NavigationController::~NavigationController() {
@@ -160,10 +140,6 @@ NavigationController::~NavigationController() {
       NotificationType::TAB_CLOSED,
       Source<NavigationController>(this),
       NotificationService::NoDetails());
-
-  // When we go away, the session storage namespace will no longer be reachable.
-  profile_->GetWebKitContext()->DeleteSessionStorageNamespace(
-      session_storage_namespace_id_);
 }
 
 void NavigationController::RestoreFromState(
@@ -238,6 +214,48 @@ void NavigationController::ContinuePendingReload() {
     ReloadInternal(false, pending_reload_);
     pending_reload_ = NO_RELOAD;
   }
+}
+
+bool NavigationController::IsInitialNavigation() {
+  return last_document_loaded_.is_null();
+}
+
+// static
+NavigationEntry* NavigationController::CreateNavigationEntry(
+    const GURL& url, const GURL& referrer, PageTransition::Type transition,
+    Profile* profile) {
+  // Allow the browser URL handler to rewrite the URL. This will, for example,
+  // remove "view-source:" from the beginning of the URL to get the URL that
+  // will actually be loaded. This real URL won't be shown to the user, just
+  // used internally.
+  GURL loaded_url(url);
+  bool reverse_on_redirect = false;
+  BrowserURLHandler::RewriteURLIfNecessary(
+      &loaded_url, profile, &reverse_on_redirect);
+
+  NavigationEntry* entry = new NavigationEntry(
+      NULL,  // The site instance for tabs is sent on navigation
+             // (TabContents::GetSiteInstance).
+      -1,
+      loaded_url,
+      referrer,
+      string16(),
+      transition);
+  entry->set_virtual_url(url);
+  entry->set_user_typed_url(url);
+  entry->set_update_virtual_url_with_url(reverse_on_redirect);
+  if (url.SchemeIsFile()) {
+    // Use the filename as the title, not the full path.
+    // We need to call FormatUrl() to perform URL de-escaping;
+    // it's a bit ugly to grab the filename out of the resulting string.
+    std::string languages =
+        profile->GetPrefs()->GetString(prefs::kAcceptLanguages);
+    std::wstring formatted = UTF16ToWideHack(net::FormatUrl(url, languages));
+    std::wstring filename =
+        FilePath::FromWStringHack(formatted).BaseName().ToWStringHack();
+    entry->set_title(WideToUTF16Hack(filename));
+  }
+  return entry;
 }
 
 NavigationEntry* NavigationController::GetEntryWithPageID(
@@ -332,6 +350,9 @@ void NavigationController::GoBack() {
   DiscardNonCommittedEntries();
 
   pending_entry_index_ = current_index - 1;
+  entries_[pending_entry_index_]->set_transition_type(
+      entries_[pending_entry_index_]->transition_type() |
+      PageTransition::FORWARD_BACK);
   NavigateToPendingEntry(NO_RELOAD);
 }
 
@@ -362,6 +383,9 @@ void NavigationController::GoForward() {
   if (!transient)
     pending_entry_index_++;
 
+  entries_[pending_entry_index_]->set_transition_type(
+      entries_[pending_entry_index_]->transition_type() |
+      PageTransition::FORWARD_BACK);
   NavigateToPendingEntry(NO_RELOAD);
 }
 
@@ -400,6 +424,9 @@ void NavigationController::GoToIndex(int index) {
   DiscardNonCommittedEntries();
 
   pending_entry_index_ = index;
+  entries_[pending_entry_index_]->set_transition_type(
+      entries_[pending_entry_index_]->transition_type() |
+      PageTransition::FORWARD_BACK);
   NavigateToPendingEntry(NO_RELOAD);
 }
 
@@ -438,31 +465,6 @@ void NavigationController::RemoveEntryAtIndex(int index,
   }
 }
 
-NavigationEntry* NavigationController::CreateNavigationEntry(
-    const GURL& url, const GURL& referrer, PageTransition::Type transition) {
-  // Allow the browser URL handler to rewrite the URL. This will, for example,
-  // remove "view-source:" from the beginning of the URL to get the URL that
-  // will actually be loaded. This real URL won't be shown to the user, just
-  // used internally.
-  GURL loaded_url(url);
-  bool reverse_on_redirect = false;
-  BrowserURLHandler::RewriteURLIfNecessary(
-      &loaded_url, profile_, &reverse_on_redirect);
-
-  NavigationEntry* entry = new NavigationEntry(NULL, -1, loaded_url, referrer,
-                                               string16(), transition);
-  entry->set_virtual_url(url);
-  entry->set_user_typed_url(url);
-  entry->set_update_virtual_url_with_url(reverse_on_redirect);
-  if (url.SchemeIsFile()) {
-    std::wstring languages = profile()->GetPrefs()->GetString(
-        prefs::kAcceptLanguages);
-    entry->set_title(WideToUTF16Hack(
-        file_util::GetFilenameFromPath(net::FormatUrl(url, languages))));
-  }
-  return entry;
-}
-
 void NavigationController::UpdateVirtualURLToURL(
     NavigationEntry* entry, const GURL& new_url) {
   GURL new_virtual_url(new_url);
@@ -479,7 +481,7 @@ void NavigationController::AddTransientEntry(NavigationEntry* entry) {
     index = last_committed_entry_index_ + 1;
   DiscardTransientEntry();
   entries_.insert(entries_.begin() + index, linked_ptr<NavigationEntry>(entry));
-  transient_entry_index_  = index;
+  transient_entry_index_ = index;
   tab_contents_->NotifyNavigationStateChanged(kInvalidateAllButShelves);
 }
 
@@ -488,7 +490,8 @@ void NavigationController::LoadURL(const GURL& url, const GURL& referrer,
   // The user initiated a load, we don't need to reload anymore.
   needs_reload_ = false;
 
-  NavigationEntry* entry = CreateNavigationEntry(url, referrer, transition);
+  NavigationEntry* entry = CreateNavigationEntry(url, referrer, transition,
+                                                 profile_);
 
   LoadEntry(entry);
 }
@@ -497,14 +500,11 @@ void NavigationController::DocumentLoadedInFrame() {
   last_document_loaded_ = base::TimeTicks::Now();
 }
 
-void NavigationController::OnUserGesture() {
-  user_gesture_observed_ = true;
-}
-
 bool NavigationController::RendererDidNavigate(
     const ViewHostMsg_FrameNavigate_Params& params,
     int extra_invalidate_flags,
     LoadCommittedDetails* details) {
+
   // Save the previous state before we clobber it.
   if (GetLastCommittedEntry()) {
     details->previous_url = GetLastCommittedEntry()->url();
@@ -532,6 +532,7 @@ bool NavigationController::RendererDidNavigate(
 
   // Do navigation-type specific actions. These will make and commit an entry.
   details->type = ClassifyNavigation(params);
+
   switch (details->type) {
     case NavigationType::NEW_PAGE:
       RendererDidNavigateToNewPage(params, &(details->did_replace_entry));
@@ -586,8 +587,6 @@ bool NavigationController::RendererDidNavigate(
   details->is_content_filtered = params.is_content_filtered;
   details->http_status_code = params.http_status_code;
   NotifyNavigationEntryCommitted(details, extra_invalidate_flags);
-
-  user_gesture_observed_ = false;
 
   return true;
 }
@@ -693,9 +692,16 @@ bool NavigationController::IsRedirect(
   return params.redirects.size() > 1;
 }
 
-bool NavigationController::IsLikelyAutoNavigation(base::TimeTicks now) {
-  return !user_gesture_observed_ &&
-         (now - last_document_loaded_) < kMaxAutoNavigationTimeDelta;
+void NavigationController::CreateNavigationEntriesFromTabNavigations(
+    const std::vector<TabNavigation>& navigations,
+    std::vector<linked_ptr<NavigationEntry> >* entries) {
+  // Create a NavigationEntry for each of the navigations.
+  int page_id = 0;
+  for (std::vector<TabNavigation>::const_iterator i =
+           navigations.begin(); i != navigations.end(); ++i, ++page_id) {
+    linked_ptr<NavigationEntry> entry(i->ToNavigationEntry(page_id, profile_));
+    entries->push_back(entry);
+  }
 }
 
 void NavigationController::RendererDidNavigateToNewPage(
@@ -726,14 +732,6 @@ void NavigationController::RendererDidNavigateToNewPage(
   new_entry->set_site_instance(tab_contents_->GetSiteInstance());
   new_entry->set_has_post_data(params.is_post);
 
-  // If the current entry is a redirection source and the redirection has
-  // occurred within kMaxAutoNavigationTimeDelta since the last document load,
-  // this is likely to be machine-initiated redirect and the entry needs to be
-  // replaced with the new entry to avoid unwanted redirections in navigating
-  // backward/forward.
-  // Otherwise, just insert the new entry.
-  *did_replace_entry = IsRedirect(params) &&
-                       IsLikelyAutoNavigation(base::TimeTicks::Now());
   InsertOrReplaceEntry(new_entry, *did_replace_entry);
 }
 
@@ -939,20 +937,88 @@ void NavigationController::CopyStateFrom(const NavigationController& source) {
     return;  // Nothing new to do.
 
   needs_reload_ = true;
-  for (int i = 0; i < source.entry_count(); i++) {
-    // When cloning a tab, copy all entries except interstitial pages
-    if (source.entries_[i].get()->page_type() !=
-        NavigationEntry::INTERSTITIAL_PAGE) {
-      entries_.push_back(linked_ptr<NavigationEntry>(
-          new NavigationEntry(*source.entries_[i])));
-    }
-  }
+  InsertEntriesFrom(source, source.entry_count());
 
-  session_storage_namespace_id_ =
-      profile_->GetWebKitContext()->dom_storage_context()->CloneSessionStorage(
-          source.session_storage_namespace_id_);
+  session_storage_namespace_ = source.session_storage_namespace_->Clone();
 
   FinishRestore(source.last_committed_entry_index_, false);
+}
+
+void NavigationController::CopyStateFromAndPrune(NavigationController* source) {
+  // This code is intended for use when the last entry is the active entry.
+  DCHECK((transient_entry_index_ != -1 &&
+          transient_entry_index_ == entry_count() - 1) ||
+         (pending_entry_ && (pending_entry_index_ == -1 ||
+                             pending_entry_index_ == entry_count() - 1)) ||
+         (!pending_entry_ && last_committed_entry_index_ == entry_count() - 1));
+
+  // Remove all the entries leaving the active entry.
+  PruneAllButActive();
+
+  // Insert the entries from source. Don't use source->GetCurrentEntryIndex as
+  // we don't want to copy over the transient entry.
+  int max_source_index = source->pending_entry_index_ != -1 ?
+      source->pending_entry_index_ : source->last_committed_entry_index_;
+  if (max_source_index == -1)
+    max_source_index = source->entry_count();
+  else
+    max_source_index++;
+  InsertEntriesFrom(*source, max_source_index);
+
+  // Adjust indices such that the last entry and pending are at the end now.
+  last_committed_entry_index_ = entry_count() - 1;
+  if (pending_entry_index_ != -1)
+    pending_entry_index_ = entry_count() - 1;
+  if (transient_entry_index_ != -1) {
+    // There's a transient entry. In this case we want the last committed to
+    // point to the previous entry.
+    transient_entry_index_ = entry_count() - 1;
+    if (last_committed_entry_index_ != -1)
+      last_committed_entry_index_--;
+  }
+
+  // Take over the session id from source.
+  session_id_ = source->session_id_;
+
+  // Reset source's session id as we're taking it over.
+  source->session_id_.clear();
+}
+
+void NavigationController::PruneAllButActive() {
+  int prune_count = entry_count();
+  if (transient_entry_index_ != -1) {
+    // There is a transient entry. Prune up to it.
+    DCHECK_EQ(entry_count() - 1, transient_entry_index_);
+    prune_count = transient_entry_index_;
+    transient_entry_index_ = 0;
+    last_committed_entry_index_ = -1;
+    pending_entry_index_ = -1;
+  } else if (!pending_entry_) {
+    // There's no pending entry. Leave the last entry (if there is one).
+    if (!prune_count)
+      return;
+
+    prune_count--;
+    last_committed_entry_index_ = 0;
+  } else if (pending_entry_index_ != -1) {
+    DCHECK_EQ(pending_entry_index_, prune_count - 1);
+    pending_entry_index_ = 0;
+    last_committed_entry_index_ = 0;
+    prune_count--;
+  } else {
+    // There is a pending_entry, but it's not in entries_.
+    pending_entry_index_ = -1;
+    last_committed_entry_index_ = -1;
+  }
+
+  if (tab_contents_->interstitial_page()) {
+    // Normally the interstitial page hides itself if the user doesn't proceeed.
+    // This would result in showing a NavigationEntry we just removed. Set this
+    // so the interstitial triggers a reload if the user doesn't proceed.
+    tab_contents_->interstitial_page()->set_reload_on_dont_proceed(true);
+  }
+
+  entries_.erase(entries_.begin(), entries_.begin() + prune_count);
 }
 
 void NavigationController::DiscardNonCommittedEntries() {
@@ -1020,7 +1086,7 @@ void NavigationController::NavigateToPendingEntry(ReloadType reload_type) {
 
   // For session history navigations only the pending_entry_index_ is set.
   if (!pending_entry_) {
-    DCHECK(pending_entry_index_ != -1);
+    DCHECK_NE(pending_entry_index_, -1);
     pending_entry_ = entries_[pending_entry_index_].get();
   }
 
@@ -1088,7 +1154,7 @@ void NavigationController::FinishRestore(int selected_index,
   DCHECK(selected_index >= 0 && selected_index < entry_count());
   ConfigureEntriesForRestore(&entries_, from_last_session);
 
-  set_max_restored_page_id(entry_count());
+  set_max_restored_page_id(static_cast<int32>(entry_count()));
 
   last_committed_entry_index_ = selected_index;
 }
@@ -1125,4 +1191,20 @@ NavigationEntry* NavigationController::GetTransientEntry() const {
   if (transient_entry_index_ == -1)
     return NULL;
   return entries_[transient_entry_index_].get();
+}
+
+void NavigationController::InsertEntriesFrom(
+    const NavigationController& source,
+    int max_index) {
+  DCHECK_LE(max_index, source.entry_count());
+  size_t insert_index = 0;
+  for (int i = 0; i < max_index; i++) {
+    // When cloning a tab, copy all entries except interstitial pages
+    if (source.entries_[i].get()->page_type() !=
+        NavigationEntry::INTERSTITIAL_PAGE) {
+      entries_.insert(entries_.begin() + insert_index++,
+                      linked_ptr<NavigationEntry>(
+                          new NavigationEntry(*source.entries_[i])));
+    }
+  }
 }

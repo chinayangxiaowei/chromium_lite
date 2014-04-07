@@ -85,6 +85,7 @@ BackingStoreX::BackingStoreX(RenderWidgetHost* widget,
         x11_util::GetRenderVisualFormat(display_,
                                         static_cast<Visual*>(visual)),
                                         0, NULL);
+    pixmap_bpp_ = 0;
   } else {
     picture_ = 0;
     pixmap_bpp_ = x11_util::BitsPerPixelForPixmapDepth(display_, depth);
@@ -98,9 +99,13 @@ BackingStoreX::BackingStoreX(RenderWidgetHost* widget, const gfx::Size& size)
       display_(NULL),
       shared_memory_support_(x11_util::SHARED_MEMORY_NONE),
       use_render_(false),
+      pixmap_bpp_(0),
       visual_(NULL),
       visual_depth_(-1),
-      root_window_(0) {
+      root_window_(0),
+      pixmap_(0),
+      picture_(0),
+      pixmap_gc_(NULL) {
 }
 
 BackingStoreX::~BackingStoreX() {
@@ -211,16 +216,35 @@ void BackingStoreX::PaintToBackingStore(
       shminfo.shmseg = shmseg;
       shminfo.shmaddr = static_cast<char*>(dib->memory());
 
-      // TODO(evanm): verify that Xlib isn't doing any conversions here.
       XImage* image = XShmCreateImage(display_, static_cast<Visual*>(visual_),
                                       32, ZPixmap,
                                       shminfo.shmaddr, &shminfo,
                                       width, height);
+
+      // This code path is important for performance and we have found that
+      // different techniques work better on different platforms. See
+      // http://code.google.com/p/chromium/issues/detail?id=44124.
+      //
+      // Checking for ARM is an approximation, but it seems to be a good one so
+      // far.
+#if defined(ARCH_CPU_ARM_FAMILY)
+      for (size_t i = 0; i < copy_rects.size(); i++) {
+        const gfx::Rect& copy_rect = copy_rects[i];
+        XShmPutImage(display_, pixmap, gc, image,
+                     copy_rect.x() - bitmap_rect.x(), /* source x */
+                     copy_rect.y() - bitmap_rect.y(), /* source y */
+                     copy_rect.x() - bitmap_rect.x(), /* dest x */
+                     copy_rect.y() - bitmap_rect.y(), /* dest y */
+                     copy_rect.width(), copy_rect.height(),
+                     False /* send_event */);
+      }
+#else
       XShmPutImage(display_, pixmap, gc, image,
                    0, 0 /* source x, y */, 0, 0 /* dest x, y */,
                    width, height, False /* send_event */);
+#endif
       XDestroyImage(image);
-    } else { // case SHARED_MEMORY_NONE
+    } else {  // case SHARED_MEMORY_NONE
       // No shared memory support, we have to copy the bitmap contents
       // to the X server. Xlib wraps the underlying PutImage call
       // behind several layers of functions which try to convert the
@@ -307,8 +331,8 @@ bool BackingStoreX::CopyFromBackingStore(const gfx::Rect& rect,
     }
     // Create the shared memory segment for the image and map it.
     if (image->bytes_per_line == 0 || image->height == 0 ||
-        (std::numeric_limits<size_t>::max() / image->bytes_per_line) >
-        static_cast<size_t>(image->height)) {
+        static_cast<size_t>(image->height) >
+        (std::numeric_limits<size_t>::max() / image->bytes_per_line)) {
       XDestroyImage(image);
       return false;
     }
@@ -342,6 +366,7 @@ bool BackingStoreX::CopyFromBackingStore(const gfx::Rect& rect,
 
   // TODO(jhawkins): Need to convert the image data if the image bits per pixel
   // is not 32.
+  // Note that this also initializes the output bitmap as opaque.
   if (!output->initialize(width, height, true) ||
       image->bits_per_pixel != 32) {
     if (shared_memory_support_ != x11_util::SHARED_MEMORY_NONE)
@@ -351,15 +376,19 @@ bool BackingStoreX::CopyFromBackingStore(const gfx::Rect& rect,
     return false;
   }
 
-  // The X image might have a different row stride, so iterate through it and
-  // copy each row out, only up to the pixels we're actually using.
-  // This code assumes a visual mode where a pixel is represented using
-  // a byte for each component.
+  // The X image might have a different row stride, so iterate through
+  // it and copy each row out, only up to the pixels we're actually
+  // using.  This code assumes a visual mode where a pixel is
+  // represented using a 32-bit unsigned int, with a byte per component.
   SkBitmap bitmap = output->getTopPlatformDevice().accessBitmap(true);
   for (int y = 0; y < height; y++) {
+    const uint32* src_row = reinterpret_cast<uint32*>(
+        &image->data[image->bytes_per_line * y]);
     uint32* dest_row = bitmap.getAddr32(0, y);
-    const char* src_row = &image->data[image->bytes_per_line * y];
-    memcpy(dest_row, src_row, width * 4);
+    for (int x = 0; x < width; ++x, ++dest_row) {
+      // Force alpha to be 0xff, because otherwise it causes rendering problems.
+      *dest_row = src_row[x] | 0xff000000;
+    }
   }
 
   if (shared_memory_support_ != x11_util::SHARED_MEMORY_NONE)

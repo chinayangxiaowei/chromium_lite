@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 #include "base/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/history/history.h"
+#include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/renderer_host/test/test_render_view_host.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_test_helper.h"
@@ -17,9 +19,11 @@
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_contents_delegate.h"
+#include "chrome/browser/tab_contents/test_tab_contents.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "chrome/test/test_notification_tracker.h"
 #include "chrome/test/testing_profile.h"
 #include "net/base/net_util.h"
@@ -89,7 +93,7 @@ class NavigationControllerHistoryTest : public NavigationControllerTest {
     NavigationControllerTest::TearDown();
 
     ASSERT_TRUE(file_util::Delete(test_dir_, true));
-    ASSERT_FALSE(file_util::PathExists(FilePath::FromWStringHack(test_dir_)));
+    ASSERT_FALSE(file_util::PathExists(test_dir_));
   }
 
   // Deletes the current profile manager and creates a new one. Indirectly this
@@ -105,7 +109,8 @@ class NavigationControllerHistoryTest : public NavigationControllerTest {
 
   void GetLastSession() {
     profile()->GetSessionService()->TabClosed(controller().window_id(),
-                                              controller().session_id());
+                                              controller().session_id(),
+                                              false);
 
     ReopenDatabase();
     Time close_time;
@@ -128,8 +133,7 @@ class NavigationControllerHistoryTest : public NavigationControllerTest {
 
  private:
   ProfileManager* profile_manager_;
-  std::wstring test_dir_;
-  std::wstring profile_path_;
+  FilePath test_dir_;
 };
 
 void RegisterForAllNavNotifications(TestNotificationTracker* tracker,
@@ -737,7 +741,7 @@ TEST_F(NavigationControllerTest, Redirect) {
   EXPECT_EQ(controller().pending_entry_index(), -1);
   EXPECT_EQ(url1, controller().GetActiveEntry()->url());
 
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 0;
   params.url = url2;
   params.transition = PageTransition::SERVER_REDIRECT;
@@ -792,7 +796,7 @@ TEST_F(NavigationControllerTest, PostThenRedirect) {
   EXPECT_EQ(controller().pending_entry_index(), -1);
   EXPECT_EQ(url1, controller().GetActiveEntry()->url());
 
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 0;
   params.url = url2;
   params.transition = PageTransition::SERVER_REDIRECT;
@@ -837,7 +841,7 @@ TEST_F(NavigationControllerTest, ImmediateRedirect) {
   EXPECT_EQ(controller().pending_entry_index(), -1);
   EXPECT_EQ(url1, controller().GetActiveEntry()->url());
 
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 0;
   params.url = url2;
   params.transition = PageTransition::SERVER_REDIRECT;
@@ -878,7 +882,7 @@ TEST_F(NavigationControllerTest, NewSubframe) {
       NotificationType::NAV_ENTRY_COMMITTED));
 
   const GURL url2("http://foo2");
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 1;
   params.url = url2;
   params.transition = PageTransition::MANUAL_SUBFRAME;
@@ -913,7 +917,7 @@ TEST_F(NavigationControllerTest, SubframeOnEmptyPage) {
 
   // Navigation controller currently has no entries.
   const GURL url("http://foo2");
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 1;
   params.url = url;
   params.transition = PageTransition::AUTO_SUBFRAME;
@@ -938,7 +942,7 @@ TEST_F(NavigationControllerTest, AutoSubframe) {
       NotificationType::NAV_ENTRY_COMMITTED));
 
   const GURL url2("http://foo2");
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 0;
   params.url = url2;
   params.transition = PageTransition::AUTO_SUBFRAME;
@@ -968,7 +972,7 @@ TEST_F(NavigationControllerTest, BackSubframe) {
 
   // First manual subframe navigation.
   const GURL url2("http://foo2");
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 1;
   params.url = url2;
   params.transition = PageTransition::MANUAL_SUBFRAME;
@@ -1051,7 +1055,7 @@ TEST_F(NavigationControllerTest, InPage) {
 
   // First navigation.
   const GURL url2("http://foo#a");
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 1;
   params.url = url2;
   params.transition = PageTransition::LINK;
@@ -1131,7 +1135,7 @@ TEST_F(NavigationControllerTest, InPage_Replace) {
 
   // First navigation.
   const GURL url2("http://foo#a");
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 0;  // Same page_id
   params.url = url2;
   params.transition = PageTransition::LINK;
@@ -1148,6 +1152,89 @@ TEST_F(NavigationControllerTest, InPage_Replace) {
   EXPECT_TRUE(details.is_in_page);
   EXPECT_TRUE(details.did_replace_entry);
   EXPECT_EQ(1, controller().entry_count());
+}
+
+// Tests for http://crbug.com/40395
+// Simulates this:
+//   <script>
+//     window.location.replace("#a");
+//     window.location='http://foo3/';
+//   </script>
+TEST_F(NavigationControllerTest, ClientRedirectAfterInPageNavigation) {
+  TestNotificationTracker notifications;
+  RegisterForAllNavNotifications(&notifications, &controller());
+
+  // Load an initial page.
+  {
+    const GURL url("http://foo/");
+    rvh()->SendNavigate(0, url);
+    EXPECT_TRUE(notifications.Check1AndReset(
+        NotificationType::NAV_ENTRY_COMMITTED));
+  }
+
+  // Navigate to a new page.
+  {
+    const GURL url("http://foo2/");
+    rvh()->SendNavigate(1, url);
+    controller().DocumentLoadedInFrame();
+    EXPECT_TRUE(notifications.Check1AndReset(
+        NotificationType::NAV_ENTRY_COMMITTED));
+  }
+
+  // Navigate within the page.
+  {
+    const GURL url("http://foo2/#a");
+    ViewHostMsg_FrameNavigate_Params params;
+    params.page_id = 1;  // Same page_id
+    params.url = url;
+    params.transition = PageTransition::LINK;
+    params.redirects.push_back(url);
+    params.should_update_history = true;
+    params.gesture = NavigationGestureUnknown;
+    params.is_post = false;
+
+    // This should NOT generate a new entry.
+    NavigationController::LoadCommittedDetails details;
+    EXPECT_TRUE(controller().RendererDidNavigate(params, 0, &details));
+    EXPECT_TRUE(notifications.Check2AndReset(
+        NotificationType::NAV_LIST_PRUNED,
+        NotificationType::NAV_ENTRY_COMMITTED));
+    EXPECT_TRUE(details.is_in_page);
+    EXPECT_TRUE(details.did_replace_entry);
+    EXPECT_EQ(2, controller().entry_count());
+  }
+
+  // Perform a client redirect to a new page.
+  {
+    const GURL url("http://foo3/");
+    ViewHostMsg_FrameNavigate_Params params;
+    params.page_id = 2;  // New page_id
+    params.url = url;
+    params.transition = PageTransition::CLIENT_REDIRECT;
+    params.redirects.push_back(GURL("http://foo2/#a"));
+    params.redirects.push_back(url);
+    params.should_update_history = true;
+    params.gesture = NavigationGestureUnknown;
+    params.is_post = false;
+
+    // This SHOULD generate a new entry.
+    NavigationController::LoadCommittedDetails details;
+    EXPECT_TRUE(controller().RendererDidNavigate(params, 0, &details));
+    EXPECT_TRUE(notifications.Check1AndReset(
+        NotificationType::NAV_ENTRY_COMMITTED));
+    EXPECT_FALSE(details.is_in_page);
+    EXPECT_EQ(3, controller().entry_count());
+  }
+
+  // Verify that BACK brings us back to http://foo2/.
+  {
+    const GURL url("http://foo2/");
+    controller().GoBack();
+    rvh()->SendNavigate(1, url);
+    EXPECT_TRUE(notifications.Check1AndReset(
+        NotificationType::NAV_ENTRY_COMMITTED));
+    EXPECT_EQ(url, controller().GetActiveEntry()->url());
+  }
 }
 
 // NotificationObserver implementation used in verifying we've received the
@@ -1241,7 +1328,7 @@ TEST_F(NavigationControllerTest, RestoreNavigate) {
   navigations.push_back(TabNavigation(0, url, GURL(),
                                       ASCIIToUTF16("Title"), "state",
                                       PageTransition::LINK));
-  TabContents our_contents(profile(), NULL, MSG_ROUTING_NONE, NULL);
+  TabContents our_contents(profile(), NULL, MSG_ROUTING_NONE, NULL, NULL);
   NavigationController& our_controller = our_contents.controller();
   our_controller.RestoreFromState(navigations, 0, true);
   our_controller.GoToIndex(0);
@@ -1255,7 +1342,7 @@ TEST_F(NavigationControllerTest, RestoreNavigate) {
             our_controller.GetEntryAtIndex(0)->restore_type());
 
   // Say we navigated to that entry.
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 0;
   params.url = url;
   params.transition = PageTransition::LINK;
@@ -1521,7 +1608,7 @@ TEST_F(NavigationControllerTest, SameSubframe) {
 
   // Navigate a subframe that would normally count as in-page.
   const GURL subframe("http://www.google.com/#");
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 0;
   params.url = subframe;
   params.transition = PageTransition::AUTO_SUBFRAME;
@@ -1539,14 +1626,14 @@ TEST_F(NavigationControllerTest, SameSubframe) {
 // Test view source redirection is reflected in title bar.
 TEST_F(NavigationControllerTest, ViewSourceRedirect) {
   const char kUrl[] = "view-source:http://redirect.to/google.com";
-  const char kResult[] = "http://google.com/";
-  const char kExpected[] = "view-source:http://google.com/";
+  const char kResult[] = "http://google.com";
+  const char kExpected[] = "view-source:google.com";
   const GURL url(kUrl);
   const GURL result_url(kResult);
 
   controller().LoadURL(url, GURL(), PageTransition::TYPED);
 
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = 0;
   params.url = result_url;
   params.transition = PageTransition::SERVER_REDIRECT;
@@ -1609,7 +1696,7 @@ TEST_F(NavigationControllerTest, SubframeWhilePending) {
   // Send a subframe update from the first page, as if one had just
   // automatically loaded. Auto subframes don't increment the page ID.
   const GURL url1_sub("http://foo/subframe");
-  ViewHostMsg_FrameNavigate_Params params = {0};
+  ViewHostMsg_FrameNavigate_Params params;
   params.page_id = controller().GetLastCommittedEntry()->page_id();
   params.url = url1_sub;
   params.transition = PageTransition::AUTO_SUBFRAME;
@@ -1627,6 +1714,157 @@ TEST_F(NavigationControllerTest, SubframeWhilePending) {
 
   // The active entry should be unchanged by the subframe load.
   EXPECT_EQ(url2, controller().GetActiveEntry()->url());
+}
+
+// Tests CopyStateFromAndPrune with 2 urls in source, 1 in dest.
+TEST_F(NavigationControllerTest, CopyStateFromAndPrune) {
+  SessionID id(controller().session_id());
+  const GURL url1("http://foo1");
+  const GURL url2("http://foo2");
+  const GURL url3("http://foo3");
+
+  NavigateAndCommit(url1);
+  NavigateAndCommit(url2);
+
+  scoped_ptr<TestTabContents> other_contents(CreateTestTabContents());
+  NavigationController& other_controller = other_contents->controller();
+  other_contents->NavigateAndCommit(url3);
+  other_controller.CopyStateFromAndPrune(&controller());
+
+  // other_controller should now contain the 3 urls: url1, url2 and url3.
+
+  ASSERT_EQ(3, other_controller.entry_count());
+
+  ASSERT_EQ(2, other_controller.GetCurrentEntryIndex());
+
+  EXPECT_EQ(url1, other_controller.GetEntryAtIndex(0)->url());
+  EXPECT_EQ(url2, other_controller.GetEntryAtIndex(1)->url());
+  EXPECT_EQ(url3, other_controller.GetEntryAtIndex(2)->url());
+
+  // The session id of the new tab should be that of the old, and the old should
+  // be set to 0.
+  EXPECT_EQ(id.id(), other_controller.session_id().id());
+  EXPECT_EQ(0, controller().session_id().id());
+}
+
+// Test CopyStateFromAndPrune with 2 urls, the first selected and nothing in
+// the target.
+TEST_F(NavigationControllerTest, CopyStateFromAndPrune2) {
+  SessionID id(controller().session_id());
+  const GURL url1("http://foo1");
+  const GURL url2("http://foo2");
+  const GURL url3("http://foo3");
+
+  NavigateAndCommit(url1);
+  NavigateAndCommit(url2);
+  controller().GoBack();
+
+  scoped_ptr<TestTabContents> other_contents(CreateTestTabContents());
+  NavigationController& other_controller = other_contents->controller();
+  other_controller.CopyStateFromAndPrune(&controller());
+
+  // other_controller should now contain the 1 url: url1.
+
+  ASSERT_EQ(1, other_controller.entry_count());
+
+  ASSERT_EQ(0, other_controller.GetCurrentEntryIndex());
+
+  EXPECT_EQ(url1, other_controller.GetEntryAtIndex(0)->url());
+
+  // The session id of the new tab should be that of the old, and the old should
+  // be set to 0.
+  EXPECT_EQ(id.id(), other_controller.session_id().id());
+  EXPECT_EQ(0, controller().session_id().id());
+}
+
+// Test CopyStateFromAndPrune with 2 urls, the first selected and nothing in
+// the target.
+TEST_F(NavigationControllerTest, CopyStateFromAndPrune3) {
+  SessionID id(controller().session_id());
+  const GURL url1("http://foo1");
+  const GURL url2("http://foo2");
+  const GURL url3("http://foo3");
+
+  NavigateAndCommit(url1);
+  NavigateAndCommit(url2);
+  controller().GoBack();
+
+  scoped_ptr<TestTabContents> other_contents(CreateTestTabContents());
+  NavigationController& other_controller = other_contents->controller();
+  other_controller.LoadURL(url3, GURL(), PageTransition::TYPED);
+  other_controller.CopyStateFromAndPrune(&controller());
+
+  // other_controller should now contain 1 entry for url1, and a pending entry
+  // for url3.
+
+  ASSERT_EQ(1, other_controller.entry_count());
+
+  EXPECT_EQ(0, other_controller.GetCurrentEntryIndex());
+
+  EXPECT_EQ(url1, other_controller.GetEntryAtIndex(0)->url());
+
+  // And there should be a pending entry for url3.
+  ASSERT_TRUE(other_controller.pending_entry());
+
+  EXPECT_EQ(url3, other_controller.pending_entry()->url());
+
+  // The session id of the new tab should be that of the old, and the old should
+  // be set to 0.
+  EXPECT_EQ(id.id(), other_controller.session_id().id());
+  EXPECT_EQ(0, controller().session_id().id());
+}
+
+// Tests that navigations initiated from the page (with the history object)
+// work as expected without navigation entries.
+TEST_F(NavigationControllerTest, HistoryNavigate) {
+  const GURL url1("http://foo1");
+  const GURL url2("http://foo2");
+  const GURL url3("http://foo3");
+
+  NavigateAndCommit(url1);
+  NavigateAndCommit(url2);
+  NavigateAndCommit(url3);
+  controller().GoBack();
+  contents()->CommitPendingNavigation();
+
+  // Casts the TabContents to a RenderViewHostDelegate::BrowserIntegration so we
+  // can call GoToEntryAtOffset which is private.
+  RenderViewHostDelegate::BrowserIntegration* rvh_delegate =
+      static_cast<RenderViewHostDelegate::BrowserIntegration*>(contents());
+
+  // Simulate the page calling history.back(), it should not create a pending
+  // entry.
+  rvh_delegate->GoToEntryAtOffset(-1);
+  EXPECT_EQ(-1, controller().pending_entry_index());
+  // The actual cross-navigation is suspended until the current RVH tells us
+  // it unloaded, simulate that.
+  contents()->ProceedWithCrossSiteNavigation();
+  // Also make sure we told the page to navigate.
+  const IPC::Message* message =
+      process()->sink().GetFirstMessageMatching(ViewMsg_Navigate::ID);
+  ASSERT_TRUE(message != NULL);
+  Tuple1<ViewMsg_Navigate_Params> nav_params;
+  ViewMsg_Navigate::Read(message, &nav_params);
+  EXPECT_EQ(url1, nav_params.a.url);
+  process()->sink().ClearMessages();
+
+  // Now test history.forward()
+  rvh_delegate->GoToEntryAtOffset(1);
+  EXPECT_EQ(-1, controller().pending_entry_index());
+  // The actual cross-navigation is suspended until the current RVH tells us
+  // it unloaded, simulate that.
+  contents()->ProceedWithCrossSiteNavigation();
+  message = process()->sink().GetFirstMessageMatching(ViewMsg_Navigate::ID);
+  ASSERT_TRUE(message != NULL);
+  ViewMsg_Navigate::Read(message, &nav_params);
+  EXPECT_EQ(url3, nav_params.a.url);
+  process()->sink().ClearMessages();
+
+  // Make sure an extravagant history.go() doesn't break.
+  rvh_delegate->GoToEntryAtOffset(120);  // Out of bounds.
+  EXPECT_EQ(-1, controller().pending_entry_index());
+  message = process()->sink().GetFirstMessageMatching(ViewMsg_Navigate::ID);
+  EXPECT_TRUE(message == NULL);
 }
 
 /* TODO(brettw) These test pass on my local machine but fail on the XP buildbot

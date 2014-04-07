@@ -38,8 +38,10 @@
 #include <gdk/gdkkeysyms.h>
 #include "base/at_exit.h"
 #include "base/command_line.h"
+#include "base/file_util.h"
 #include "base/logging.h"
 #include "base/scoped_ptr.h"
+#include "o3d/breakpad/linux/breakpad.h"
 #include "plugin/cross/main.h"
 #include "plugin/cross/out_of_memory.h"
 #include "plugin/cross/whitelist.h"
@@ -61,6 +63,8 @@ base::AtExitManager g_at_exit_manager;
 
 bool g_xembed_support = false;
 
+o3d::Breakpad g_breakpad;
+
 #ifdef O3D_PLUGIN_ENV_VARS_FILE
 static const char *kEnvVarsFilePath = O3D_PLUGIN_ENV_VARS_FILE;
 #endif
@@ -68,6 +72,8 @@ static const char *kEnvVarsFilePath = O3D_PLUGIN_ENV_VARS_FILE;
 static void DrawPlugin(PluginObject *obj) {
   // Limit drawing to no more than once every timer tick.
   if (!obj->draw_) return;
+  // Don't allow re-entrant rendering (can happen in Chrome)
+  if (obj->client()->IsRendering()) return;
   obj->client()->RenderClient(true);
   obj->draw_ = false;
 }
@@ -80,7 +86,7 @@ void LinuxTimer(XtPointer data, XtIntervalId* id) {
   obj->client()->Tick();
   obj->draw_ = true;
   if (obj->renderer()) {
-    if (obj->client()->render_mode() == o3d::Client::RENDERMODE_CONTINUOUS ||
+    if (obj->client()->NeedsContinuousRender() ||
         obj->renderer()->need_to_render()) {
 
       // NOTE: this draws no matter what instead of just invalidating the
@@ -90,7 +96,7 @@ void LinuxTimer(XtPointer data, XtIntervalId* id) {
     }
   }
   obj->xt_interval_ =
-      XtAppAddTimeOut(obj->xt_app_context_, 10, LinuxTimer, obj);
+      XtAppAddTimeOut(obj->xt_app_context_, 8, LinuxTimer, obj);
 }
 
 void LinuxExposeHandler(Widget w,
@@ -603,7 +609,7 @@ static gboolean GtkTimeoutCallback(gpointer user_data) {
   obj->draw_ = true;
   obj->client()->Tick();
   if (obj->renderer()) {
-    if (obj->client()->render_mode() == o3d::Client::RENDERMODE_CONTINUOUS ||
+    if (obj->client()->NeedsContinuousRender() ||
         obj->renderer()->need_to_render()) {
 
       GtkWidget *widget;
@@ -622,8 +628,17 @@ NPError InitializePlugin() {
   if (!o3d::SetupOutOfMemoryHandler())
     return NPERR_MODULE_LOAD_FAILED_ERROR;
 
+  // Setup breakpad
+  g_breakpad.Initialize();
+  g_breakpad.set_version(O3D_PLUGIN_VERSION);
+
   CommandLine::Init(0, NULL);
-  InitLogging("debug.log",
+
+  FilePath log;
+  file_util::GetTempDir(&log);
+  log = log.Append("debug.log");
+
+  InitLogging(log.value().c_str(),
               logging::LOG_TO_BOTH_FILE_AND_SYSTEM_DEBUG_LOG,
               logging::DONT_LOCK_LOG_FILE,
               logging::APPEND_TO_OLD_LOG_FILE);
@@ -681,6 +696,8 @@ NPError EXPORT_SYMBOL OSCALL NP_Shutdown(void) {
   DLOG(INFO) << "NP_Shutdown";
 
   CommandLine::Reset();
+
+  g_breakpad.Shutdown();
 
   return NPERR_NO_ERROR;
 }
@@ -793,7 +810,7 @@ NPError NPP_SetWindow(NPP instance, NPWindow *window) {
       }
       gtk_widget_show(obj->gtk_container_);
       drawable = GDK_WINDOW_XID(obj->gtk_container_->window);
-      obj->timeout_id_ = g_timeout_add(10, GtkTimeoutCallback, obj);
+      obj->timeout_id_ = g_timeout_add(8, GtkTimeoutCallback, obj);
     } else {
       // No XEmbed support, the xwindow is a Xt Widget.
       Widget widget = XtWindowToWidget(display, xwindow);
@@ -813,7 +830,7 @@ NPError NPP_SetWindow(NPP instance, NPWindow *window) {
                         LinuxEnterLeaveHandler, obj);
       obj->xt_app_context_ = XtWidgetToApplicationContext(widget);
       obj->xt_interval_ =
-          XtAppAddTimeOut(obj->xt_app_context_, 10, LinuxTimer, obj);
+          XtAppAddTimeOut(obj->xt_app_context_, 8, LinuxTimer, obj);
     }
 
     // Create and assign the graphics context.
@@ -899,7 +916,8 @@ gboolean PluginObject::OnGtkConfigure(GtkWidget *widget,
   client()->SendResizeEvent(renderer()->width(), renderer()->height(),
                             true);
   fullscreen_ = true;
-  return TRUE;
+  // Return false here so that the default handler in GTK will still be invoked.
+  return FALSE;
 }
 
 gboolean PluginObject::OnGtkDelete(GtkWidget *widget,

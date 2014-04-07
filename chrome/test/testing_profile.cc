@@ -1,22 +1,47 @@
-// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/test/testing_profile.h"
 
 #include "build/build_config.h"
+
+#include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/string_util.h"
-#include "chrome/common/url_constants.h"
+#include "base/file_util.h"
+#include "base/message_loop_proxy.h"
+#include "base/path_service.h"
+#include "base/string_number_conversions.h"
+#include "chrome/browser/autocomplete/autocomplete_classifier.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
+#include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/dom_ui/ntp_resource_cache.h"
+#include "chrome/browser/extensions/extensions_service.h"
+#include "chrome/browser/favicon_service.h"
+#include "chrome/browser/find_bar_state.h"
+#include "chrome/browser/geolocation/geolocation_content_settings_map.h"
+#include "chrome/browser/geolocation/geolocation_permission_context.h"
+#include "chrome/browser/history/history.h"
 #include "chrome/browser/history/history_backend.h"
-#include "chrome/browser/net/url_request_context_getter.h"
+#include "chrome/browser/history/top_sites.h"
+#include "chrome/browser/host_content_settings_map.h"
+#include "chrome/browser/in_process_webkit/webkit_context.h"
+#include "chrome/browser/net/gaia/token_service.h"
+#include "chrome/browser/notifications/desktop_notification_service.h"
+#include "chrome/browser/prefs/browser_prefs.h"
+#include "chrome/browser/search_engines/template_url_fetcher.h"
+#include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sync/profile_sync_service_mock.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/net/url_request_context_getter.h"
 #include "chrome/common/notification_service.h"
+#include "chrome/common/url_constants.h"
+#include "chrome/test/testing_pref_service.h"
+#include "net/base/cookie_monster.h"
 #include "net/url_request/url_request_context.h"
+#include "net/url_request/url_request_unittest.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "webkit/database/database_tracker.h"
 
@@ -25,6 +50,7 @@
 #endif
 
 using base::Time;
+using testing::NiceMock;
 using testing::Return;
 
 namespace {
@@ -84,27 +110,20 @@ class BookmarkLoadObserver : public BookmarkModelObserver {
   DISALLOW_COPY_AND_ASSIGN(BookmarkLoadObserver);
 };
 
-// This context is used to assist testing the CookieMonster by providing a
-// valid CookieStore. This can probably be expanded to test other aspects of
-// the context as well.
-class TestURLRequestContext : public URLRequestContext {
- public:
-  TestURLRequestContext() {
-    cookie_store_ = new net::CookieMonster(NULL, NULL);
-  }
-};
-
 // Used to return a dummy context (normally the context is on the IO thread).
 // The one here can be run on the main test thread. Note that this can lead to
-// a leak if your test does not have a ChromeThread::IO in it because
+// a leak if your test does not have a BrowserThread::IO in it because
 // URLRequestContextGetter is defined as a ReferenceCounted object with a
-// DeleteOnIOThread trait.
+// special trait that deletes it on the IO thread.
 class TestURLRequestContextGetter : public URLRequestContextGetter {
  public:
   virtual URLRequestContext* GetURLRequestContext() {
     if (!context_)
       context_ = new TestURLRequestContext();
     return context_.get();
+  }
+  virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy() {
+    return BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO);
   }
 
  private:
@@ -128,6 +147,9 @@ class TestExtensionURLRequestContextGetter : public URLRequestContextGetter {
       context_ = new TestExtensionURLRequestContext();
     return context_.get();
   }
+  virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy() {
+    return BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO);
+  }
 
  private:
   scoped_refptr<URLRequestContext> context_;
@@ -137,27 +159,34 @@ class TestExtensionURLRequestContextGetter : public URLRequestContextGetter {
 
 TestingProfile::TestingProfile()
     : start_time_(Time::Now()),
+      testing_prefs_(NULL),
       created_theme_provider_(false),
       has_history_service_(false),
       off_the_record_(false),
       last_session_exited_cleanly_(true) {
-  PathService::Get(base::DIR_TEMP, &path_);
-  path_ = path_.Append(FILE_PATH_LITERAL("TestingProfilePath"));
-  file_util::Delete(path_, true);
-  file_util::CreateDirectory(path_);
-}
+  if (!temp_dir_.CreateUniqueTempDir()) {
+    LOG(ERROR) << "Failed to create unique temporary directory.";
 
-TestingProfile::TestingProfile(int count)
-    : start_time_(Time::Now()),
-      created_theme_provider_(false),
-      has_history_service_(false),
-      off_the_record_(false),
-      last_session_exited_cleanly_(true) {
-  PathService::Get(base::DIR_TEMP, &path_);
-  path_ = path_.Append(FILE_PATH_LITERAL("TestingProfilePath"));
-  path_ = path_.AppendASCII(IntToString(count));
-  file_util::Delete(path_, true);
-  file_util::CreateDirectory(path_);
+    // Fallback logic in case we fail to create unique temporary directory.
+    FilePath system_tmp_dir;
+    bool success = PathService::Get(base::DIR_TEMP, &system_tmp_dir);
+
+    // We're severly screwed if we can't get the system temporary
+    // directory. Die now to avoid writing to the filesystem root
+    // or other bad places.
+    CHECK(success);
+
+    FilePath fallback_dir(system_tmp_dir.AppendASCII("TestingProfilePath"));
+    file_util::Delete(fallback_dir, true);
+    file_util::CreateDirectory(fallback_dir);
+    if (!temp_dir_.Set(fallback_dir)) {
+      // That shouldn't happen, but if it does, try to recover.
+      LOG(ERROR) << "Failed to use a fallback temporary directory.";
+
+      // We're screwed if this fails, see CHECK above.
+      CHECK(temp_dir_.Set(system_tmp_dir));
+    }
+  }
 }
 
 TestingProfile::~TestingProfile() {
@@ -169,7 +198,13 @@ TestingProfile::~TestingProfile() {
   // FaviconService depends on HistoryServce so destroying it later.
   DestroyFaviconService();
   DestroyWebDataService();
-  file_util::Delete(path_, true);
+  if (top_sites_.get())
+    top_sites_->ClearProfile();
+  history::TopSites::DeleteTopSites(top_sites_);
+  if (extensions_service_.get()) {
+    extensions_service_->DestroyingProfile();
+    extensions_service_ = NULL;
+  }
 }
 
 void TestingProfile::CreateFaviconService() {
@@ -238,6 +273,10 @@ void TestingProfile::CreateBookmarkModel(bool delete_file) {
   bookmark_bar_model_->Load();
 }
 
+void TestingProfile::CreateAutocompleteClassifier() {
+  autocomplete_classifier_.reset(new AutocompleteClassifier(this));
+}
+
 void TestingProfile::CreateWebDataService(bool delete_file) {
   if (web_data_service_.get())
     web_data_service_->Shutdown();
@@ -264,8 +303,16 @@ void TestingProfile::BlockUntilBookmarkModelLoaded() {
   DCHECK(bookmark_bar_model_->IsLoaded());
 }
 
+void TestingProfile::CreateTemplateURLFetcher() {
+  template_url_fetcher_.reset(new TemplateURLFetcher(this));
+}
+
 void TestingProfile::CreateTemplateURLModel() {
-  template_url_model_.reset(new TemplateURLModel(this));
+  SetTemplateURLModel(new TemplateURLModel(this));
+}
+
+void TestingProfile::SetTemplateURLModel(TemplateURLModel* model) {
+  template_url_model_.reset(model);
 }
 
 void TestingProfile::UseThemeProvider(BrowserThemeProvider* theme_provider) {
@@ -274,10 +321,42 @@ void TestingProfile::UseThemeProvider(BrowserThemeProvider* theme_provider) {
   theme_provider_.reset(theme_provider);
 }
 
+scoped_refptr<ExtensionsService> TestingProfile::CreateExtensionsService(
+    const CommandLine* command_line,
+    const FilePath& install_directory) {
+  extensions_service_ = new ExtensionsService(this,
+                                              command_line,
+                                              install_directory,
+                                              false);
+  return extensions_service_;
+}
+
+FilePath TestingProfile::GetPath() {
+  DCHECK(temp_dir_.IsValid());  // TODO(phajdan.jr): do it better.
+  return temp_dir_.path();
+}
+
+TestingPrefService* TestingProfile::GetTestingPrefService() {
+  if (!prefs_.get())
+    CreateTestingPrefService();
+  DCHECK(testing_prefs_);
+  return testing_prefs_;
+}
+
 webkit_database::DatabaseTracker* TestingProfile::GetDatabaseTracker() {
   if (!db_tracker_)
-    db_tracker_ = new webkit_database::DatabaseTracker(GetPath());
+    db_tracker_ = new webkit_database::DatabaseTracker(GetPath(), false);
   return db_tracker_;
+}
+
+ExtensionsService* TestingProfile::GetExtensionsService() {
+  return extensions_service_.get();
+}
+
+net::CookieMonster* TestingProfile::GetCookieMonster() {
+  if (!GetRequestContext())
+    return NULL;
+  return GetRequestContext()->GetCookieStore()->GetCookieMonster();
 }
 
 void TestingProfile::InitThemes() {
@@ -292,6 +371,35 @@ void TestingProfile::InitThemes() {
   }
 }
 
+void TestingProfile::SetPrefService(PrefService* prefs) {
+  DCHECK(!prefs_.get());
+  prefs_.reset(prefs);
+}
+
+void TestingProfile::CreateTestingPrefService() {
+  DCHECK(!prefs_.get());
+  testing_prefs_ = new TestingPrefService();
+  prefs_.reset(testing_prefs_);
+  Profile::RegisterUserPrefs(prefs_.get());
+  browser::RegisterAllPrefs(prefs_.get(), prefs_.get());
+}
+
+PrefService* TestingProfile::GetPrefs() {
+  if (!prefs_.get()) {
+    CreateTestingPrefService();
+  }
+  return prefs_.get();
+}
+
+history::TopSites* TestingProfile::GetTopSites() {
+  if (!top_sites_.get()) {
+    top_sites_ = new history::TopSites(this);
+    FilePath file_name = temp_dir_.path().AppendASCII("TopSites.db");
+    top_sites_->Init(file_name);
+  }
+  return top_sites_;
+}
+
 URLRequestContextGetter* TestingProfile::GetRequestContext() {
   return request_context_.get();
 }
@@ -301,20 +409,69 @@ void TestingProfile::CreateRequestContext() {
     request_context_ = new TestURLRequestContextGetter();
 }
 
+void TestingProfile::ResetRequestContext() {
+  request_context_ = NULL;
+}
+
 URLRequestContextGetter* TestingProfile::GetRequestContextForExtensions() {
   if (!extensions_request_context_)
       extensions_request_context_ = new TestExtensionURLRequestContextGetter();
   return extensions_request_context_.get();
 }
 
+FindBarState* TestingProfile::GetFindBarState() {
+  if (!find_bar_state_.get())
+    find_bar_state_.reset(new FindBarState());
+  return find_bar_state_.get();
+}
+
+HostContentSettingsMap* TestingProfile::GetHostContentSettingsMap() {
+  if (!host_content_settings_map_.get())
+    host_content_settings_map_ = new HostContentSettingsMap(this);
+  return host_content_settings_map_.get();
+}
+
+GeolocationContentSettingsMap*
+TestingProfile::GetGeolocationContentSettingsMap() {
+  if (!geolocation_content_settings_map_.get()) {
+    geolocation_content_settings_map_ =
+        new GeolocationContentSettingsMap(this);
+  }
+  return geolocation_content_settings_map_.get();
+}
+
+GeolocationPermissionContext*
+TestingProfile::GetGeolocationPermissionContext() {
+  if (!geolocation_permission_context_.get()) {
+    geolocation_permission_context_ =
+        new GeolocationPermissionContext(this);
+  }
+  return geolocation_permission_context_.get();
+}
+
 void TestingProfile::set_session_service(SessionService* session_service) {
   session_service_ = session_service;
+}
+
+WebKitContext* TestingProfile::GetWebKitContext() {
+  if (webkit_context_ == NULL)
+    webkit_context_ = new WebKitContext(this);
+  return webkit_context_;
 }
 
 NTPResourceCache* TestingProfile::GetNTPResourceCache() {
   if (!ntp_resource_cache_.get())
     ntp_resource_cache_.reset(new NTPResourceCache(this));
   return ntp_resource_cache_.get();
+}
+
+DesktopNotificationService* TestingProfile::GetDesktopNotificationService() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  if (!desktop_notification_service_.get()) {
+    desktop_notification_service_.reset(new DesktopNotificationService(
+        this, NULL));
+  }
+  return desktop_notification_service_.get();
 }
 
 void TestingProfile::BlockUntilHistoryProcessesPendingRequests() {
@@ -326,11 +483,25 @@ void TestingProfile::BlockUntilHistoryProcessesPendingRequests() {
   MessageLoop::current()->Run();
 }
 
+TokenService* TestingProfile::GetTokenService() {
+  if (!token_service_.get()) {
+    token_service_.reset(new TokenService());
+  }
+  return token_service_.get();
+}
+
 ProfileSyncService* TestingProfile::GetProfileSyncService() {
+  return GetProfileSyncService("");
+}
+
+ProfileSyncService* TestingProfile::GetProfileSyncService(
+    const std::string& cros_user) {
   if (!profile_sync_service_.get()) {
-    ProfileSyncServiceMock* pss = new ProfileSyncServiceMock();
-    ON_CALL(*pss, HasSyncSetupCompleted()).WillByDefault(Return(false));
-    profile_sync_service_.reset(pss);
+    // Use a NiceMock here since we are really using the mock as a
+    // fake.  Test cases that want to set expectations on a
+    // ProfileSyncService should use the ProfileMock and have this
+    // method return their own mock instance.
+    profile_sync_service_.reset(new NiceMock<ProfileSyncServiceMock>());
   }
   return profile_sync_service_.get();
 }

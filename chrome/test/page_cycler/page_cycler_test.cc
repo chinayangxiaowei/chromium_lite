@@ -4,12 +4,13 @@
 
 #include "base/basictypes.h"
 #include "base/command_line.h"
-#include "base/eintr_wrapper.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
+#include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
@@ -17,13 +18,12 @@
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/automation/window_proxy.h"
 #include "chrome/test/chrome_process_util.h"
-#include "chrome/test/ui/ui_test.h"
+#include "chrome/test/test_switches.h"
+#include "chrome/test/ui/ui_perf_test.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 
 #if defined(OS_MACOSX)
-#include <errno.h>
-#include <fcntl.h>
 #include <string.h>
 #include <sys/resource.h>
 #endif
@@ -76,14 +76,16 @@ void SetFileDescriptorLimit(rlim_t max_descriptors) {
     PLOG(ERROR) << "Failed to get file descriptor limit";
   }
 }
+#endif  // OS_MACOSX
 
-void PopulateUBC(const FilePath &test_dir) {
-  // This will recursively walk the directory given and read all the files it
-  // finds.  This is done so the Mac UBC is likely to have as much loaded as
-  // possible.  Without this, the tests of this build gets one set of timings
-  // and then the reference build test, gets slightly faster ones (even if the
-  // reference build is the same binary).  The hope is by forcing all the
-  // possible data into the UBC we equalize the tests for comparing timing data.
+void PopulateBufferCache(const FilePath& test_dir) {
+  // This will recursively walk the directory given and read all the
+  // files it finds.  This is done so the system file cache is likely
+  // to have as much loaded as possible.  Without this, the tests of
+  // this build gets one set of timings and then the reference build
+  // test, gets slightly faster ones (even if the reference build is
+  // the same binary).  The hope is by forcing all the possible data
+  // into the cache we equalize the tests for comparing timing data.
 
   // We don't want to walk into .svn dirs, so we have to do the tree walk
   // ourselves.
@@ -104,7 +106,6 @@ void PopulateUBC(const FilePath &test_dir) {
     }
   }
 
-  char buf[1024];
   unsigned int loaded = 0;
 
   // We seem to have some files in the data dirs that are just there for
@@ -141,23 +142,19 @@ void PopulateUBC(const FilePath &test_dir) {
       if (should_skip)
         continue;
 
-      // Read the file to get it into the UBC
-      int fd = open(path.value().c_str(), O_RDONLY);
-      if (fd >= 0) {
+      // Read the file fully to get it into the cache.
+      // We don't care what the contents are.
+      if (file_util::ReadFileToString(path, NULL))
         ++loaded;
-        while (HANDLE_EINTR(read(fd, buf, sizeof(buf))) > 0) {
-        }
-        HANDLE_EINTR(close(fd));
-      }
     }
   }
-  LOG(INFO) << "UBC should be loaded with " << loaded << " files.";
+  LOG(INFO) << "Buffer cache should be primed with " << loaded << " files.";
 }
-#endif  // defined(OS_MACOSX)
 
-class PageCyclerTest : public UITest {
+class PageCyclerTest : public UIPerfTest {
  protected:
   bool print_times_only_;
+  int num_test_iterations_;
 #if defined(OS_MACOSX)
   rlim_t fd_limit_;
 #endif
@@ -166,10 +163,18 @@ class PageCyclerTest : public UITest {
       : print_times_only_(false) {
     show_window_ = true;
 
+    const CommandLine& parsed_command_line = *CommandLine::ForCurrentProcess();
+    num_test_iterations_ = TEST_ITERATIONS;
+
+    if (parsed_command_line.HasSwitch(switches::kPageCyclerIterations)) {
+      std::string str = parsed_command_line.GetSwitchValueASCII(
+          switches::kPageCyclerIterations);
+      base::StringToInt(str, &num_test_iterations_);
+    }
 
     // Expose garbage collection for the page cycler tests.
-    launch_arguments_.AppendSwitchWithValue(switches::kJavaScriptFlags,
-                                            L"--expose_gc");
+    launch_arguments_.AppendSwitchASCII(switches::kJavaScriptFlags,
+                                        "--expose_gc");
 #if defined(OS_MACOSX)
     static rlim_t initial_fd_limit = GetFileDescriptorLimit();
     fd_limit_ = initial_fd_limit;
@@ -198,7 +203,7 @@ class PageCyclerTest : public UITest {
   }
 
   virtual int GetTestIterations() {
-    return TEST_ITERATIONS;
+    return num_test_iterations_;
   }
 
   // For HTTP tests, the name must be safe for use in a URL without escaping.
@@ -208,9 +213,7 @@ class PageCyclerTest : public UITest {
     ASSERT_TRUE(file_util::DirectoryExists(test_path))
         << "Missing test directory " << test_path.value();
 
-#if defined(OS_MACOSX)
-    PopulateUBC(test_path);
-#endif
+    PopulateBufferCache(test_path);
 
     GURL test_url;
     if (use_http) {
@@ -223,7 +226,7 @@ class PageCyclerTest : public UITest {
     // run N iterations
     GURL::Replacements replacements;
     const std::string query_string =
-        "iterations=" + IntToString(GetTestIterations()) + "&auto=1";
+        "iterations=" + base::IntToString(GetTestIterations()) + "&auto=1";
     replacements.SetQuery(
         query_string.c_str(),
         url_parse::Component(0, query_string.length()));
@@ -268,7 +271,9 @@ class PageCyclerTest : public UITest {
     }
 
     std::string trace_name = "t" + std::string(suffix);
-    wprintf(L"\nPages: [%ls]\n", pages.c_str());
+
+    printf("Pages: [%s]\n", base::SysWideToNativeMB(pages).c_str());
+
     PrintResultList(graph, "", trace_name, timings, "ms",
                     true /* important */);
   }
@@ -362,7 +367,7 @@ static bool HasDatabaseErrors(const std::string timings) {
     if (new_pos == std::string::npos)
       new_pos = timings.length();
     time_str = timings.substr(pos, new_pos - pos);
-    if (!StringToInt(time_str, &time)) {
+    if (!base::StringToInt(time_str, &time)) {
       LOG(ERROR) << "Invalid time reported: " << time_str;
       return true;
     }
@@ -472,6 +477,11 @@ PAGE_CYCLER_FILE_TESTS("dom", DomFile);
 PAGE_CYCLER_FILE_TESTS("dhtml", DhtmlFile);
 PAGE_CYCLER_FILE_TESTS("morejs", MorejsFile);
 PAGE_CYCLER_EXTENSIONS_FILE_TESTS("morejs", MorejsFile);
+// added more tests here:
+PAGE_CYCLER_FILE_TESTS("alexa_us", Alexa_usFile);
+PAGE_CYCLER_FILE_TESTS("moz2", Moz2File);
+PAGE_CYCLER_FILE_TESTS("morejsnp", MorejsnpFile);
+PAGE_CYCLER_FILE_TESTS("bloat", BloatFile);
 
 // http (localhost) tests
 PAGE_CYCLER_HTTP_TESTS("moz", MozHttp);
@@ -481,6 +491,8 @@ PAGE_CYCLER_HTTP_TESTS("dom", DomHttp);
 PAGE_CYCLER_HTTP_TESTS("bloat", BloatHttp);
 
 // HTML5 database tests
+// These tests are _really_ slow on XP/Vista.
+#if !defined(OS_WIN)
 PAGE_CYCLER_DATABASE_TESTS("select-transactions",
                            SelectTransactions);
 PAGE_CYCLER_DATABASE_TESTS("select-readtransactions",
@@ -495,5 +507,6 @@ PAGE_CYCLER_DATABASE_TESTS("delete-transactions",
                            DeleteTransactions);
 PAGE_CYCLER_DATABASE_TESTS("pseudo-random-transactions",
                            PseudoRandomTransactions);
+#endif
 
 }  // namespace

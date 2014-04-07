@@ -42,12 +42,16 @@
 
 #include <keyhi.h>
 #include <prprf.h>
+#include <unicode/uidna.h>
 
 #include "app/l10n_util.h"
 #include "base/i18n/number_formatting.h"
+#include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/common/net/x509_certificate_model.h"
 #include "grit/generated_resources.h"
 #include "net/base/net_util.h"
+#include "net/third_party/mozilla_security_manager/nsNSSCertTrust.h"
 
 namespace {
 
@@ -330,6 +334,12 @@ std::string GetOIDText(SECItem* oid) {
     case SEC_OID_OCSP_RESPONDER:
       string_id = IDS_CERT_EKU_OCSP_SIGNING;
       break;
+    case SEC_OID_PKIX_CPS_POINTER_QUALIFIER:
+      string_id = IDS_CERT_PKIX_CPS_POINTER_QUALIFIER;
+      break;
+    case SEC_OID_PKIX_USER_NOTICE_QUALIFIER:
+      string_id = IDS_CERT_PKIX_USER_NOTICE_QUALIFIER;
+      break;
 
     // There are a billionty other OIDs we could add here.  I tried to get the
     // important ones...
@@ -382,7 +392,6 @@ std::string GetOIDText(SECItem* oid) {
   return DumpOidString(oid);
 }
 
-
 // Get a display string from a Relative Distinguished Name.
 std::string ProcessRDN(CERTRDN* rdn) {
   std::string rv;
@@ -396,6 +405,8 @@ std::string ProcessRDN(CERTRDN* rdn) {
       rv += " = ";
       std::string value(reinterpret_cast<char*>(decode_item->data),
                         decode_item->len);
+      if (SECOID_FindOIDTag(&avas[i]->type) == SEC_OID_AVA_COMMON_NAME)
+        value = x509_certificate_model::ProcessIDN(value);
       rv += value;
       SECITEM_FreeItem(decode_item, PR_TRUE);
     }
@@ -500,6 +511,7 @@ std::string ProcessGeneralName(PRArenaPool* arena,
       key = l10n_util::GetStringUTF8(IDS_CERT_GENERAL_NAME_DNS_NAME);
       value = std::string(reinterpret_cast<char*>(current->name.other.data),
                           current->name.other.len);
+      value = x509_certificate_model::ProcessIDN(value);
       break;
     case certX400Address:
       key = l10n_util::GetStringUTF8(IDS_CERT_GENERAL_NAME_X400_ADDRESS);
@@ -567,7 +579,7 @@ std::string ProcessGeneralNames(PRArenaPool* arena,
     std::string text = ProcessGeneralName(arena, current);
     if (text.empty())
       break;
-    rv += text + '\n';
+    rv += text;
     current = CERT_GetNextGeneralName(current);
   } while (current != name_list);
   return rv;
@@ -636,6 +648,119 @@ std::string ProcessAuthKeyId(SECItem* extension_data) {
   return rv;
 }
 
+std::string ProcessUserNotice(SECItem* der_notice) {
+  CERTUserNotice* notice = CERT_DecodeUserNotice(der_notice);
+  if (!notice)
+    return ProcessRawBytes(der_notice);
+
+  std::string rv;
+  if (notice->noticeReference.organization.len != 0) {
+    switch (notice->noticeReference.organization.type) {
+      case siAsciiString:
+      case siVisibleString:
+      case siUTF8String:
+        rv += std::string(
+            reinterpret_cast<char*>(notice->noticeReference.organization.data),
+            notice->noticeReference.organization.len);
+        break;
+      case siBMPString:
+        rv += ProcessBMPString(&notice->noticeReference.organization);
+        break;
+      default:
+        break;
+    }
+    rv += " - ";
+    SECItem** itemList = notice->noticeReference.noticeNumbers;
+    while (*itemList) {
+      unsigned long number;
+      if (SEC_ASN1DecodeInteger(*itemList, &number) == SECSuccess) {
+        if (itemList != notice->noticeReference.noticeNumbers)
+          rv += ", ";
+        rv += '#';
+        rv += UTF16ToUTF8(base::UintToString16(number));
+      }
+      itemList++;
+    }
+  }
+  if (notice->displayText.len != 0) {
+    rv += "\n    ";
+    switch (notice->displayText.type) {
+      case siAsciiString:
+      case siVisibleString:
+      case siUTF8String:
+        rv += std::string(reinterpret_cast<char*>(notice->displayText.data),
+                          notice->displayText.len);
+        break;
+      case siBMPString:
+        rv += ProcessBMPString(&notice->displayText);
+        break;
+      default:
+        break;
+    }
+  }
+
+  CERT_DestroyUserNotice(notice);
+  return rv;
+}
+
+std::string ProcessCertificatePolicies(SECItem* extension_data) {
+  std::string rv;
+
+  CERTCertificatePolicies* policies = CERT_DecodeCertificatePoliciesExtension(
+      extension_data);
+  if (!policies)
+    return l10n_util::GetStringUTF8(IDS_CERT_EXTENSION_DUMP_ERROR);
+
+  CERTPolicyInfo** policyInfos = policies->policyInfos;
+  while (*policyInfos) {
+    CERTPolicyInfo* policyInfo = *policyInfos++;
+    std::string key = GetOIDText(&policyInfo->policyID);
+
+    // If we have policy qualifiers, display the oid text
+    // with a ':', otherwise just put the oid text and a newline.
+    // TODO(mattm): Add extra note if this is the ev oid?  (It's a bit
+    // complicated, since we don't want to do the EV check synchronously.)
+    if (policyInfo->policyQualifiers) {
+      rv += l10n_util::GetStringFUTF8(IDS_CERT_MULTILINE_INFO_START_FORMAT,
+                                      UTF8ToUTF16(key));
+    } else {
+      rv += key;
+    }
+    rv += '\n';
+
+    if (policyInfo->policyQualifiers) {
+      // Add all qualifiers on separate lines, indented.
+      CERTPolicyQualifier** policyQualifiers = policyInfo->policyQualifiers;
+      while (*policyQualifiers != NULL) {
+        rv += "  ";
+
+        CERTPolicyQualifier* policyQualifier = *policyQualifiers++;
+        rv += l10n_util::GetStringFUTF8(
+            IDS_CERT_MULTILINE_INFO_START_FORMAT,
+            UTF8ToUTF16(GetOIDText(&policyQualifier->qualifierID)));
+        switch(policyQualifier->oid) {
+          case SEC_OID_PKIX_CPS_POINTER_QUALIFIER:
+            rv += "    ";
+            /* The CPS pointer ought to be the cPSuri alternative
+               of the Qualifier choice. */
+            rv += ProcessIA5String(&policyQualifier->qualifierValue);
+            break;
+          case SEC_OID_PKIX_USER_NOTICE_QUALIFIER:
+            rv += ProcessUserNotice(&policyQualifier->qualifierValue);
+            break;
+          default:
+            rv += ProcessRawBytes(&policyQualifier->qualifierValue);
+            break;
+        }
+        rv += '\n';
+      }
+    }
+  }
+
+  CERT_DestroyCertificatePoliciesExtension(policies);
+  return rv;
+}
+
 std::string ProcessCrlDistPoints(SECItem* extension_data) {
   std::string rv;
   CERTCrlDistributionPoints* crldp;
@@ -684,6 +809,7 @@ std::string ProcessCrlDistPoints(SECItem* extension_data) {
           if (comma)
             rv += ',';
           rv += l10n_util::GetStringUTF8(reason_string_map[i].string_id);
+          comma = true;
         }
       }
       rv += '\n';
@@ -880,9 +1006,8 @@ std::string ProcessExtensionData(SECOidTag oid_tag, SECItem* extension_data) {
       return ProcessSubjectKeyId(extension_data);
     case SEC_OID_X509_AUTH_KEY_ID:
       return ProcessAuthKeyId(extension_data);
-    // TODO(mattm):
-    // case SEC_OID_X509_CERTIFICATE_POLICIES:
-    //   return ProcessCertificatePolicies(extension_data, ev_oid_tag);
+    case SEC_OID_X509_CERTIFICATE_POLICIES:
+      return ProcessCertificatePolicies(extension_data);
     case SEC_OID_X509_CRL_DIST_POINTS:
       return ProcessCrlDistPoints(extension_data);
     case SEC_OID_X509_AUTH_INFO_ACCESS:
@@ -913,9 +1038,9 @@ std::string ProcessSubjectPublicKeyInfo(CERTSubjectPublicKeyInfo* spki) {
       case rsaKey: {
         rv = l10n_util::GetStringFUTF8(
             IDS_CERT_RSA_PUBLIC_KEY_DUMP_FORMAT,
-            UintToString16(key->u.rsa.modulus.len * 8),
+            base::UintToString16(key->u.rsa.modulus.len * 8),
             UTF8ToUTF16(ProcessRawBytes(&key->u.rsa.modulus)),
-            UintToString16(key->u.rsa.publicExponent.len * 8),
+            base::UintToString16(key->u.rsa.publicExponent.len * 8),
             UTF8ToUTF16(ProcessRawBytes(&key->u.rsa.publicExponent)));
         break;
       }
@@ -926,6 +1051,23 @@ std::string ProcessSubjectPublicKeyInfo(CERTSubjectPublicKeyInfo* spki) {
     SECKEY_DestroyPublicKey(key);
   }
   return rv;
+}
+
+net::CertType GetCertType(CERTCertificate *cert) {
+  nsNSSCertTrust trust(cert->trust);
+  if (cert->nickname && trust.HasAnyUser())
+    return net::USER_CERT;
+  if (trust.HasAnyCA())
+    return net::CA_CERT;
+  if (trust.HasPeer(PR_TRUE, PR_FALSE, PR_FALSE))
+    return net::SERVER_CERT;
+  if (trust.HasPeer(PR_FALSE, PR_TRUE, PR_FALSE) && cert->emailAddr)
+    return net::EMAIL_CERT;
+  if (CERT_IsCACert(cert, NULL))
+    return net::CA_CERT;
+  if (cert->emailAddr)
+    return net::EMAIL_CERT;
+  return net::UNKNOWN_CERT;
 }
 
 }  // namespace mozilla_security_manager

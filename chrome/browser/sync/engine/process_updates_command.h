@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_ENGINE_PROCESS_UPDATES_COMMAND_H_
 #define CHROME_BROWSER_SYNC_ENGINE_PROCESS_UPDATES_COMMAND_H_
+#pragma once
 
 #include "chrome/browser/sync/engine/model_changing_syncer_command.h"
 #include "chrome/browser/sync/engine/syncer_types.h"
@@ -38,7 +39,7 @@ class ProcessUpdatesCommand : public ModelChangingSyncerCommand {
  private:
   ServerUpdateProcessingResult ProcessUpdate(
       const syncable::ScopedDirLookup& dir,
-      const sync_pb::SyncEntity& pb_entry);
+      const sync_pb::SyncEntity& proto_update);
   DISALLOW_COPY_AND_ASSIGN(ProcessUpdatesCommand);
 };
 

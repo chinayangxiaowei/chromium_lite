@@ -10,10 +10,10 @@
 
 #include "base/compiler_specific.h"
 #include "base/basictypes.h"
+#include "base/gtest_prod_util.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "net/base/completion_callback.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 #include "webkit/appcache/appcache_working_set.h"
 
 class GURL;
@@ -48,7 +48,8 @@ class AppCacheStorage {
 
     // If successfully stored 'success' will be true.
     virtual void OnGroupAndNewestCacheStored(
-        AppCacheGroup* group, AppCache* newest_cache, bool success) {}
+        AppCacheGroup* group, AppCache* newest_cache, bool success,
+        bool would_exceed_quota) {}
 
     // If the operation fails, success will be false.
     virtual void OnGroupMadeObsolete(AppCacheGroup* group, bool success) {}
@@ -166,6 +167,11 @@ class AppCacheStorage {
 
   virtual void PurgeMemory() = 0;
 
+  // Maintain a collection of quota overrides in memory.
+  void SetOriginQuotaInMemory(const GURL& origin, int64 quota);
+  void ResetOriginQuotaInMemory(const GURL& origin);
+  int64 GetOriginQuotaInMemory(const GURL& origin);
+
   // Generates unique storage ids for different object types.
   int64 NewCacheId() {
     return ++last_cache_id_;
@@ -200,11 +206,7 @@ class AppCacheStorage {
     Delegate* delegate;
     AppCacheStorage* storage;
 
-    DelegateReference(Delegate* delegate, AppCacheStorage* storage)
-        : delegate(delegate), storage(storage) {
-      storage->delegate_references_.insert(
-        DelegateReferenceMap::value_type(delegate, this));
-    }
+    DelegateReference(Delegate* delegate, AppCacheStorage* storage);
 
     void CancelReference() {
       storage->delegate_references_.erase(delegate);
@@ -215,10 +217,7 @@ class AppCacheStorage {
    private:
     friend class base::RefCounted<DelegateReference>;
 
-    ~DelegateReference() {
-      if (delegate)
-        storage->delegate_references_.erase(delegate);
-    }
+    virtual ~DelegateReference();
   };
   typedef std::map<Delegate*, DelegateReference*> DelegateReferenceMap;
   typedef std::vector<scoped_refptr<DelegateReference> >
@@ -230,6 +229,7 @@ class AppCacheStorage {
    public:
     ResponseInfoLoadTask(const GURL& manifest_url, int64 response_id,
                          AppCacheStorage* storage);
+    ~ResponseInfoLoadTask();
 
     int64 response_id() const { return response_id_; }
     const GURL& manifest_url() const { return manifest_url_; }
@@ -283,6 +283,11 @@ class AppCacheStorage {
     return ++last_response_id_;
   }
 
+  // Store quotas for extensions in memory, in order to prevent writing a row
+  // to quota_table_ every time an extention is loaded.
+  typedef std::map<GURL, int64> QuotaMap;
+  QuotaMap in_memory_quotas_;
+
   // The last storage id used for different object types.
   int64 last_cache_id_;
   int64 last_group_id_;
@@ -296,7 +301,8 @@ class AppCacheStorage {
   // The set of last ids must be retrieved from storage prior to being used.
   static const int64 kUnitializedId;
 
-  FRIEND_TEST(AppCacheStorageTest, DelegateReferences);
+  FRIEND_TEST_ALL_PREFIXES(AppCacheStorageTest, DelegateReferences);
+
   DISALLOW_COPY_AND_ASSIGN(AppCacheStorage);
 };
 

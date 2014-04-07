@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,14 @@
 
 #include "app/l10n_util_mac.h"
 #include "app/resource_bundle.h"
+#include "base/logging.h"
 #import "base/mac_util.h"
+#include "base/string16.h"
 #include "base/sys_string_conversions.h"
-#include "chrome/browser/search_engines/template_url_model.h"
+#include "chrome/browser/search_engines/template_url.h"
 #include "grit/app_resources.h"
 #include "grit/generated_resources.h"
+#include "grit/theme_resources.h"
 #include "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 
 namespace {
@@ -118,9 +121,9 @@ void ShiftOriginY(NSView* view, CGFloat amount) {
 
 - (IBAction)save:(id)sender {
   DCHECK([self validateFields]);
-  std::wstring title = base::SysNSStringToWide([nameField_ stringValue]);
-  std::wstring keyword = base::SysNSStringToWide([keywordField_ stringValue]);
-  std::wstring url = base::SysNSStringToWide([urlField_ stringValue]);
+  string16 title = base::SysNSStringToUTF16([nameField_ stringValue]);
+  string16 keyword = base::SysNSStringToUTF16([keywordField_ stringValue]);
+  std::string url = base::SysNSStringToUTF8([urlField_ stringValue]);
   controller_->AcceptAddOrEdit(title, keyword, url);
   [self doClose];
 }
@@ -155,21 +158,21 @@ void ShiftOriginY(NSView* view, CGFloat amount) {
 // This sets the image state for all the controls and enables or disables the
 // done button. Returns YES if all the fields are valid.
 - (BOOL)validateFields {
-  std::wstring title = base::SysNSStringToWide([nameField_ stringValue]);
+  string16 title = base::SysNSStringToUTF16([nameField_ stringValue]);
   BOOL titleValid = controller_->IsTitleValid(title);
   [self setIsValid:titleValid
            toolTip:IDS_SEARCH_ENGINES_INVALID_TITLE_TT
       forImageView:nameImage_
          textField:nameField_];
 
-  std::wstring keyword = base::SysNSStringToWide([keywordField_ stringValue]);
+  string16 keyword = base::SysNSStringToUTF16([keywordField_ stringValue]);
   BOOL keywordValid = controller_->IsKeywordValid(keyword);
   [self setIsValid:keywordValid
            toolTip:IDS_SEARCH_ENGINES_INVALID_KEYWORD_TT
       forImageView:keywordImage_
          textField:keywordField_];
 
-  std::wstring url = base::SysNSStringToWide([urlField_ stringValue]);
+  std::string url = base::SysNSStringToUTF8([urlField_ stringValue]);
   BOOL urlValid = controller_->IsURLValid(url);
   [self setIsValid:urlValid
            toolTip:IDS_SEARCH_ENGINES_INVALID_URL_TT

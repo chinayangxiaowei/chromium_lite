@@ -1,6 +1,6 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved. Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "views/controls/button/native_button_gtk.h"
 
@@ -33,8 +33,14 @@ void NativeButtonGtk::UpdateLabel() {
   if (!native_view())
     return;
 
-  gtk_button_set_label(GTK_BUTTON(native_view()),
+  GtkWidget* label = gtk_bin_get_child(GTK_BIN(native_view()));
+  if (!label) {
+    gtk_button_set_label(GTK_BUTTON(native_view()),
+                         WideToUTF8(native_button_->label()).c_str());
+  } else {
+    gtk_label_set_text(GTK_LABEL(label),
                        WideToUTF8(native_button_->label()).c_str());
+  }
   preferred_size_ = gfx::Size();
 }
 
@@ -42,11 +48,13 @@ void NativeButtonGtk::UpdateFont() {
   if (!native_view())
     return;
 
-  PangoFontDescription* pfd =
-      gfx::Font::PangoFontFromGfxFont(native_button_->font());
-  gtk_widget_modify_font(native_view(), pfd);
-  pango_font_description_free(pfd);
-  preferred_size_ = gfx::Size();
+  GtkWidget* label = gtk_bin_get_child(GTK_BIN(native_view()));
+  if (label) {
+    PangoFontDescription* pfd = native_button_->font().GetNativeFont();
+    gtk_widget_modify_font(label, pfd);
+    pango_font_description_free(pfd);
+    preferred_size_ = gfx::Size();
+  }
 }
 
 void NativeButtonGtk::UpdateEnabled() {
@@ -94,9 +102,10 @@ gfx::Size NativeButtonGtk::GetPreferredSize() {
 }
 
 void NativeButtonGtk::CreateNativeControl() {
-  GtkWidget* widget = gtk_button_new();
+  GtkWidget* widget = gtk_button_new_with_label("");
+
   g_signal_connect(widget, "clicked",
-                   G_CALLBACK(CallClicked), this);
+                   G_CALLBACK(CallClickedThunk), this);
 
   // Any push button can become the default button.
   GTK_WIDGET_SET_FLAGS(widget, GTK_CAN_DEFAULT);
@@ -112,9 +121,8 @@ void NativeButtonGtk::NativeControlCreated(GtkWidget* widget) {
   UpdateDefault();
 }
 
-// static
-void NativeButtonGtk::CallClicked(GtkButton* widget, NativeButtonGtk* button) {
-  button->OnClicked();
+void NativeButtonGtk::CallClicked(GtkButton* widget) {
+  OnClicked();
 }
 
 void NativeButtonGtk::OnClicked() {
@@ -140,7 +148,7 @@ Checkbox* NativeCheckboxGtk::checkbox() {
 void NativeCheckboxGtk::CreateNativeControl() {
   GtkWidget* widget = gtk_check_button_new();
   g_signal_connect(widget, "clicked",
-                   G_CALLBACK(CallClicked), this);
+                   G_CALLBACK(CallClickedThunk), this);
   NativeControlCreated(widget);
 }
 
@@ -192,7 +200,7 @@ RadioButton* NativeRadioButtonGtk::radio_button() {
 void NativeRadioButtonGtk::CreateNativeControl() {
   GtkWidget* widget = gtk_radio_button_new(NULL);
   g_signal_connect(widget, "clicked",
-                   G_CALLBACK(CallClicked), this);
+                   G_CALLBACK(CallClickedThunk), this);
   g_signal_connect(widget, "toggled",
                    G_CALLBACK(CallToggled), this);
   NativeControlCreated(widget);

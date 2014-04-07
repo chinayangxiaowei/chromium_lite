@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_LOGGING_CHROME_H__
 #define CHROME_COMMON_LOGGING_CHROME_H__
+#pragma once
 
 #include <string>
 #include <vector>
@@ -12,6 +13,10 @@
 
 class CommandLine;
 class FilePath;
+
+namespace base {
+class Time;
+}
 
 namespace logging {
 
@@ -30,6 +35,12 @@ namespace logging {
 // and GetSilencedError().
 void InitChromeLogging(const CommandLine& command_line,
                        OldFileDeletionState delete_old_log_file);
+
+#if defined(OS_CHROMEOS)
+void RedirectChromeLogging(const FilePath& new_log_dir,
+                           const CommandLine& command_line,
+                           OldFileDeletionState delete_old_log_file);
+#endif
 
 // Call when done using logging for Chrome.
 void CleanupChromeLogging();

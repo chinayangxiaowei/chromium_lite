@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_MENU_MENU_CONTROLLER_H_
 #define VIEWS_CONTROLS_MENU_MENU_CONTROLLER_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -38,6 +39,22 @@ class MenuController : public MessageLoopForUI::Dispatcher {
   friend class MenuHostRootView;
   friend class MenuItemView;
 
+  // Enumeration of how the menu should exit.
+  enum ExitType {
+    // Don't exit.
+    EXIT_NONE,
+
+    // All menus, including nested, should be exited.
+    EXIT_ALL,
+
+    // Only the outermost menu should be exited.
+    EXIT_OUTERMOST,
+
+    // This is set if the menu is being closed as the result of one of the menus
+    // being destroyed.
+    EXIT_DESTROYED
+  };
+
   // If a menu is currently active, this returns the controller for it.
   static MenuController* GetActiveInstance();
 
@@ -54,6 +71,9 @@ class MenuController : public MessageLoopForUI::Dispatcher {
   // Whether or not Run blocks.
   bool IsBlockingRun() const { return blocking_run_; }
 
+  // Whether or not drag operation is in progress.
+  bool drag_in_progress() const { return drag_in_progress_; }
+
   // Sets the selection to menu_item, a value of NULL unselects everything.
   // If open_submenu is true and menu_item has a submenu, the submenu is shown.
   // If update_immediately is true, submenus are opened immediately, otherwise
@@ -66,12 +86,12 @@ class MenuController : public MessageLoopForUI::Dispatcher {
                     bool open_submenu,
                     bool update_immediately);
 
-  // Cancels the current Run. If all is true, any nested loops are canceled
-  // as well. This immediately hides all menus.
-  void Cancel(bool all);
+  // Cancels the current Run. See ExitType for a description of what happens
+  // with the various parameters.
+  void Cancel(ExitType type);
 
-  // An alternative to Cancel(true) that can be used with a OneShotTimer.
-  void CancelAll() { return Cancel(true); }
+  // An alternative to Cancel(EXIT_ALL) that can be used with a OneShotTimer.
+  void CancelAll() { Cancel(EXIT_ALL); }
 
   // Various events, forwarded from the submenu.
   //
@@ -98,19 +118,9 @@ class MenuController : public MessageLoopForUI::Dispatcher {
   void OnDragExitedScrollButton(SubmenuView* source);
 
  private:
-  // Enumeration of how the menu should exit.
-  enum ExitType {
-    // Don't exit.
-    EXIT_NONE,
-
-    // All menus, including nested, should be exited.
-    EXIT_ALL,
-
-    // Only the outermost menu should be exited.
-    EXIT_OUTERMOST
-  };
-
   class MenuScrollTask;
+
+  struct SelectByCharDetails;
 
   // Tracks selection information.
   struct State {
@@ -195,6 +205,10 @@ class MenuController : public MessageLoopForUI::Dispatcher {
   explicit MenuController(bool blocking);
 
   ~MenuController();
+
+  // If there is a hot tracked view AcceleratorPressed is invoked on it and
+  // true is returned.
+  bool SendAcceleratorToHotTrackedView();
 
   void UpdateInitialLocation(const gfx::Rect& bounds,
                              MenuItemView::AnchorPosition position);
@@ -297,12 +311,31 @@ class MenuController : public MessageLoopForUI::Dispatcher {
   // Selects the next/previous menu item.
   void IncrementSelection(int delta);
 
+  // Returns the next selectable child menu item of |parent| starting at |index|
+  // and incrementing index by |delta|. If there are no more selected menu items
+  // NULL is returned.
+  MenuItemView* FindNextSelectableMenuItem(MenuItemView* parent,
+                                           int index,
+                                           int delta);
+
   // If the selected item has a submenu and it isn't currently open, the
   // the selection is changed such that the menu opens immediately.
   void OpenSubmenuChangeSelectionIfCan();
 
   // If possible, closes the submenu.
   void CloseSubmenu();
+
+  // Returns details about which menu items match the mnemonic |key|.
+  // |match_function| is used to determine which menus match.
+  SelectByCharDetails FindChildForMnemonic(
+      MenuItemView* parent,
+      wchar_t key,
+      bool (*match_function)(MenuItemView* menu, wchar_t mnemonic));
+
+  // Selects or accepts the appropriate menu item based on |details|. Returns
+  // true if |Accept| was invoked (which happens if there aren't multiple item
+  // with the same mnemonic and the item to select does not have a submenu).
+  bool AcceptOrSelect(MenuItemView* parent, const SelectByCharDetails& details);
 
   // Selects by mnemonic, and if that doesn't work tries the first character of
   // the title. Returns true if a match was selected and the menu should exit.
@@ -324,6 +357,23 @@ class MenuController : public MessageLoopForUI::Dispatcher {
 
   // Stops scrolling.
   void StopScrolling();
+
+  // Updates |active_mouse_view_| from the location of the event and sends it
+  // the appropriate events. This is used to send mouse events to child views so
+  // that they react to click-drag-release as if the user clicked on the view
+  // itself.
+  void UpdateActiveMouseView(SubmenuView* event_source,
+                             const MouseEvent& event,
+                             View* target_menu);
+
+  // Sends a mouse release event to the current |active_mouse_view_| and sets
+  // it to null.
+  void SendMouseReleaseToActiveView(SubmenuView* event_source,
+                                    const MouseEvent& event,
+                                    bool cancel);
+
+  // Variant of above that sends a cancel mouse release.
+  void SendMouseReleaseToActiveView();
 
   // The active instance.
   static MenuController* active_instance_;
@@ -385,6 +435,9 @@ class MenuController : public MessageLoopForUI::Dispatcher {
   // Indicates a possible drag operation.
   bool possible_drag_;
 
+  // True when drag operation is in progress.
+  bool drag_in_progress_;
+
   // Location the mouse was pressed at. Used to detect d&d.
   gfx::Point press_pt_;
 
@@ -402,6 +455,10 @@ class MenuController : public MessageLoopForUI::Dispatcher {
   scoped_ptr<MenuScrollTask> scroll_task_;
 
   MenuButton* menu_button_;
+
+  // If non-null mouse drag events are forwarded to this view. See
+  // UpdateActiveMouseView for details.
+  View* active_mouse_view_;
 
   DISALLOW_COPY_AND_ASSIGN(MenuController);
 };

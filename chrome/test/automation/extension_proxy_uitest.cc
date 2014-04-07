@@ -32,7 +32,7 @@ class ExtensionProxyUITest : public UITest {
   scoped_refptr<ExtensionProxy> InstallSimpleBrowserActionExtension() {
     return automation()->InstallExtension(
         test_data_directory_.AppendASCII("extensions").AppendASCII("uitest").
-            AppendASCII("simple_browser_action.crx"));
+            AppendASCII("simple_browser_action.crx"), false);
   }
 
   // Installs a extension which, when clicking the browser action, renames
@@ -41,7 +41,7 @@ class ExtensionProxyUITest : public UITest {
   scoped_refptr<ExtensionProxy> InstallRenameTabExtension() {
     return automation()->InstallExtension(
         test_data_directory_.AppendASCII("extensions").AppendASCII("uitest").
-            AppendASCII("rename_tab.crx"));
+            AppendASCII("rename_tab.crx"), false);
   }
 
   // The google translate extension, which is installed on test setup.
@@ -94,7 +94,8 @@ TEST_F(ExtensionProxyUITest, Uninstall) {
   ASSERT_TRUE(simple_extension_->Uninstall());
 }
 
-TEST_F(ExtensionProxyUITest, ExecuteBrowserActionInActiveTabAsync) {
+// http://crbug.com/44370
+TEST_F(ExtensionProxyUITest, DISABLED_ExecuteBrowserActionInActiveTabAsync) {
   scoped_refptr<BrowserProxy> browser = automation()->GetBrowserWindow(0);
   ASSERT_TRUE(browser.get());
   scoped_refptr<ExtensionProxy> rename_tab_extension =
@@ -108,7 +109,7 @@ TEST_F(ExtensionProxyUITest, ExecuteBrowserActionInActiveTabAsync) {
   // The root directory for the http server does not matter in this case,
   // but we have to pick something.
   PathService::Get(chrome::DIR_TEST_DATA, &path);
-  StartHttpServerWithPort(path, L"1365");
+  StartHttpServerWithPort(path, 1365);
   GURL localhost = GURL("http://localhost:1365");
   NavigateToURL(localhost);
 

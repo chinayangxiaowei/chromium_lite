@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,9 @@
 #include "base/i18n/time_formatting.h"
 #include "base/string_util.h"
 #include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser.h"
+#include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/status/status_area_host.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/pref_names.h"
@@ -24,34 +26,23 @@ namespace chromeos {
 const int kTimerSlopSeconds = 1;
 
 ClockMenuButton::ClockMenuButton(StatusAreaHost* host)
-    : MenuButton(NULL, std::wstring(), this, false),
+    : StatusAreaButton(this),
       host_(host) {
+  // Add as SystemLibrary observer. We update the clock if timezone changes.
+  CrosLibrary::Get()->GetSystemLibrary()->AddObserver(this);
+
   set_border(NULL);
+  set_use_menu_button_paint(true);
   SetFont(ResourceBundle::GetSharedInstance().GetFont(
-      ResourceBundle::BaseFont).DeriveFont(1, gfx::Font::BOLD));
+      ResourceBundle::BaseFont).DeriveFont(1));
   SetEnabledColor(0xB3FFFFFF); // White with 70% Alpha
-  SetShowHighlighted(false);
-  // Fill text with 0s to figure out max width of text size.
-  ClearMaxTextSize();
-  std::wstring zero = ASCIIToWide("0");
-  std::wstring zerozero = ASCIIToWide("00");
-  SetText(l10n_util::GetStringF(IDS_STATUSBAR_CLOCK_SHORT_TIME_AM,
-                                zero, zerozero));
-  SetText(l10n_util::GetStringF(IDS_STATUSBAR_CLOCK_SHORT_TIME_PM,
-                                zero, zerozero));
-  max_width_one_digit = GetPreferredSize().width();
-  ClearMaxTextSize();
-  SetText(l10n_util::GetStringF(IDS_STATUSBAR_CLOCK_SHORT_TIME_AM,
-                                zerozero, zerozero));
-  SetText(l10n_util::GetStringF(IDS_STATUSBAR_CLOCK_SHORT_TIME_PM,
-                                zerozero, zerozero));
-  max_width_two_digit = GetPreferredSize().width();
-  set_alignment(TextButton::ALIGN_RIGHT);
+  SetShowMultipleIconStates(false);
+  set_alignment(TextButton::ALIGN_CENTER);
   UpdateTextAndSetNextTimer();
-  // Init member prefs so we can update the clock if prefs change.
-  // This only works if we are within a browser and have a profile.
-  if (host->GetProfile())
-    timezone_.Init(prefs::kTimeZone, host->GetProfile()->GetPrefs(), this);
+}
+
+ClockMenuButton::~ClockMenuButton() {
+  CrosLibrary::Get()->GetSystemLibrary()->RemoveObserver(this);
 }
 
 void ClockMenuButton::UpdateTextAndSetNextTimer() {
@@ -79,39 +70,9 @@ void ClockMenuButton::UpdateTextAndSetNextTimer() {
 }
 
 void ClockMenuButton::UpdateText() {
-  // Use icu::Calendar because the correct timezone is set on icu::TimeZone's
-  // default timezone.
-  UErrorCode error = U_ZERO_ERROR;
-  cal_.reset(icu::Calendar::createInstance(error));
-  if (!cal_.get())
-    return;
-
-  int hour = cal_->get(UCAL_HOUR, error);
-  int minute = cal_->get(UCAL_MINUTE, error);
-  int ampm = cal_->get(UCAL_AM_PM, error);
-
-  if (hour == 0)
-    hour = 12;
-  std::wstring hour_str = IntToWString(hour);
-  std::wstring min_str = IntToWString(minute);
-  // Append a "0" before the minute if it's only a single digit.
-  if (minute < 10)
-    min_str = IntToWString(0) + min_str;
-  int msg = (ampm == UCAL_AM) ? IDS_STATUSBAR_CLOCK_SHORT_TIME_AM :
-                                IDS_STATUSBAR_CLOCK_SHORT_TIME_PM;
-
-  std::wstring time_string = l10n_util::GetStringF(msg, hour_str, min_str);
-
-  // See if the preferred size changed. If so, relayout the StatusAreaView.
-  int cur_width = GetPreferredSize().width();
-  int new_width = hour < 10 ? max_width_one_digit : max_width_two_digit;
-  SetText(time_string);
-  set_max_width(new_width);
-
-  // If width has changed, we want to relayout the StatusAreaView.
-  if (new_width != cur_width)
-    PreferredSizeChanged();
-
+  base::Time time(base::Time::Now());
+  SetText(base::TimeFormatTimeOfDay(time));
+  SetTooltipText(base::TimeFormatShortDate(time));
   SchedulePaint();
 }
 
@@ -147,19 +108,11 @@ void ClockMenuButton::ActivatedAt(int index) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// ClockMenuButton, NotificationObserver implementation:
+// ClockMenuButton, SystemLibrary::Observer implementation:
 
-void ClockMenuButton::Observe(NotificationType type,
-                              const NotificationSource& source,
-                              const NotificationDetails& details) {
-  if (type == NotificationType::PREF_CHANGED) {
-    const std::wstring* pref_name = Details<std::wstring>(details).ptr();
-    if (!pref_name || *pref_name == prefs::kTimeZone) {
-      UpdateText();
-    }
-  }
+void ClockMenuButton::TimezoneChanged(const icu::TimeZone& timezone) {
+  UpdateText();
 }
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // ClockMenuButton, views::ViewMenuDelegate implementation:

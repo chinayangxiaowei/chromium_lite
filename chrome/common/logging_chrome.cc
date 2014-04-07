@@ -26,7 +26,6 @@
 #include <windows.h>
 #endif
 
-#include <iostream>
 #include <fstream>
 
 #include "chrome/common/logging_chrome.h"
@@ -34,11 +33,14 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/debug_util.h"
-#include "base/env_var.h"
+#include "base/environment.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
+#include "base/string_number_conversions.h"
+#include "base/string_util.h"
+#include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -55,6 +57,10 @@ static bool dialogs_are_suppressed_ = false;
 // This should be true for exactly the period between the end of
 // InitChromeLogging() and the beginning of CleanupChromeLogging().
 static bool chrome_logging_initialized_ = false;
+
+// This should be true for exactly the period between the end of
+// InitChromeLogging() and the beginning of CleanupChromeLogging().
+static bool chrome_logging_redirected_ = false;
 
 #if defined(OS_WIN)
 // {7FE69228-633E-4f06-80C1-527FEA23E3A7}
@@ -97,15 +103,7 @@ static void SuppressDialogs() {
 
 namespace logging {
 
-void InitChromeLogging(const CommandLine& command_line,
-                       OldFileDeletionState delete_old_log_file) {
-  DCHECK(!chrome_logging_initialized_) <<
-    "Attempted to initialize logging when it was already initialized.";
-
-#if defined(OS_POSIX) && defined(IPC_MESSAGE_LOG_ENABLED)
-  IPC::Logging::SetLoggerFunctions(g_log_function_mapping);
-#endif
-
+LoggingDestination DetermineLogMode(const CommandLine& command_line) {
   // only use OutputDebugString in debug mode
 #ifdef NDEBUG
   bool enable_logging = false;
@@ -133,11 +131,75 @@ void InitChromeLogging(const CommandLine& command_line,
   } else {
     log_mode = logging::LOG_NONE;
   }
+  return log_mode;
+}
 
-  logging::InitLogging(GetLogFileName().value().c_str(),
-                       log_mode,
+#if defined(OS_CHROMEOS)
+void SetUpSymlink(const FilePath& symlink_path, const FilePath& new_log_path) {
+  // We don't care if the unlink fails; we're going to continue anyway.
+  if (unlink(symlink_path.value().c_str()) == -1)
+    PLOG(WARNING) << "Unable to unlink " << symlink_path.value();
+  if (symlink(new_log_path.value().c_str(),
+              symlink_path.value().c_str()) == -1) {
+    PLOG(ERROR) << "Unable to create symlink " << symlink_path.value()
+                << " pointing at " << new_log_path.value();
+  }
+}
+
+FilePath TimestampLog(const FilePath& new_log_file, base::Time timestamp) {
+  base::Time::Exploded time_deets;
+  timestamp.LocalExplode(&time_deets);
+  std::string suffix = StringPrintf("_%02d%02d%02d-%02d%02d%02d",
+                                    time_deets.year,
+                                    time_deets.month,
+                                    time_deets.day_of_month,
+                                    time_deets.hour,
+                                    time_deets.minute,
+                                    time_deets.second);
+  FilePath new_log_path = new_log_file.InsertBeforeExtension(suffix);
+  SetUpSymlink(new_log_file, new_log_path);
+
+  return new_log_path;
+}
+
+void RedirectChromeLogging(const FilePath& new_log_dir,
+                           const CommandLine& command_line,
+                           OldFileDeletionState delete_old_log_file) {
+  DCHECK(!chrome_logging_redirected_) <<
+    "Attempted to redirect logging when it was already initialized.";
+  FilePath log_file_name = GetLogFileName().BaseName();
+  FilePath new_log_path =
+      TimestampLog(new_log_dir.Append(log_file_name), base::Time::Now());
+  InitLogging(new_log_path.value().c_str(),
+              DetermineLogMode(command_line),
+              logging::LOCK_LOG_FILE,
+              delete_old_log_file);
+  chrome_logging_redirected_ = true;
+}
+#endif
+
+void InitChromeLogging(const CommandLine& command_line,
+                       OldFileDeletionState delete_old_log_file) {
+  DCHECK(!chrome_logging_initialized_) <<
+    "Attempted to initialize logging when it was already initialized.";
+
+#if defined(OS_POSIX) && defined(IPC_MESSAGE_LOG_ENABLED)
+  IPC::Logging::SetLoggerFunctions(g_log_function_mapping);
+#endif
+
+  FilePath log_path = GetLogFileName();
+#if defined(OS_CHROMEOS)
+  log_path = TimestampLog(log_path, base::Time::Now());
+#endif
+
+  logging::InitLogging(log_path.value().c_str(),
+                       DetermineLogMode(command_line),
                        logging::LOCK_LOG_FILE,
                        delete_old_log_file);
+
+  // Default to showing error dialogs.
+  if (!CommandLine::ForCurrentProcess()->HasSwitch(switches::kNoErrorDialogs))
+    logging::SetShowErrorDialogs(true);
 
   // we want process and thread IDs because we have a lot of things running
   logging::SetLogItems(true, true, false, true);
@@ -146,30 +208,28 @@ void InitChromeLogging(const CommandLine& command_line,
   // headless mode to be configured either by the Environment
   // Variable or by the Command Line Switch.  This is for
   // automated test purposes.
-  scoped_ptr<base::EnvVarGetter> env(base::EnvVarGetter::Create());
-  if (env->HasEnv(env_vars::kHeadless) ||
+  scoped_ptr<base::Environment> env(base::Environment::Create());
+  if (env->HasVar(env_vars::kHeadless) ||
       command_line.HasSwitch(switches::kNoErrorDialogs))
     SuppressDialogs();
 
-  std::string log_filter_prefix =
-      command_line.GetSwitchValueASCII(switches::kLogFilterPrefix);
-  logging::SetLogFilterPrefix(log_filter_prefix.c_str());
-
-  // Use a minimum log level if the command line has one, otherwise set the
-  // default to LOG_WARNING.
-  std::string log_level = command_line.GetSwitchValueASCII(
-      switches::kLoggingLevel);
-  int level = 0;
-  if (StringToInt(log_level, &level)) {
-    if ((level >= 0) && (level < LOG_NUM_SEVERITIES))
+  // Use a minimum log level if the command line asks for one,
+  // otherwise leave it at the default level (INFO).
+  if (command_line.HasSwitch(switches::kLoggingLevel)) {
+    std::string log_level = command_line.GetSwitchValueASCII(
+        switches::kLoggingLevel);
+    int level = 0;
+    if (base::StringToInt(log_level, &level) &&
+        level >= 0 && level < LOG_NUM_SEVERITIES) {
       logging::SetMinLogLevel(level);
-  } else {
-    logging::SetMinLogLevel(LOG_WARNING);
+    } else {
+      LOG(WARNING) << "Bad log level: " << log_level;
+    }
   }
 
 #if defined(OS_WIN)
   // Enable trace control and transport through event tracing for Windows.
-  if (env->HasEnv(env_vars::kEtwLogging))
+  if (env->HasVar(env_vars::kEtwLogging))
     logging::LogEventProvider::Initialize(kChromeTraceProviderName);
 #endif
 
@@ -185,12 +245,13 @@ void CleanupChromeLogging() {
   CloseLogFile();
 
   chrome_logging_initialized_ = false;
+  chrome_logging_redirected_ = false;
 }
 
 FilePath GetLogFileName() {
   std::string filename;
-  scoped_ptr<base::EnvVarGetter> env(base::EnvVarGetter::Create());
-  if (env->GetEnv(env_vars::kLogFileName, &filename) && !filename.empty()) {
+  scoped_ptr<base::Environment> env(base::Environment::Create());
+  if (env->GetVar(env_vars::kLogFileName, &filename) && !filename.empty()) {
 #if defined(OS_WIN)
     return FilePath(UTF8ToWide(filename).c_str());
 #elif defined(OS_POSIX)

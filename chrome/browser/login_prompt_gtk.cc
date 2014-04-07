@@ -7,6 +7,7 @@
 #include <gtk/gtk.h>
 
 #include "app/l10n_util.h"
+#include "app/gtk_signal.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/gtk/constrained_window_gtk.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/tab_contents/navigation_controller.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tab_contents/tab_contents_view_gtk.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/common/notification_service.h"
 #include "grit/generated_resources.h"
@@ -44,7 +46,7 @@ class LoginHandlerGtk : public LoginHandler,
   // LoginModelObserver implementation.
   virtual void OnAutofillDataAvailable(const std::wstring& username,
                                        const std::wstring& password) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
     // NOTE: Would be nice to use gtk_entry_get_text_length, but it is fairly
     // new and not always in our GTK version.
@@ -60,9 +62,9 @@ class LoginHandlerGtk : public LoginHandler,
   // LoginHandler:
   virtual void BuildViewForPasswordManager(PasswordManager* manager,
                                            std::wstring explanation) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-    root_.Own(gtk_vbox_new(NULL, gtk_util::kContentAreaBorder));
+    root_.Own(gtk_vbox_new(FALSE, gtk_util::kContentAreaBorder));
     GtkWidget* label = gtk_label_new(WideToUTF8(explanation).c_str());
     gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
     gtk_box_pack_start(GTK_BOX(root_.get()), label, FALSE, FALSE, 0);
@@ -89,15 +91,15 @@ class LoginHandlerGtk : public LoginHandler,
     gtk_button_set_label(
         GTK_BUTTON(ok_),
         l10n_util::GetStringUTF8(IDS_LOGIN_DIALOG_OK_BUTTON_LABEL).c_str());
-    g_signal_connect(ok_, "clicked", G_CALLBACK(OnOKClicked), this);
+    g_signal_connect(ok_, "clicked", G_CALLBACK(OnOKClickedThunk), this);
     gtk_box_pack_end(GTK_BOX(hbox), ok_, FALSE, FALSE, 0);
 
     GtkWidget* cancel = gtk_button_new_from_stock(GTK_STOCK_CANCEL);
-    g_signal_connect(cancel, "clicked", G_CALLBACK(OnCancelClicked), this);
+    g_signal_connect(cancel, "clicked", G_CALLBACK(OnCancelClickedThunk), this);
     gtk_box_pack_end(GTK_BOX(hbox), cancel, FALSE, FALSE, 0);
 
     g_signal_connect(root_.get(), "hierarchy-changed",
-                     G_CALLBACK(OnPromptShown), this);
+                     G_CALLBACK(OnPromptHierarchyChangedThunk), this);
 
     SetModel(manager);
 
@@ -117,7 +119,7 @@ class LoginHandlerGtk : public LoginHandler,
   }
 
   virtual void DeleteDelegate() {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
     // The constrained window is going to delete itself; clear our pointer.
     SetDialog(NULL);
@@ -129,34 +131,10 @@ class LoginHandlerGtk : public LoginHandler,
  private:
   friend class LoginPrompt;
 
-  static void OnOKClicked(GtkButton *button, LoginHandlerGtk* handler) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
-
-    handler->SetAuth(
-        UTF8ToWide(gtk_entry_get_text(GTK_ENTRY(handler->username_entry_))),
-        UTF8ToWide(gtk_entry_get_text(GTK_ENTRY(handler->password_entry_))));
-  }
-
-  static void OnCancelClicked(GtkButton *button, LoginHandlerGtk* handler) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
-
-    handler->CancelAuth();
-  }
-
-  static void OnPromptShown(GtkButton* root,
-                            GtkWidget* previous_toplevel,
-                            LoginHandlerGtk* handler) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
-
-    if (!GTK_WIDGET_TOPLEVEL(gtk_widget_get_toplevel(handler->ok_)))
-      return;
-
-    // Now that we have attached ourself to the window, we can make our OK
-    // button the default action and mess with the focus.
-    GTK_WIDGET_SET_FLAGS(handler->ok_, GTK_CAN_DEFAULT);
-    gtk_widget_grab_default(handler->ok_);
-    gtk_widget_grab_focus(handler->username_entry_);
-  }
+  CHROMEGTK_CALLBACK_0(LoginHandlerGtk, void, OnOKClicked);
+  CHROMEGTK_CALLBACK_0(LoginHandlerGtk, void, OnCancelClicked);
+  CHROMEGTK_CALLBACK_1(LoginHandlerGtk, void, OnPromptHierarchyChanged,
+                       GtkWidget*);
 
   // The GtkWidgets that form our visual hierarchy:
   // The root container we pass to our parent.
@@ -169,6 +147,42 @@ class LoginHandlerGtk : public LoginHandler,
 
   DISALLOW_COPY_AND_ASSIGN(LoginHandlerGtk);
 };
+
+void LoginHandlerGtk::OnOKClicked(GtkWidget* sender) {
+  SetAuth(
+      UTF8ToWide(gtk_entry_get_text(GTK_ENTRY(username_entry_))),
+      UTF8ToWide(gtk_entry_get_text(GTK_ENTRY(password_entry_))));
+}
+
+void LoginHandlerGtk::OnCancelClicked(GtkWidget* sender) {
+  CancelAuth();
+}
+
+void LoginHandlerGtk::OnPromptHierarchyChanged(GtkWidget* sender,
+                                               GtkWidget* previous_toplevel) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  if (!GTK_WIDGET_TOPLEVEL(gtk_widget_get_toplevel(ok_)))
+    return;
+
+  // Now that we have attached ourself to the window, we can make our OK
+  // button the default action and mess with the focus.
+  GTK_WIDGET_SET_FLAGS(ok_, GTK_CAN_DEFAULT);
+  gtk_widget_grab_default(ok_);
+
+  // The user may have focused another tab. In this case do not grab focus
+  // until this tab is refocused.
+  if (gtk_util::IsWidgetAncestryVisible(username_entry_)) {
+    gtk_widget_grab_focus(username_entry_);
+  } else {
+  // TODO(estade): this define should not need to be here because this class
+  // should not be used on linux/views.
+#if defined(TOOLKIT_GTK)
+    static_cast<TabContentsViewGtk*>(GetTabContentsForLogin()->view())->
+        SetFocusedWidget(username_entry_);
+#endif
+  }
+}
 
 // static
 LoginHandler* LoginHandler::Create(net::AuthChallengeInfo* auth_info,

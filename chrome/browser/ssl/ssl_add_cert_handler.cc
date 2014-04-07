@@ -4,41 +4,56 @@
 
 #include "chrome/browser/ssl/ssl_add_cert_handler.h"
 
-#include "app/l10n_util.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/browser.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/chrome_thread.h"
-#include "chrome/common/platform_util.h"
-#include "grit/generated_resources.h"
+#include "chrome/browser/renderer_host/render_view_host_delegate.h"
+#include "chrome/browser/renderer_host/render_view_host_notification_task.h"
+#include "chrome/browser/renderer_host/resource_dispatcher_host.h"
+#include "chrome/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "net/base/cert_database.h"
 #include "net/base/net_errors.h"
 #include "net/base/x509_certificate.h"
 #include "net/url_request/url_request.h"
 
 SSLAddCertHandler::SSLAddCertHandler(URLRequest* request,
-                                     net::X509Certificate* cert)
-    : cert_(cert) {
-  // Stay alive until the UI completes and Finished() is called.
+                                     net::X509Certificate* cert,
+                                     int render_process_host_id,
+                                     int render_view_id)
+    : cert_(cert),
+      render_process_host_id_(render_process_host_id),
+      render_view_id_(render_view_id) {
+  ResourceDispatcherHostRequestInfo* info =
+      ResourceDispatcherHost::InfoForRequest(request);
+  network_request_id_ = info->request_id();
+  // Stay alive until the process completes and Finished() is called.
   AddRef();
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
-      NewRunnableMethod(this, &SSLAddCertHandler::RunUI));
+  // Delay adding the certificate until the next mainloop iteration.
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      NewRunnableMethod(this, &SSLAddCertHandler::Run));
 }
 
-void SSLAddCertHandler::RunUI() {
+SSLAddCertHandler::~SSLAddCertHandler() {}
+
+void SSLAddCertHandler::Run() {
   int cert_error;
   {
     net::CertDatabase db;
     cert_error = db.CheckUserCert(cert_);
   }
   if (cert_error != net::OK) {
-    // TODO(snej): Map cert_error to a more specific error message.
-    ShowError(l10n_util::GetStringUTF16(IDS_ADD_CERT_ERR_INVALID_CERT));
+    CallRenderViewHostSSLDelegate(
+        render_process_host_id_, render_view_id_,
+        &RenderViewHostDelegate::SSL::OnVerifyClientCertificateError,
+        scoped_refptr<SSLAddCertHandler>(this), cert_error);
     Finished(false);
     return;
   }
-  AskToAddCert();
+  // TODO(davidben): Move the existing certificate dialog elsewhere, make
+  // AskToAddCert send a message to the RenderViewHostDelegate, and ask when we
+  // cannot completely verify the certificate for whatever reason.
+
+  // AskToAddCert();
+  Finished(true);
 }
 
 #if !defined(OS_MACOSX)
@@ -53,17 +68,22 @@ void SSLAddCertHandler::Finished(bool add_cert) {
     net::CertDatabase db;
     int cert_error = db.AddUserCert(cert_);
     if (cert_error != net::OK) {
-      // TODO(snej): Map cert_error to a more specific error message.
-      ShowError(l10n_util::GetStringUTF16(IDS_ADD_CERT_ERR_FAILED));
+      CallRenderViewHostSSLDelegate(
+          render_process_host_id_, render_view_id_,
+          &RenderViewHostDelegate::SSL::OnAddClientCertificateError,
+          scoped_refptr<SSLAddCertHandler>(this), cert_error);
+    } else {
+      CallRenderViewHostSSLDelegate(
+          render_process_host_id_, render_view_id_,
+          &RenderViewHostDelegate::SSL::OnAddClientCertificateSuccess,
+          scoped_refptr<SSLAddCertHandler>(this));
     }
   }
-  Release();
-}
+  // Inform the RVH that we're finished
+  CallRenderViewHostSSLDelegate(
+      render_process_host_id_, render_view_id_,
+      &RenderViewHostDelegate::SSL::OnAddClientCertificateFinished,
+      scoped_refptr<SSLAddCertHandler>(this));
 
-void SSLAddCertHandler::ShowError(const string16& error) {
-  Browser* browser = BrowserList::GetLastActive();
-  platform_util::SimpleErrorBox(
-      browser ? browser->window()->GetNativeHandle() : NULL,
-      l10n_util::GetStringUTF16(IDS_ADD_CERT_FAILURE_TITLE),
-      error);
+  Release();
 }

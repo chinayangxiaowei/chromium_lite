@@ -4,6 +4,9 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_TYPED_URL_DATA_TYPE_CONTROLLER_H__
 #define CHROME_BROWSER_SYNC_GLUE_TYPED_URL_DATA_TYPE_CONTROLLER_H__
+#pragma once
+
+#include <string>
 
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
@@ -64,7 +67,8 @@ class TypedUrlDataTypeController : public DataTypeController,
   }
 
   // UnrecoverableHandler implementation
-  virtual void OnUnrecoverableError();
+  virtual void OnUnrecoverableError(const tracked_objects::Location& from_here,
+                                    const std::string& message);
 
   // NotificationObserver implementation.
   virtual void Observe(NotificationType type,
@@ -77,6 +81,13 @@ class TypedUrlDataTypeController : public DataTypeController,
 
   virtual void OnRequestRemoved(CancelableRequestProvider* provider,
                                 CancelableRequestProvider::Handle handle) {}
+
+  virtual void WillExecute(CancelableRequestProvider* provider,
+                           CancelableRequestProvider::Handle handle) {}
+
+  virtual void DidExecute(CancelableRequestProvider* provider,
+                          CancelableRequestProvider::Handle handle) {}
+
  private:
   friend class ControlTask;
   void StartImpl(history::HistoryBackend* backend);
@@ -84,10 +95,11 @@ class TypedUrlDataTypeController : public DataTypeController,
   void StartDoneImpl(StartResult result, State state);
   void StopImpl();
   void StartFailed(StartResult result);
-  void OnUnrecoverableErrorImpl();
+  void OnUnrecoverableErrorImpl(const tracked_objects::Location& from_here,
+                                const std::string& message);
 
   void set_state(State state) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     state_ = state;
   }
 

@@ -4,13 +4,12 @@
 
 #include "views/drag_utils.h"
 
-#include "app/l10n_util.h"
 #include "app/os_exchange_data.h"
 #include "app/resource_bundle.h"
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/font.h"
 #include "googleurl/src/gurl.h"
 #include "grit/app_resources.h"
@@ -48,7 +47,7 @@ void SetURLAndDragImage(const GURL& url,
   button.SetBounds(0, 0, prefsize.width(), prefsize.height());
 
   // Render the image.
-  gfx::Canvas canvas(prefsize.width(), prefsize.height(), false);
+  gfx::CanvasSkia canvas(prefsize.width(), prefsize.height(), false);
   button.Paint(&canvas, true);
   SetDragImageOnDataObject(canvas, prefsize,
       gfx::Point(prefsize.width() / 2, prefsize.height() / 2), data);
@@ -66,9 +65,9 @@ void CreateDragImageForFile(const FilePath::StringType& file_name,
 
   const int width = kFileDragImageMaxWidth;
   // Add +2 here to allow room for the halo.
-  const int height = font.height() + icon->height() +
+  const int height = font.GetHeight() + icon->height() +
                      kLinkDragImageVPadding + 2;
-  gfx::Canvas canvas(width, height, false /* translucent */);
+  gfx::CanvasSkia canvas(width, height, false /* translucent */);
 
   // Paint the icon.
   canvas.DrawBitmapInt(*icon, (width - icon->width()) / 2, 0);
@@ -78,18 +77,26 @@ void CreateDragImageForFile(const FilePath::StringType& file_name,
   std::wstring name = file_util::GetFilenameFromPath(file_name);
   canvas.DrawStringWithHalo(name, font, kFileDragImageTextColor, SK_ColorWHITE,
                             1, icon->height() + kLinkDragImageVPadding + 1,
-                            width - 2, font.height(),
+                            width - 2, font.GetHeight(),
                             gfx::Canvas::TEXT_ALIGN_CENTER);
 #else
-  std::wstring name = file_util::GetFilenameFromPath(UTF8ToWide(file_name));
+  std::wstring name = FilePath(file_name).BaseName().ToWStringHack();
   canvas.DrawStringInt(name, font, kFileDragImageTextColor,
                        0, icon->height() + kLinkDragImageVPadding,
-                       width, font.height(), gfx::Canvas::TEXT_ALIGN_CENTER);
+                       width, font.GetHeight(), gfx::Canvas::TEXT_ALIGN_CENTER);
 #endif
 
   SetDragImageOnDataObject(canvas, gfx::Size(width, height),
                            gfx::Point(width / 2, kLinkDragImageVPadding),
                            data_object);
+}
+
+void SetDragImageOnDataObject(const gfx::Canvas& canvas,
+                              const gfx::Size& size,
+                              const gfx::Point& cursor_offset,
+                              OSExchangeData* data_object) {
+  SetDragImageOnDataObject(
+      canvas.AsCanvasSkia()->ExtractBitmap(), size, cursor_offset, data_object);
 }
 
 } // namespace drag_utils

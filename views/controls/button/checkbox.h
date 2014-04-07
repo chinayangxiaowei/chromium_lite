@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_BUTTON_CHECKBOX_H_
 #define VIEWS_CONTROLS_BUTTON_CHECKBOX_H_
+#pragma once
 
 #include <string>
 
@@ -42,6 +43,7 @@ class Checkbox : public NativeButton {
 
   // Overridden from View:
   virtual gfx::Size GetPreferredSize();
+  virtual int GetHeightForWidth(int w);
   virtual void Layout();
   virtual void SetEnabled(bool enabled);
   virtual void PaintFocusBorder(gfx::Canvas* canvas);
@@ -58,8 +60,8 @@ class Checkbox : public NativeButton {
   virtual void WillLoseFocus();
 
   // Accessibility accessors, overridden from View.
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual bool GetAccessibleState(AccessibilityTypes::State* state);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual AccessibilityTypes::State GetAccessibleState();
 
   // Overridden from NativeButton:
   virtual void SetLabel(const std::wstring& label);

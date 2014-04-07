@@ -4,6 +4,11 @@
 
 #ifndef CHROME_BROWSER_SYNC_UNRECOVERABLE_ERROR_HANDLER_H_
 #define CHROME_BROWSER_SYNC_UNRECOVERABLE_ERROR_HANDLER_H_
+#pragma once
+
+#include <string>
+
+#include "base/tracked.h"
 
 namespace browser_sync {
 
@@ -13,7 +18,8 @@ class UnrecoverableErrorHandler {
   // syncer model are inconsistent, or similar.  The ProfileSyncService will
   // try to avoid doing any work to avoid crashing or corrupting things
   // further, and will report an error status if queried.
-  virtual void OnUnrecoverableError() = 0;
+  virtual void OnUnrecoverableError(const tracked_objects::Location& from_here,
+                                    const std::string& message) = 0;
  protected:
   virtual ~UnrecoverableErrorHandler() { }
 };

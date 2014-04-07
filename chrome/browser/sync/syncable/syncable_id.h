@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_SYNCABLE_SYNCABLE_ID_H_
 #define CHROME_BROWSER_SYNC_SYNCABLE_SYNCABLE_ID_H_
+#pragma once
 
 #include <iosfwd>
 #include <limits>
@@ -12,7 +13,6 @@
 
 #include "base/hash_tables.h"
 #include "chrome/browser/sync/util/fast_dump.h"
-#include "chrome/browser/sync/util/sync_types.h"
 
 extern "C" {
 struct sqlite3;
@@ -28,11 +28,10 @@ class Id;
 class MockConnectionManager;
 class SQLStatement;
 
-std::ostream& operator << (std::ostream& out, const syncable::Id& id);
-browser_sync::FastDump& operator <<
-  (browser_sync::FastDump& out, const syncable::Id& id);
-
 namespace syncable {
+
+std::ostream& operator<<(std::ostream& out, const Id& id);
+browser_sync::FastDump& operator<<(browser_sync::FastDump& out, const Id& id);
 
 // For historical reasons, 3 concepts got everloaded into the Id:
 // 1. A unique, opaque identifier for the object.
@@ -49,10 +48,9 @@ class Id {
                          syncable::EntryKernel** kernel);
   friend struct syncable::IdRowTraits;
   friend int BindFields(const EntryKernel& entry, SQLStatement* statement);
-  friend std::ostream& ::operator << (std::ostream& out,
-                                      const syncable::Id& id);
-  friend browser_sync::FastDump& ::operator <<
-    (browser_sync::FastDump& out, const syncable::Id& id);
+  friend std::ostream& operator<<(std::ostream& out, const Id& id);
+  friend browser_sync::FastDump& operator<<
+    (browser_sync::FastDump& out, const Id& id);
   friend class MockConnectionManager;
   friend class SyncableIdTest;
  public:
@@ -84,7 +82,6 @@ class Id {
   inline void Clear() {
     s_ = "r";
   }
-  std::string AsQueryParam() const;
   // Must never allow id == 0 or id < 0 to compile.
   inline bool operator == (const Id& that) const {
     return s_ == that.s_;
@@ -99,13 +96,13 @@ class Id {
     return s_ > that.s_;
   }
 
- public:
-  // Three functions used to work with our proto buffers.
+  // Three functions are used to work with our proto buffers.
   std::string GetServerId() const;
   static Id CreateFromServerId(const std::string& server_id);
   // This should only be used if you get back a reference to a local
   // id from the server. Returns a client only opaque id.
   static Id CreateFromClientString(const std::string& local_id);
+
  protected:
   std::string s_;
 };

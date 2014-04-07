@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_TAB_CONTENTS_RENDER_VIEW_HOST_MANAGER_H_
 #define CHROME_BROWSER_TAB_CONTENTS_RENDER_VIEW_HOST_MANAGER_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "base/logging.h"
@@ -67,6 +68,9 @@ class RenderViewHostManager
 
     // Focuses the location bar.
     virtual void SetFocusToLocationBar(bool select_all) = 0;
+
+   protected:
+    virtual ~Delegate() {}
   };
 
   // Both delegate pointers must be non-NULL and are not owned by this class.
@@ -76,7 +80,7 @@ class RenderViewHostManager
   // You must call Init() before using this class.
   RenderViewHostManager(RenderViewHostDelegate* render_view_delegate,
                         Delegate* delegate);
-  ~RenderViewHostManager();
+  virtual ~RenderViewHostManager();
 
   // For arguments, see TabContents constructor.
   void Init(Profile* profile,
@@ -170,6 +174,7 @@ class RenderViewHostManager
 
  private:
   friend class TestTabContents;
+  friend class RenderViewHostManagerTest;
 
   // Returns whether this tab should transition to a new renderer for
   // cross-site URLs.  Enabled unless we see the --process-per-tab command line
@@ -194,7 +199,13 @@ class RenderViewHostManager
 
   // Helper method to create a pending RenderViewHost for a cross-site
   // navigation.
-  bool CreatePendingRenderView(SiteInstance* instance);
+  bool CreatePendingRenderView(const NavigationEntry& entry,
+                               SiteInstance* instance);
+
+  // Sets up the necessary state for a new RenderViewHost navigating to the
+  // given entry.
+  bool InitRenderView(RenderViewHost* render_view_host,
+                      const NavigationEntry& entry);
 
   // Sets the pending RenderViewHost/DOMUI to be the active one. Note that this
   // doesn't require the pending render_view_host_ pointer to be non-NULL, since

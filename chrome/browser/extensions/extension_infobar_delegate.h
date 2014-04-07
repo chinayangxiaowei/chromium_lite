@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_INFOBAR_DELEGATE_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_INFOBAR_DELEGATE_H_
+#pragma once
 
 #include "chrome/browser/tab_contents/infobar_delegate.h"
 
@@ -21,6 +22,9 @@ class ExtensionInfoBarDelegate : public InfoBarDelegate,
   class DelegateObserver {
    public:
     virtual void OnDelegateDeleted() = 0;
+
+   protected:
+    virtual ~DelegateObserver() {}
   };
 
   ExtensionInfoBarDelegate(Browser* browser, TabContents* contents,
@@ -33,21 +37,19 @@ class ExtensionInfoBarDelegate : public InfoBarDelegate,
   void set_observer(DelegateObserver* observer) { observer_ = observer; }
 
   // Overridden from InfoBarDelegate:
+  virtual void InfoBarDismissed() { closing_ = true; }
   virtual bool EqualsDelegate(InfoBarDelegate* delegate) const;
   virtual void InfoBarClosed();
   virtual InfoBar* CreateInfoBar();
-  virtual ExtensionInfoBarDelegate* AsExtensionInfoBarDelegate() {
-    return this;
-  }
-  virtual Type GetInfoBarType() {
-    return PAGE_ACTION_TYPE;
-  }
+  virtual ExtensionInfoBarDelegate* AsExtensionInfoBarDelegate();
+  virtual Type GetInfoBarType();
 
   // Overridden from NotificationObserver:
   virtual void Observe(NotificationType type,
                        const NotificationSource& source,
                        const NotificationDetails& details);
 
+  bool closing() { return closing_; }
  private:
   // The extension host we are showing the InfoBar for. The delegate needs to
   // own this since the InfoBar gets deleted and recreated when you switch tabs
@@ -63,6 +65,10 @@ class ExtensionInfoBarDelegate : public InfoBarDelegate,
   TabContents* tab_contents_;
 
   NotificationRegistrar registrar_;
+
+  // Whether we are currently animating to close. This is used to ignore
+  // ExtensionView::PreferredSizeChanged notifications.
+  bool closing_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionInfoBarDelegate);
 };

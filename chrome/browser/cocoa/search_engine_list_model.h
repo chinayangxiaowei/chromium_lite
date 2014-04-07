@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_SEARCH_ENGINE_LIST_MODEL_H_
 #define CHROME_BROWSER_COCOA_SEARCH_ENGINE_LIST_MODEL_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -35,7 +36,8 @@ class SearchEngineObserver;
 // setter changes the back-end preference.
 - (NSUInteger)defaultIndex;
 - (void)setDefaultIndex:(NSUInteger)index;
-
+// Return TRUE if the default is managed via policy.
+- (BOOL)isDefaultManaged;
 @end
 
 // Broadcast when the cross-platform model changes. This can be used to update

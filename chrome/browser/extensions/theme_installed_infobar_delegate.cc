@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,25 +9,33 @@
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_theme_provider.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/notification_service.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 
 ThemeInstalledInfoBarDelegate::ThemeInstalledInfoBarDelegate(
     TabContents* tab_contents, const Extension* new_theme,
     const std::string& previous_theme_id)
-         : ConfirmInfoBarDelegate(tab_contents),
-           profile_(tab_contents->profile()),
-           name_(new_theme->name()),
-           previous_theme_id_(previous_theme_id) {
+    : ConfirmInfoBarDelegate(tab_contents),
+      profile_(tab_contents->profile()),
+      name_(new_theme->name()),
+      theme_id_(new_theme->id()),
+      previous_theme_id_(previous_theme_id),
+      tab_contents_(tab_contents) {
   profile_->GetThemeProvider()->OnInfobarDisplayed();
+  registrar_.Add(this, NotificationType::BROWSER_THEME_CHANGED,
+                 NotificationService::AllSources());
 }
 
 ThemeInstalledInfoBarDelegate::~ThemeInstalledInfoBarDelegate() {
+  // We don't want any notifications while we're running our destructor.
+  registrar_.RemoveAll();
+
   profile_->GetThemeProvider()->OnInfobarDestroyed();
 }
 
@@ -35,9 +43,9 @@ void ThemeInstalledInfoBarDelegate::InfoBarClosed() {
   delete this;
 }
 
-std::wstring ThemeInstalledInfoBarDelegate::GetMessageText() const {
-  return l10n_util::GetStringF(IDS_THEME_INSTALL_INFOBAR_LABEL,
-                               UTF8ToWide(name_));
+string16 ThemeInstalledInfoBarDelegate::GetMessageText() const {
+  return l10n_util::GetStringFUTF16(IDS_THEME_INSTALL_INFOBAR_LABEL,
+                                    UTF8ToUTF16(name_));
 }
 
 SkBitmap* ThemeInstalledInfoBarDelegate::GetIcon() const {
@@ -56,16 +64,16 @@ int ThemeInstalledInfoBarDelegate::GetButtons() const {
   return BUTTON_CANCEL;
 }
 
-std::wstring ThemeInstalledInfoBarDelegate::GetButtonLabel(
+string16 ThemeInstalledInfoBarDelegate::GetButtonLabel(
     ConfirmInfoBarDelegate::InfoBarButton button) const {
   switch (button) {
     case BUTTON_CANCEL: {
-      return l10n_util::GetString(IDS_THEME_INSTALL_INFOBAR_UNDO_BUTTON);
+      return l10n_util::GetStringUTF16(IDS_THEME_INSTALL_INFOBAR_UNDO_BUTTON);
     }
     default:
       // The InfoBar will create a default OK button and make it invisible.
       // TODO(mirandac): remove the default OK button from ConfirmInfoBar.
-      return L"";
+      return string16();
   }
 }
 
@@ -84,4 +92,41 @@ bool ThemeInstalledInfoBarDelegate::Cancel() {
 
   profile_->ClearTheme();
   return true;
+}
+
+void ThemeInstalledInfoBarDelegate::Observe(
+    NotificationType type,
+    const NotificationSource& source,
+    const NotificationDetails& details) {
+  switch (type.value) {
+    case NotificationType::BROWSER_THEME_CHANGED: {
+      // If the new theme is different from what this info bar is associated
+      // with, close this info bar since it is no longer relevant.
+      Extension* extension = Details<Extension>(details).ptr();
+      if (!extension || theme_id_ != extension->id()) {
+        if (tab_contents_ && !tab_contents_->is_being_destroyed()) {
+          tab_contents_->RemoveInfoBar(this);
+          // The infobar is gone so there is no reason for this delegate to keep
+          // a pointer to the TabContents (the TabContents has deleted its
+          // reference to this delegate and a new delegate will be created if
+          // a new infobar is created).
+          tab_contents_ = NULL;
+          // Although it's not being used anymore, this delegate is never deleted.
+          // It can not be deleted now because it is still needed if we
+          // "undo" the theme change that triggered this notification
+          // (when InfoBar::OnBackgroundExpose() is called). This will likely
+          // be fixed when infobar delegate deletion is cleaned up for
+          // http://crbug.com/62154.
+        }
+      }
+      break;
+    }
+
+    default:
+      NOTREACHED();
+  }
+}
+
+bool ThemeInstalledInfoBarDelegate::MatchesTheme(Extension* theme) {
+  return (theme && theme->id() == theme_id_);
 }

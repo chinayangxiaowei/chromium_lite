@@ -6,13 +6,13 @@
 
 #include "app/theme_provider.h"
 #include "gfx/rect.h"
-#include "chrome/browser/browser_theme_provider.h"
 #import "chrome/browser/cocoa/bookmark_bar_constants.h"
 #import "chrome/browser/cocoa/bookmark_bar_controller.h"
 #import "chrome/browser/cocoa/browser_window_controller.h"
 #import "chrome/browser/cocoa/themed_window.h"
 #include "chrome/browser/ntp_background_util.h"
-#include "gfx/canvas_paint.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
+#include "gfx/canvas_skia_paint.h"
 
 const CGFloat kBorderRadius = 3.0;
 
@@ -54,7 +54,7 @@ const CGFloat kBorderRadius = 3.0;
 
   // Draw the background.
   {
-    // CanvasPaint draws to the NSGraphicsContext during its destructor, so
+    // CanvasSkiaPaint draws to the NSGraphicsContext during its destructor, so
     // explicitly scope this.
     //
     // Paint the entire bookmark bar, even if the damage rect is much smaller
@@ -66,7 +66,7 @@ const CGFloat kBorderRadius = 3.0;
     // already repainting the rest of the bookmark bar below without setting a
     // clip area, anyway. Also, the only time we weren't asked to redraw the
     // whole bookmark bar is when the find bar is drawn over it.
-    gfx::CanvasPaint canvas(bounds, true);
+    gfx::CanvasSkiaPaint canvas(bounds, true);
     gfx::Rect area(0, 0, NSWidth(bounds), NSHeight(bounds));
 
     NtpBackgroundUtil::PaintBackgroundDetachedMode(themeProvider, &canvas,

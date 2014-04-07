@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_GTK_EXTENSION_VIEW_GTK_H_
 #define CHROME_BROWSER_GTK_EXTENSION_VIEW_GTK_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "gfx/native_widget_types.h"
@@ -20,12 +21,22 @@ class ExtensionViewGtk {
  public:
   ExtensionViewGtk(ExtensionHost* extension_host, Browser* browser);
 
+  class Container {
+   public:
+    virtual ~Container() {}
+    virtual void OnExtensionPreferredSizeChanged(ExtensionViewGtk* view,
+                                                 const gfx::Size& new_size) {}
+  };
+
   void Init();
 
   gfx::NativeView native_view();
   Browser* browser() const { return browser_; }
 
   void SetBackground(const SkBitmap& background);
+
+  // Sets the container for this view.
+  void SetContainer(Container* container) { container_ = container; }
 
   // Method for the ExtensionHost to notify us about the correct size for
   // extension contents.
@@ -36,12 +47,6 @@ class ExtensionViewGtk {
   void RenderViewCreated();
 
   RenderViewHost* render_view_host() const;
-
-  // Declared here for testing.
-  static const int kMinWidth;
-  static const int kMinHeight;
-  static const int kMaxWidth;
-  static const int kMaxHeight;
 
  private:
   void CreateWidgetHostView();
@@ -55,6 +60,9 @@ class ExtensionViewGtk {
   // The background the view should have once it is initialized. This is set
   // when the view has a custom background, but hasn't been initialized yet.
   SkBitmap pending_background_;
+
+  // This view's container.
+  Container* container_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionViewGtk);
 };

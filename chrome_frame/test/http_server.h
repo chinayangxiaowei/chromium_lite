@@ -1,6 +1,7 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #ifndef CHROME_FRAME_TEST_HTTP_SERVER_H_
 #define CHROME_FRAME_TEST_HTTP_SERVER_H_
 
@@ -9,24 +10,24 @@
 
 #include "googleurl/src/gurl.h"
 #include "base/ref_counted.h"
-#include "net/url_request/url_request_unittest.h"
+#include "net/test/test_server.h"
 
-// chrome frame specilization of http server from net.
+class FilePath;
+
+// Chrome Frame specilization of http server from net.
 class ChromeFrameHTTPServer {
  public:
+  ChromeFrameHTTPServer();
+
   void SetUp();
   void TearDown();
-  bool WaitToFinish(int milliseconds);
   GURL Resolve(const wchar_t* relative_url);
-  std::wstring GetDataDir();
+  FilePath GetDataDir();
 
-  HTTPTestServer* server() {
-    return server_;
-  }
+  net::TestServer* test_server() { return &test_server_; }
 
  protected:
-  scoped_refptr<HTTPTestServer> server_;
+  net::TestServer test_server_;
 };
 
 #endif  // CHROME_FRAME_TEST_HTTP_SERVER_H_
-

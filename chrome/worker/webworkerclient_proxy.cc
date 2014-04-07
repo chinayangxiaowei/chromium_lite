@@ -5,17 +5,23 @@
 #include "chrome/worker/webworkerclient_proxy.h"
 
 #include "base/command_line.h"
+#include "base/message_loop.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/file_system/file_system_dispatcher.h"
+#include "chrome/common/file_system/webfilesystem_callback_dispatcher.h"
 #include "chrome/common/webmessageportchannel_impl.h"
 #include "chrome/common/worker_messages.h"
 #include "chrome/renderer/webworker_proxy.h"
 #include "chrome/worker/webworker_stub_base.h"
 #include "chrome/worker/worker_thread.h"
+#include "chrome/worker/worker_webapplicationcachehost_impl.h"
 #include "ipc/ipc_logging.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebFileSystemCallbacks.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebWorker.h"
 
+using WebKit::WebApplicationCacheHost;
 using WebKit::WebMessagePortChannel;
 using WebKit::WebMessagePortChannelArray;
 using WebKit::WebString;
@@ -28,6 +34,7 @@ using WebKit::WebWorkerClient;
 WebWorkerClientProxy::WebWorkerClientProxy(int route_id,
                                            WebWorkerStubBase* stub)
     : route_id_(route_id),
+      appcache_host_id_(0),
       stub_(stub),
       ALLOW_THIS_IN_INITIALIZER_LIST(kill_process_factory_(this)) {
 }
@@ -62,7 +69,6 @@ void WebWorkerClientProxy::postExceptionToWorkerObject(
 }
 
 void WebWorkerClientProxy::postConsoleMessageToWorkerObject(
-    int destination,
     int source,
     int type,
     int level,
@@ -70,7 +76,6 @@ void WebWorkerClientProxy::postConsoleMessageToWorkerObject(
     int line_number,
     const WebString& source_url) {
   WorkerHostMsg_PostConsoleMessageToWorkerObject_Params params;
-  params.destination_identifier = destination;
   params.source_identifier = source;
   params.message_type = type;
   params.message_level = level;
@@ -104,7 +109,28 @@ void WebWorkerClientProxy::workerContextDestroyed() {
 
 WebKit::WebWorker* WebWorkerClientProxy::createWorker(
     WebKit::WebWorkerClient* client) {
-  return new WebWorkerProxy(client, WorkerThread::current(), 0);
+  return new WebWorkerProxy(client, WorkerThread::current(),
+                            0, appcache_host_id_);
+}
+
+WebApplicationCacheHost* WebWorkerClientProxy::createApplicationCacheHost(
+    WebKit::WebApplicationCacheHostClient* client) {
+  WorkerWebApplicationCacheHostImpl* host =
+      new WorkerWebApplicationCacheHostImpl(stub_->appcache_init_info(),
+                                            client);
+  // Remember the id of the instance we create so we have access to that
+  // value when creating nested dedicated workers in createWorker.
+  appcache_host_id_ = host->host_id();
+  return host;
+}
+
+void WebWorkerClientProxy::openFileSystem(
+    WebKit::WebFileSystem::Type type,
+    long long size,
+    WebKit::WebFileSystemCallbacks* callbacks) {
+  ChildThread::current()->file_system_dispatcher()->OpenFileSystem(
+      stub_->url().GetOrigin(), static_cast<fileapi::FileSystemType>(type),
+      size, new WebFileSystemCallbackDispatcher(callbacks));
 }
 
 bool WebWorkerClientProxy::Send(IPC::Message* message) {
@@ -130,4 +156,3 @@ void WebWorkerClientProxy::EnsureWorkerContextTerminates() {
           &WebWorkerClientProxy::workerContextDestroyed),
           kMaxTimeForRunawayWorkerMs);
 }
-

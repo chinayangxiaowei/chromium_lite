@@ -2,17 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef WEBKIT_GLUE_PLUGIN_WEBPLUGIN_DELEGATE_IMPL_H_
-#define WEBKIT_GLUE_PLUGIN_WEBPLUGIN_DELEGATE_IMPL_H_
+#ifndef WEBKIT_GLUE_PLUGINS_WEBPLUGIN_DELEGATE_IMPL_H_
+#define WEBKIT_GLUE_PLUGINS_WEBPLUGIN_DELEGATE_IMPL_H_
 
 #include "build/build_config.h"
 
 #include <string>
 #include <list>
-#include <set>
 
-#include "base/file_path.h"
 #include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
 #include "base/task.h"
 #include "base/time.h"
 #include "base/timer.h"
@@ -22,13 +21,13 @@
 #include "webkit/glue/plugins/webplugin_delegate.h"
 #include "webkit/glue/webcursor.h"
 
-#if defined(OS_MACOSX)
-#include "app/surface/accelerated_surface_mac.h"
-#endif
-
 #if defined(USE_X11)
+#include "app/x11_util.h"
+
 typedef struct _GdkDrawable GdkPixmap;
 #endif
+
+class FilePath;
 
 namespace NPAPI {
 class PluginInstance;
@@ -39,7 +38,10 @@ class WebMouseEvent;
 }
 
 #if defined(OS_MACOSX)
-class CoreAnimationRedrawTimerSource;
+class ExternalDragTracker;
+#ifndef NP_NO_QUICKDRAW
+class QuickDrawDrawingManager;
+#endif
 #ifdef __OBJC__
 @class CALayer;
 @class CARenderer;
@@ -47,6 +49,9 @@ class CoreAnimationRedrawTimerSource;
 class CALayer;
 class CARenderer;
 #endif
+namespace webkit_glue {
+class WebPluginAcceleratedSurface;
+}
 #endif
 
 // An implementation of WebPluginDelegate that runs in the plugin process,
@@ -65,10 +70,12 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
     PLUGIN_QUIRK_WINDOWLESS_OFFSET_WINDOW_TO_DRAW = 256,  // Linux
     PLUGIN_QUIRK_WINDOWLESS_INVALIDATE_AFTER_SET_WINDOW = 512,  // Linux
     PLUGIN_QUIRK_NO_WINDOWLESS = 1024,  // Windows
-    PLUGIN_QUIRK_PATCH_REGENUMKEYEXW = 2048, // Windows
-    PLUGIN_QUIRK_ALWAYS_NOTIFY_SUCCESS = 4096, // Windows
-    PLUGIN_QUIRK_ALLOW_FASTER_QUICKDRAW_PATH = 8192, // Mac
-    PLUGIN_QUIRK_WINDOWLESS_NO_RIGHT_CLICK = 32768, // Linux
+    PLUGIN_QUIRK_PATCH_REGENUMKEYEXW = 2048,  // Windows
+    PLUGIN_QUIRK_ALWAYS_NOTIFY_SUCCESS = 4096,  // Windows
+    PLUGIN_QUIRK_ALLOW_FASTER_QUICKDRAW_PATH = 8192,  // Mac
+    PLUGIN_QUIRK_HANDLE_MOUSE_CAPTURE = 16384,  // Windows
+    PLUGIN_QUIRK_WINDOWLESS_NO_RIGHT_CLICK = 32768,  // Linux
+    PLUGIN_QUIRK_IGNORE_FIRST_SETWINDOW_CALL = 65536,  // Windows.
   };
 
   static WebPluginDelegateImpl* Create(const FilePath& filename,
@@ -94,7 +101,7 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
                               const gfx::Rect& clip_rect);
   virtual void Paint(WebKit::WebCanvas* canvas, const gfx::Rect& rect);
   virtual void Print(gfx::NativeDrawingContext context);
-  virtual void SetFocus();
+  virtual void SetFocus(bool focused);
   virtual bool HandleInputEvent(const WebKit::WebInputEvent& event,
                                 WebKit::WebCursorInfo* cursor_info);
   virtual NPObject* GetPluginScriptableObject();
@@ -130,25 +137,20 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
   // Returns a combination of PluginQuirks.
   int GetQuirks() const { return quirks_; }
 
+  // Informs the plugin that the view it is in has gained or lost focus.
+  void SetContentAreaHasFocus(bool has_focus);
+
 #if defined(OS_MACOSX)
   // Informs the plugin that the geometry has changed, as with UpdateGeometry,
   // but also includes the new buffer context for that new geometry.
   void UpdateGeometryAndContext(const gfx::Rect& window_rect,
                                 const gfx::Rect& clip_rect,
                                 gfx::NativeDrawingContext context);
+  // Informs the delegate that the plugin called NPN_Invalidate*. Used as a
+  // trigger for Core Animation drawing.
+  void PluginDidInvalidate();
   // Returns the delegate currently processing events.
   static WebPluginDelegateImpl* GetActiveDelegate();
-  // Returns a vector of currently active delegates in this process.
-  static std::set<WebPluginDelegateImpl*> GetActiveDelegates();
-  // Informs the delegate that it has gained or lost focus.
-  void FocusChanged(bool has_focus);
-  // Set a notifier function that gets called when the delegate is accepting
-  // the focus.  If no notifier function has been set, the delegate will just
-  // call FocusChanged(true).  This is used in a multiprocess environment to
-  // propagate focus notifications to all running plugin processes.
-  void SetFocusNotifier(void (*notifier)(WebPluginDelegateImpl*)) {
-    focus_notifier_ = notifier;
-  }
   // Informs the plugin that the window it is in has gained or lost focus.
   void SetWindowHasFocus(bool has_focus);
   // Returns whether or not the window the plugin is in has focus.
@@ -157,7 +159,10 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
   void SetContainerVisibility(bool is_visible);
   // Informs the plugin that its containing window's frame has changed.
   // Frames are in screen coordinates.
-  void WindowFrameChanged(gfx::Rect window_frame, gfx::Rect view_frame);
+  void WindowFrameChanged(const gfx::Rect& window_frame,
+                          const gfx::Rect& view_frame);
+  // Informs the plugin that IME composition has been confirmed.
+  void ImeCompositionConfirmed(const string16& text);
   // Informs the delegate that the plugin set a Carbon ThemeCursor.
   void SetThemeCursor(ThemeCursor cursor);
   // Informs the delegate that the plugin set a Carbon Cursor.
@@ -178,9 +183,12 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
 #if defined(OS_MACOSX)
   // Allow setting a "fake" window handle to associate this plug-in with
   // an IOSurface in the browser. Used for accelerated drawing surfaces.
-  void set_windowed_handle(gfx::PluginWindowHandle handle) {
-    windowed_handle_ = handle;
-    UpdateAcceleratedSurface();
+  void set_windowed_handle(gfx::PluginWindowHandle handle);
+#endif
+
+#if defined(USE_X11)
+  void SetWindowlessShmPixmap(XID shm_pixmap) {
+    windowless_shm_pixmap_ = shm_pixmap;
   }
 #endif
 
@@ -247,7 +255,15 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
 
   // Tells the plugin about the current state of the window.
   // See NPAPI NPP_SetWindow for more information.
-  void WindowlessSetWindow(bool force_set_window);
+  void WindowlessSetWindow();
+
+  // Informs the plugin that it has gained or lost keyboard focus (on the Mac,
+  // this just means window first responder status).
+  void SetPluginHasFocus(bool focused);
+
+  // Handles the platform specific details of setting plugin focus. Returns
+  // false if the platform cancelled the focus tranfer.
+  bool PlatformSetPluginHasFocus(bool focused);
 
   //-----------------------------------------
   // used for windowed and windowless plugins
@@ -273,14 +289,6 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
 
   bool windowed_did_set_window_;
 
-  // TODO(dglazkov): No longer used by Windows, make sure the removal
-  // causes no regressions and eliminate from other platforms.
-  // this is an optimization to avoid calling SetWindow to the plugin
-  // when it is not necessary.  Initially, we need to call SetWindow,
-  // and after that we only need to call it when the geometry changes.
-  // use this flag to indicate whether we really need it or not.
-  bool windowless_needs_set_window_;
-
   // used by windowed and windowless plugins
   bool windowless_;
 
@@ -300,9 +308,12 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
   // layout of this process with the one of the browser process.
   HKL keyboard_layout_;
   int parent_thread_id_;
-#endif // OS_WIN
+#endif  // defined(OS_WIN)
 
 #if defined(USE_X11)
+  // The SHM pixmap for a windowless plugin.
+  XID windowless_shm_pixmap_;
+
   // The pixmap we're drawing into, for a windowless plugin.
   GdkPixmap* pixmap_;
   double first_event_time_;
@@ -320,27 +331,8 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
 
   gfx::PluginWindowHandle parent_;
   NPWindow window_;
-#if defined(OS_MACOSX)
-  CGContextRef buffer_context_;  // Weak ref.
-#ifndef NP_NO_CARBON
-  NP_CGContext np_cg_context_;
-#endif
-#ifndef NP_NO_QUICKDRAW
-  NP_Port qd_port_;
-  // Variables used for the faster QuickDraw path:
-  GWorldPtr qd_buffer_world_;  // Created lazily; may be NULL.
-  GWorldPtr qd_plugin_world_;  // Created lazily; may be NULL.
-  bool qd_fast_path_enabled_;
-  base::TimeTicks fast_path_enable_tick_;
-#endif
-  CALayer* layer_;  // Used for CA drawing mode. Weak, retained by plug-in.
-  AcceleratedSurface* surface_;
-  CARenderer* renderer_;  // Renders layer_ to surface_.
-  scoped_ptr<base::RepeatingTimer<WebPluginDelegateImpl> > redraw_timer_;
-#endif
   gfx::Rect window_rect_;
   gfx::Rect clip_rect_;
-  std::vector<gfx::Rect> cutout_rects_;
   int quirks_;
 
 #if defined(OS_WIN)
@@ -381,6 +373,13 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
       HKEY key, DWORD index, LPWSTR name, LPDWORD name_size, LPDWORD reserved,
       LPWSTR class_name, LPDWORD class_size, PFILETIME last_write_time);
 
+  // The mouse hook proc which handles mouse capture in windowed plugins.
+  static LRESULT CALLBACK MouseHookProc(int code, WPARAM wParam,
+                                        LPARAM lParam);
+
+  // Calls SetCapture/ReleaseCapture based on the message type.
+  static void HandleCaptureForMessage(HWND window, UINT message);
+
 #elif defined(OS_MACOSX)
   // Sets window_rect_ to |rect|
   void SetPluginRect(const gfx::Rect& rect);
@@ -388,19 +387,14 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
   void SetContentAreaOrigin(const gfx::Point& origin);
   // Updates everything that depends on the plugin's absolute screen location.
   void PluginScreenLocationChanged();
+  // Updates anything that depends on plugin visibility.
+  void PluginVisibilityChanged();
 
-  // Returns the apparent zoom ratio for the given event, as inferred from our
-  // current knowledge about about where on screen the plugin is.
-  // This is a temporary workaround for <http://crbug.com/9996>; once that is
-  // fixed we should have correct event coordinates (or an explicit
-  // notification of zoom level).
-  float ApparentEventZoomLevel(const WebKit::WebMouseEvent& event);
+  // Enables/disables IME.
+  void SetImeEnabled(bool enabled);
 
   // Informs the browser about the updated accelerated drawing surface.
   void UpdateAcceleratedSurface();
-
-  // Updates anything that depends on plugin visibility.
-  void PluginVisibilityChanged();
 
   // Uses a CARenderer to draw the plug-in's layer in our OpenGL surface.
   void DrawLayerInSurface();
@@ -410,17 +404,6 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
   void UpdateDummyWindowBounds(const gfx::Point& plugin_origin);
 
 #ifndef NP_NO_QUICKDRAW
-  // Scrapes the contents of our dummy window into the given context.
-  // Used for the slower QuickDraw path.
-  void ScrapeDummyWindowIntoContext(CGContextRef context);
-
-  // Copies the source GWorld's bits into the target GWorld.
-  // Used for the faster QuickDraw path.
-  void CopyGWorldBits(GWorldPtr source, GWorldPtr dest);
-
-  // Updates the GWorlds used by the faster QuickDraw path.
-  void UpdateGWorlds(CGContextRef context);
-
   // Sets the mode used for QuickDraw plugin drawing. If enabled is true the
   // plugin draws into a GWorld that's not connected to a window (the faster
   // path), otherwise the plugin draws into our invisible dummy window (which is
@@ -434,24 +417,36 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
   void UpdateIdleEventRate();
 #endif  // !NP_NO_CARBON
 
+  CGContextRef buffer_context_;  // Weak ref.
+
+#ifndef NP_NO_CARBON
+  NP_CGContext np_cg_context_;
+#endif
+#ifndef NP_NO_QUICKDRAW
+  NP_Port qd_port_;
+  scoped_ptr<QuickDrawDrawingManager> qd_manager_;
+  base::TimeTicks fast_path_enable_tick_;
+#endif
+
+  CALayer* layer_;  // Used for CA drawing mode. Weak, retained by plug-in.
+  webkit_glue::WebPluginAcceleratedSurface* surface_;  // Weak ref.
+  CARenderer* renderer_;  // Renders layer_ to surface_.
+  scoped_ptr<base::RepeatingTimer<WebPluginDelegateImpl> > redraw_timer_;
+
   // The upper-left corner of the web content area in screen coordinates,
   // relative to an upper-left (0,0).
   gfx::Point content_area_origin_;
-
-  // True if the plugin thinks it has keyboard focus
-  bool have_focus_;
-  // If non-zero, we are in the middle of a drag that started outside the
-  // plugin, and this corresponds to the WebInputEvent modifier flags for any
-  // buttons that were down when the mouse entered and are still down now.
-  int external_drag_buttons_;
-  // A function to call when we want to accept keyboard focus
-  void (*focus_notifier_)(WebPluginDelegateImpl* notifier);
 
   bool containing_window_has_focus_;
   bool initial_window_focus_;
   bool container_is_visible_;
   bool have_called_set_window_;
+
   gfx::Rect cached_clip_rect_;
+
+  bool ime_enabled_;
+
+  scoped_ptr<ExternalDragTracker> external_drag_tracker_;
 #endif  // OS_MACOSX
 
   // Called by the message filter hook when the plugin enters a modal loop.
@@ -480,6 +475,10 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
   // Runnable Method Factory used to invoke the OnUserGestureEnd method
   // asynchronously.
   ScopedRunnableMethodFactory<WebPluginDelegateImpl> user_gesture_msg_factory_;
+
+  // Handle to the mouse hook installed for certain windowed plugins like
+  // flash.
+  HHOOK mouse_hook_;
 #endif
 
   // Holds the depth of the HandleEvent callstack.
@@ -488,7 +487,22 @@ class WebPluginDelegateImpl : public webkit_glue::WebPluginDelegate {
   // Holds the current cursor set by the windowless plugin.
   WebCursor current_windowless_cursor_;
 
+  // Set to true initially and indicates if this is the first npp_setwindow
+  // call received by the plugin.
+  bool first_set_window_call_;
+
+  // True if the plugin thinks it has keyboard focus
+  bool plugin_has_focus_;
+  // True if the plugin element has focus within the web content, regardless of
+  // whether its containing view currently has focus.
+  bool has_webkit_focus_;
+  // True if the containing view currently has focus.
+  // Initially set to true so that plugin focus still works in environments
+  // where SetContentAreaHasFocus is never called. See
+  // https://bugs.webkit.org/show_bug.cgi?id=46013 for details.
+  bool containing_view_has_focus_;
+
   DISALLOW_COPY_AND_ASSIGN(WebPluginDelegateImpl);
 };
 
-#endif  // WEBKIT_GLUE_PLUGIN_WEBPLUGIN_DELEGATE_IMPL_H_
+#endif  // WEBKIT_GLUE_PLUGINS_WEBPLUGIN_DELEGATE_IMPL_H_

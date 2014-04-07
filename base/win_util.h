@@ -1,17 +1,20 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_WIN_UTIL_H__
 #define BASE_WIN_UTIL_H__
+#pragma once
 
 #include <windows.h>
-#include <aclapi.h>
-#include <shlobj.h>
 
 #include <string>
 
-#include "base/keyboard_codes.h"
+#include "base/string16.h"
+
+struct IPropertyStore;
+struct _tagpropertykey;
+typedef _tagpropertykey PROPERTYKEY;
 
 namespace win_util {
 
@@ -20,7 +23,7 @@ namespace win_util {
 // though.
 enum WinVersion {
   WINVERSION_PRE_2000 = 0,  // Not supported
-  WINVERSION_2000 = 1,
+  WINVERSION_2000 = 1,      // Not supported
   WINVERSION_XP = 2,
   WINVERSION_SERVER_2003 = 3,
   WINVERSION_VISTA = 4,
@@ -112,15 +115,19 @@ std::wstring FormatMessage(unsigned messageid);
 // Uses the last Win32 error to generate a human readable message string.
 std::wstring FormatLastWin32Error();
 
-// Methods to convert base::KeyboardCode/Windows virtual key type methods.
-WORD KeyboardCodeToWin(base::KeyboardCode keycode);
-base::KeyboardCode WinToKeyboardCode(WORD keycode);
-
 // Sets the application id in given IPropertyStore. The function is intended
 // for tagging application/chromium shortcut, browser window and jump list for
 // Win7.
 bool SetAppIdForPropertyStore(IPropertyStore* property_store,
                               const wchar_t* app_id);
+
+// Adds the specified |command| using the specified |name| to the AutoRun key.
+// |root_key| could be HKCU or HKLM or the root of any user hive.
+bool AddCommandToAutoRun(HKEY root_key, const string16& name,
+                         const string16& command);
+// Removes the command specified by |name| from the AutoRun key. |root_key|
+// could be HKCU or HKLM or the root of any user hive.
+bool RemoveCommandFromAutoRun(HKEY root_key, const string16& name);
 
 }  // namespace win_util
 

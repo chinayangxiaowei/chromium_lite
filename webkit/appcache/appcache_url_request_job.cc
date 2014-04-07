@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,13 @@
 
 #include "base/message_loop.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log.h"
+#include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
+#include "net/url_request/url_request.h"
 #include "net/url_request/url_request_status.h"
 
 namespace appcache {
@@ -19,7 +24,8 @@ AppCacheURLRequestJob::AppCacheURLRequestJob(
     : URLRequestJob(request), storage_(storage),
       has_been_started_(false), has_been_killed_(false),
       delivery_type_(AWAITING_DELIVERY_ORDERS),
-      cache_id_(kNoCacheId),
+      cache_id_(kNoCacheId), is_fallback_(false),
+      cache_entry_not_found_(false),
       ALLOW_THIS_IN_INITIALIZER_LIST(read_callback_(
           this, &AppCacheURLRequestJob::OnReadComplete)) {
   DCHECK(storage_);
@@ -31,13 +37,15 @@ AppCacheURLRequestJob::~AppCacheURLRequestJob() {
 }
 
 void AppCacheURLRequestJob::DeliverAppCachedResponse(
-    const GURL& manifest_url, int64 cache_id, const AppCacheEntry& entry) {
+    const GURL& manifest_url, int64 cache_id, const AppCacheEntry& entry,
+    bool is_fallback) {
   DCHECK(!has_delivery_orders());
   DCHECK(entry.has_response_id());
   delivery_type_ = APPCACHED_DELIVERY;
   manifest_url_ = manifest_url;
   cache_id_ = cache_id;
   entry_ = entry;
+  is_fallback_ = is_fallback;
   MaybeBeginDelivery();
 }
 
@@ -80,11 +88,18 @@ void AppCacheURLRequestJob::BeginDelivery() {
       break;
 
     case ERROR_DELIVERY:
+      request()->net_log().AddEvent(
+          net::NetLog::TYPE_APPCACHE_DELIVERING_ERROR_RESPONSE, NULL);
       NotifyStartError(
           URLRequestStatus(URLRequestStatus::FAILED, net::ERR_FAILED));
       break;
 
     case APPCACHED_DELIVERY:
+      request()->net_log().AddEvent(
+          is_fallback_ ?
+              net::NetLog::TYPE_APPCACHE_DELIVERING_FALLBACK_RESPONSE :
+              net::NetLog::TYPE_APPCACHE_DELIVERING_CACHED_RESPONSE,
+          NULL);
       storage_->LoadResponseInfo(manifest_url_, entry_.response_id(), this);
       break;
 
@@ -108,8 +123,13 @@ void AppCacheURLRequestJob::OnResponseInfoLoaded(
 
     NotifyHeadersComplete();
   } else {
-    NotifyStartError(
-        URLRequestStatus(URLRequestStatus::FAILED, net::ERR_FAILED));
+    // A resource that is expected to be in the appcache is missing.
+    // See http://code.google.com/p/chromium/issues/detail?id=50657
+    // Instead of failing the request, we restart the request. The retry
+    // attempt will fallthru to the network instead of trying to load
+    // from the appcache.
+    cache_entry_not_found_ = true;
+    NotifyRestartRequired();
   }
   storage_ = NULL;  // no longer needed
 }
@@ -152,13 +172,13 @@ void AppCacheURLRequestJob::SetupRangeResponse() {
   headers->RemoveHeader(kRangeHeader);
   headers->ReplaceStatusLine(kPartialStatusLine);
   headers->AddHeader(
-      StringPrintf("%s: %d", kLengthHeader, length));
+      base::StringPrintf("%s: %d", kLengthHeader, length));
   headers->AddHeader(
-      StringPrintf("%s: bytes %d-%d/%d",
-                   kRangeHeader,
-                   offset,
-                   offset + length - 1,
-                   resource_size));
+      base::StringPrintf("%s: bytes %d-%d/%d",
+                         kRangeHeader,
+                         offset,
+                         offset + length - 1,
+                         resource_size));
 }
 
 void AppCacheURLRequestJob::OnReadComplete(int result) {
@@ -243,13 +263,18 @@ bool AppCacheURLRequestJob::ReadRawData(net::IOBuffer* buf, int buf_size,
 }
 
 void AppCacheURLRequestJob::SetExtraRequestHeaders(
-    const std::string& headers) {
+    const net::HttpRequestHeaders& headers) {
+  std::string value;
+  std::vector<net::HttpByteRange> ranges;
+  if (!headers.GetHeader(net::HttpRequestHeaders::kRange, &value) ||
+      !net::HttpUtil::ParseRangeHeader(value, &ranges)) {
+    return;
+  }
+
   // If multiple ranges are requested, we play dumb and
   // return the entire response with 200 OK.
-  std::vector<net::HttpByteRange> ranges;
-  if (!net::HttpUtil::ParseRanges(headers, &ranges) || (ranges.size() > 1U))
-    return;
-  range_requested_ = ranges[0];
+  if (ranges.size() == 1U)
+    range_requested_ = ranges[0];
 }
 
 }  // namespace appcache

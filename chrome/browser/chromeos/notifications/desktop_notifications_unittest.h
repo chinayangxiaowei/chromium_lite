@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_NOTIFICATIONS_DESKTOP_NOTIFICATIONS_UNITTEST_H_
 #define CHROME_BROWSER_CHROMEOS_NOTIFICATIONS_DESKTOP_NOTIFICATIONS_UNITTEST_H_
+#pragma once
 
 #include <set>
 #include <string>
@@ -11,7 +12,7 @@
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "chrome/browser/browser_list.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chromeos/notifications/balloon_collection_impl.h"
 #include "chrome/browser/notifications/balloon.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
@@ -20,9 +21,9 @@
 #include "chrome/browser/notifications/notification_test_util.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #include "chrome/browser/notifications/notifications_prefs_cache.h"
+#include "chrome/common/render_messages.h"
 #include "chrome/test/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/WebKit/chromium/public/WebNotificationPresenter.h"
 
 namespace chromeos {
 
@@ -84,10 +85,13 @@ class DesktopNotificationsTest : public testing::Test {
     return service_->prefs_cache()->HasPermission(origin);
   }
 
+  // Constructs a notification parameter structure for use in tests.
+  ViewHostMsg_ShowNotification_Params StandardTestNotification();
+
   // Create a message loop to allow notifications code to post tasks,
   // and a thread so that notifications code runs on the expected thread.
   MessageLoopForUI message_loop_;
-  ChromeThread ui_thread_;
+  BrowserThread ui_thread_;
 
   // Test profile.
   scoped_ptr<TestingProfile> profile_;

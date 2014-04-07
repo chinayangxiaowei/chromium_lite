@@ -1,8 +1,11 @@
 // Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "base/file_util.h"
 #include "base/scoped_temp_dir.h"
 #include "base/scoped_vector.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_prepopulate_data.h"
 #include "chrome/common/pref_names.h"
@@ -67,9 +70,9 @@ TEST_F(TemplateURLPrepopulateDataTest, UniqueIDs) {
   for (size_t i = 0; i < arraysize(ids); ++i) {
     profile.GetPrefs()->SetInteger(prefs::kCountryIDAtInstall, ids[i]);
     ScopedVector<TemplateURL> urls;
-    size_t url_count;
+    size_t default_index;
     TemplateURLPrepopulateData::GetPrepopulatedEngines(
-        profile.GetPrefs(), &(urls.get()), &url_count);
+        profile.GetPrefs(), &(urls.get()), &default_index);
     std::set<int> unique_ids;
     for (size_t turl_i = 0; turl_i < urls.size(); ++turl_i) {
       ASSERT_TRUE(unique_ids.find(urls[turl_i]->prepopulate_id()) ==
@@ -91,7 +94,10 @@ TEST_F(TemplateURLPrepopulateDataTest, ProvidersFromPrefs) {
       "       \"search_url\":\"http://foo.com/s?q={searchTerms}\","
       "       \"favicon_url\":\"http://foi.com/favicon.ico\","
       "       \"suggest_url\":\"\","
+      "       \"instant_url\":\"\","
       "       \"encoding\":\"UTF-8\","
+      "       \"search_engine_type\":1,"
+      "       \"logo_id\":0,"
       "       \"id\":1001"
       "     }"
       "   ]"
@@ -102,17 +108,17 @@ TEST_F(TemplateURLPrepopulateDataTest, ProvidersFromPrefs) {
   FilePath preferences_file = temp_dir.path().AppendASCII("Preferences");
   file_util::WriteFile(preferences_file, pref_data, sizeof(pref_data));
 
-  scoped_ptr<PrefService> prefs(new PrefService(preferences_file));
-
+  scoped_ptr<PrefService> prefs(
+      PrefService::CreateUserPrefService(preferences_file));
   TemplateURLPrepopulateData::RegisterUserPrefs(prefs.get());
 
   int version = TemplateURLPrepopulateData::GetDataVersion(prefs.get());
   EXPECT_EQ(1, version);
 
-  std::vector<TemplateURL*> t_urls;
+  ScopedVector<TemplateURL> t_urls;
   size_t default_index;
   TemplateURLPrepopulateData::GetPrepopulatedEngines(
-      prefs.get(), &t_urls, &default_index);
+      prefs.get(), &(t_urls.get()), &default_index);
 
   ASSERT_EQ(1u, t_urls.size());
   EXPECT_EQ(L"foo", t_urls[0]->short_name());
@@ -121,5 +127,7 @@ TEST_F(TemplateURLPrepopulateDataTest, ProvidersFromPrefs) {
   EXPECT_EQ("foi.com", t_urls[0]->GetFavIconURL().host());
   EXPECT_EQ(1u, t_urls[0]->input_encodings().size());
   EXPECT_EQ(1001, t_urls[0]->prepopulate_id());
+  EXPECT_EQ(TemplateURLPrepopulateData::SEARCH_ENGINE_GOOGLE,
+            t_urls[0]->search_engine_type());
+  EXPECT_EQ(0, t_urls[0]->logo_id());
 }
-

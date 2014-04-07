@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VIEWS_FRAME_BROWSER_FRAME_WIN_H_
 #define CHROME_BROWSER_VIEWS_FRAME_BROWSER_FRAME_WIN_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "chrome/browser/views/frame/browser_frame.h"
@@ -37,15 +38,15 @@ class BrowserFrameWin : public BrowserFrame, public views::WindowWin {
 
   // BrowserFrame implementation.
   virtual views::Window* GetWindow();
-  virtual void TabStripCreated(BaseTabStrip* tabstrip);
   virtual int GetMinimizeButtonOffset() const;
   virtual gfx::Rect GetBoundsForTabStrip(BaseTabStrip* tabstrip) const;
+  virtual int GetHorizontalTabStripVerticalOffset(bool restored) const;
   virtual void UpdateThrobber(bool running);
   virtual void ContinueDraggingDetachedTab();
   virtual ThemeProvider* GetThemeProviderForFrame() const;
   virtual bool AlwaysUseNativeFrame() const;
   virtual views::View* GetFrameView() const;
-  virtual void PaintTabStripShadow(gfx::Canvas* canvas);
+  virtual void TabStripDisplayModeChanged();
 
  protected:
   // Overridden from views::WindowWin:
@@ -65,6 +66,7 @@ class BrowserFrameWin : public BrowserFrame, public views::WindowWin {
   virtual void OnWindowPosChanged(WINDOWPOS* window_pos);
   virtual ThemeProvider* GetThemeProvider() const;
   virtual ThemeProvider* GetDefaultThemeProvider() const;
+  virtual void OnScreenReaderDetected();
 
   // Overridden from views::Window:
   virtual int GetShowState() const;

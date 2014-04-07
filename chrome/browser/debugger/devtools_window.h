@@ -1,16 +1,18 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_DEBUGGER_DEVTOOLS_WINDOW_H_
 #define CHROME_BROWSER_DEBUGGER_DEVTOOLS_WINDOW_H_
+#pragma once
 
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/scoped_ptr.h"
 #include "chrome/browser/debugger/devtools_client_host.h"
+#include "chrome/browser/debugger/devtools_toggle_action.h"
 #include "chrome/browser/tab_contents/tab_contents_delegate.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/common/notification_service.h"
 
@@ -23,13 +25,14 @@ class BrowserWindow;
 class Profile;
 class RenderViewHost;
 class TabContents;
+class Value;
 
 class DevToolsWindow
     : public DevToolsClientHost,
       public NotificationObserver,
       public TabContentsDelegate {
  public:
-  static const std::wstring kDevToolsApp;
+  static const char kDevToolsApp[];
   static TabContents* GetDevToolsContents(TabContents* inspected_tab);
 
   DevToolsWindow(Profile* profile, RenderViewHost* inspected_rvh, bool docked);
@@ -40,7 +43,7 @@ class DevToolsWindow
   virtual void SendMessageToClient(const IPC::Message& message);
   virtual void InspectedTabClosing();
 
-  void Show(bool open_console);
+  void Show(DevToolsToggleAction action);
   void Activate();
   void SetDocked(bool docked);
   RenderViewHost* GetRenderViewHost();
@@ -51,6 +54,7 @@ class DevToolsWindow
 
  private:
   void CreateDevToolsBrowser();
+  bool FindInspectedBrowserAndTabIndex(Browser**, int* tab);
   BrowserWindow* GetInspectedBrowserWindow();
   void SetAttachedWindow();
 
@@ -59,9 +63,13 @@ class DevToolsWindow
                        const NotificationSource& source,
                        const NotificationDetails& details);
 
-  void ScheduleOpenConsole();
-  void DoOpenConsole();
-
+  void ScheduleAction(DevToolsToggleAction action);
+  void DoAction();
+  GURL GetDevToolsUrl();
+  void UpdateTheme();
+  void AddDevToolsExtensionsToClient();
+  void CallClientFunction(const std::wstring& function_name,
+                          const Value& arg);
   // Overridden from TabContentsDelegate.
   virtual void OpenURLFromTab(TabContents* source,
                               const GURL& url,
@@ -76,10 +84,10 @@ class DevToolsWindow
                               const gfx::Rect& initial_pos,
                               bool user_gesture) {}
   virtual void ActivateContents(TabContents* contents) {}
+  virtual void DeactivateContents(TabContents* contents) {}
   virtual void LoadingStateChanged(TabContents* source) {}
   virtual void CloseContents(TabContents* source) {}
   virtual void MoveContents(TabContents* source, const gfx::Rect& pos) {}
-  virtual bool IsPopup(TabContents* source) { return false; }
   virtual bool CanReloadContents(TabContents* source) const { return false; }
   virtual void URLStarredChanged(TabContents* source, bool starred) {}
   virtual void UpdateTargetURL(TabContents* source, const GURL& url) {}
@@ -94,7 +102,7 @@ class DevToolsWindow
   Browser* browser_;
   bool docked_;
   bool is_loaded_;
-  bool open_console_on_load_;
+  DevToolsToggleAction action_on_load_;
   NotificationRegistrar registrar_;
   DISALLOW_COPY_AND_ASSIGN(DevToolsWindow);
 };

@@ -1,17 +1,20 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_BOOKMARKS_MODULE_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_BOOKMARKS_MODULE_H_
+#pragma once
 
 #include <list>
+#include <set>
 #include <string>
 
 #include "base/singleton.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
 #include "chrome/browser/extensions/extension_function.h"
 #include "chrome/browser/shell_dialogs.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 
 // Observes BookmarkModel and then routes the notifications as events to
@@ -124,7 +127,7 @@ class RemoveBookmarkFunction : public BookmarksFunction {
  public:
   // Returns true on successful parse and sets invalid_id to true if conversion
   // from id string to int64 failed.
-  static bool ExtractIds(const Value* args, std::list<int64>* ids,
+  static bool ExtractIds(const ListValue* args, std::list<int64>* ids,
                          bool* invalid_id);
   virtual bool RunImpl();
   virtual void GetQuotaLimitHeuristics(
@@ -148,7 +151,7 @@ class CreateBookmarkFunction : public BookmarksFunction {
 
 class MoveBookmarkFunction : public BookmarksFunction {
  public:
-  static bool ExtractIds(const Value* args, std::list<int64>* ids,
+  static bool ExtractIds(const ListValue* args, std::list<int64>* ids,
                          bool* invalid_id);
   virtual void GetQuotaLimitHeuristics(
       std::list<QuotaLimitHeuristic*>* heuristics) const;
@@ -159,7 +162,7 @@ class MoveBookmarkFunction : public BookmarksFunction {
 
 class UpdateBookmarkFunction : public BookmarksFunction {
  public:
-  static bool ExtractIds(const Value* args, std::list<int64>* ids,
+  static bool ExtractIds(const ListValue* args, std::list<int64>* ids,
                          bool* invalid_id);
   virtual void GetQuotaLimitHeuristics(
       std::list<QuotaLimitHeuristic*>* heuristics) const;

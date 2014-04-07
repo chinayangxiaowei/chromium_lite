@@ -4,12 +4,14 @@
 
 #ifndef CHROME_BROWSER_COCOA_DOWNLOAD_ITEM_MAC_H_
 #define CHROME_BROWSER_COCOA_DOWNLOAD_ITEM_MAC_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
 #include "base/scoped_nsobject.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/cancelable_request.h"
+#include "chrome/browser/download/download_item.h"
 #include "chrome/browser/download/download_manager.h"
 #include "chrome/browser/icon_manager.h"
 

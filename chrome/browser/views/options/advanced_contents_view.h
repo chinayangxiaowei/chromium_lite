@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VIEWS_OPTIONS_ADVANCED_CONTENTS_VIEW_H__
 #define CHROME_BROWSER_VIEWS_OPTIONS_ADVANCED_CONTENTS_VIEW_H__
+#pragma once
 
 #include "chrome/browser/views/options/options_page_view.h"
 
@@ -32,7 +33,7 @@ class AdvancedScrollViewContainer : public views::View {
   // The scroll view that contains the advanced options.
   views::ScrollView* scroll_view_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(AdvancedScrollViewContainer);
+  DISALLOW_COPY_AND_ASSIGN(AdvancedScrollViewContainer);
 };
 
 #endif  // CHROME_BROWSER_VIEWS_OPTIONS_ADVANCED_CONTENTS_VIEW_H__

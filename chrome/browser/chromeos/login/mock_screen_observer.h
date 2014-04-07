@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_MOCK_SCREEN_OBSERVER_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_MOCK_SCREEN_OBSERVER_H_
+#pragma once
 
 #include <string>
 
@@ -19,8 +20,6 @@ class MockScreenObserver : public ScreenObserver {
   MockScreenObserver() {}
   virtual ~MockScreenObserver() {}
   MOCK_METHOD1(OnExit, void(ExitCodes));
-  MOCK_METHOD2(OnSwitchLanguage, void(const std::string&,
-                                      ScreenObserver::ExitCodes));
   MOCK_METHOD2(OnSetUserNamePassword,
                void(const std::string&, const std::string&));
 };

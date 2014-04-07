@@ -4,10 +4,9 @@
 
 #ifndef CHROME_BROWSER_GTK_OPTIONS_CONTENT_EXCEPTION_EDITOR_H_
 #define CHROME_BROWSER_GTK_OPTIONS_CONTENT_EXCEPTION_EDITOR_H_
+#pragma once
 
 #include <gtk/gtk.h>
-
-#include <string>
 
 #include "app/gtk_signal.h"
 #include "chrome/browser/content_exceptions_table_model.h"
@@ -26,6 +25,7 @@ class ContentExceptionEditor {
     virtual void AcceptExceptionEdit(
         const HostContentSettingsMap::Pattern& pattern,
         ContentSetting setting,
+        bool is_off_the_record,
         int index,
         bool is_new) = 0;
 
@@ -36,15 +36,19 @@ class ContentExceptionEditor {
   ContentExceptionEditor(GtkWindow* parent,
                          Delegate* delegate,
                          ContentExceptionsTableModel* model,
+                         bool allow_off_the_record,
                          int index,
                          const HostContentSettingsMap::Pattern& pattern,
-                         ContentSetting setting);
+                         ContentSetting setting,
+                         bool is_off_the_record);
+  virtual ~ContentExceptionEditor() {}
 
  private:
   // Returns true if we're adding a new item.
   bool is_new() const { return index_ == -1; }
 
-  bool IsPatternValid(const HostContentSettingsMap::Pattern& pattern) const;
+  bool IsPatternValid(const HostContentSettingsMap::Pattern& pattern,
+                      bool is_off_the_record) const;
 
   void UpdateImage(GtkWidget* image, bool is_valid);
 
@@ -69,6 +73,7 @@ class ContentExceptionEditor {
   GtkWidget* entry_;
   GtkWidget* pattern_image_;
   GtkWidget* action_combo_;
+  GtkWidget* otr_checkbox_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentExceptionEditor);
 };

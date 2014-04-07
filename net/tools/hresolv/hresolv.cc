@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,10 +27,12 @@
 #include "base/condition_variable.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/message_loop.h"
+#include "base/string_number_conversions.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/thread.h"
 #include "base/time.h"
-#include "base/waitable_event.h"
 #include "net/base/address_list.h"
 #include "net/base/completion_callback.h"
 #include "net/base/host_resolver_impl.h"
@@ -50,7 +52,7 @@ static const FlagName kAddrinfoFlagNames[] = {
   {AI_V4MAPPED, "AI_V4MAPPED"},
   {AI_ALL, "AI_ALL"},
   {AI_ADDRCONFIG, "AI_ADDRCONFIG"},
-#if defined(OS_LINUX) || defined(OS_WIN)
+#if !defined(OS_MACOSX)
   {AI_NUMERICSERV, "AI_NUMERICSERV"},
 #endif
 };
@@ -132,28 +134,28 @@ std::string FormatAddrinfoDetails(const struct addrinfo& ai,
   std::string ai_addr = net::NetAddressToString(&ai);
   std::string ai_canonname;
   if (ai.ai_canonname) {
-    ai_canonname = StringPrintf("%s  ai_canonname: %s\n",
-                                indent,
-                                ai.ai_canonname);
+    ai_canonname = base::StringPrintf("%s  ai_canonname: %s\n",
+                                      indent,
+                                      ai.ai_canonname);
   }
-  return StringPrintf("%saddrinfo {\n"
-                      "%s  ai_flags: %s\n"
-                      "%s  ai_family: %s\n"
-                      "%s  ai_socktype: %s\n"
-                      "%s  ai_protocol: %s\n"
-                      "%s  ai_addrlen: %d\n"
-                      "%s  ai_addr: %s\n"
-                      "%s"
-                      "%s}\n",
-                      indent,
-                      indent, ai_flags.c_str(),
-                      indent, ai_family,
-                      indent, ai_socktype,
-                      indent, ai_protocol,
-                      indent, ai.ai_addrlen,
-                      indent, ai_addr.c_str(),
-                      ai_canonname.c_str(),
-                      indent);
+  return base::StringPrintf("%saddrinfo {\n"
+                            "%s  ai_flags: %s\n"
+                            "%s  ai_family: %s\n"
+                            "%s  ai_socktype: %s\n"
+                            "%s  ai_protocol: %s\n"
+                            "%s  ai_addrlen: %d\n"
+                            "%s  ai_addr: %s\n"
+                            "%s"
+                            "%s}\n",
+                            indent,
+                            indent, ai_flags.c_str(),
+                            indent, ai_family,
+                            indent, ai_socktype,
+                            indent, ai_protocol,
+                            indent, ai.ai_addrlen,
+                            indent, ai_addr.c_str(),
+                            ai_canonname.c_str(),
+                            indent);
 }
 
 std::string FormatAddressList(const net::AddressList& address_list,
@@ -185,16 +187,16 @@ class DelayedResolve : public base::RefCounted<DelayedResolve> {
         invoker_(invoker),
         ALLOW_THIS_IN_INITIALIZER_LIST(
             io_callback_(this, &DelayedResolve::OnResolveComplete)) {
-   }
+  }
 
   void Start() {
     net::CompletionCallback* callback = (is_async_) ? &io_callback_ : NULL;
-    net::HostResolver::RequestInfo request_info(host_, 80);
+    net::HostResolver::RequestInfo request_info(net::HostPortPair(host_, 80));
     int rv = resolver_->Resolve(request_info,
                                 &address_list_,
                                 callback,
                                 NULL,
-                                NULL);
+                                net::BoundNetLog());
     if (rv != net::ERR_IO_PENDING) {
       OnResolveComplete(rv);
     }
@@ -213,7 +215,7 @@ class DelayedResolve : public base::RefCounted<DelayedResolve> {
   std::string host_;
   net::AddressList address_list_;
   bool is_async_;
-  scoped_refptr<net::HostResolver> resolver_;
+  net::HostResolver* const resolver_;
   ResolverInvoker* invoker_;
   net::CompletionCallbackImpl<DelayedResolve> io_callback_;
 };
@@ -287,7 +289,7 @@ class ResolverInvoker {
   }
 
   MessageLoop message_loop_;
-  scoped_refptr<net::HostResolver> resolver_;
+  net::HostResolver* const resolver_;
   int remaining_requests_;
 };
 
@@ -323,7 +325,7 @@ bool ParseCommandLine(CommandLine* command_line, CommandLineOptions* options) {
   options->async = command_line->HasSwitch(kAsync);
   if (command_line->HasSwitch(kCacheSize)) {
     std::string cache_size = command_line->GetSwitchValueASCII(kCacheSize);
-    bool valid_size = StringToInt(cache_size, &options->cache_size);
+    bool valid_size = base::StringToInt(cache_size, &options->cache_size);
     if (valid_size) {
       valid_size = options->cache_size >= 0;
     }
@@ -335,7 +337,7 @@ bool ParseCommandLine(CommandLine* command_line, CommandLineOptions* options) {
 
   if (command_line->HasSwitch(kCacheTtl)) {
     std::string cache_ttl = command_line->GetSwitchValueASCII(kCacheTtl);
-    bool valid_ttl = StringToInt(cache_ttl, &options->cache_ttl);
+    bool valid_ttl = base::StringToInt(cache_ttl, &options->cache_ttl);
     if (valid_ttl) {
       valid_ttl = options->cache_ttl >= 0;
     }
@@ -353,14 +355,18 @@ bool ParseCommandLine(CommandLine* command_line, CommandLineOptions* options) {
 }
 
 bool ReadHostsAndTimesFromLooseValues(
-    const std::vector<std::wstring>& loose_args,
+    const std::vector<CommandLine::StringType>& args,
     std::vector<HostAndTime>* hosts_and_times) {
-  std::vector<std::wstring>::const_iterator loose_args_end = loose_args.end();
-  for (std::vector<std::wstring>::const_iterator it = loose_args.begin();
-       it != loose_args_end;
+  for (std::vector<CommandLine::StringType>::const_iterator it =
+           args.begin();
+       it != args.end();
        ++it) {
     // TODO(cbentzel): Read time offset.
+#if defined(OS_WIN)
     HostAndTime host_and_time = {WideToASCII(*it), 0};
+#else
+    HostAndTime host_and_time = {*it, 0};
+#endif
     hosts_and_times->push_back(host_and_time);
   }
   return true;
@@ -395,7 +401,7 @@ bool ReadHostsAndTimesFromFile(const FilePath& path,
       }
       case 2: {
         int timestamp;
-        if (!StringToInt(tokens[1], &timestamp)) {
+        if (!base::StringToInt(tokens[1], &timestamp)) {
           // Unexpected value - keep going.
         }
         if (timestamp < previous_timestamp) {
@@ -430,7 +436,7 @@ int main(int argc, char** argv) {
   // file into memory.
   std::vector<HostAndTime> hosts_and_times;
   if (options.input_path.empty()) {
-    if (!ReadHostsAndTimesFromLooseValues(command_line->GetLooseValues(),
+    if (!ReadHostsAndTimesFromLooseValues(command_line->args(),
                                           &hosts_and_times)) {
       exit(1);
     }
@@ -445,9 +451,8 @@ int main(int argc, char** argv) {
       base::TimeDelta::FromMilliseconds(options.cache_ttl),
       base::TimeDelta::FromSeconds(0));
 
-  scoped_refptr<net::HostResolver> host_resolver(
-      new net::HostResolverImpl(NULL, cache, NULL, 100u));
-  ResolverInvoker invoker(host_resolver.get());
+  net::HostResolverImpl host_resolver(NULL, cache, 100u, NULL);
+  ResolverInvoker invoker(&host_resolver);
   invoker.ResolveAll(hosts_and_times, options.async);
 
   CommandLine::Reset();

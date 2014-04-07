@@ -18,14 +18,14 @@
 namespace net {
 
 SSLClientSocket* SSLClientSocketNSSFactory(
-    ClientSocket* transport_socket,
+    ClientSocketHandle* transport_socket,
     const std::string& hostname,
     const SSLConfig& ssl_config) {
   // TODO(wtc): SSLClientSocketNSS can't do SSL client authentication using
   // CryptoAPI yet (http://crbug.com/37560), so we fall back on
   // SSLClientSocketWin.
 #if defined(OS_WIN)
-  if (ssl_config.client_cert)
+  if (ssl_config.send_client_cert)
     return new SSLClientSocketWin(transport_socket, hostname, ssl_config);
 #endif
 

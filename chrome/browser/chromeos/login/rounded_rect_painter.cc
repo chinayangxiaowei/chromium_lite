@@ -4,11 +4,11 @@
 
 #include "chrome/browser/chromeos/login/rounded_rect_painter.h"
 
-#include "app/resource_bundle.h"
 #include "base/logging.h"
-#include "gfx/canvas.h"
-#include "third_party/skia/include/effects/SkGradientShader.h"
+#include "gfx/canvas_skia.h"
+#include "chrome/browser/chromeos/login/helper.h"
 #include "third_party/skia/include/effects/SkBlurMaskFilter.h"
+#include "third_party/skia/include/effects/SkGradientShader.h"
 #include "views/border.h"
 #include "views/painter.h"
 
@@ -16,13 +16,11 @@ namespace chromeos {
 
 namespace {
 
-const int kBackgroundPadding = 10;
-const int kCornerRadius = 12;
-const int kScreenShadow = 10;
+const SkColor kScreenTopColor = SkColorSetRGB(250, 251, 251);
+const SkColor kScreenBottomColor = SkColorSetRGB(204, 209, 212);
 const SkColor kScreenShadowColor = SkColorSetARGB(64, 34, 54, 115);
-const SkColor kBackgroundTopColor = SkColorSetRGB(82, 139, 224);
-const SkColor kBackgroundBottomColor = SkColorSetRGB(50, 102, 204);
-const SkColor kShadowStrokeColor = SkColorSetRGB(40, 90, 177);
+const SkColor kShadowStrokeColor = 0;
+const int kScreenShadow = 10;
 
 static void DrawRoundedRect(
       gfx::Canvas* canvas,
@@ -55,7 +53,7 @@ static void DrawRoundedRect(
   } else {
     paint.setColor(top_color);
   }
-  canvas->drawPath(path, paint);
+  canvas->AsCanvasSkia()->drawPath(path, paint);
 
   if (stroke_color != 0) {
     // Expand rect by 0.5px so resulting stroke will take the whole pixel.
@@ -68,7 +66,7 @@ static void DrawRoundedRect(
     paint.setStyle(SkPaint::kStroke_Style);
     paint.setStrokeWidth(SkIntToScalar(SK_Scalar1));
     paint.setColor(stroke_color);
-    canvas->drawRoundRect(
+    canvas->AsCanvasSkia()->drawRoundRect(
       rect,
       SkIntToScalar(corner_radius), SkIntToScalar(corner_radius),
       paint);
@@ -93,7 +91,7 @@ static void DrawRoundedRectShadow(
   rect.set(
       SkIntToScalar(x + shadow / 2), SkIntToScalar(y + shadow / 2),
       SkIntToScalar(x + w - shadow / 2), SkIntToScalar(y + h - shadow / 2));
-  canvas->drawRoundRect(
+  canvas->AsCanvasSkia()->drawRoundRect(
       rect,
       SkIntToScalar(corner_radius), SkIntToScalar(corner_radius),
       paint);
@@ -114,8 +112,9 @@ static void DrawRectWithBorder(int w,
   if (padding > 0) {
     SkPaint paint;
     paint.setColor(padding_color);
-    canvas->drawRectCoords(SkIntToScalar(0), SkIntToScalar(0),
-                           SkIntToScalar(w), SkIntToScalar(h), paint);
+    canvas->AsCanvasSkia()->drawRectCoords(
+        SkIntToScalar(0), SkIntToScalar(0), SkIntToScalar(w), SkIntToScalar(h),
+        paint);
   }
   if (border->shadow > 0) {
     DrawRoundedRectShadow(
@@ -173,26 +172,7 @@ class RoundedRectBorder : public views::Border {
 
 void RoundedRectBorder::Paint(const views::View& view,
                               gfx::Canvas* canvas) const {
-  gfx::Rect clip_rect;
-  if (!canvas->GetClipRect(&clip_rect))
-    return;  // Empty clip rectangle, nothing to paint.
-
-  int w = view.width();
-  int h = view.height();
-
-  gfx::Insets insets;
-  GetInsets(&insets);
-  SkRect remove;
-  remove.set(SkIntToScalar(insets.left()),
-             SkIntToScalar(insets.top()),
-             SkIntToScalar(w - insets.right()),
-             SkIntToScalar(h - insets.bottom()));
-  canvas->clipRect(remove, SkRegion::kDifference_Op);
-
-  if (canvas->IntersectsClipRectInt(0, 0, w, h)) {
-    DrawRectWithBorder(w, h, border_, canvas);
-  }
-  canvas->clipRect(remove, SkRegion::kIntersect_Op);
+  // Don't paint anything. RoundedRectBorder is used to provide insets only.
 }
 
 void RoundedRectBorder::GetInsets(gfx::Insets* insets) const {
@@ -202,26 +182,68 @@ void RoundedRectBorder::GetInsets(gfx::Insets* insets) const {
   insets->Set(inset - shadow / 3, inset, inset + shadow / 3, inset);
 }
 
-}  //  namespace
+// Simple solid round background.
+class RoundedBackground : public views::Background {
+ public:
+  explicit RoundedBackground(int corner_radius,
+                             int stroke_width,
+                             const SkColor& background_color,
+                             const SkColor& stroke_color)
+      : corner_radius_(corner_radius),
+        stroke_width_(stroke_width),
+        stroke_color_(stroke_color) {
+    SetNativeControlColor(background_color);
+  }
+
+  virtual void Paint(gfx::Canvas* canvas, views::View* view) const {
+    SkRect rect;
+    rect.iset(0, 0, view->width(), view->height());
+    SkPath path;
+    path.addRoundRect(rect,
+                      SkIntToScalar(corner_radius_),
+                      SkIntToScalar(corner_radius_));
+    // Draw interior.
+    SkPaint paint;
+    paint.setStyle(SkPaint::kFill_Style);
+    paint.setFlags(SkPaint::kAntiAlias_Flag);
+    paint.setColor(get_color());
+    canvas->AsCanvasSkia()->drawPath(path, paint);
+    // Redraw boundary region with correspoinding color.
+    paint.setStyle(SkPaint::kStroke_Style);
+    paint.setStrokeWidth(SkIntToScalar(stroke_width_));
+    paint.setColor(stroke_color_);
+    canvas->AsCanvasSkia()->drawPath(path, paint);
+  }
+
+ private:
+  int corner_radius_;
+  int stroke_width_;
+  SkColor stroke_color_;
+
+  DISALLOW_COPY_AND_ASSIGN(RoundedBackground);
+};
+
+}  // namespace
 
 // static
-const BorderDefinition BorderDefinition::kWizardBorder = {
-  kBackgroundPadding,
-  SK_ColorBLACK,
-  0,
-  SK_ColorBLACK,
-  kCornerRadius,
-  kBackgroundTopColor,
-  kBackgroundBottomColor
-};
 const BorderDefinition BorderDefinition::kScreenBorder = {
   0,
   SK_ColorBLACK,
   kScreenShadow,
   kScreenShadowColor,
-  kCornerRadius,
-  SK_ColorWHITE,
-  SK_ColorWHITE
+  login::kScreenCornerRadius,
+  kScreenTopColor,
+  kScreenBottomColor
+};
+
+const BorderDefinition BorderDefinition::kUserBorder = {
+  0,
+  SK_ColorBLACK,
+  0,
+  kScreenShadowColor,
+  login::kUserCornerRadius,
+  kScreenTopColor,
+  kScreenBottomColor
 };
 
 views::Painter* CreateWizardPainter(const BorderDefinition* const border) {
@@ -230,6 +252,14 @@ views::Painter* CreateWizardPainter(const BorderDefinition* const border) {
 
 views::Border* CreateWizardBorder(const BorderDefinition* const border) {
   return new RoundedRectBorder(border);
+}
+
+views::Background* CreateRoundedBackground(int corner_radius,
+                                           int stroke_width,
+                                           SkColor background_color,
+                                           SkColor stroke_color) {
+  return new RoundedBackground(
+      corner_radius, stroke_width, background_color, stroke_color);
 }
 
 }  // namespace chromeos

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_VIEW_TYPES_H_
 #define CHROME_COMMON_VIEW_TYPES_H_
+#pragma once
 
 #include "base/basictypes.h"
 
@@ -12,9 +13,8 @@ class ViewType {
  public:
   enum Type {
     INVALID,
+    BACKGROUND_CONTENTS,
     TAB_CONTENTS,
-    EXTENSION_TOOLSTRIP,
-    EXTENSION_MOLE,
     EXTENSION_BACKGROUND_PAGE,
     EXTENSION_POPUP,
     EXTENSION_INFOBAR,
@@ -26,16 +26,11 @@ class ViewType {
   // Constant strings corresponding to the Type enumeration values.  Used
   // when converting JS arguments.
   static const char* kTabContents;
-  static const char* kToolstrip;
-  static const char* kMole;
   static const char* kBackgroundPage;
   static const char* kPopup;
   static const char* kInfobar;
   static const char* kNotification;
   static const char* kAll;
-
-  // Return true if a view type should automatically resize to fit its contents.
-  static bool ShouldAutoResize(Type);
 
  private:
   // This class is for scoping only, so you shouldn't create an instance of it.

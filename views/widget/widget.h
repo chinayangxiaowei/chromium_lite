@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_WIDGET_WIDGET_H_
 #define VIEWS_WIDGET_WIDGET_H_
+#pragma once
 
 #include <vector>
 
@@ -94,6 +95,10 @@ class Widget {
   static Widget* GetWidgetFromNativeView(gfx::NativeView native_view);
   static Widget* GetWidgetFromNativeWindow(gfx::NativeWindow native_window);
 
+  // Enumerates all windows pertaining to us and notifies their
+  // view hierarchies that the locale has changed.
+  static void NotifyLocaleChanged();
+
   // Initialize the Widget with a parent and an initial desired size.
   // |contents_view| is the view that will be the single child of RootView
   // within this Widget. As contents_view is inserted into RootView's tree,
@@ -102,6 +107,13 @@ class Widget {
   // the caller is responsible for populating the RootView, and sizing its
   // contents as the window is sized.
   virtual void Init(gfx::NativeView parent, const gfx::Rect& bounds) = 0;
+
+  // Initialize the widget with a views::Widget parent and an initial
+  // desired size.  This internally invokes |Init(gfx::NativeView,
+  // const gfx::Rect&)| but it determines the correct native view
+  // for each platform and the type of widget. Passing NULL to
+  // |parent| is same as invoking |Init(NULL, bounds)|.
+  virtual void InitWithWidget(Widget* parent, const gfx::Rect& bounds) = 0;
 
   // Returns the WidgetDelegate for delegating certain events.
   virtual WidgetDelegate* GetWidgetDelegate() = 0;
@@ -169,6 +181,9 @@ class Widget {
 
   // Returns whether the Widget is the currently active window.
   virtual bool IsActive() const = 0;
+
+  // Returns whether the Widget is customized for accessibility.
+  virtual bool IsAccessibleWidget() const = 0;
 
   // Starts a drag operation for the specified view. |point| is a position in
   // |view| coordinates that the drag was initiated from.

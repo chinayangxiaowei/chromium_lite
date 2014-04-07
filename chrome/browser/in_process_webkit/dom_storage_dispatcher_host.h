@@ -1,9 +1,10 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.  Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_IN_PROCESS_WEBKIT_DOM_STORAGE_DISPATCHER_HOST_H_
 #define CHROME_BROWSER_IN_PROCESS_WEBKIT_DOM_STORAGE_DISPATCHER_HOST_H_
+#pragma once
 
 #include "base/process.h"
 #include "base/ref_counted.h"
@@ -18,7 +19,6 @@ class GURL;
 class HostContentSettingsMap;
 class ResourceMessageFilter;
 class Task;
-class WebKitThread;
 struct ViewMsg_DOMStorageEvent_Params;
 
 // This class handles the logistics of DOM Storage within the browser process.
@@ -29,8 +29,8 @@ class DOMStorageDispatcherHost
  public:
   // Only call the constructor from the UI thread.
   DOMStorageDispatcherHost(
-      ResourceMessageFilter* resource_message_filter_,
-      WebKitContext* webkit_context, WebKitThread* webkit_thread);
+      ResourceMessageFilter* resource_message_filter,
+      WebKitContext* webkit_context);
 
   // Only call from ResourceMessageFilter on the IO thread.
   void Init(int process_id, base::ProcessHandle process_handle);
@@ -40,7 +40,7 @@ class DOMStorageDispatcherHost
   void Shutdown();
 
   // Only call from ResourceMessageFilter on the IO thread.
-  bool OnMessageReceived(const IPC::Message& message, bool *msg_is_ok);
+  bool OnMessageReceived(const IPC::Message& message, bool* msg_is_ok);
 
   // Clones a session storage namespace and returns the cloned namespaces' id.
   // Only call on the IO thread.
@@ -100,9 +100,6 @@ class DOMStorageDispatcherHost
 
   // Data shared between renderer processes with the same profile.
   scoped_refptr<WebKitContext> webkit_context_;
-
-  // ResourceDispatcherHost takes care of destruction.  Immutable.
-  WebKitThread* webkit_thread_;
 
   // Only set and use on the IO thread.
   ResourceMessageFilter* resource_message_filter_;

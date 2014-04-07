@@ -7,7 +7,7 @@
 #include "base/values.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
@@ -19,10 +19,10 @@
 typedef BrowserInit::LaunchWithProfile::Tab Tab;
 
 // Key used in dictionaries for the app id.
-static const wchar_t kAppID[] = L"app_id";
+static const char kAppID[] = "app_id";
 
 // Key used in dictionaries for the url.
-static const wchar_t kURL[] = L"url";
+static const char kURL[] = "url";
 
 // Returns true if |browser| has any pinned tabs.
 static bool HasPinnedTabs(Browser* browser) {
@@ -43,13 +43,12 @@ static void EncodePinnedTab(TabStripModel* model,
 
   TabContents* tab_contents = model->GetTabContentsAt(index);
   if (model->IsAppTab(index)) {
-    Extension* extension = tab_contents->app_extension();
+    Extension* extension = tab_contents->extension_app();
     DCHECK(extension);
     value->SetString(kAppID, extension->id());
-    // For apps we use the launch url. We do this for two reasons:
+    // For apps we use the launch url. We do this for the following reason:
     // . the user is effectively restarting the app, so that returning them to
     //   the app's launch page seems closest to what they expect.
-    // . we do the same when restoring a phantom tab.
     value->SetString(kURL, extension->GetFullLaunchURL().spec());
     values->Append(value.release());
   } else {

@@ -5,9 +5,7 @@
 #ifndef WEBKIT_GLUE_MEDIA_BUFFERED_DATA_SOURCE_H_
 #define WEBKIT_GLUE_MEDIA_BUFFERED_DATA_SOURCE_H_
 
-#include <algorithm>
 #include <string>
-#include <vector>
 
 #include "base/callback.h"
 #include "base/lock.h"
@@ -23,9 +21,10 @@
 #include "net/base/completion_callback.h"
 #include "net/base/file_stream.h"
 #include "webkit/glue/media/media_resource_loader_bridge_factory.h"
+#include "webkit/glue/media/web_data_source.h"
+#include "webkit/glue/webmediaplayer_impl.h"
 
 namespace webkit_glue {
-
 /////////////////////////////////////////////////////////////////////////////
 // BufferedResourceLoader
 // This class works inside demuxer thread and render thread. It contains a
@@ -90,6 +89,9 @@ class BufferedResourceLoader :
   // is not available.
   virtual int64 GetBufferedLastBytePosition();
 
+  // Sets whether deferring data is allowed or disallowed.
+  virtual void SetAllowDefer(bool is_allowed);
+
   // Gets the content length in bytes of the instance after this loader has been
   // started. If this value is -1, then content length is unknown.
   virtual int64 content_length() { return content_length_; }
@@ -105,32 +107,35 @@ class BufferedResourceLoader :
   // Returns true if network is currently active.
   virtual bool network_activity() { return !completed_ && !deferred_; }
 
+  // Returns resulting URL.
+  virtual const GURL& url() { return url_; }
+
   /////////////////////////////////////////////////////////////////////////////
   // webkit_glue::ResourceLoaderBridge::Peer implementations.
   virtual void OnUploadProgress(uint64 position, uint64 size) {}
   virtual bool OnReceivedRedirect(
       const GURL& new_url,
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info,
+      const webkit_glue::ResourceResponseInfo& info,
       bool* has_new_first_party_for_cookies,
       GURL* new_first_party_for_cookies);
   virtual void OnReceivedResponse(
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info,
+      const webkit_glue::ResourceResponseInfo& info,
       bool content_filtered);
+  virtual void OnDownloadedData(int len) {}
   virtual void OnReceivedData(const char* data, int len);
-  virtual void OnCompletedRequest(const URLRequestStatus& status,
-      const std::string& security_info);
+  virtual void OnCompletedRequest(
+      const URLRequestStatus& status,
+      const std::string& security_info,
+      const base::Time& completion_time);
   GURL GetURLForDebugging() const { return url_; }
 
  protected:
   friend class base::RefCountedThreadSafe<BufferedResourceLoader>;
 
-  // An empty constructor so mock classes can be constructed.
-  BufferedResourceLoader() {
-  }
-
   virtual ~BufferedResourceLoader();
 
  private:
+  friend class BufferedResourceLoaderTest;
 
   // Defer the resource loading if the buffer is full.
   void EnableDeferIfNeeded();
@@ -150,7 +155,7 @@ class BufferedResourceLoader :
   void ReadInternal();
 
   // If we have made a range request, verify the response from the server.
-  bool VerifyPartialResponse(const ResourceLoaderBridge::ResponseInfo& info);
+  bool VerifyPartialResponse(const ResourceResponseInfo& info);
 
   // Done with read. Invokes the read callback and reset parameters for the
   // read request.
@@ -169,6 +174,9 @@ class BufferedResourceLoader :
 
   // True if resource loading was deferred.
   bool deferred_;
+
+  // True if resource loader is allowed to defer, false otherwise.
+  bool defer_allowed_;
 
   // True if resource loading has completed.
   bool completed_;
@@ -209,18 +217,20 @@ class BufferedResourceLoader :
   DISALLOW_COPY_AND_ASSIGN(BufferedResourceLoader);
 };
 
-class BufferedDataSource : public media::DataSource {
+class BufferedDataSource : public WebDataSource {
  public:
   // Methods called from pipeline thread
   // Static methods for creating this class.
   static media::FilterFactory* CreateFactory(
       MessageLoop* message_loop,
-      webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory) {
-    return new media::FilterFactoryImpl2<
+      webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory,
+      webkit_glue::WebMediaPlayerImpl::Proxy* proxy) {
+    return new media::FilterFactoryImpl3<
         BufferedDataSource,
         MessageLoop*,
-        webkit_glue::MediaResourceLoaderBridgeFactory*>(
-        message_loop, bridge_factory);
+        webkit_glue::MediaResourceLoaderBridgeFactory*,
+        webkit_glue::WebMediaPlayerImpl::Proxy*>(
+        message_loop, bridge_factory, proxy);
   }
 
   // media::FilterFactoryImpl2 implementation.
@@ -230,7 +240,8 @@ class BufferedDataSource : public media::DataSource {
   // media::MediaFilter implementation.
   virtual void Initialize(const std::string& url,
                           media::FilterCallback* callback);
-  virtual void Stop();
+  virtual void Stop(media::FilterCallback* callback);
+  virtual void SetPlaybackRate(float playback_rate);
 
   // media::DataSource implementation.
   // Called from demuxer thread.
@@ -244,10 +255,15 @@ class BufferedDataSource : public media::DataSource {
     return media_format_;
   }
 
+  // webkit_glue::WebDataSource implementation.
+  virtual bool HasSingleOrigin();
+  virtual void Abort();
+
  protected:
   BufferedDataSource(
       MessageLoop* render_loop,
-      webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory);
+      webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory,
+      webkit_glue::WebMediaPlayerImpl::Proxy* proxy);
   virtual ~BufferedDataSource();
 
   // A factory method to create a BufferedResourceLoader based on the read
@@ -262,10 +278,11 @@ class BufferedDataSource : public media::DataSource {
   virtual base::TimeDelta GetTimeoutMilliseconds();
 
  private:
-  friend class media::FilterFactoryImpl2<
+  friend class media::FilterFactoryImpl3<
       BufferedDataSource,
       MessageLoop*,
-      webkit_glue::MediaResourceLoaderBridgeFactory*>;
+      webkit_glue::MediaResourceLoaderBridgeFactory*,
+      webkit_glue::WebMediaPlayerImpl::Proxy*>;
 
   // Posted to perform initialization on render thread and start resource
   // loading.
@@ -275,16 +292,23 @@ class BufferedDataSource : public media::DataSource {
   void ReadTask(int64 position, int read_size, uint8* read_buffer,
                 media::DataSource::ReadCallback* read_callback);
 
-  // Task posted when Stop() is called.
-  void StopTask();
+  // Task posted when Stop() is called. Stops |watch_dog_timer_| and
+  // |loader_|, reset Read() variables, and set |stopped_on_render_loop_|
+  // to signal any remaining tasks to stop.
+  void CleanupTask();
 
   // Restart resource loading on render thread.
   void RestartLoadingTask();
 
   // This task monitors the current active read request. If the current read
   // request has timed out, this task will destroy the current loader and
-  // creates a new one to accomodate the read request.
+  // creates a new one to accommodate the read request.
   void WatchDogTask();
+
+  // This task uses the current playback rate with the previous playback rate
+  // to determine whether we are going from pause to play and play to pause,
+  // and signals the buffered resource loader accordingly.
+  void SetPlaybackRateTask(float playback_rate);
 
   // The method that performs actual read. This method can only be executed on
   // the render thread.
@@ -338,6 +362,9 @@ class BufferedDataSource : public media::DataSource {
   // i.e. range request is not supported.
   bool streaming_;
 
+  // True if the media resource has a single origin.
+  bool single_origin_;
+
   // A factory object to produce ResourceLoaderBridge.
   scoped_ptr<webkit_glue::MediaResourceLoaderBridgeFactory> bridge_factory_;
 
@@ -381,9 +408,13 @@ class BufferedDataSource : public media::DataSource {
   // thread and read from the render thread.
   bool stop_signal_received_;
 
-  // This variable is set by StopTask() that indicates this object is stopped
+  // This variable is set by CleanupTask() that indicates this object is stopped
   // on the render thread.
   bool stopped_on_render_loop_;
+
+  // This variable is true when we are in a paused state and false when we
+  // are in a playing state.
+  bool media_is_paused_;
 
   // This timer is to run the WatchDogTask repeatedly. We use a timer instead
   // of doing PostDelayedTask() reduce the extra reference held by the message

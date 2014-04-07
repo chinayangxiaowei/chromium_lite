@@ -33,14 +33,14 @@
 /**
  * A RawData object contains raw binary data which could contain
  * image, audio, text, or other information.
- * 
+ *
  * var request =  g_pack.createArchiveRequest();
- * 
+ *
  * request.onfileavailable = function(rawData) {
  *   var texture = g_pack.createTextureFromRawData(rawData, true);
  *   ...
  * };
- * 
+ *
  * request.send();
  * @constructor
  */
@@ -55,7 +55,7 @@ o3d.inherit('RawData', 'NamedObject');
  * and the uri must end in .json, .txt, .xml, .ini or .csv
  * @type {string}
  */
-o3d.RawData.prototype.string_value = '';
+o3d.RawData.prototype.stringValue = '';
 
 
 /**

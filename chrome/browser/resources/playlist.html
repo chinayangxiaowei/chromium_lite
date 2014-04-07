@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <title>Media Playlist</title>
 <style type="text/css">
+body {
+  background: #080809;
+}
 
 .playlist {
   width: 100%;
@@ -35,11 +38,21 @@
 }
 
 .title {
- 
+
+}
+
+.innertitle {
+  text-decoration: line-through;
+}
+
+.error {
+  color: red;
+  float: left;
+  padding-right: 5px;
 }
 
 </style>
-<script src='local_strings.js'></script>
+<script src="shared/js/local_strings.js"></script>
 <script>
 
 function $(o) {
@@ -63,6 +76,12 @@ function pathIsAudioFile(path) {
 var currentPlaylist = null;
 var currentOffset = -1;
 function load() {
+  document.body.addEventListener('dragover', function(e) {
+    if (e.preventDefault) e.preventDefault();
+  });
+  document.body.addEventListener('drop', function(e) {
+    if (e.preventDefault) e.preventDefault();
+  });
   chrome.send("getCurrentPlaylist", []);
 };
 
@@ -95,8 +114,21 @@ function updateUI() {
       rowdiv.appendChild(numberdiv);
 
       var titlediv = document.createElement('div');
-      titlediv.classname = 'title';
-      titlediv.textContent = getDisplayNameFromPath(currentPlaylist[x].path);
+      if (currentPlaylist[x].error) {
+        var errormark = document.createElement('div');
+        errormark.className = 'error';
+        errormark.textContent = 'X';
+        var innertitle = document.createElement('div');
+        innertitle.className = 'innertitle';
+        innertitle.textContent = 
+          decodeURI(getDisplayNameFromPath(currentPlaylist[x].path));
+        titlediv.appendChild(errormark);
+        titlediv.appendChild(innertitle);
+      } else {
+        titlediv.className = 'title';
+        titlediv.textContent = 
+          decodeURI(getDisplayNameFromPath(currentPlaylist[x].path));
+      }
       rowdiv.appendChild(titlediv);
       rowdiv.onclick = new Function('setPlaylistOffset(' + x + ')');
       if (currentOffset == x) {

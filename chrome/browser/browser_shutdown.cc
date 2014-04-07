@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,33 +7,43 @@
 #include <string>
 
 #include "app/resource_bundle.h"
+#include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/histogram.h"
 #include "base/path_service.h"
+#include "base/process_util.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/thread.h"
 #include "base/time.h"
-#include "base/waitable_event.h"
 #include "build/build_config.h"
+#include "chrome/browser/about_flags.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/dom_ui/chrome_url_data_manager.h"
-#include "chrome/browser/first_run.h"
+#include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/jankometer.h"
 #include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/browser/plugin_process_host.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_widget_host.h"
+#include "chrome/browser/service/service_process_control_manager.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/chrome_plugin_lib.h"
-#include "net/dns_global.h"
+#include "chrome/common/switch_utils.h"
+#include "net/predictor_api.h"
 
 #if defined(OS_WIN)
 #include "chrome/browser/rlz/rlz.h"
+#endif
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/boot_times_loader.h"
 #endif
 
 using base::Time;
@@ -41,10 +51,8 @@ using base::TimeDelta;
 
 namespace browser_shutdown {
 
-#if defined(OS_MACOSX)
 // Whether the browser is trying to quit (e.g., Quit chosen from menu).
 bool g_trying_to_quit = false;
-#endif  // OS_MACOSX
 
 Time shutdown_started_;
 ShutdownType shutdown_type_ = NOT_VALID;
@@ -96,10 +104,18 @@ FilePath GetShutdownMsPath() {
 }
 
 void Shutdown() {
+#if defined(OS_CHROMEOS)
+  chromeos::BootTimesLoader::Get()->AddLogoutTimeMarker(
+      "BrowserShutdownStarted", false);
+#endif
+
   // Unload plugins. This needs to happen on the IO thread.
-  ChromeThread::PostTask(
-        ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
         NewRunnableFunction(&ChromePluginLib::UnloadAllPlugins));
+
+  // Shutdown all IPC channels to service processes.
+  ServiceProcessControlManager::instance()->Shutdown();
 
   // WARNING: During logoff/shutdown (WM_ENDSESSION) we may not have enough
   // time to get here. If you have something that *must* happen on end session,
@@ -111,7 +127,7 @@ void Shutdown() {
 
   PrefService* prefs = g_browser_process->local_state();
 
-  chrome_browser_net::SaveDnsPrefetchStateForNextStartupAndTrim(prefs);
+  chrome_browser_net::SavePredictorStateForNextStartupAndTrim(prefs);
 
   MetricsService* metrics = g_browser_process->metrics_service();
   if (metrics) {
@@ -128,9 +144,17 @@ void Shutdown() {
                       shutdown_num_processes_slow_);
   }
 
+  // Check local state for the restart flag so we can restart the session below.
+  bool restart_last_session = false;
+  if (prefs->HasPrefPath(prefs::kRestartLastSessionOnShutdown)) {
+    restart_last_session =
+        prefs->GetBoolean(prefs::kRestartLastSessionOnShutdown);
+    prefs->ClearPref(prefs::kRestartLastSessionOnShutdown);
+  }
+
   prefs->SavePersistentPrefs();
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) && defined(GOOGLE_CHROME_BUILD)
   // Cleanup any statics created by RLZ. Must be done before NotificationService
   // is destroyed.
   RLZTracker::CleanupRlz();
@@ -140,6 +164,10 @@ void Shutdown() {
   // before calling UninstallJankometer().
   delete g_browser_process;
   g_browser_process = NULL;
+#if defined(OS_CHROMEOS)
+  chromeos::BootTimesLoader::Get()->AddLogoutTimeMarker("BrowserDeleted",
+                                                        true);
+#endif
 
   // Uninstall Jank-O-Meter here after the IO thread is no longer running.
   UninstallJankometer();
@@ -154,12 +182,56 @@ void Shutdown() {
   }
 #endif
 
+  if (restart_last_session) {
+#if !defined(OS_CHROMEOS)
+    // Make sure to relaunch the browser with the original command line plus
+    // the Restore Last Session flag. Note that Chrome can be launched (ie.
+    // through ShellExecute on Windows) with a switch argument terminator at
+    // the end (double dash, as described in b/1366444) plus a URL,
+    // which prevents us from appending to the command line directly (issue
+    // 46182). We therefore use GetSwitches to copy the command line (it stops
+    // at the switch argument terminator).
+    CommandLine old_cl(*CommandLine::ForCurrentProcess());
+    scoped_ptr<CommandLine> new_cl(new CommandLine(old_cl.GetProgram()));
+    std::map<std::string, CommandLine::StringType> switches =
+        old_cl.GetSwitches();
+    // Remove the switches that shouldn't persist across restart.
+    about_flags::RemoveFlagsSwitches(&switches);
+    switches::RemoveSwitchesForAutostart(&switches);
+    // Append the old switches to the new command line.
+    for (std::map<std::string, CommandLine::StringType>::const_iterator i =
+        switches.begin(); i != switches.end(); ++i) {
+      CommandLine::StringType switch_value = i->second;
+      if (!switch_value.empty())
+        new_cl->AppendSwitchNative(i->first, i->second);
+      else
+        new_cl->AppendSwitch(i->first);
+    }
+    // Ensure restore last session is set.
+    if (!new_cl->HasSwitch(switches::kRestoreLastSession))
+      new_cl->AppendSwitch(switches::kRestoreLastSession);
+
+#if defined(OS_WIN) || defined(OS_LINUX)
+    Upgrade::RelaunchChromeBrowser(*new_cl.get());
+#endif  // defined(OS_WIN) || defined(OS_LINUX)
+
+#if defined(OS_MACOSX)
+    new_cl->AppendSwitch(switches::kActivateOnLaunch);
+    base::LaunchApp(*new_cl.get(), false, false, NULL);
+#endif  // defined(OS_MACOSX)
+
+#else
+    NOTIMPLEMENTED();
+#endif  // !defined(OS_CHROMEOS)
+  }
+
   if (shutdown_type_ > NOT_VALID && shutdown_num_processes_ > 0) {
     // Measure total shutdown time as late in the process as possible
     // and then write it to a file to be read at startup.
     // We can't use prefs since all services are shutdown at this point.
     TimeDelta shutdown_delta = Time::Now() - shutdown_started_;
-    std::string shutdown_ms = Int64ToString(shutdown_delta.InMilliseconds());
+    std::string shutdown_ms =
+        base::Int64ToString(shutdown_delta.InMilliseconds());
     int len = static_cast<int>(shutdown_ms.length()) + 1;
     FilePath shutdown_ms_file = GetShutdownMsPath();
     file_util::WriteFile(shutdown_ms_file, shutdown_ms.c_str(), len);
@@ -172,13 +244,13 @@ void ReadLastShutdownFile(
     ShutdownType type,
     int num_procs,
     int num_procs_slow) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   FilePath shutdown_ms_file = GetShutdownMsPath();
   std::string shutdown_ms_str;
   int64 shutdown_ms = 0;
   if (file_util::ReadFileToString(shutdown_ms_file, &shutdown_ms_str))
-    shutdown_ms = StringToInt64(shutdown_ms_str);
+    base::StringToInt64(shutdown_ms_str, &shutdown_ms);
   file_util::Delete(shutdown_ms_file, false);
 
   if (type == NOT_VALID || shutdown_ms == 0 || num_procs == 0)
@@ -225,13 +297,12 @@ void ReadLastShutdownInfo() {
   prefs->SetInteger(prefs::kShutdownNumProcessesSlow, 0);
 
   // Read and delete the file on the file thread.
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
       NewRunnableFunction(
           &ReadLastShutdownFile, type, num_procs, num_procs_slow));
 }
 
-#if defined(OS_MACOSX)
 void SetTryingToQuit(bool quitting) {
   g_trying_to_quit = quitting;
 }
@@ -239,6 +310,13 @@ void SetTryingToQuit(bool quitting) {
 bool IsTryingToQuit() {
   return g_trying_to_quit;
 }
+
+bool ShuttingDownWithoutClosingBrowsers() {
+#if defined(USE_X11)
+  if (GetShutdownType() == browser_shutdown::END_SESSION)
+    return true;
 #endif
+  return false;
+}
 
 }  // namespace browser_shutdown

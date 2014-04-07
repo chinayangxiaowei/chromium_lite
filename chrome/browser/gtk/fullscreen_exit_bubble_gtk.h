@@ -4,13 +4,15 @@
 
 #ifndef CHROME_BROWSER_GTK_FULLSCREEN_EXIT_BUBBLE_GTK_H_
 #define CHROME_BROWSER_GTK_FULLSCREEN_EXIT_BUBBLE_GTK_H_
+#pragma once
 
-#include <gtk/gtk.h>
-
+#include "app/gtk_signal.h"
+#include "app/gtk_signal_registrar.h"
 #include "base/timer.h"
 #include "chrome/browser/gtk/slide_animator_gtk.h"
 
 typedef struct _GtkFloatingContainer GtkFloatingContainer;
+typedef struct _GtkWidget GtkWidget;
 
 // FullscreenExitBubbleGTK is responsible for showing a bubble atop the screen
 // in fullscreen mode, telling users how to exit and providing a click target.
@@ -18,7 +20,7 @@ class FullscreenExitBubbleGtk {
  public:
   // We place the bubble in |container|.
   explicit FullscreenExitBubbleGtk(GtkFloatingContainer* container);
-  ~FullscreenExitBubbleGtk();
+  virtual ~FullscreenExitBubbleGtk();
 
   void InitWidgets();
 
@@ -30,12 +32,9 @@ class FullscreenExitBubbleGtk {
   // Hide the exit bubble.
   void Hide();
 
-  static void OnSetFloatingPosition(GtkFloatingContainer* floating_container,
-                                    GtkAllocation* allocation,
-                                    FullscreenExitBubbleGtk* bubble);
-
-  static void OnLinkClicked(GtkWidget* link,
-                            FullscreenExitBubbleGtk* bubble);
+  CHROMEGTK_CALLBACK_1(FullscreenExitBubbleGtk, void, OnSetFloatingPosition,
+                       GtkAllocation*);
+  CHROMEGTK_CALLBACK_0(FullscreenExitBubbleGtk, void, OnLinkClicked);
 
   // A pointer to the floating container that is our parent.
   GtkFloatingContainer* container_;
@@ -45,6 +44,8 @@ class FullscreenExitBubbleGtk {
 
   // The timer that does the initial hiding of the exit bubble.
   base::OneShotTimer<FullscreenExitBubbleGtk> initial_delay_;
+
+  GtkSignalRegistrar signals_;
 };
 
 #endif  // CHROME_BROWSER_GTK_FULLSCREEN_EXIT_BUBBLE_GTK_H_

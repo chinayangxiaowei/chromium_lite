@@ -4,10 +4,13 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_LOGIN_UTILS_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_LOGIN_UTILS_H_
+#pragma once
 
 #include <string>
-#include <vector>
 
+#include "chrome/common/net/gaia/gaia_auth_consumer.h"
+
+class GURL;
 class Profile;
 
 namespace chromeos {
@@ -32,12 +35,30 @@ class LoginUtils {
 
   // Invoked after the user has successfully logged in. This launches a browser
   // and does other bookkeeping after logging in.
-  virtual void CompleteLogin(const std::string& username,
-                             const std::string& credentials) = 0;
+  virtual void CompleteLogin(
+      const std::string& username,
+      const std::string& password,
+      const GaiaAuthConsumer::ClientLoginResult& credentials) = 0;
+
+  // Invoked after the tmpfs is successfully mounted.
+  // Asks session manager to restart Chrome in Browse Without Sign In mode.
+  // |start_url| is url for launched browser to open.
+  virtual void CompleteOffTheRecordLogin(const GURL& start_url) = 0;
 
   // Creates and returns the authenticator to use. The caller owns the returned
   // Authenticator and must delete it when done.
   virtual Authenticator* CreateAuthenticator(LoginStatusConsumer* consumer) = 0;
+
+  // Used to postpone browser launch via DoBrowserLaunch() if some post
+  // login screen is to be shown.
+  virtual void EnableBrowserLaunch(bool enable) = 0;
+
+  // Returns if browser launch enabled now or not.
+  virtual bool IsBrowserLaunchEnabled() const = 0;
+
+  // Prewarms the authentication network connection.
+  virtual void PrewarmAuthentication() = 0;
+
 };
 
 }  // namespace chromeos

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@ NullAudioRenderer::NullAudioRenderer()
 }
 
 NullAudioRenderer::~NullAudioRenderer() {
-  Stop();
+  DCHECK_EQ(kNullThreadHandle, thread_);
 }
 
 // static
@@ -48,7 +48,8 @@ void NullAudioRenderer::ThreadMain() {
     if (GetPlaybackRate() > 0.0f)  {
       size_t bytes = FillBuffer(buffer_.get(),
                                 buffer_size_,
-                                base::TimeDelta());
+                                base::TimeDelta(),
+                                true);
 
       // Calculate our sleep duration, taking playback rate into consideration.
       sleep_in_milliseconds =

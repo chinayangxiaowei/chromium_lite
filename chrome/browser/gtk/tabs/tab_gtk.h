@@ -1,11 +1,12 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_GTK_TABS_TAB_GTK_H_
 #define CHROME_BROWSER_GTK_TABS_TAB_GTK_H_
+#pragma once
 
-#include "app/theme_provider.h"
+#include "app/gtk_signal.h"
 #include "base/basictypes.h"
 #include "base/message_loop.h"
 #include "chrome/browser/gtk/tabs/tab_renderer_gtk.h"
@@ -78,7 +79,7 @@ class TabGtk : public TabRendererGtk,
     virtual ThemeProvider* GetThemeProvider() = 0;
 
    protected:
-    ~TabDelegate() {}
+    virtual ~TabDelegate() {}
   };
 
   explicit TabGtk(TabDelegate* delegate);
@@ -98,9 +99,7 @@ class TabGtk : public TabRendererGtk,
   virtual bool IsVisible() const;
   virtual void SetVisible(bool visible) const;
   virtual void CloseButtonClicked();
-  virtual void UpdateData(TabContents* contents,
-                          bool phantom,
-                          bool loading_only);
+  virtual void UpdateData(TabContents* contents, bool app, bool loading_only);
   virtual void SetBounds(const gfx::Rect& bounds);
 
  private:
@@ -113,31 +112,26 @@ class TabGtk : public TabRendererGtk,
   virtual void DidProcessEvent(GdkEvent* event);
 
   // button-press-event handler that handles mouse clicks.
-  static gboolean OnButtonPressEvent(GtkWidget* widget, GdkEventButton* event,
-                                     TabGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabGtk, gboolean, OnButtonPressEvent, GdkEventButton*);
 
   // button-release-event handler that handles mouse click releases.
-  static gboolean OnButtonReleaseEvent(GtkWidget* widget, GdkEventButton* event,
-                                       TabGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabGtk, gboolean, OnButtonReleaseEvent, GdkEventButton*);
 
   // drag-begin is emitted when the drag is started. We connect so that we can
   // set the drag icon to a transparent pixbuf.
-  static void OnDragBegin(GtkWidget* widget, GdkDragContext* context,
-                          TabGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabGtk, void, OnDragBegin, GdkDragContext*);
 
   // drag-failed is emitted when the drag is finished.  In our case the signal
   // does not imply failure as we don't use the drag-n-drop API to transfer drop
   // data.
-  static gboolean OnDragFailed(GtkWidget* widget, GdkDragContext* context,
-                               GtkDragResult result, TabGtk* tab);
+  CHROMEGTK_CALLBACK_2(TabGtk, gboolean, OnDragFailed, GdkDragContext*,
+                       GtkDragResult);
 
   // When a drag is ending, a fake button release event is passed to the drag
   // widget to fake letting go of the mouse button.  We need a callback for
   // this event because it is the only way to catch drag end events when the
   // user presses space or return.
-  static gboolean OnDragButtonReleased(GtkWidget* widget,
-                                       GdkEventButton* event,
-                                       TabGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabGtk, gboolean, OnDragButtonReleased, GdkEventButton*);
 
   // Shows the context menu.
   void ShowContextMenu();

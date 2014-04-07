@@ -6,12 +6,19 @@
 
 #include <gdk/gdkkeysyms.h>
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/i18n/rtl.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/find_bar_controller.h"
+#include "chrome/browser/find_bar_state.h"
 #include "chrome/browser/gtk/browser_window_gtk.h"
 #include "chrome/browser/gtk/cairo_cached_surface.h"
 #include "chrome/browser/gtk/custom_button.h"
@@ -26,11 +33,11 @@
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/native_web_keyboard_event.h"
 #include "chrome/common/notification_service.h"
 #include "gfx/gtk_util.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "third_party/WebKit/WebKit/chromium/public/gtk/WebInputEventFactory.h"
 
 namespace {
 
@@ -120,7 +127,7 @@ void SetDialogShape(GtkWidget* widget) {
       IDR_FIND_DLG_LEFT_BACKGROUND,
       IDR_FIND_DLG_MIDDLE_BACKGROUND,
       IDR_FIND_DLG_RIGHT_BACKGROUND,
-      NULL, NULL, NULL, NULL, NULL, NULL);
+      0, 0, 0, 0, 0, 0);
     dialog_shape->ChangeWhiteToTransparent();
   }
 
@@ -136,7 +143,7 @@ const NineBox* GetDialogBorder() {
       IDR_FIND_DIALOG_LEFT,
       IDR_FIND_DIALOG_MIDDLE,
       IDR_FIND_DIALOG_RIGHT,
-      NULL, NULL, NULL, NULL, NULL, NULL);
+      0, 0, 0, 0, 0, 0);
   }
 
   return dialog_border;
@@ -236,7 +243,7 @@ void FindBarGtk::InitWidgets() {
 
   find_next_button_.reset(new CustomDrawButton(theme_provider_,
       IDR_FINDINPAGE_NEXT, IDR_FINDINPAGE_NEXT_H, IDR_FINDINPAGE_NEXT_H,
-      IDR_FINDINPAGE_NEXT_P, 0, GTK_STOCK_GO_DOWN, GTK_ICON_SIZE_MENU));
+      IDR_FINDINPAGE_NEXT_P, GTK_STOCK_GO_DOWN, GTK_ICON_SIZE_MENU));
   g_signal_connect(find_next_button_->widget(), "clicked",
                    G_CALLBACK(OnClicked), this);
   gtk_widget_set_tooltip_text(find_next_button_->widget(),
@@ -246,7 +253,7 @@ void FindBarGtk::InitWidgets() {
 
   find_previous_button_.reset(new CustomDrawButton(theme_provider_,
       IDR_FINDINPAGE_PREV, IDR_FINDINPAGE_PREV_H, IDR_FINDINPAGE_PREV_H,
-      IDR_FINDINPAGE_PREV_P, 0, GTK_STOCK_GO_UP, GTK_ICON_SIZE_MENU));
+      IDR_FINDINPAGE_PREV_P, GTK_STOCK_GO_UP, GTK_ICON_SIZE_MENU));
   g_signal_connect(find_previous_button_->widget(), "clicked",
                    G_CALLBACK(OnClicked), this);
   gtk_widget_set_tooltip_text(find_previous_button_->widget(),
@@ -273,10 +280,6 @@ void FindBarGtk::InitWidgets() {
                      TRUE, TRUE, 0);
   gtk_container_set_border_width(GTK_CONTAINER(match_count_centerer), 1);
   gtk_container_add(GTK_CONTAINER(match_count_event_box_), match_count_label_);
-
-  // Until we switch to vector graphics, force the font size.
-  gtk_util::ForceFontSizePixels(text_entry_, 13.4);  // 13.4px == 10pt @ 96dpi
-  gtk_util::ForceFontSizePixels(match_count_centerer, 13.4);
 
   gtk_box_pack_end(GTK_BOX(content_hbox), match_count_centerer,
                    FALSE, FALSE, 0);
@@ -306,6 +309,14 @@ void FindBarGtk::InitWidgets() {
   // We take care to avoid showing the slide animator widget.
   gtk_widget_show_all(container_);
   gtk_widget_show(widget());
+}
+
+FindBarController* FindBarGtk::GetFindBarController() const {
+  return find_bar_controller_;
+}
+
+void FindBarGtk::SetFindBarController(FindBarController* find_bar_controller) {
+  find_bar_controller_ = find_bar_controller;
 }
 
 void FindBarGtk::Show(bool animate) {
@@ -384,8 +395,8 @@ void FindBarGtk::UpdateUIForFindResult(const FindNotificationDetails& result,
   if (!find_text.empty() && have_valid_range) {
     gtk_label_set_text(GTK_LABEL(match_count_label_),
         l10n_util::GetStringFUTF8(IDS_FIND_IN_PAGE_COUNT,
-            IntToString16(result.active_match_ordinal()),
-            IntToString16(result.number_of_matches())).c_str());
+            base::IntToString16(result.active_match_ordinal()),
+            base::IntToString16(result.number_of_matches())).c_str());
     UpdateMatchLabelAppearance(result.number_of_matches() == 0 &&
                                result.final_update());
   } else {
@@ -456,8 +467,15 @@ void FindBarGtk::Observe(NotificationType type,
   container_height_ = -1;
 
   if (theme_provider_->UseGtkTheme()) {
+    gtk_widget_modify_cursor(text_entry_, NULL, NULL);
     gtk_widget_modify_base(text_entry_, GTK_STATE_NORMAL, NULL);
     gtk_widget_modify_text(text_entry_, GTK_STATE_NORMAL, NULL);
+
+    // Prevent forced font sizes because it causes the jump up and down
+    // character movement (http://crbug.com/22614), and because it will
+    // prevent centering of the text entry.
+    gtk_util::UndoForceFontSize(text_entry_);
+    gtk_util::UndoForceFontSize(match_count_label_);
 
     gtk_widget_set_size_request(content_event_box_, -1, -1);
     gtk_widget_modify_bg(content_event_box_, GTK_STATE_NORMAL, NULL);
@@ -482,10 +500,15 @@ void FindBarGtk::Observe(NotificationType type,
 
     gtk_misc_set_alignment(GTK_MISC(match_count_label_), 0.5, 0.5);
   } else {
+    gtk_widget_modify_cursor(text_entry_, &gfx::kGdkBlack, &gfx::kGdkGray);
     gtk_widget_modify_base(text_entry_, GTK_STATE_NORMAL,
                            &kEntryBackgroundColor);
     gtk_widget_modify_text(text_entry_, GTK_STATE_NORMAL,
                            &kEntryTextColor);
+
+    // Until we switch to vector graphics, force the font size.
+    gtk_util::ForceFontSizePixels(text_entry_, 13.4);  // 13.4px == 10pt @ 96dpi
+    gtk_util::ForceFontSizePixels(match_count_label_, 13.4);
 
     // Force the text widget height so it lines up with the buttons regardless
     // of font size.
@@ -549,6 +572,12 @@ void FindBarGtk::FindEntryTextInContents(bool forward_search) {
     tab_contents->StopFinding(FindBarController::kClearSelection);
     UpdateUIForFindResult(find_bar_controller_->tab_contents()->find_result(),
                           string16());
+
+    // Clearing the text box should also clear the prepopulate state so that
+    // when we close and reopen the Find box it doesn't show the search we
+    // just deleted.
+    FindBarState* find_bar_state = browser_->profile()->GetFindBarState();
+    find_bar_state->set_last_prepopulate_text(string16());
   }
 }
 
@@ -765,11 +794,15 @@ gboolean FindBarGtk::OnContentEventBoxExpose(GtkWidget* widget,
                                              GdkEventExpose* event,
                                              FindBarGtk* bar) {
   if (bar->theme_provider_->UseGtkTheme()) {
-    // Draw the text entry background around where we input stuff.
+    // Draw the text entry background around where we input stuff. Note the
+    // decrement to |width|. We do this because some theme engines
+    // (*cough*Clearlooks*cough*) don't do any blending and use thickness to
+    // make sure that widgets never overlap.
+    int padding = gtk_widget_get_style(widget)->xthickness;
     GdkRectangle rec = {
       widget->allocation.x,
       widget->allocation.y,
-      widget->allocation.width,
+      widget->allocation.width - padding,
       widget->allocation.height
     };
 
@@ -844,10 +877,9 @@ gboolean FindBarGtk::OnExpose(GtkWidget* widget, GdkEventExpose* e,
     GtkAllocation border_allocation = bar->border_bin_->allocation;
 
     // Blit the left part of the background image once on the left.
-    bool rtl = base::i18n::IsRTL();
-    CairoCachedSurface* background_left = bar->theme_provider_->GetSurfaceNamed(
-        rtl ? IDR_FIND_BOX_BACKGROUND_LEFT_RTL : IDR_FIND_BOX_BACKGROUND_LEFT,
-        widget);
+    CairoCachedSurface* background_left =
+        bar->theme_provider_->GetRTLEnabledSurfaceNamed(
+        IDR_FIND_BOX_BACKGROUND_LEFT, widget);
     background_left->SetSource(cr, border_allocation.x, border_allocation.y);
     cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_REPEAT);
     cairo_rectangle(cr, border_allocation.x, border_allocation.y,

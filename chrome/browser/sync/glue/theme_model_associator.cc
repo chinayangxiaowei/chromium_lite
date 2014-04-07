@@ -7,13 +7,12 @@
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_theme_provider.h"
 #include "chrome/browser/sync/engine/syncapi.h"
 #include "chrome/browser/sync/glue/sync_backend_host.h"
 #include "chrome/browser/sync/glue/theme_util.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/protocol/theme_specifics.pb.h"
-#include "chrome/browser/sync/unrecoverable_error_handler.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 
 namespace browser_sync {
 
@@ -29,12 +28,9 @@ static const char kNoThemesFolderError[] =
 }  // namespace
 
 ThemeModelAssociator::ThemeModelAssociator(
-    ProfileSyncService* sync_service,
-    UnrecoverableErrorHandler* error_handler)
-    : sync_service_(sync_service),
-      error_handler_(error_handler) {
+    ProfileSyncService* sync_service)
+    : sync_service_(sync_service) {
   DCHECK(sync_service_);
-  DCHECK(error_handler_);
 }
 
 ThemeModelAssociator::~ThemeModelAssociator() {}
@@ -49,7 +45,7 @@ bool ThemeModelAssociator::AssociateModels() {
   }
 
   Profile* profile = sync_service_->profile();
-  sync_api::ReadNode node(&trans);
+  sync_api::WriteNode node(&trans);
   // TODO(akalin): When we have timestamps, we may want to do
   // something more intelligent than preferring the sync data over our
   // local data.
@@ -58,8 +54,10 @@ bool ThemeModelAssociator::AssociateModels() {
     // TODO(akalin): If the sync data does not have
     // use_system_theme_by_default and we do, update that flag on the
     // sync data.
-    SetCurrentThemeFromThemeSpecificsIfNecessary(
-        node.GetThemeSpecifics(), profile);
+    sync_pb::ThemeSpecifics theme_specifics = node.GetThemeSpecifics();
+    if (UpdateThemeSpecificsOrSetCurrentThemeIfNecessary(profile,
+                                                         &theme_specifics))
+      node.SetThemeSpecifics(theme_specifics);
   } else {
     // Set the sync data from the current theme.
     sync_api::WriteNode node(&trans);
@@ -95,13 +93,6 @@ bool ThemeModelAssociator::SyncModelHasUserCreatedNodes(bool* has_nodes) {
   // The sync model has user created nodes iff the themes folder has
   // any children.
   *has_nodes = root.GetFirstChildId() != sync_api::kInvalidId;
-  return true;
-}
-
-bool ThemeModelAssociator::ChromeModelHasUserCreatedNodes(bool* has_nodes) {
-  DCHECK(has_nodes);
-  // Assume the themes model always has user-created nodes.
-  *has_nodes = true;
   return true;
 }
 

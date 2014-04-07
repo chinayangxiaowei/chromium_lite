@@ -4,14 +4,16 @@
 
 #ifndef CHROME_BROWSER_COCOA_FULLSCREEN_CONTROLLER_H_
 #define CHROME_BROWSER_COCOA_FULLSCREEN_CONTROLLER_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
 #import "base/cocoa_protocols_mac.h"
 #include "base/mac_util.h"
-#include "chrome/browser/cocoa/location_bar_view_mac.h"
+#include "chrome/browser/cocoa/location_bar/location_bar_view_mac.h"
 
 @class BrowserWindowController;
+@class DropdownAnimation;
 
 // Provides a controller to manage fullscreen mode for a single browser window.
 // This class handles running animations, showing and hiding the floating
@@ -46,7 +48,7 @@
 
   // Pointer to the currently running animation.  Is nil if no animation is
   // running.
-  scoped_nsobject<NSAnimation> currentAnimation_;
+  scoped_nsobject<DropdownAnimation> currentAnimation_;
 
   // Timers for scheduled showing/hiding of the bar (which are always done with
   // animation).
@@ -112,5 +114,9 @@
 - (void)changeFloatingBarShownFraction:(CGFloat)fraction;
 
 @end
+
+// Notification posted when we're about to enter or leave fullscreen.
+extern NSString* const kWillEnterFullscreenNotification;
+extern NSString* const kWillLeaveFullscreenNotification;
 
 #endif  // CHROME_BROWSER_COCOA_FULLSCREEN_CONTROLLER_H_

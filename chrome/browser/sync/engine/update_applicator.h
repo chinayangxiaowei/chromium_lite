@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -10,8 +10,8 @@
 
 #ifndef CHROME_BROWSER_SYNC_ENGINE_UPDATE_APPLICATOR_H_
 #define CHROME_BROWSER_SYNC_ENGINE_UPDATE_APPLICATOR_H_
+#pragma once
 
-#include <set>
 #include <vector>
 
 #include "base/basictypes.h"
@@ -27,6 +27,7 @@ class UpdateProgress;
 }
 
 class ConflictResolver;
+class Cryptographer;
 
 class UpdateApplicator {
  public:
@@ -34,10 +35,12 @@ class UpdateApplicator {
       UpdateIterator;
 
   UpdateApplicator(ConflictResolver* resolver,
+                   Cryptographer* cryptographer,
                    const UpdateIterator& begin,
                    const UpdateIterator& end,
                    const ModelSafeRoutingInfo& routes,
                    ModelSafeGroup group_filter);
+  ~UpdateApplicator();
 
   // returns true if there's more we can do.
   bool AttemptOneApplication(syncable::WriteTransaction* trans);
@@ -62,6 +65,9 @@ class UpdateApplicator {
   // Used to resolve conflicts when trying to apply updates.
   ConflictResolver* const resolver_;
 
+  // Used to decrypt sensitive sync nodes.
+  Cryptographer* cryptographer_;
+
   UpdateIterator const begin_;
   UpdateIterator end_;
   UpdateIterator pointer_;
@@ -73,6 +79,8 @@ class UpdateApplicator {
   // Track the result of the various items.
   std::vector<syncable::Id> conflicting_ids_;
   std::vector<syncable::Id> successful_ids_;
+
+  DISALLOW_COPY_AND_ASSIGN(UpdateApplicator);
 };
 
 }  // namespace browser_sync

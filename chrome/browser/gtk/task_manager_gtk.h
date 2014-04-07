@@ -1,17 +1,25 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_GTK_TASK_MANAGER_GTK_H_
 #define CHROME_BROWSER_GTK_TASK_MANAGER_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
 #include <string>
 
+#include "app/gtk_signal.h"
 #include "base/scoped_ptr.h"
-#include "chrome/browser/task_manager.h"
+#include "chrome/browser/task_manager/task_manager.h"
 #include "grit/generated_resources.h"
+
+#if defined(TOOLKIT_VIEWS)
+namespace gfx {
+class Point;
+}
+#endif
 
 class TaskManagerGtk : public TaskManagerModelObserver {
  public:
@@ -58,7 +66,11 @@ class TaskManagerGtk : public TaskManagerModelObserver {
   void KillSelectedProcesses();
 
   // Opens the context menu used to select the task manager columns.
+#if defined(TOOLKIT_VIEWS)
+  void ShowContextMenu(const gfx::Point& point);
+#else
   void ShowContextMenu();
+#endif
 
   // Activates the tab associated with the focused row.
   void ActivateFocusedTab();
@@ -70,51 +82,36 @@ class TaskManagerGtk : public TaskManagerModelObserver {
   gint CompareImpl(GtkTreeModel* tree_model, GtkTreeIter* a,
                    GtkTreeIter* b, int id);
 
-  // response signal handler that notifies us of dialog destruction.
-  static void OnDestroy(GtkDialog* dialog, TaskManagerGtk* task_manager);
+  // Response signal handler that notifies us of dialog destruction.
+  CHROMEGTK_CALLBACK_0(TaskManagerGtk, void, OnDestroy);
 
-  // response signal handler that notifies us of dialog responses.
-  static void OnResponse(GtkDialog* dialog, gint response_id,
-                         TaskManagerGtk* task_manager);
+  // Response signal handler that notifies us of dialog responses.
+  CHROMEGTK_CALLBACK_1(TaskManagerGtk, void, OnResponse, gint);
 
-  // realize signal handler to set the page column's initial size.
-  static void OnTreeViewRealize(GtkTreeView* treeview,
-                                TaskManagerGtk* task_manager);
+  // Realize signal handler to set the page column's initial size.
+  CHROMEG_CALLBACK_0(TaskManagerGtk, void, OnTreeViewRealize, GtkTreeView*);
 
-  // changed signal handler that is sent when the treeview selection changes.
-  static void OnSelectionChangedThunk(GtkTreeSelection* selection,
-                                      TaskManagerGtk* task_manager) {
-    task_manager->OnSelectionChanged(selection);
-  }
-  void OnSelectionChanged(GtkTreeSelection* selection);
+  // Changed signal handler that is sent when the treeview selection changes.
+  CHROMEG_CALLBACK_0(TaskManagerGtk, void, OnSelectionChanged,
+                     GtkTreeSelection*);
 
   // button-press-event handler that activates a process on double-click.
-  static gboolean OnButtonPressEvent(GtkWidget* widget, GdkEventButton* event,
-                                     TaskManagerGtk* task_manager);
+  CHROMEGTK_CALLBACK_1(TaskManagerGtk, gboolean, OnButtonPressEvent,
+                       GdkEventButton*);
 
   // button-release-event handler that opens the right-click context menu.
-  static gboolean OnButtonReleaseEvent(GtkWidget* widget, GdkEventButton* event,
-                                       TaskManagerGtk* task_manager);
+  CHROMEGTK_CALLBACK_1(TaskManagerGtk, gboolean, OnButtonReleaseEvent,
+                       GdkEventButton*);
 
   // Handles an accelerator being pressed.
-  static gboolean OnGtkAccelerator(GtkAccelGroup* accel_group,
-                                   GObject* acceleratable,
-                                   guint keyval,
-                                   GdkModifierType modifier,
-                                   TaskManagerGtk* task_manager);
+  CHROMEG_CALLBACK_3(TaskManagerGtk, gboolean, OnGtkAccelerator,
+                     GtkAccelGroup*, GObject*, guint, GdkModifierType);
 
   // Page sorting callback.
   static gint ComparePage(GtkTreeModel* model, GtkTreeIter* a,
                           GtkTreeIter* b, gpointer task_manager) {
     return reinterpret_cast<TaskManagerGtk*>(task_manager)->
         CompareImpl(model, a, b, IDS_TASK_MANAGER_PAGE_COLUMN);
-  }
-
-  // Physical memory sorting callback.
-  static gint ComparePhysicalMemory(GtkTreeModel* model, GtkTreeIter* a,
-                                    GtkTreeIter* b, gpointer task_manager) {
-    return reinterpret_cast<TaskManagerGtk*>(task_manager)->
-        CompareImpl(model, a, b, IDS_TASK_MANAGER_PHYSICAL_MEM_COLUMN);
   }
 
   // Shared memory sorting callback.
@@ -129,6 +126,14 @@ class TaskManagerGtk : public TaskManagerModelObserver {
                                    GtkTreeIter* b, gpointer task_manager) {
     return reinterpret_cast<TaskManagerGtk*>(task_manager)->
         CompareImpl(model, a, b, IDS_TASK_MANAGER_PRIVATE_MEM_COLUMN);
+  }
+
+  // Javascript memory sorting callback.
+  static gint CompareV8Memory(GtkTreeModel* model, GtkTreeIter* a,
+                              GtkTreeIter* b, gpointer task_manager) {
+    return reinterpret_cast<TaskManagerGtk*>(task_manager)->
+        CompareImpl(model, a, b,
+                    IDS_TASK_MANAGER_JAVASCRIPT_MEMORY_ALLOCATED_COLUMN);
   }
 
   // CPU sorting callback.
@@ -172,6 +177,13 @@ class TaskManagerGtk : public TaskManagerModelObserver {
                                      GtkTreeIter* b, gpointer task_manager) {
     return reinterpret_cast<TaskManagerGtk*>(task_manager)->
         CompareImpl(model, a, b, IDS_TASK_MANAGER_WEBCORE_CSS_CACHE_COLUMN);
+  }
+
+  // Sqlite memory sorting callback.
+  static gint CompareSqliteMemoryUsed(GtkTreeModel* model, GtkTreeIter* a,
+                                      GtkTreeIter* b, gpointer task_manager) {
+    return reinterpret_cast<TaskManagerGtk*>(task_manager)->
+        CompareImpl(model, a, b, IDS_TASK_MANAGER_SQLITE_MEMORY_USED_COLUMN);
   }
 
   // Goats Teleported sorting callback.

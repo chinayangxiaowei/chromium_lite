@@ -4,10 +4,12 @@
 
 #ifndef CHROME_BROWSER_GTK_TAB_CONTENTS_DRAG_SOURCE_H_
 #define CHROME_BROWSER_GTK_TAB_CONTENTS_DRAG_SOURCE_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
 #include "app/gtk_signal.h"
+#include "app/gtk_signal_registrar.h"
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/message_loop.h"
@@ -15,9 +17,9 @@
 #include "gfx/point.h"
 #include "gfx/native_widget_types.h"
 #include "googleurl/src/gurl.h"
-#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDragOperation.h"
 
+class SkBitmap;
 class TabContents;
 class TabContentsView;
 struct WebDropData;
@@ -52,6 +54,8 @@ class TabContentsDragSource : public MessageLoopForUI::Observer {
                        GdkDragContext*);
   CHROMEGTK_CALLBACK_4(TabContentsDragSource, void, OnDragDataGet,
                        GdkDragContext*, GtkSelectionData*, guint, guint);
+  CHROMEGTK_CALLBACK_1(TabContentsDragSource, gboolean, OnDragIconExpose,
+                       GdkEventExpose*);
 
   gfx::NativeView GetContentNativeView() const;
 
@@ -64,7 +68,7 @@ class TabContentsDragSource : public MessageLoopForUI::Observer {
 
   // The image used for depicting the drag, and the offset between the cursor
   // and the top left pixel.
-  SkBitmap drag_image_;
+  GdkPixbuf* drag_pixbuf_;
   gfx::Point image_offset_;
 
   // The mime type for the file contents of the current drag (if any).
@@ -76,7 +80,8 @@ class TabContentsDragSource : public MessageLoopForUI::Observer {
 
   // This is the widget we use to initiate drags. Since we don't use the
   // renderer widget, we can persist drags even when our contents is switched
-  // out.
+  // out. We can't use an OwnedWidgetGtk because the GtkInvisible widget
+  // initialization code sinks the reference.
   GtkWidget* drag_widget_;
 
   // The file mime type for a drag-out download.
@@ -88,10 +93,12 @@ class TabContentsDragSource : public MessageLoopForUI::Observer {
   // The URL to download from for a drag-out download.
   GURL download_url_;
 
-  // The widget that provides visual feedback for the drag. We use this instead
-  // of gtk_drag_set_icon_pixbuf() because some window managers will use shadows
-  // or other visual effects on top level windows.
+  // The widget that provides visual feedback for the drag. We can't use
+  // an OwnedWidgetGtk because the GtkWindow initialization code sinks
+  // the reference.
   GtkWidget* drag_icon_;
+
+  GtkSignalRegistrar signals_;
 
   DISALLOW_COPY_AND_ASSIGN(TabContentsDragSource);
 };

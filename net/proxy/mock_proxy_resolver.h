@@ -4,10 +4,12 @@
 
 #ifndef NET_PROXY_MOCK_PROXY_RESOLVER_H_
 #define NET_PROXY_MOCK_PROXY_RESOLVER_H_
+#pragma once
 
 #include <vector>
 
 #include "base/logging.h"
+#include "base/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_errors.h"
@@ -59,19 +61,17 @@ class MockAsyncProxyResolverBase : public ProxyResolver {
 
   class SetPacScriptRequest {
    public:
-    SetPacScriptRequest(MockAsyncProxyResolverBase* resolver,
-                        const GURL& pac_url,
-                        const std::string& pac_bytes,
-                        CompletionCallback* callback)
+    SetPacScriptRequest(
+        MockAsyncProxyResolverBase* resolver,
+        const scoped_refptr<ProxyResolverScriptData>& script_data,
+        CompletionCallback* callback)
         : resolver_(resolver),
-          pac_url_(pac_url),
-          pac_bytes_(pac_bytes),
+          script_data_(script_data),
           callback_(callback),
           origin_loop_(MessageLoop::current()) {
     }
 
-    const GURL& pac_url() const { return pac_url_; }
-    const std::string& pac_bytes() const { return pac_bytes_; }
+    const ProxyResolverScriptData* script_data() const { return script_data_; }
 
     void CompleteNow(int rv) {
        CompletionCallback* callback = callback_;
@@ -84,8 +84,7 @@ class MockAsyncProxyResolverBase : public ProxyResolver {
 
    private:
     MockAsyncProxyResolverBase* resolver_;
-    const GURL pac_url_;
-    const std::string pac_bytes_;
+    const scoped_refptr<ProxyResolverScriptData> script_data_;
     CompletionCallback* callback_;
     MessageLoop* origin_loop_;
   };
@@ -114,12 +113,12 @@ class MockAsyncProxyResolverBase : public ProxyResolver {
     RemovePendingRequest(request);
   }
 
-  virtual int SetPacScript(const GURL& pac_url,
-                           const std::string& pac_bytes,
-                           CompletionCallback* callback) {
+  virtual int SetPacScript(
+      const scoped_refptr<ProxyResolverScriptData>& script_data,
+      CompletionCallback* callback) {
     DCHECK(!pending_set_pac_script_request_.get());
     pending_set_pac_script_request_.reset(
-        new SetPacScriptRequest(this, pac_url, pac_bytes, callback));
+        new SetPacScriptRequest(this, script_data, callback));
     // Finished when user calls SetPacScriptRequest::CompleteNow().
     return ERR_IO_PENDING;
   }

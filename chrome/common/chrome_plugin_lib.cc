@@ -25,10 +25,10 @@ using base::TimeDelta;
 
 // TODO(port): revisit when plugins happier
 #if defined(OS_WIN)
-const TCHAR ChromePluginLib::kRegistryChromePlugins[] =
-    _T("Software\\Google\\Chrome\\Plugins");
-static const TCHAR kRegistryLoadOnStartup[] = _T("LoadOnStartup");
-static const TCHAR kRegistryPath[] = _T("Path");
+const wchar_t ChromePluginLib::kRegistryChromePlugins[] =
+    L"Software\\Google\\Chrome\\Plugins";
+static const wchar_t kRegistryLoadOnStartup[] = L"LoadOnStartup";
+static const wchar_t kRegistryPath[] = L"Path";
 #endif
 
 typedef base::hash_map<FilePath, scoped_refptr<ChromePluginLib> >
@@ -115,12 +115,6 @@ void ChromePluginLib::RegisterPluginsWithNPAPI() {
   // Register Gears, if available.
   if (PathService::Get(chrome::FILE_GEARS_PLUGIN, &path))
     NPAPI::PluginList::Singleton()->AddExtraPluginPath(path);
-
-  // Register the internal Flash, if available.
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableInternalFlash) &&
-      PathService::Get(chrome::FILE_FLASH_PLUGIN, &path))
-    NPAPI::PluginList::Singleton()->AddExtraPluginPath(path);
 }
 
 static void LogPluginLoadTime(const TimeDelta &time) {
@@ -195,7 +189,8 @@ ChromePluginLib::ChromePluginLib(const FilePath& filename)
 #endif
       initialized_(false),
       CP_VersionNegotiate_(NULL),
-      CP_Initialize_(NULL) {
+      CP_Initialize_(NULL),
+      CP_Test_(NULL) {
   memset((void*)&plugin_funcs_, 0, sizeof(plugin_funcs_));
 }
 

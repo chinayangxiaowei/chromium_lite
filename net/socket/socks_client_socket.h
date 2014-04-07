@@ -1,13 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_SOCKET_SOCKS_CLIENT_SOCKET_H_
 #define NET_SOCKET_SOCKS_CLIENT_SOCKET_H_
+#pragma once
 
 #include <string>
 
-#include "base/logging.h"
+#include "base/basictypes.h"
+#include "base/gtest_prod_util.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "googleurl/src/gurl.h"
@@ -17,7 +19,6 @@
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
 #include "net/socket/client_socket.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 namespace net {
 
@@ -47,10 +48,14 @@ class SOCKSClientSocket : public ClientSocket {
   // ClientSocket methods:
 
   // Does the SOCKS handshake and completes the protocol.
-  virtual int Connect(CompletionCallback* callback, const BoundNetLog& net_log);
+  virtual int Connect(CompletionCallback* callback);
   virtual void Disconnect();
   virtual bool IsConnected() const;
   virtual bool IsConnectedAndIdle() const;
+  virtual const BoundNetLog& NetLog() const { return net_log_; }
+  virtual void SetSubresourceSpeculation();
+  virtual void SetOmniboxSpeculation();
+  virtual bool WasEverUsed() const;
 
   // Socket methods:
   virtual int Read(IOBuffer* buf, int buf_len, CompletionCallback* callback);
@@ -62,9 +67,9 @@ class SOCKSClientSocket : public ClientSocket {
   virtual int GetPeerAddress(AddressList* address) const;
 
  private:
-  FRIEND_TEST(SOCKSClientSocketTest, CompleteHandshake);
-  FRIEND_TEST(SOCKSClientSocketTest, SOCKS4AFailedDNS);
-  FRIEND_TEST(SOCKSClientSocketTest, SOCKS4AIfDomainInIPv6);
+  FRIEND_TEST_ALL_PREFIXES(SOCKSClientSocketTest, CompleteHandshake);
+  FRIEND_TEST_ALL_PREFIXES(SOCKSClientSocketTest, SOCKS4AFailedDNS);
+  FRIEND_TEST_ALL_PREFIXES(SOCKSClientSocketTest, SOCKS4AIfDomainInIPv6);
 
   enum State {
     STATE_RESOLVE_HOST,

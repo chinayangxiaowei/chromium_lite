@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef APP_GFX_TEXT_ELIDER_H_
-#define APP_GFX_TEXT_ELIDER_H_
+#ifndef APP_TEXT_ELIDER_H_
+#define APP_TEXT_ELIDER_H_
+#pragma once
 
 #include <unicode/coll.h>
 #include <unicode/uchar.h>
@@ -36,9 +37,13 @@ std::wstring ElideUrl(const GURL& url,
                       int available_pixel_width,
                       const std::wstring& languages);
 
+// Elides |text| to fit in |available_pixel_width|.  If |elide_in_middle| is
+// set the ellipsis is placed in the middle of the string; otherwise it is
+// placed at the end.
 std::wstring ElideText(const std::wstring& text,
                        const gfx::Font& font,
-                       int available_pixel_width);
+                       int available_pixel_width,
+                       bool elide_in_middle);
 
 // Elide a filename to fit a given pixel width, with an emphasis on not hiding
 // the extension unless we have to. If filename contains a path, the path will
@@ -46,9 +51,9 @@ std::wstring ElideText(const std::wstring& text,
 // filename is forced to have LTR directionality, which means that in RTL UI
 // the elided filename is wrapped with LRE (Left-To-Right Embedding) mark and
 // PDF (Pop Directional Formatting) mark.
-std::wstring ElideFilename(const FilePath& filename,
-                           const gfx::Font& font,
-                           int available_pixel_width);
+string16 ElideFilename(const FilePath& filename,
+                       const gfx::Font& font,
+                       int available_pixel_width);
 
 // SortedDisplayURL maintains a string from a URL suitable for display to the
 // use. SortedDisplayURL also provides a function used for comparing two
@@ -58,7 +63,8 @@ std::wstring ElideFilename(const FilePath& filename,
 class SortedDisplayURL {
  public:
   SortedDisplayURL(const GURL& url, const std::wstring& languages);
-  SortedDisplayURL() {}
+  SortedDisplayURL();
+  ~SortedDisplayURL();
 
   // Compares this SortedDisplayURL to |url| using |collator|. Returns a value
   // < 0, = 1 or > 0 as to whether this url is less then, equal to or greater
@@ -84,4 +90,4 @@ class SortedDisplayURL {
 
 } // namespace gfx.
 
-#endif  // APP_GFX_TEXT_ELIDER_H_
+#endif  // APP_TEXT_ELIDER_H_

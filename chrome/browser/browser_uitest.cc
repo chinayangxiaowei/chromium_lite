@@ -2,16 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/base_paths.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/path_service.h"
 #include "base/string_util.h"
 #include "base/sys_info.h"
 #include "base/test/test_file_util.h"
 #include "base/values.h"
 #include "chrome/app/chrome_dll_resource.h"
+#include "chrome/browser/browser.h"
+#include "chrome/browser/platform_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/platform_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/automation/browser_proxy.h"
 #include "chrome/test/automation/tab_proxy.h"
@@ -21,7 +24,7 @@
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "net/base/net_util.h"
-#include "net/url_request/url_request_unittest.h"
+#include "net/test/test_server.h"
 
 namespace {
 
@@ -84,10 +87,10 @@ TEST_F(BrowserTest, NullOpenerRedirectForksProcess) {
   if (in_process_renderer())
     return;
 
-  const wchar_t kDocRoot[] = L"chrome/test/data";
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(kDocRoot, NULL);
-  ASSERT_TRUE(NULL != server.get());
+  net::TestServer test_server(net::TestServer::TYPE_HTTP,
+                              FilePath(FILE_PATH_LITERAL("chrome/test/data")));
+  ASSERT_TRUE(test_server.Start());
+
   FilePath test_file(test_data_directory_);
   scoped_refptr<BrowserProxy> window(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(window.get());
@@ -135,10 +138,10 @@ TEST_F(BrowserTest, MAYBE_OtherRedirectsDontForkProcess) {
   if (in_process_renderer())
     return;
 
-  const wchar_t kDocRoot[] = L"chrome/test/data";
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(kDocRoot, NULL);
-  ASSERT_TRUE(NULL != server.get());
+  net::TestServer test_server(net::TestServer::TYPE_HTTP,
+                              FilePath(FILE_PATH_LITERAL("chrome/test/data")));
+  ASSERT_TRUE(test_server.Start());
+
   FilePath test_file(test_data_directory_);
   scoped_refptr<BrowserProxy> window(automation()->GetBrowserWindow(0));
   ASSERT_TRUE(window.get());
@@ -245,7 +248,7 @@ class KioskModeTest : public UITest {
 };
 
 TEST_F(KioskModeTest, EnableKioskModeTest) {
-  // Load a dummy url.
+  // Load a local file.
   FilePath test_file(test_data_directory_);
   test_file = test_file.AppendASCII("title1.html");
 
@@ -276,8 +279,7 @@ public:
     file_util::Delete(tmp_profile_, true);
     file_util::CreateDirectory(tmp_profile_);
 
-    launch_arguments_.AppendSwitchWithValue(switches::kUserDataDir,
-                                            tmp_profile_.ToWStringHack());
+    launch_arguments_.AppendSwitchPath(switches::kUserDataDir, tmp_profile_);
   }
 
   bool LaunchAppWithProfile() {
@@ -301,5 +303,79 @@ TEST_F(LaunchBrowserWithNonAsciiUserDatadir, TestNonAsciiUserDataDir) {
   ASSERT_TRUE(browser.get());
 }
 #endif  // defined(OS_WIN)
+
+class AppModeTest : public UITest {
+ public:
+  AppModeTest() {
+    // Load a local file.
+    FilePath test_file(test_data_directory_);
+    test_file = test_file.AppendASCII("title1.html");
+    GURL test_file_url(net::FilePathToFileURL(test_file));
+
+    launch_arguments_.AppendSwitchASCII(switches::kApp, test_file_url.spec());
+  }
+};
+
+TEST_F(AppModeTest, EnableAppModeTest) {
+  // Test that an application browser window loads correctly.
+
+  // Verify that the window is present.
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+
+  // Verify the browser is an application.
+  Browser::Type type;
+  ASSERT_TRUE(browser->GetType(&type));
+  EXPECT_EQ(Browser::TYPE_APP, type);
+}
+
+// Tests to ensure that the browser continues running in the background after
+// the last window closes.
+class RunInBackgroundTest : public UITest {
+ public:
+  RunInBackgroundTest() {
+    launch_arguments_.AppendSwitch(switches::kKeepAliveForTest);
+  }
+};
+
+TEST_F(RunInBackgroundTest, RunInBackgroundBasicTest) {
+  // Close the browser window, then open a new one - the browser should keep
+  // running.
+  scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
+  ASSERT_TRUE(browser.get());
+  int window_count;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  EXPECT_EQ(1, window_count);
+  ASSERT_TRUE(browser->RunCommand(IDC_CLOSE_WINDOW));
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  EXPECT_EQ(0, window_count);
+  ASSERT_TRUE(IsBrowserRunning());
+  ASSERT_TRUE(automation()->OpenNewBrowserWindow(Browser::TYPE_NORMAL, true));
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  EXPECT_EQ(1, window_count);
+}
+
+// Tests to ensure that the browser continues running in the background after
+// the last window closes.
+class NoStartupWindowTest : public UITest {
+ public:
+  NoStartupWindowTest() {
+    launch_arguments_.AppendSwitch(switches::kNoStartupWindow);
+    launch_arguments_.AppendSwitch(switches::kKeepAliveForTest);
+  }
+};
+
+TEST_F(NoStartupWindowTest, NoStartupWindowBasicTest) {
+  // No browser window should be started by default.
+  int window_count;
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  EXPECT_EQ(0, window_count);
+
+  // Starting a browser window should work just fine.
+  ASSERT_TRUE(IsBrowserRunning());
+  ASSERT_TRUE(automation()->OpenNewBrowserWindow(Browser::TYPE_NORMAL, true));
+  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
+  EXPECT_EQ(1, window_count);
+}
 
 }  // namespace

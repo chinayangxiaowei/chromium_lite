@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,7 @@
 #include <ostream>
 
 #include "base/file_path.h"
-#include "base/keyboard_codes.h"
+#include "base/string_number_conversions.h"
 #include "chrome/browser/net/url_request_mock_http_job.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
@@ -36,7 +36,7 @@ using npapi_test::kTestCompleteSuccess;
 static const FilePath::CharType* kTestDir = FILE_PATH_LITERAL("npapi");
 
 // Test passing arguments to a plugin.
-TEST_F(NPAPITester, Arguments) {
+TEST_F(NPAPITesterBase, Arguments) {
   const FilePath test_case(FILE_PATH_LITERAL("arguments.html"));
   GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
@@ -45,15 +45,16 @@ TEST_F(NPAPITester, Arguments) {
 }
 
 // Test invoking many plugins within a single page.
-// Flaky, http://crbug.com/28372
-TEST_F(NPAPITester, FLAKY_ManyPlugins) {
+// Test still flaky under valgrind
+// http://crbug.com/28372, http://crbug.com/45561
+TEST_F(NPAPITesterBase, FLAKY_ManyPlugins) {
   const FilePath test_case(FILE_PATH_LITERAL("many_plugins.html"));
   GURL url(ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case));
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
 
   for (int i = 1; i <= 15; i++) {
     SCOPED_TRACE(StringPrintf("Waiting for plugin #%d", i));
-    ASSERT_NO_FATAL_FAILURE(WaitForFinish("arguments", IntToString(i),
+    ASSERT_NO_FATAL_FAILURE(WaitForFinish("arguments", base::IntToString(i),
                                           url, kTestCompleteCookie,
                                           kTestCompleteSuccess,
                                           action_max_timeout_ms()));
@@ -61,7 +62,7 @@ TEST_F(NPAPITester, FLAKY_ManyPlugins) {
 }
 
 // Test various calls to GetURL from a plugin.
-TEST_F(NPAPITester, GetURL) {
+TEST_F(NPAPITesterBase, GetURL) {
   const FilePath test_case(FILE_PATH_LITERAL("geturl.html"));
   GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
@@ -71,7 +72,7 @@ TEST_F(NPAPITester, GetURL) {
 
 // Test various calls to GetURL for javascript URLs with
 // non NULL targets from a plugin.
-TEST_F(NPAPITester, GetJavaScriptURL) {
+TEST_F(NPAPITesterBase, GetJavaScriptURL) {
   const FilePath test_case(FILE_PATH_LITERAL("get_javascript_url.html"));
   GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
@@ -82,7 +83,7 @@ TEST_F(NPAPITester, GetJavaScriptURL) {
 // Flaky test: http://crbug.com/29020
 // Test that calling GetURL with a javascript URL and target=_self
 // works properly when the plugin is embedded in a subframe.
-TEST_F(NPAPITester, FLAKY_GetJavaScriptURL2) {
+TEST_F(NPAPITesterBase, FLAKY_GetJavaScriptURL2) {
   const FilePath test_case(FILE_PATH_LITERAL("get_javascript_url2.html"));
   GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
@@ -93,7 +94,7 @@ TEST_F(NPAPITester, FLAKY_GetJavaScriptURL2) {
 // Tests that if an NPObject is proxies back to its original process, the
 // original pointer is returned and not a proxy.  If this fails the plugin
 // will crash.
-TEST_F(NPAPITester, NPObjectProxy) {
+TEST_F(NPAPITesterBase, NPObjectProxy) {
   const FilePath test_case(FILE_PATH_LITERAL("npobject_proxy.html"));
   GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
@@ -101,53 +102,12 @@ TEST_F(NPAPITester, NPObjectProxy) {
                 kTestCompleteSuccess, action_max_timeout_ms());
 }
 
-// Tests if a plugin executing a self deleting script using NPN_GetURL
-// works without crashing or hanging
-TEST_F(NPAPITester, SelfDeletePluginGetUrl) {
-  const FilePath test_case(FILE_PATH_LITERAL("self_delete_plugin_geturl.html"));
-  GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
-  ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
-  WaitForFinish("self_delete_plugin_geturl", "1", url,
-                kTestCompleteCookie, kTestCompleteSuccess,
-                action_max_timeout_ms());
-}
-
-// Tests if a plugin executing a self deleting script using Invoke
-// works without crashing or hanging
-// Flaky. See http://crbug.com/30702
-TEST_F(NPAPITester, FLAKY_SelfDeletePluginInvoke) {
-  const FilePath test_case(FILE_PATH_LITERAL("self_delete_plugin_invoke.html"));
-  GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
-  ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
-  WaitForFinish("self_delete_plugin_invoke", "1", url,
-                kTestCompleteCookie, kTestCompleteSuccess,
-                action_max_timeout_ms());
-}
-
-// Tests if a plugin executing a self deleting script using Invoke with
-// a modal dialog showing works without crashing or hanging
-TEST_F(NPAPITester, DISABLED_SelfDeletePluginInvokeAlert) {
-  const FilePath test_case(
-      FILE_PATH_LITERAL("self_delete_plugin_invoke_alert.html"));
-  GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
-  ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
-
-  // Wait for the alert dialog and then close it.
-  ASSERT_TRUE(automation()->WaitForAppModalDialog());
-  scoped_refptr<WindowProxy> window(automation()->GetActiveWindow());
-  ASSERT_TRUE(window.get());
-  ASSERT_TRUE(window->SimulateOSKeyPress(base::VKEY_ESCAPE, 0));
-
-  WaitForFinish("self_delete_plugin_invoke_alert", "1", url,
-                kTestCompleteCookie, kTestCompleteSuccess,
-                action_max_timeout_ms());
-}
-
 #if defined(OS_WIN) || defined(OS_MACOSX)
 // Tests if a plugin executing a self deleting script in the context of
 // a synchronous paint event works correctly
+// http://crbug.com/44960
 TEST_F(NPAPIVisiblePluginTester,
-       DISABLED_SelfDeletePluginInvokeInSynchronousPaint) {
+       FLAKY_SelfDeletePluginInvokeInSynchronousPaint) {
   if (UITest::in_process_renderer())
     return;
 
@@ -258,10 +218,29 @@ TEST_F(NPAPIVisiblePluginTester, SelfDeletePluginInNPNEvaluate) {
                 kTestCompleteCookie, kTestCompleteSuccess,
                 action_max_timeout_ms());
 }
+
+TEST_F(NPAPIVisiblePluginTester, SelfDeleteCreatePluginInNPNEvaluate) {
+  if (UITest::in_process_renderer())
+    return;
+
+  const FilePath test_case(
+      FILE_PATH_LITERAL("npn_plugin_delete_create_in_evaluate.html"));
+  GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
+  ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
+  WaitForFinish("npobject_delete_create_plugin_in_evaluate", "1", url,
+                kTestCompleteCookie, kTestCompleteSuccess,
+                action_max_timeout_ms());
+}
+
 #endif
 
-// Flaky. See http://crbug.com/17645
-TEST_F(NPAPIVisiblePluginTester, DISABLED_OpenPopupWindowWithPlugin) {
+// FLAKY. See bug http://crbug.com/17645. This bug report indicates that this
+// test is crashy. I could not repro the crash on my local setup. Leaving this
+// marked as FLAKY for now while we watch this on the builders.
+TEST_F(NPAPIVisiblePluginTester, FLAKY_OpenPopupWindowWithPlugin) {
+  if (UITest::in_process_renderer())
+    return;
+
   const FilePath test_case(
       FILE_PATH_LITERAL("get_javascript_open_popup_with_plugin.html"));
   GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
@@ -272,7 +251,7 @@ TEST_F(NPAPIVisiblePluginTester, DISABLED_OpenPopupWindowWithPlugin) {
 }
 
 // Test checking the privacy mode is off.
-TEST_F(NPAPITester, PrivateDisabled) {
+TEST_F(NPAPITesterBase, PrivateDisabled) {
   if (UITest::in_process_renderer())
     return;
 
@@ -283,7 +262,7 @@ TEST_F(NPAPITester, PrivateDisabled) {
                 kTestCompleteSuccess, action_max_timeout_ms());
 }
 
-TEST_F(NPAPITester, ScheduleTimer) {
+TEST_F(NPAPITesterBase, ScheduleTimer) {
   const FilePath test_case(FILE_PATH_LITERAL("schedule_timer.html"));
   GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
@@ -291,7 +270,7 @@ TEST_F(NPAPITester, ScheduleTimer) {
                 kTestCompleteSuccess, action_max_timeout_ms());
 }
 
-TEST_F(NPAPITester, PluginThreadAsyncCall) {
+TEST_F(NPAPITesterBase, PluginThreadAsyncCall) {
   const FilePath test_case(FILE_PATH_LITERAL("plugin_thread_async_call.html"));
   GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
   ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
@@ -342,7 +321,7 @@ TEST_F(NPAPIVisiblePluginTester, GetURLRequestFailWrite) {
 }
 
 #if defined(OS_WIN)
-TEST_F(NPAPITester, EnsureScriptingWorksInDestroy) {
+TEST_F(NPAPITesterBase, EnsureScriptingWorksInDestroy) {
   if (UITest::in_process_renderer())
     return;
 
@@ -358,7 +337,7 @@ TEST_F(NPAPITester, EnsureScriptingWorksInDestroy) {
 // This test uses a Windows Event to signal to the plugin that it should crash
 // on NP_Initialize.
 // This is flaky. http://crbug.com/32048
-TEST_F(NPAPITester, FLAKY_NoHangIfInitCrashes) {
+TEST_F(NPAPITesterBase, FLAKY_NoHangIfInitCrashes) {
   if (UITest::in_process_renderer())
     return;
 
@@ -380,37 +359,6 @@ TEST_F(NPAPITester, FLAKY_NoHangIfInitCrashes) {
 
 #endif
 
-TEST_F(NPAPITester, NPObjectReleasedOnDestruction) {
-  if (UITest::in_process_renderer())
-    return;
-
-  const FilePath test_case(
-      FILE_PATH_LITERAL("npobject_released_on_destruction.html"));
-  GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
-  ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
-
-  scoped_refptr<BrowserProxy> window_proxy(automation()->GetBrowserWindow(0));
-  ASSERT_TRUE(window_proxy);
-  ASSERT_TRUE(window_proxy->AppendTab(GURL(chrome::kAboutBlankURL)));
-
-  scoped_refptr<TabProxy> tab_proxy(window_proxy->GetTab(0));
-  ASSERT_TRUE(tab_proxy.get());
-  ASSERT_TRUE(tab_proxy->Close(true));
-}
-
-// Test that a dialog is properly created when a plugin throws an
-// exception.  Should be run for in and out of process plugins, but
-// the more interesting case is out of process, where we must route
-// the exception to the correct renderer.
-TEST_F(NPAPITester, NPObjectSetException) {
-  const FilePath test_case(FILE_PATH_LITERAL("npobject_set_exception.html"));
-  GURL url = ui_test_utils::GetTestUrl(FilePath(kTestDir), test_case);
-  ASSERT_NO_FATAL_FAILURE(NavigateToURL(url));
-  WaitForFinish("npobject_set_exception", "1", url,
-                kTestCompleteCookie, kTestCompleteSuccess,
-                action_max_timeout_ms());
-}
-
 TEST_F(NPAPIVisiblePluginTester, PluginReferrerTest) {
   if (UITest::in_process_renderer())
     return;
@@ -426,8 +374,7 @@ TEST_F(NPAPIVisiblePluginTester, PluginReferrerTest) {
 }
 
 #if defined(OS_MACOSX)
-// http://crbug.com/36670 - failes on 10.6
-TEST_F(NPAPIVisiblePluginTester, FLAKY_PluginConvertPointTest) {
+TEST_F(NPAPIVisiblePluginTester, PluginConvertPointTest) {
   if (UITest::in_process_renderer())
     return;
 
@@ -435,7 +382,7 @@ TEST_F(NPAPIVisiblePluginTester, FLAKY_PluginConvertPointTest) {
   ASSERT_TRUE(browser.get());
   scoped_refptr<WindowProxy> window(browser->GetWindow());
   ASSERT_TRUE(window.get());
-  window->SetBounds(gfx::Rect(100, 100, 600, 600));
+  window->SetBounds(gfx::Rect(50, 50, 400, 400));
 
   GURL url(URLRequestMockHTTPJob::GetMockUrl(
       FilePath(FILE_PATH_LITERAL("npapi/convert_point.html"))));

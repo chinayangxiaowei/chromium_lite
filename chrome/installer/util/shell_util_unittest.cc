@@ -7,7 +7,6 @@
 #include <shlobj.h>
 
 #include <fstream>
-#include <iostream>
 
 #include "base/file_util.h"
 #include "base/path_service.h"
@@ -98,7 +97,7 @@ class ShellUtilTest : public testing::Test {
 
   virtual void TearDown() {
     // Clean up test directory
-    ASSERT_TRUE(file_util::Delete(test_dir_, false));
+    ASSERT_TRUE(file_util::Delete(test_dir_, true));
     ASSERT_FALSE(file_util::PathExists(test_dir_));
   }
 

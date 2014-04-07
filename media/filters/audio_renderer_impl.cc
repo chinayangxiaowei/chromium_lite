@@ -7,6 +7,7 @@
 #include <math.h>
 
 #include "media/base/filter_host.h"
+#include "media/audio/audio_manager.h"
 
 namespace media {
 
@@ -33,7 +34,7 @@ bool AudioRendererImpl::IsMediaFormatSupported(
   int channels;
   int sample_rate;
   int sample_bits;
-  return AudioManager::GetAudioManager()->HasAudioDevices() &&
+  return AudioManager::GetAudioManager()->HasAudioOutputDevices() &&
       ParseMediaFormat(media_format, &channels, &sample_rate, &sample_bits);
 }
 
@@ -51,19 +52,22 @@ void AudioRendererImpl::SetVolume(float volume) {
     stream_->SetVolume(volume);
 }
 
-uint32 AudioRendererImpl::OnMoreData(AudioOutputStream* stream, void* dest_void,
-                                     uint32 len, uint32 pending_bytes) {
+uint32 AudioRendererImpl::OnMoreData(
+    AudioOutputStream* stream, uint8* dest, uint32 len,
+    AudioBuffersState buffers_state) {
   // TODO(scherkus): handle end of stream.
   if (!stream_)
     return 0;
 
-  // TODO(scherkus): Maybe change OnMoreData to pass in char/uint8 or similar.
   // TODO(fbarchard): Waveout_output_win.h should handle zero length buffers
   //                  without clicking.
-  pending_bytes = static_cast<uint32>(ceil(pending_bytes * GetPlaybackRate()));
-  base::TimeDelta delay =  base::TimeDelta::FromMicroseconds(
-      base::Time::kMicrosecondsPerSecond * pending_bytes / bytes_per_second_);
-  return FillBuffer(static_cast<uint8*>(dest_void), len, delay);
+  uint32 pending_bytes = static_cast<uint32>(ceil(buffers_state.total_bytes() *
+                                                  GetPlaybackRate()));
+  base::TimeDelta delay = base::TimeDelta::FromMicroseconds(
+      base::Time::kMicrosecondsPerSecond * pending_bytes /
+      bytes_per_second_);
+  bool buffers_empty = buffers_state.pending_bytes == 0;
+  return FillBuffer(dest, len, delay, buffers_empty);
 }
 
 void AudioRendererImpl::OnClose(AudioOutputStream* stream) {
@@ -78,23 +82,23 @@ void AudioRendererImpl::OnError(AudioOutputStream* stream, int code) {
 
 bool AudioRendererImpl::OnInitialize(const MediaFormat& media_format) {
   // Parse out audio parameters.
-  int channels;
-  int sample_rate;
-  int sample_bits;
-  if (!ParseMediaFormat(media_format, &channels, &sample_rate, &sample_bits)) {
+  AudioParameters params;
+  if (!ParseMediaFormat(media_format, &params.channels,
+                        &params.sample_rate, &params.bits_per_sample)) {
     return false;
   }
 
-  bytes_per_second_ = sample_rate * channels * sample_bits / 8;
+  bytes_per_second_ = params.sample_rate * params.channels *
+      params.bits_per_sample / 8;
 
   // Create our audio stream.
-  stream_ = AudioManager::GetAudioManager()->MakeAudioStream(
-      AudioManager::AUDIO_PCM_LINEAR, channels, sample_rate, sample_bits);
+  stream_ = AudioManager::GetAudioManager()->MakeAudioOutputStream(params);
   if (!stream_)
     return false;
 
   // Calculate buffer size and open the stream.
-  size_t size = kSamplesPerBuffer * channels * sample_bits / 8;
+  size_t size = kSamplesPerBuffer * params.channels *
+      params.bits_per_sample / 8;
   if (!stream_->Open(size)) {
     stream_->Close();
     stream_ = NULL;

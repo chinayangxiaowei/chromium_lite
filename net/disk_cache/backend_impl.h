@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #ifndef NET_DISK_CACHE_BACKEND_IMPL_H_
 #define NET_DISK_CACHE_BACKEND_IMPL_H_
+#pragma once
 
 #include "base/file_path.h"
 #include "base/hash_tables.h"
@@ -13,6 +14,7 @@
 #include "net/disk_cache/block_files.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/eviction.h"
+#include "net/disk_cache/in_flight_backend_io.h"
 #include "net/disk_cache/rankings.h"
 #include "net/disk_cache/stats.h"
 #include "net/disk_cache/trace.h"
@@ -27,7 +29,8 @@ enum BackendFlags {
   kUpgradeMode = 1 << 3,        // This is the upgrade tool (dump).
   kNewEviction = 1 << 4,        // Use of new eviction was specified.
   kNoRandom = 1 << 5,           // Don't add randomness to the behavior.
-  kNoLoadProtection = 1 << 6    // Don't act conservatively under load.
+  kNoLoadProtection = 1 << 6,   // Don't act conservatively under load.
+  kNoBuffering = 1 << 7         // Disable extended IO buffering.
 };
 
 // This class implements the Backend interface. An object of this
@@ -35,55 +38,65 @@ enum BackendFlags {
 class BackendImpl : public Backend {
   friend class Eviction;
  public:
-  explicit BackendImpl(const FilePath& path)
-      : path_(path), block_files_(path), mask_(0), max_size_(0),
-        cache_type_(net::DISK_CACHE), uma_report_(0), user_flags_(0),
-        init_(false), restarted_(false), unit_test_(false), read_only_(false),
-        new_eviction_(false), first_timer_(true),
-        ALLOW_THIS_IN_INITIALIZER_LIST(factory_(this)) {}
+  BackendImpl(const FilePath& path, base::MessageLoopProxy* cache_thread);
   // mask can be used to limit the usable size of the hash table, for testing.
-  BackendImpl(const FilePath& path, uint32 mask)
-      : path_(path), block_files_(path), mask_(mask), max_size_(0),
-        cache_type_(net::DISK_CACHE), uma_report_(0), user_flags_(kMask),
-        init_(false), restarted_(false), unit_test_(false), read_only_(false),
-        new_eviction_(false), first_timer_(true),
-        ALLOW_THIS_IN_INITIALIZER_LIST(factory_(this)) {}
+  BackendImpl(const FilePath& path, uint32 mask,
+              base::MessageLoopProxy* cache_thread);
   ~BackendImpl();
 
   // Returns a new backend with the desired flags. See the declaration of
   // CreateCacheBackend().
-  static Backend* CreateBackend(const FilePath& full_path, bool force,
-                                int max_bytes, net::CacheType type,
-                                BackendFlags flags);
+  static int CreateBackend(const FilePath& full_path, bool force,
+                           int max_bytes, net::CacheType type,
+                           uint32 flags, base::MessageLoopProxy* thread,
+                           Backend** backend, CompletionCallback* callback);
 
   // Performs general initialization for this current instance of the cache.
-  bool Init();
+  int Init(CompletionCallback* callback);
 
   // Backend interface.
   virtual int32 GetEntryCount() const;
-  virtual bool OpenEntry(const std::string& key, Entry** entry);
   virtual int OpenEntry(const std::string& key, Entry** entry,
                         CompletionCallback* callback);
-  virtual bool CreateEntry(const std::string& key, Entry** entry);
   virtual int CreateEntry(const std::string& key, Entry** entry,
                           CompletionCallback* callback);
-  virtual bool DoomEntry(const std::string& key);
   virtual int DoomEntry(const std::string& key, CompletionCallback* callback);
-  virtual bool DoomAllEntries();
   virtual int DoomAllEntries(CompletionCallback* callback);
-  virtual bool DoomEntriesBetween(const base::Time initial_time,
-                                  const base::Time end_time);
   virtual int DoomEntriesBetween(const base::Time initial_time,
                                  const base::Time end_time,
                                  CompletionCallback* callback);
-  virtual bool DoomEntriesSince(const base::Time initial_time);
   virtual int DoomEntriesSince(const base::Time initial_time,
                                CompletionCallback* callback);
-  virtual bool OpenNextEntry(void** iter, Entry** next_entry);
   virtual int OpenNextEntry(void** iter, Entry** next_entry,
                             CompletionCallback* callback);
   virtual void EndEnumeration(void** iter);
   virtual void GetStats(StatsItems* stats);
+
+  // Performs the actual initialization and final cleanup on destruction.
+  int SyncInit();
+  void CleanupCache();
+
+  // Same bahavior as OpenNextEntry but walks the list from back to front.
+  int OpenPrevEntry(void** iter, Entry** prev_entry,
+                    CompletionCallback* callback);
+
+  // Synchronous implementation of the asynchronous interface.
+  int SyncOpenEntry(const std::string& key, Entry** entry);
+  int SyncCreateEntry(const std::string& key, Entry** entry);
+  int SyncDoomEntry(const std::string& key);
+  int SyncDoomAllEntries();
+  int SyncDoomEntriesBetween(const base::Time initial_time,
+                             const base::Time end_time);
+  int SyncDoomEntriesSince(const base::Time initial_time);
+  int SyncOpenNextEntry(void** iter, Entry** next_entry);
+  int SyncOpenPrevEntry(void** iter, Entry** prev_entry);
+  void SyncEndEnumeration(void* iter);
+
+  // Open or create an entry for the given |key| or |iter|.
+  EntryImpl* OpenEntryImpl(const std::string& key);
+  EntryImpl* CreateEntryImpl(const std::string& key);
+  EntryImpl* OpenNextEntryImpl(void** iter);
+  EntryImpl* OpenPrevEntryImpl(void** iter);
 
   // Sets the maximum size for the total amount of data stored by this instance.
   bool SetMaxSize(int max_bytes);
@@ -96,6 +109,10 @@ class BackendImpl : public Backend {
 
   // Returns the actual file used to store a given (non-external) address.
   MappedFile* File(Addr address);
+
+  InFlightBackendIO* background_queue() {
+    return &background_queue_;
+  }
 
   // Creates an external storage file.
   bool CreateExternalFile(Addr* address);
@@ -124,9 +141,14 @@ class BackendImpl : public Backend {
   // Removes all references to this entry.
   void RemoveEntry(EntryImpl* entry);
 
-  // This method must be called whenever an entry is released for the last time.
-  // |address| is the cache address of the entry.
-  void CacheEntryDestroyed(Addr address);
+  // This method must be called when an entry is released for the last time, so
+  // the entry should not be used anymore. |address| is the cache address of the
+  // entry.
+  void OnEntryDestroyBegin(Addr address);
+
+  // This method must be called after all resources for an entry have been
+  // released.
+  void OnEntryDestroyEnd();
 
   // If the data stored by the provided |rankings| points to an open entry,
   // returns a pointer to that entry, otherwise returns NULL. Note that this
@@ -145,6 +167,17 @@ class BackendImpl : public Backend {
   // Logs requests that are denied due to being too big.
   void TooMuchStorageRequested(int32 size);
 
+  // Returns true if a temporary buffer is allowed to be extended.
+  bool IsAllocAllowed(int current_size, int new_size);
+
+  // Tracks the release of |size| bytes by an entry buffer.
+  void BufferDeleted(int size);
+
+  // Only intended for testing the two previous methods.
+  int GetTotalBuffersSize() const {
+    return buffer_bytes_;
+  }
+
   // Returns true if this instance seems to be under heavy load.
   bool IsLoaded() const;
 
@@ -156,6 +189,9 @@ class BackendImpl : public Backend {
   net::CacheType cache_type() const {
     return cache_type_;
   }
+
+  // Returns a weak pointer to this object.
+  base::WeakPtr<BackendImpl> GetWeakPtr();
 
   // Returns the group for this client, based on the current cache size.
   int GetSizeGroup() const;
@@ -176,6 +212,13 @@ class BackendImpl : public Backend {
 
   // Called when an interesting event should be logged (counted).
   void OnEvent(Stats::Counters an_event);
+
+  // Keeps track of paylod access (doesn't include metadata).
+  void OnRead(int bytes);
+  void OnWrite(int bytes);
+
+  // Keeps track of the time needed to complete some IO operations.
+  void OnOperationCompleted(base::TimeDelta elapsed_time);
 
   // Timer callback to calculate usage statistics.
   void OnStatsTimer();
@@ -199,12 +242,16 @@ class BackendImpl : public Backend {
   // Clears the counter of references to test handling of corruptions.
   void ClearRefCountForTest();
 
+  // Sends a dummy operation through the operation queue, for unit tests.
+  int FlushQueueForTest(CompletionCallback* callback);
+
+  // Runs the provided task on the cache thread. The task will be automatically
+  // deleted after it runs.
+  int RunTaskForTest(Task* task, CompletionCallback* callback);
+
   // Peforms a simple self-check, and returns the number of dirty items
   // or an error code (negative value).
   int SelfCheck();
-
-  // Same bahavior as OpenNextEntry but walks the list from back to front.
-  bool OpenPrevEntry(void** iter, Entry** prev_entry);
 
  private:
   typedef base::hash_map<CacheAddr, EntryImpl*> EntriesMap;
@@ -228,7 +275,7 @@ class BackendImpl : public Backend {
   EntryImpl* MatchEntry(const std::string& key, uint32 hash, bool find_parent);
 
   // Opens the next or previous entry on a cache iteration.
-  bool OpenFollowingEntry(bool forward, void** iter, Entry** next_entry);
+  EntryImpl* OpenFollowingEntry(bool forward, void** iter);
 
   // Opens the next or previous entry on a single list. If successfull,
   // |from_entry| will be updated to point to the new entry, otherwise it will
@@ -242,7 +289,7 @@ class BackendImpl : public Backend {
   EntryImpl* GetEnumeratedEntry(CacheRankingsBlock* next, bool to_evict);
 
   // Re-opens an entry that was previously deleted.
-  bool ResurrectEntry(EntryImpl* deleted_entry, Entry** entry);
+  EntryImpl* ResurrectEntry(EntryImpl* deleted_entry);
 
   void DestroyInvalidEntry(EntryImpl* entry);
   void DestroyInvalidEntryFromEnumeration(EntryImpl* entry);
@@ -275,6 +322,10 @@ class BackendImpl : public Backend {
   // Part of the self test. Returns false if the entry is corrupt.
   bool CheckEntry(EntryImpl* cache_entry);
 
+  // Returns the maximum total memory for the memory buffers.
+  int MaxBuffersSize();
+
+  InFlightBackendIO background_queue_;  // The controller of pending operations.
   scoped_refptr<MappedFile> index_;  // The main cache index.
   FilePath path_;  // Path to the folder used as backing storage.
   Index* data_;  // Pointer to the index data.
@@ -287,6 +338,10 @@ class BackendImpl : public Backend {
   int num_refs_;  // Number of referenced cache entries.
   int max_refs_;  // Max number of referenced cache entries.
   int num_pending_io_;  // Number of pending IO operations.
+  int entry_count_;  // Number of entries accessed lately.
+  int byte_count_;  // Number of bytes read/written lately.
+  int buffer_bytes_;  // Total size of the temporary entries' buffers.
+  int io_delay_;  // Average time (ms) required to complete some IO operations.
   net::CacheType cache_type_;
   int uma_report_;  // Controls transmision of UMA data.
   uint32 user_flags_;  // Flags set by the user.
@@ -297,13 +352,16 @@ class BackendImpl : public Backend {
   bool disabled_;
   bool new_eviction_;  // What eviction algorithm should be used.
   bool first_timer_;  // True if the timer has not been called.
+  bool throttle_requests_;
 
   Stats stats_;  // Usage statistcs.
   base::RepeatingTimer<BackendImpl> timer_;  // Usage timer.
+  base::WaitableEvent done_;  // Signals the end of background work.
   scoped_refptr<TraceObject> trace_object_;  // Inits internal tracing.
   ScopedRunnableMethodFactory<BackendImpl> factory_;
+  base::WeakPtrFactory<BackendImpl> ptr_factory_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(BackendImpl);
+  DISALLOW_COPY_AND_ASSIGN(BackendImpl);
 };
 
 // Returns the prefered max cache size given the available disk space.

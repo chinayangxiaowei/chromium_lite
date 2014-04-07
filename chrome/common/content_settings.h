@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_CONTENT_SETTINGS_H_
 #define CHROME_COMMON_CONTENT_SETTINGS_H_
+#pragma once
 
 #include "chrome/common/content_settings_types.h"
 
@@ -14,6 +15,7 @@ enum ContentSetting {
   CONTENT_SETTING_ALLOW,
   CONTENT_SETTING_BLOCK,
   CONTENT_SETTING_ASK,
+  CONTENT_SETTING_SESSION_ONLY,
   CONTENT_SETTING_NUM_SETTINGS
 };
 

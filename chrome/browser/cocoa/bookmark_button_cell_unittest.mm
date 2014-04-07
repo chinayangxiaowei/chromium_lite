@@ -1,12 +1,16 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "app/resource_bundle.h"
 #include "base/scoped_nsobject.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/bookmarks/bookmark_model.h"
 #import "chrome/browser/cocoa/bookmark_button_cell.h"
 #import "chrome/browser/cocoa/bookmark_menu.h"
 #include "chrome/browser/cocoa/browser_test_helper.h"
 #import "chrome/browser/cocoa/cocoa_test_helper.h"
+#include "grit/app_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
@@ -50,6 +54,36 @@ TEST_F(BookmarkButtonCellTest, SizeForBounds) {
   NSSize size = [cell.get() cellSizeForBounds:r];
   EXPECT_TRUE(size.width > 0 && size.height > 0);
   EXPECT_TRUE(size.width < 200 && size.height < 200);
+}
+
+// Make sure icon-only buttons are squeezed tightly.
+TEST_F(BookmarkButtonCellTest, IconOnlySqueeze) {
+  NSRect frame = NSMakeRect(0, 0, 50, 30);
+  scoped_nsobject<NSButton> view([[NSButton alloc] initWithFrame:frame]);
+  scoped_nsobject<BookmarkButtonCell> cell(
+      [[BookmarkButtonCell alloc] initTextCell:@"Testing"]);
+  [view setCell:cell.get()];
+  [[test_window() contentView] addSubview:view];
+
+  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  scoped_nsobject<NSImage> image([rb.GetNSImageNamed(IDR_DEFAULT_FAVICON)
+                                    retain]);
+  EXPECT_TRUE(image.get());
+
+  NSRect r = NSMakeRect(0, 0, 100, 100);
+  [cell setBookmarkCellText:@"  " image:image];
+  CGFloat two_space_width = [cell.get() cellSizeForBounds:r].width;
+  [cell setBookmarkCellText:@" " image:image];
+  CGFloat one_space_width = [cell.get() cellSizeForBounds:r].width;
+  [cell setBookmarkCellText:@"" image:image];
+  CGFloat zero_space_width = [cell.get() cellSizeForBounds:r].width;
+
+  // Make sure the switch to "no title" is more significant than we
+  // would otherwise see by decreasing the length of the title.
+  CGFloat delta1 = two_space_width - one_space_width;
+  CGFloat delta2 = one_space_width - zero_space_width;
+  EXPECT_GT(delta2, delta1);
+
 }
 
 // Make sure the default from the base class is overridden.
@@ -125,7 +159,8 @@ TEST_F(BookmarkButtonCellTest, Awake) {
 TEST_F(BookmarkButtonCellTest, FolderArrow) {
   BookmarkModel* model = helper_.profile()->GetBookmarkModel();
   const BookmarkNode* bar = model->GetBookmarkBarNode();
-  const BookmarkNode* node = model->AddURL(bar, bar->GetChildCount(), L"title",
+  const BookmarkNode* node = model->AddURL(bar, bar->GetChildCount(),
+                                           ASCIIToUTF16("title"),
                                            GURL("http://www.google.com"));
   scoped_nsobject<BookmarkButtonCell> cell(
     [[BookmarkButtonCell alloc] initForNode:node

@@ -5,6 +5,8 @@
 #ifndef GPU_COMMAND_BUFFER_SERVICE_GPU_PROCESSOR_H_
 #define GPU_COMMAND_BUFFER_SERVICE_GPU_PROCESSOR_H_
 
+#include <vector>
+
 #include "app/surface/transport_dib.h"
 #include "base/callback.h"
 #include "base/ref_counted.h"
@@ -19,13 +21,15 @@
 #include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 
-#if defined(OS_MACOSX) && !defined(UNIT_TEST)
+#if defined(OS_MACOSX)
 #include "app/surface/accelerated_surface_mac.h"
 #endif
 
-namespace gpu {
-
+namespace gfx {
 class GLContext;
+}
+
+namespace gpu {
 
 // This class processes commands in a command buffer. It is event driven and
 // posts tasks to the current message loop to do additional work.
@@ -41,16 +45,22 @@ class GPUProcessor : public CommandBufferEngine {
 
   virtual ~GPUProcessor();
 
+  // Perform platform specific and common initialization.
   bool Initialize(gfx::PluginWindowHandle hwnd,
                   const gfx::Size& size,
+                  const std::vector<int32>& attribs,
                   GPUProcessor* parent,
                   uint32 parent_texture_id);
 
-  bool InitializeCommon(const gfx::Size& size,
+  // Perform common initialization. Takes ownership of GLContext.
+  bool InitializeCommon(gfx::GLContext* context,
+                        const gfx::Size& size,
+                        const std::vector<int32>& attribs,
                         gles2::GLES2Decoder* parent_decoder,
                         uint32 parent_texture_id);
 
   void Destroy();
+  void DestroyCommon();
 
   virtual void ProcessCommands();
 
@@ -83,7 +93,14 @@ class GPUProcessor : public CommandBufferEngine {
   // It is not defined on which thread this callback is called.
   virtual void SetSwapBuffersCallback(Callback0::Type* callback);
 
+  // Get the GLES2Decoder associated with this processor.
+  gles2::GLES2Decoder* decoder() const { return decoder_.get(); }
+
  private:
+  // Called via a callback just before we are supposed to call the
+  // user's swap buffers callback.
+  virtual void WillSwapBuffers();
+
   // The GPUProcessor holds a weak reference to the CommandBuffer. The
   // CommandBuffer owns the GPUProcessor and holds a strong reference to it
   // through the ProcessCommands callback.
@@ -91,16 +108,18 @@ class GPUProcessor : public CommandBufferEngine {
 
   int commands_per_update_;
 
+  // TODO(gman): Group needs to be passed in so it can be shared by
+  //    multiple GPUProcessors.
   gles2::ContextGroup group_;
   scoped_ptr<gles2::GLES2Decoder> decoder_;
   scoped_ptr<CommandParser> parser_;
-  scoped_ptr<GLContext> context_;
 
-#if defined(OS_MACOSX) && !defined(UNIT_TEST)
-  AcceleratedSurface surface_;
+#if defined(OS_MACOSX)
+  scoped_ptr<AcceleratedSurface> surface_;
 #endif
 
   ScopedRunnableMethodFactory<GPUProcessor> method_factory_;
+  scoped_ptr<Callback0::Type> wrapped_swap_buffers_callback_;
 };
 
 }  // namespace gpu

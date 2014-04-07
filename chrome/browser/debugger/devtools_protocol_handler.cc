@@ -5,7 +5,7 @@
 #include "chrome/browser/debugger/devtools_protocol_handler.h"
 
 #include "base/logging.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/debugger/inspectable_tab_proxy.h"
 #include "chrome/browser/debugger/devtools_remote_message.h"
 #include "chrome/browser/debugger/devtools_remote_listen_socket.h"
@@ -25,19 +25,19 @@ DevToolsProtocolHandler::~DevToolsProtocolHandler() {
 }
 
 void DevToolsProtocolHandler::Start() {
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(this, &DevToolsProtocolHandler::Init));
 }
 
 void DevToolsProtocolHandler::Init() {
   server_ = DevToolsRemoteListenSocket::Listen(
-      "127.0.0.1", port_, this, this);
+      "127.0.0.1", port_, this);
 }
 
 void DevToolsProtocolHandler::Stop() {
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(this, &DevToolsProtocolHandler::Teardown));
   tool_to_listener_map_.clear();  // Releases all scoped_refptr's to listeners
 }
@@ -72,9 +72,9 @@ void DevToolsProtocolHandler::HandleMessage(
     NOTREACHED();  // an unsupported tool, bail out
     return;
   }
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
           it->second.get(), &DevToolsRemoteListener::HandleMessage, message));
 }
@@ -85,32 +85,20 @@ void DevToolsProtocolHandler::Send(const DevToolsRemoteMessage& message) {
   }
 }
 
-void DevToolsProtocolHandler::DidAccept(ListenSocket *server,
-                                        ListenSocket *connection) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
-  if (connection_ == NULL) {
-    connection_ = connection;
-    connection_->AddRef();
-  }
-  // else the connection will get deleted itself with scoped_refptr
+void DevToolsProtocolHandler::OnAcceptConnection(ListenSocket *connection) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  connection_ = connection;
 }
 
-void DevToolsProtocolHandler::DidRead(ListenSocket *connection,
-                                      const std::string& data) {
-  // Not used.
-}
-
-void DevToolsProtocolHandler::DidClose(ListenSocket *sock) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
-  DCHECK(connection_ == sock);
+void DevToolsProtocolHandler::OnConnectionLost() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   connection_ = NULL;
-  sock->Release();
   for (ToolToListenerMap::const_iterator it = tool_to_listener_map_.begin(),
        end = tool_to_listener_map_.end();
        it != end;
        ++it) {
-    ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
           it->second.get(), &DevToolsRemoteListener::OnConnectionLost));
   }

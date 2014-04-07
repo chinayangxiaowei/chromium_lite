@@ -4,10 +4,11 @@
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_DOWNLOAD_THROTTLING_RESOURCE_HANDLER_H_
 #define CHROME_BROWSER_RENDERER_HOST_DOWNLOAD_THROTTLING_RESOURCE_HANDLER_H_
+#pragma once
 
 #include <string>
 
-#include "chrome/browser/download/download_request_manager.h"
+#include "chrome/browser/download/download_request_limiter.h"
 #include "chrome/browser/renderer_host/resource_handler.h"
 #include "googleurl/src/gurl.h"
 
@@ -17,15 +18,15 @@ class URLRequest;
 
 // DownloadThrottlingResourceHandler is used to determine if a download should
 // be allowed. When a DownloadThrottlingResourceHandler is created it pauses the
-// download and asks the DownloadRequestManager if the download should be
-// allowed. The DownloadRequestManager notifies us asynchronously as to whether
+// download and asks the DownloadRequestLimiter if the download should be
+// allowed. The DownloadRequestLimiter notifies us asynchronously as to whether
 // the download is allowed or not. If the download is allowed the request is
 // resumed, a DownloadResourceHandler is created and all EventHandler methods
 // are delegated to it. If the download is not allowed the request is canceled.
 
 class DownloadThrottlingResourceHandler
     : public ResourceHandler,
-      public DownloadRequestManager::Callback {
+      public DownloadRequestLimiter::Callback {
  public:
   DownloadThrottlingResourceHandler(ResourceDispatcherHost* host,
                                     URLRequest* request,
@@ -51,7 +52,7 @@ class DownloadThrottlingResourceHandler
                                    const std::string& security_info);
   virtual void OnRequestClosed();
 
-  // DownloadRequestManager::Callback implementation:
+  // DownloadRequestLimiter::Callback implementation:
   virtual void CancelDownload();
   virtual void ContinueDownload();
   virtual int GetRequestId();

@@ -61,23 +61,24 @@ class NigoriStream {
 // static
 const char Nigori::kSaltSalt[] = "saltsalt";
 
-Nigori::Nigori(const std::string& hostname)
-    : hostname_(hostname) {
+Nigori::Nigori() {
 }
 
 Nigori::~Nigori() {
 }
 
-bool Nigori::Init(const std::string& username, const std::string& password) {
+bool Nigori::InitByDerivation(const std::string& hostname,
+                              const std::string& username,
+                              const std::string& password) {
   NigoriStream salt_password;
-  salt_password << username << hostname_;
+  salt_password << username << hostname;
 
   // Suser = PBKDF2(Username || Servername, "saltsalt", Nsalt, 8)
   scoped_ptr<SymmetricKey> user_salt(SymmetricKey::DeriveKeyFromPassword(
       SymmetricKey::HMAC_SHA1, salt_password.str(),
       kSaltSalt,
       kSaltIterations,
-      kSaltKeySize));
+      kSaltKeySizeInBits));
   DCHECK(user_salt.get());
 
   std::string raw_user_salt;
@@ -102,9 +103,25 @@ bool Nigori::Init(const std::string& username, const std::string& password) {
   return true;
 }
 
+bool Nigori::InitByImport(const std::string& user_key,
+                          const std::string& encryption_key,
+                          const std::string& mac_key) {
+  user_key_.reset(SymmetricKey::Import(SymmetricKey::AES, user_key));
+  DCHECK(user_key_.get());
+
+  encryption_key_.reset(SymmetricKey::Import(SymmetricKey::AES,
+                                             encryption_key));
+  DCHECK(encryption_key_.get());
+
+  mac_key_.reset(SymmetricKey::Import(SymmetricKey::HMAC_SHA1, mac_key));
+  DCHECK(mac_key_.get());
+
+  return user_key_.get() && encryption_key_.get() && mac_key_.get();
+}
+
 // Permute[Kenc,Kmac](type || name)
 bool Nigori::Permute(Type type, const std::string& name,
-                     std::string* permuted) {
+                     std::string* permuted) const {
   DCHECK_LT(0U, name.size());
 
   NigoriStream plaintext;
@@ -147,7 +164,7 @@ std::string GenerateRandomString(size_t size) {
 }
 
 // Enc[Kenc,Kmac](value)
-bool Nigori::Encrypt(const std::string& value, std::string* encrypted) {
+bool Nigori::Encrypt(const std::string& value, std::string* encrypted) const {
   DCHECK_LT(0U, value.size());
 
   std::string iv = GenerateRandomString(kIvSize);
@@ -180,7 +197,7 @@ bool Nigori::Encrypt(const std::string& value, std::string* encrypted) {
   return Base64Encode(output, encrypted);
 }
 
-bool Nigori::Decrypt(const std::string& encrypted, std::string* value) {
+bool Nigori::Decrypt(const std::string& encrypted, std::string* value) const {
   std::string input;
   if (!Base64Decode(encrypted, &input))
     return false;
@@ -223,6 +240,18 @@ bool Nigori::Decrypt(const std::string& encrypted, std::string* value) {
     return false;
 
   return true;
+}
+
+bool Nigori::ExportKeys(std::string* user_key,
+                        std::string* encryption_key,
+                        std::string* mac_key) const {
+  DCHECK(user_key);
+  DCHECK(encryption_key);
+  DCHECK(mac_key);
+
+  return user_key_->GetRawKey(user_key) &&
+      encryption_key_->GetRawKey(encryption_key) &&
+      mac_key_->GetRawKey(mac_key);
 }
 
 }  // namespace browser_sync

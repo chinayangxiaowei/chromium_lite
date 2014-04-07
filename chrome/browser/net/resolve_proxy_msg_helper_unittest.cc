@@ -1,10 +1,9 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/net/resolve_proxy_msg_helper.h"
 
-#include "base/waitable_event.h"
 #include "net/base/net_errors.h"
 #include "net/proxy/mock_proxy_resolver.h"
 #include "net/proxy/proxy_config_service.h"
@@ -13,9 +12,11 @@
 // This ProxyConfigService always returns "http://pac" as the PAC url to use.
 class MockProxyConfigService : public net::ProxyConfigService {
  public:
-  virtual int GetProxyConfig(net::ProxyConfig* results) {
-    results->set_pac_url(GURL("http://pac"));
-    return net::OK;
+  virtual void AddObserver(Observer* observer) {}
+  virtual void RemoveObserver(Observer* observer) {}
+  virtual bool GetLatestProxyConfig(net::ProxyConfig* results) {
+    *results = net::ProxyConfig::CreateFromCustomPacURL(GURL("http://pac"));
+    return true;
   }
 };
 
@@ -55,7 +56,7 @@ class MyDelegate : public ResolveProxyMsgHelper::Delegate {
 TEST(ResolveProxyMsgHelperTest, Sequential) {
   net::MockAsyncProxyResolver* resolver = new net::MockAsyncProxyResolver;
   scoped_refptr<net::ProxyService> service(
-      new net::ProxyService(new MockProxyConfigService, resolver, NULL, NULL));
+      new net::ProxyService(new MockProxyConfigService, resolver, NULL));
 
   MyDelegate delegate;
   ResolveProxyMsgHelper helper(&delegate, service);
@@ -118,7 +119,7 @@ TEST(ResolveProxyMsgHelperTest, Sequential) {
 TEST(ResolveProxyMsgHelperTest, QueueRequests) {
   net::MockAsyncProxyResolver* resolver = new net::MockAsyncProxyResolver;
   scoped_refptr<net::ProxyService> service(
-      new net::ProxyService(new MockProxyConfigService, resolver, NULL, NULL));
+      new net::ProxyService(new MockProxyConfigService, resolver, NULL));
 
   MyDelegate delegate;
   ResolveProxyMsgHelper helper(&delegate, service);
@@ -185,7 +186,7 @@ TEST(ResolveProxyMsgHelperTest, QueueRequests) {
 TEST(ResolveProxyMsgHelperTest, CancelPendingRequests) {
   net::MockAsyncProxyResolver* resolver = new net::MockAsyncProxyResolver;
   scoped_refptr<net::ProxyService> service(
-      new net::ProxyService(new MockProxyConfigService, resolver, NULL, NULL));
+      new net::ProxyService(new MockProxyConfigService, resolver, NULL));
 
   MyDelegate delegate;
   scoped_ptr<ResolveProxyMsgHelper> helper(

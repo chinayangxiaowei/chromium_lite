@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_FOCUS_ACCELERATOR_HANDLER_H_
 #define VIEWS_FOCUS_ACCELERATOR_HANDLER_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -11,9 +12,7 @@
 #include <gdk/gdk.h>
 #endif
 
-#if defined(OS_WIN)
 #include <set>
-#endif
 
 #include "base/message_loop.h"
 
@@ -36,8 +35,6 @@ class AcceleratorHandler : public MessageLoopForUI::Dispatcher {
 #if defined(OS_WIN)
   // The keys currently pressed and consumed by the FocusManager.
   std::set<WPARAM> pressed_keys_;
-#else  // OS_LINUX
-  guint last_key_pressed_;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(AcceleratorHandler);

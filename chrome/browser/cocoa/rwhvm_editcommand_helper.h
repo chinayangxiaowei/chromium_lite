@@ -1,16 +1,17 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_COCOA_RWHVM_EDITCOMMAND_HELPER_H_
 #define CHROME_BROWSER_COCOA_RWHVM_EDITCOMMAND_HELPER_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
+#include "base/basictypes.h"
 #include "base/hash_tables.h"
-#include "base/logging.h"
+#include "base/gtest_prod_util.h"
 #include "chrome/browser/renderer_host/render_widget_host_view_mac.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 // RenderWidgetHostViewMacEditCommandHelper is the real name of this class
 // but that's too long, so we use a shorter version.
@@ -30,8 +31,10 @@
 //  fact a distinct object) When these selectors are called, the relevant
 // edit command is executed in WebCore.
 class RWHVMEditCommandHelper {
-   FRIEND_TEST(RWHVMEditCommandHelperTest, TestAddEditingSelectorsToClass);
-   FRIEND_TEST(RWHVMEditCommandHelperTest, TestEditingCommandDelivery);
+   FRIEND_TEST_ALL_PREFIXES(RWHVMEditCommandHelperTest,
+                            TestAddEditingSelectorsToClass);
+   FRIEND_TEST_ALL_PREFIXES(RWHVMEditCommandHelperTest,
+                            TestEditingCommandDelivery);
 
  public:
   RWHVMEditCommandHelper();
@@ -66,4 +69,4 @@ class RWHVMEditCommandHelper {
   DISALLOW_COPY_AND_ASSIGN(RWHVMEditCommandHelper);
 };
 
-#endif //  CHROME_BROWSER_COCOA_RWHVM_EDITCOMMAND_HELPER_H_
+#endif  // CHROME_BROWSER_COCOA_RWHVM_EDITCOMMAND_HELPER_H_

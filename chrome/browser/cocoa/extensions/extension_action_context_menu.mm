@@ -8,17 +8,18 @@
 #include "base/sys_string_conversions.h"
 #include "base/task.h"
 #include "chrome/browser/browser_list.h"
-#import "chrome/browser/cocoa/autocomplete_text_field_cell.h"
 #include "chrome/browser/cocoa/browser_window_cocoa.h"
 #include "chrome/browser/cocoa/browser_window_controller.h"
 #include "chrome/browser/cocoa/extensions/browser_actions_controller.h"
 #include "chrome/browser/cocoa/extensions/extension_popup_controller.h"
 #include "chrome/browser/cocoa/info_bubble_view.h"
+#import "chrome/browser/cocoa/location_bar/location_bar_view_mac.h"
 #include "chrome/browser/cocoa/toolbar_controller.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/extensions/extension_tabs_module.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_change_registrar.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_action.h"
@@ -45,8 +46,7 @@ class AsyncUninstaller : public ExtensionInstallUI::Delegate {
   ~AsyncUninstaller() {}
 
   // Overridden by ExtensionInstallUI::Delegate.
-  virtual void InstallUIProceed(bool create_shortcut) {
-    DCHECK(!create_shortcut);
+  virtual void InstallUIProceed() {
     profile_->GetExtensionsService()->
         UninstallExtension(extension_->id(), false);
   }
@@ -72,14 +72,10 @@ class DevmodeObserver : public NotificationObserver {
   DevmodeObserver(ExtensionActionContextMenu* menu,
                              PrefService* service)
       : menu_(menu), pref_service_(service) {
-    pref_service_->AddPrefObserver(prefs::kExtensionsUIDeveloperMode,
-                                   this);
+    registrar_.Init(pref_service_);
+    registrar_.Add(prefs::kExtensionsUIDeveloperMode, this);
   }
-
-  ~DevmodeObserver() {
-    pref_service_->RemovePrefObserver(prefs::kExtensionsUIDeveloperMode,
-                                      this);
-  }
+  virtual ~DevmodeObserver() {}
 
   void Observe(NotificationType type,
                const NotificationSource& source,
@@ -93,9 +89,10 @@ class DevmodeObserver : public NotificationObserver {
  private:
   ExtensionActionContextMenu* menu_;
   PrefService* pref_service_;
+  PrefChangeRegistrar registrar_;
 };
 
-}
+}  // namespace extension_action_context_menu
 
 @interface ExtensionActionContextMenu(Private)
 // Callback for the context menu items.
@@ -178,7 +175,8 @@ int CurrentTabId() {
     [inspectorItem_.get() setTag:kExtensionContextInspect];
 
     PrefService* service = profile_->GetPrefs();
-    observer_.reset(new extension_action_context_menu::DevmodeObserver(self, service));
+    observer_.reset(
+        new extension_action_context_menu::DevmodeObserver(self, service));
 
     [self updateInspectorItem];
     return self;
@@ -234,37 +232,33 @@ int CurrentTabId() {
       break;
     }
     case kExtensionContextInspect: {
-      NSPoint popupPoint;
       BrowserWindowCocoa* window =
           static_cast<BrowserWindowCocoa*>(browser->window());
-      LocationBar* locationBar = window->GetLocationBar();
-      AutocompleteTextField* field =
-          (AutocompleteTextField*)locationBar->location_entry()->
-          GetNativeView();
-      AutocompleteTextFieldCell* fieldCell = [field autocompleteTextFieldCell];
-      NSRect popupRect =
-          [fieldCell pageActionFrameForExtensionAction:action_
-                                               inFrame:[field bounds]];
-      if (!NSEqualRects(popupRect, NSZeroRect)) {
-        popupRect = [[field superview] convertRect:popupRect toView:nil];
-        popupPoint = popupRect.origin;
-        NSRect fieldFrame = [field bounds];
-        fieldFrame = [field convertRect:fieldFrame toView:nil];
-        popupPoint.x += fieldFrame.origin.x + popupRect.size.width / 2;
-      } else {
-        ToolbarController* toolbarController =
-            [window->cocoa_controller() toolbarController];
+      ToolbarController* toolbarController =
+          [window->cocoa_controller() toolbarController];
+      LocationBarViewMac* locationBarView =
+          [toolbarController locationBarBridge];
+
+      NSPoint popupPoint = NSZeroPoint;
+      if (extension_->page_action() == action_) {
+        popupPoint = locationBarView->GetPageActionBubblePoint(action_);
+
+      } else if (extension_->browser_action() == action_) {
         BrowserActionsController* controller =
             [toolbarController browserActionsController];
         popupPoint = [controller popupPointForBrowserAction:extension_];
+
+      } else {
+        NOTREACHED() << "action_ is not a page action or browser action?";
       }
+
       int tabId = CurrentTabId();
       GURL url = action_->GetPopupUrl(tabId);
       DCHECK(url.is_valid());
       [ExtensionPopupController showURL:url
                               inBrowser:BrowserList::GetLastActive()
                              anchoredAt:popupPoint
-                          arrowLocation:kTopRight
+                          arrowLocation:info_bubble::kTopRight
                                 devMode:YES];
       break;
     }
@@ -275,8 +269,8 @@ int CurrentTabId() {
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem*)menuItem {
-  if([menuItem isEqualTo: inspectorItem_.get()]) {
-    return (action_->HasPopup(CurrentTabId()));
+  if([menuItem isEqualTo:inspectorItem_.get()]) {
+    return action_ && action_->HasPopup(CurrentTabId());
   }
   return YES;
 }

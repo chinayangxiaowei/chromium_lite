@@ -1,12 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_PROXY_PROXY_CONFIG_SERVICE_COMMON_UNITTEST_H_
 #define NET_PROXY_PROXY_CONFIG_SERVICE_COMMON_UNITTEST_H_
-
-#include <string>
-#include <vector>
+#pragma once
 
 #include "net/proxy/proxy_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -16,8 +14,6 @@
 
 namespace net {
 
-class ProxyBypassRules;
-
 // This structure contains our expectations on what values the ProxyRules
 // should have.
 struct ProxyRulesExpectation {
@@ -26,17 +22,9 @@ struct ProxyRulesExpectation {
                         const char* proxy_for_http,
                         const char* proxy_for_https,
                         const char* proxy_for_ftp,
-                        const char* socks_proxy,
-                        const char* flattened_bypass_rules)
-    : type(type),
-      single_proxy(single_proxy),
-      proxy_for_http(proxy_for_http),
-      proxy_for_https(proxy_for_https),
-      proxy_for_ftp(proxy_for_ftp),
-      socks_proxy(socks_proxy),
-      flattened_bypass_rules(flattened_bypass_rules) {
-  }
-
+                        const char* fallback_proxy,
+                        const char* flattened_bypass_rules,
+                        bool reverse_bypass);
 
   // Call this within an EXPECT_TRUE(), to assert that |rules| matches
   // our expected values |*this|.
@@ -68,7 +56,14 @@ struct ProxyRulesExpectation {
       const char* proxy_http,
       const char* proxy_https,
       const char* proxy_ftp,
-      const char* socks_proxy,
+      const char* fallback_proxy,
+      const char* flattened_bypass_rules);
+
+  // Same as PerScheme, but with the bypass rules reversed
+  static ProxyRulesExpectation PerSchemeWithBypassReversed(
+      const char* proxy_http,
+      const char* proxy_https,
+      const char* proxy_ftp,
       const char* flattened_bypass_rules);
 
   ProxyConfig::ProxyRules::Type type;
@@ -76,8 +71,9 @@ struct ProxyRulesExpectation {
   const char* proxy_for_http;
   const char* proxy_for_https;
   const char* proxy_for_ftp;
-  const char* socks_proxy;
+  const char* fallback_proxy;
   const char* flattened_bypass_rules;
+  bool reverse_bypass;
 };
 
 }  // namespace net

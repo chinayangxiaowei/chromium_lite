@@ -4,11 +4,14 @@
 
 #import "chrome/browser/app_controller_mac.h"
 
+#include "app/l10n_util.h"
 #include "app/l10n_util_mac.h"
 #include "base/auto_reset.h"
 #include "base/command_line.h"
+#include "base/file_path.h"
 #include "base/mac_util.h"
 #include "base/message_loop.h"
+#include "base/string_number_conversions.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/browser.h"
@@ -16,10 +19,9 @@
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_shutdown.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/browser_window.h"
-#include "chrome/browser/chrome_thread.h"
 #import "chrome/browser/cocoa/about_window_controller.h"
-#import "chrome/browser/cocoa/bookmark_manager_controller.h"
 #import "chrome/browser/cocoa/bookmark_menu_bridge.h"
 #import "chrome/browser/cocoa/browser_window_cocoa.h"
 #import "chrome/browser/cocoa/browser_window_controller.h"
@@ -36,18 +38,20 @@
 #include "chrome/browser/download/download_manager.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/options_window.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/printing/print_job_manager.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/browser/sync/sync_ui_util_mac.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/common/app_mode_constants_mac.h"
+#include "chrome/common/app_mode_common_mac.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/url_constants.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "net/base/net_util.h"
@@ -85,7 +89,7 @@ Browser* ActivateBrowser(Profile* profile) {
 // to the new |Browser|.
 Browser* CreateBrowser(Profile* profile) {
   {
-    AutoReset auto_reset_in_run(&g_is_opening_new_window, true);
+    AutoReset<bool> auto_reset_in_run(&g_is_opening_new_window, true);
     Browser::OpenEmptyWindow(profile);
   }
 
@@ -130,20 +134,20 @@ void RecordLastRunAppBundlePath() {
                            app_mode::kAppPrefsID);
 
   // Sync after a delay avoid I/O contention on startup; 1500 ms is plenty.
-  ChromeThread::PostDelayedTask(ChromeThread::FILE, FROM_HERE,
-                                new PrefsSyncTask(), 1500);
+  BrowserThread::PostDelayedTask(BrowserThread::FILE, FROM_HERE,
+                                 new PrefsSyncTask(), 1500);
 }
 
 }  // anonymous namespace
 
 @interface AppController(Private)
 - (void)initMenuState;
-- (void)handleQuitEvent:(NSAppleEventDescriptor*)event
-              withReply:(NSAppleEventDescriptor*)reply;
+- (void)registerServicesMenuTypesTo:(NSApplication*)app;
 - (void)openUrls:(const std::vector<GURL>&)urls;
 - (void)getUrl:(NSAppleEventDescriptor*)event
      withReply:(NSAppleEventDescriptor*)reply;
 - (void)windowLayeringDidChange:(NSNotification*)inNotification;
+- (void)checkForAnyKeyWindows;
 - (BOOL)userWillWaitForInProgressDownloads:(int)downloadCount;
 - (BOOL)shouldQuitWithInProgressDownloads;
 - (void)showPreferencesWindow:(id)sender
@@ -222,22 +226,7 @@ void RecordLastRunAppBundlePath() {
 // (NSApplicationDelegate protocol) This is the Apple-approved place to override
 // the default handlers.
 - (void)applicationWillFinishLaunching:(NSNotification*)notification {
-  NSAppleEventManager* em = [NSAppleEventManager sharedAppleEventManager];
-  [em setEventHandler:self
-          andSelector:@selector(handleQuitEvent:withReply:)
-        forEventClass:kCoreEventClass
-           andEventID:kAEQuitApplication];
-}
-
-// (NSApplicationDelegate protocol) Our mechanism for application termination
-// does not go through |-applicationShouldTerminate:|, so it should not be
-// called. In a release build, cancelling termination will prevent a crash (but
-// if things go really wrong, the user may have to force-terminate the
-// application).
-- (NSApplicationTerminateReply)applicationShouldTerminate:
-    (NSApplication*)sender {
-  NOTREACHED();
-  return NSTerminateCancel;
+  // Nothing here right now.
 }
 
 - (BOOL)tryToTerminateApplication:(NSApplication*)app {
@@ -249,21 +238,22 @@ void RecordLastRunAppBundlePath() {
       ![self shouldQuitWithInProgressDownloads])
     return NO;
 
-  // Set the state to "trying to quit", so that closing all browser windows will
-  // lead to termination.
-  browser_shutdown::SetTryingToQuit(true);
-
   // TODO(viettrungluu): Remove Apple Event handlers here? (It's safe to leave
   // them in, but I'm not sure about UX; we'd also want to disable other things
   // though.) http://crbug.com/40861
 
-  if (!BrowserList::size())
-    return YES;
+  size_t num_browsers = BrowserList::size();
 
-  // Try to close all the windows.
-  BrowserList::CloseAllBrowsers(true);
+  // Give any print jobs in progress time to finish.
+  if (!browser_shutdown::IsTryingToQuit())
+    g_browser_process->print_job_manager()->StopJobs(true);
 
-  return NO;
+  // Initiate a shutdown (via BrowserList::CloseAllBrowsers()) if we aren't
+  // already shutting down.
+  if (!browser_shutdown::IsTryingToQuit())
+    BrowserList::CloseAllBrowsers();
+
+  return num_browsers == 0 ? YES : NO;
 }
 
 - (void)stopTryingToTerminateApplication:(NSApplication*)app {
@@ -288,9 +278,9 @@ void RecordLastRunAppBundlePath() {
   // There better be no browser windows left at this point.
   CHECK_EQ(BrowserList::size(), 0u);
 
-  // Release the reference to the browser process. Once all the browsers get
-  // dealloc'd, it will stop the RunLoop and fall back into main().
-  g_browser_process->ReleaseModule();
+  // Tell BrowserList not to keep the browser process alive. Once all the
+  // browsers get dealloc'd, it will stop the RunLoop and fall back into main().
+  BrowserList::EndKeepAlive();
 
   // Close these off if they have open windows.
   [prefsController_ close];
@@ -416,6 +406,27 @@ void RecordLastRunAppBundlePath() {
 // update the UI based on the new main window.
 - (void)windowLayeringDidChange:(NSNotification*)notify {
   [self delayedFixCloseMenuItemKeyEquivalents];
+
+  if ([notify name] == NSWindowDidResignKeyNotification) {
+    // If a window is closed, this notification is fired but |[NSApp keyWindow]|
+    // returns nil regardless of whether any suitable candidates for the key
+    // window remain. It seems that the new key window for the app is not set
+    // until after this notification is fired, so a check is performed after the
+    // run loop is allowed to spin.
+    [self performSelector:@selector(checkForAnyKeyWindows)
+               withObject:nil
+               afterDelay:0.0];
+  }
+}
+
+- (void)checkForAnyKeyWindows {
+  if ([NSApp keyWindow])
+    return;
+
+  NotificationService::current()->Notify(
+      NotificationType::NO_KEY_WINDOW,
+      NotificationService::AllSources(),
+      NotificationService::NoDetails());
 }
 
 // Called when the number of tabs changes in one of the browser windows. The
@@ -451,11 +462,9 @@ void RecordLastRunAppBundlePath() {
 // This is called after profiles have been loaded and preferences registered.
 // It is safe to access the default profile here.
 - (void)applicationDidFinishLaunching:(NSNotification*)notify {
-  // Hold an extra ref to the BrowserProcess singleton so it doesn't go away
-  // when all the browser windows get closed. We'll release it on quit which
-  // will be the signal to exit.
-  DCHECK(g_browser_process);
-  g_browser_process->AddRefModule();
+  // Notify BrowserList to keep the application running so it doesn't go away
+  // when all the browser windows get closed.
+  BrowserList::StartKeepAlive();
 
   bookmarkMenuBridge_.reset(new BookmarkMenuBridge([self defaultProfile]));
   historyMenuBridge_.reset(new HistoryMenuBridge([self defaultProfile]));
@@ -481,6 +490,9 @@ void RecordLastRunAppBundlePath() {
   // shim.
   RecordLastRunAppBundlePath();
 
+  // Makes "Services" menu items available.
+  [self registerServicesMenuTypesTo:[notify object]];
+
   startupComplete_ = YES;
 
   // TODO(viettrungluu): This is very temporary, since this should be done "in"
@@ -489,6 +501,11 @@ void RecordLastRunAppBundlePath() {
   if (startupUrls_.size()) {
     [self openUrls:startupUrls_];
     [self clearStartupUrls];
+  }
+
+  const CommandLine& parsed_command_line = *CommandLine::ForCurrentProcess();
+  if (!parsed_command_line.HasSwitch(switches::kEnableExposeForTabs)) {
+    [tabposeMenuItem_ setHidden:YES];
   }
 }
 
@@ -508,46 +525,38 @@ void RecordLastRunAppBundlePath() {
   NSString* waitTitle = nil;
   NSString* exitTitle = nil;
 
-  std::wstring product_name = l10n_util::GetString(IDS_PRODUCT_NAME);
+  string16 product_name = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
 
   // Set the dialog text based on whether or not there are multiple downloads.
   if (downloadCount == 1) {
     // Dialog text: warning and explanation.
-    warningText =
-        base::SysWideToNSString(l10n_util::GetStringF(
-            IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_WARNING, product_name));
-    explanationText =
-        base::SysWideToNSString(l10n_util::GetStringF(
-            IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_EXPLANATION, product_name));
+    warningText = l10n_util::GetNSStringF(
+        IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_WARNING, product_name);
+    explanationText = l10n_util::GetNSStringF(
+        IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_EXPLANATION, product_name);
 
     // Cancel download and exit button text.
-    exitTitle =
-        base::SysWideToNSString(l10n_util::GetString(
-            IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_OK_BUTTON_LABEL));
+    exitTitle = l10n_util::GetNSString(
+        IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_OK_BUTTON_LABEL);
 
     // Wait for download button text.
-    waitTitle =
-        base::SysWideToNSString(l10n_util::GetString(
-            IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_CANCEL_BUTTON_LABEL));
+    waitTitle = l10n_util::GetNSString(
+        IDS_SINGLE_DOWNLOAD_REMOVE_CONFIRM_CANCEL_BUTTON_LABEL);
   } else {
     // Dialog text: warning and explanation.
-    warningText =
-        base::SysWideToNSString(l10n_util::GetStringF(
-            IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_WARNING, product_name,
-            IntToWString(downloadCount)));
-    explanationText =
-        base::SysWideToNSString(l10n_util::GetStringF(
-            IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_EXPLANATION, product_name));
+    warningText = l10n_util::GetNSStringF(
+        IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_WARNING, product_name,
+        base::IntToString16(downloadCount));
+    explanationText = l10n_util::GetNSStringF(
+        IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_EXPLANATION, product_name);
 
     // Cancel downloads and exit button text.
-    exitTitle =
-        base::SysWideToNSString(l10n_util::GetString(
-            IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_OK_BUTTON_LABEL));
+    exitTitle = l10n_util::GetNSString(
+        IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_OK_BUTTON_LABEL);
 
     // Wait for downloads button text.
-    waitTitle =
-        base::SysWideToNSString(l10n_util::GetString(
-            IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_CANCEL_BUTTON_LABEL));
+    waitTitle = l10n_util::GetNSString(
+        IDS_MULTIPLE_DOWNLOADS_REMOVE_CONFIRM_CANCEL_BUTTON_LABEL);
   }
 
   // 'waitButton' is the default choice.
@@ -600,13 +609,15 @@ void RecordLastRunAppBundlePath() {
   return service && !service->entries().empty();
 }
 
-// Returns true if there is no browser window, or if the active window is
-// blocked by a modal dialog.
-- (BOOL)keyWindowIsMissingOrBlocked {
+// Returns true if there is not a modal window (either window- or application-
+// modal) blocking the active browser. Note that tab modal dialogs (HTTP auth
+// sheets) will not count as blocking the browser. But things like open/save
+// dialogs that are window modal will block the browser.
+- (BOOL)keyWindowIsNotModal {
   Browser* browser = BrowserList::GetLastActive();
-  return browser == NULL ||
+  return [NSApp modalWindow] == nil && (!browser ||
          ![[browser->window()->GetNativeHandle() attachedSheet]
-           isKindOfClass:[NSWindow class]];
+             isKindOfClass:[NSWindow class]]);
 }
 
 // Called to validate menu items when there are no key windows. All the
@@ -628,11 +639,22 @@ void RecordLastRunAppBundlePath() {
         // app_controller is only activated when there are no key windows (see
         // function comment).
         case IDC_RESTORE_TAB:
-          enable = [self keyWindowIsMissingOrBlocked] && [self canRestoreTab];
+          enable = [self keyWindowIsNotModal] && [self canRestoreTab];
           break;
+        // Browser-level items that open in new tabs should not open if there's
+        // a window- or app-modal dialog.
         case IDC_OPEN_FILE:
         case IDC_NEW_TAB:
-          enable = [self keyWindowIsMissingOrBlocked];
+        case IDC_SHOW_HISTORY:
+        case IDC_SHOW_BOOKMARK_MANAGER:
+          enable = [self keyWindowIsNotModal];
+          break;
+        // Browser-level items that open in new windows.
+        case IDC_NEW_WINDOW:
+        case IDC_TASK_MANAGER:
+          // Allow the user to open a new window if there's a window-modal
+          // dialog.
+          enable = [self keyWindowIsNotModal] || ([NSApp modalWindow] == nil);
           break;
         case IDC_SYNC_BOOKMARKS: {
           Profile* defaultProfile = [self defaultProfile];
@@ -647,12 +669,14 @@ void RecordLastRunAppBundlePath() {
                 << "NULL defaultProfile detected -- not doing anything";
             break;
           }
-          enable = ProfileSyncService::IsSyncEnabled();
+          enable = defaultProfile->IsSyncAccessible() &&
+              [self keyWindowIsNotModal];
           sync_ui_util::UpdateSyncItem(item, enable, defaultProfile);
           break;
         }
         default:
-          enable = menuState_->IsCommandEnabled(tag) ? YES : NO;
+          enable = menuState_->IsCommandEnabled(tag) ?
+                   [self keyWindowIsNotModal] : NO;
       }
     }
   } else if (action == @selector(terminate:)) {
@@ -732,18 +756,11 @@ void RecordLastRunAppBundlePath() {
       UserMetrics::RecordAction(UserMetricsAction("ShowBookmarkManager"),
                                 defaultProfile);
       if (Browser* browser = ActivateBrowser(defaultProfile)) {
-        // Call through browser which takes care of opening a tab or the old
-        // bookmark manager window.
+        // Open a bookmark manager tab.
         browser->OpenBookmarkManager();
       } else {
-        // We have no browser window. Only create a window if we are using the
-        // new tabbed bookmark manager.
-        if (CommandLine::ForCurrentProcess()->HasSwitch(
-                switches::kDisableTabbedBookmarkManager)) {
-          [BookmarkManagerController showBookmarkManager:defaultProfile];
-        } else {
-          Browser::OpenBookmarkManagerWindow(defaultProfile);
-        }
+        // No browser window, so create one for the bookmark manager tab.
+        Browser::OpenBookmarkManagerWindow(defaultProfile);
       }
       break;
     case IDC_SHOW_HISTORY:
@@ -770,7 +787,7 @@ void RecordLastRunAppBundlePath() {
       else
         Browser::OpenHelpWindow(defaultProfile);
       break;
-    case IDC_REPORT_BUG: {
+    case IDC_FEEDBACK: {
       Browser* browser = BrowserList::GetLastActive();
       TabContents* currentTab =
           browser ? browser->GetSelectedTabContents() : NULL;
@@ -800,6 +817,9 @@ void RecordLastRunAppBundlePath() {
       UserMetrics::RecordAction(UserMetricsAction("TaskManager"),
                                 defaultProfile);
       TaskManagerMac::Show();
+      break;
+    case IDC_OPTIONS:
+      [self showPreferences:sender];
       break;
   }
 }
@@ -835,9 +855,26 @@ void RecordLastRunAppBundlePath() {
   if (flag)
     return YES;
 
+  // If launched as a hidden login item (due to installation of a persistent app
+  // or by the user, for example in System Preferenecs->Accounts->Login Items),
+  // allow session to be restored first time the user clicks on a Dock icon.
+  // Normally, it'd just open a new empty page.
+  {
+      static BOOL doneOnce = NO;
+      if (!doneOnce) {
+        doneOnce = YES;
+        if (mac_util::WasLaunchedAsHiddenLoginItem()) {
+          SessionService* sessionService =
+              [self defaultProfile]->GetSessionService();
+          if (sessionService &&
+              sessionService->RestoreIfNecessary(std::vector<GURL>()))
+            return NO;
+        }
+      }
+  }
   // Otherwise open a new window.
   {
-    AutoReset auto_reset_in_run(&g_is_opening_new_window, true);
+    AutoReset<bool> auto_reset_in_run(&g_is_opening_new_window, true);
     Browser::OpenEmptyWindow([self defaultProfile]);
   }
 
@@ -862,10 +899,16 @@ void RecordLastRunAppBundlePath() {
   menuState_->UpdateCommandEnabled(IDC_MANAGE_EXTENSIONS, true);
   menuState_->UpdateCommandEnabled(IDC_HELP_PAGE, true);
   menuState_->UpdateCommandEnabled(IDC_IMPORT_SETTINGS, true);
-  menuState_->UpdateCommandEnabled(IDC_REPORT_BUG, true);
-  menuState_->UpdateCommandEnabled(IDC_SYNC_BOOKMARKS,
-                                   ProfileSyncService::IsSyncEnabled());
+  menuState_->UpdateCommandEnabled(IDC_FEEDBACK, true);
+  menuState_->UpdateCommandEnabled(IDC_SYNC_BOOKMARKS, true);
   menuState_->UpdateCommandEnabled(IDC_TASK_MANAGER, true);
+}
+
+- (void)registerServicesMenuTypesTo:(NSApplication*)app {
+  // Note that RenderWidgetHostViewCocoa implements NSServicesRequests which
+  // handles requests from services.
+  NSArray* types = [NSArray arrayWithObjects:NSStringPboardType, nil];
+  [app registerServicesMenuSendTypes:types returnTypes:types];
 }
 
 - (Profile*)defaultProfile {
@@ -874,13 +917,6 @@ void RecordLastRunAppBundlePath() {
     return *g_browser_process->profile_manager()->begin();
 
   return NULL;
-}
-
-// (Private) Never call |-applicationShouldTerminate:|; just make everything go
-// through |-terminate:|.
-- (void)handleQuitEvent:(NSAppleEventDescriptor*)event
-              withReply:(NSAppleEventDescriptor*)reply {
-  [NSApp terminate:nil];
 }
 
 // Various methods to open URLs that we get in a native fashion. We use
@@ -903,7 +939,7 @@ void RecordLastRunAppBundlePath() {
   }
 
   CommandLine dummy(CommandLine::ARGUMENTS_ONLY);
-  BrowserInit::LaunchWithProfile launch(std::wstring(), dummy);
+  BrowserInit::LaunchWithProfile launch(FilePath(), dummy);
   launch.OpenURLsInBrowser(browser, false, urls);
 }
 
@@ -951,9 +987,20 @@ void RecordLastRunAppBundlePath() {
 // Show the preferences window, or bring it to the front if it's already
 // visible.
 - (IBAction)showPreferences:(id)sender {
-  [self showPreferencesWindow:sender
-                         page:OPTIONS_PAGE_DEFAULT
-                      profile:[self defaultProfile]];
+  const CommandLine& parsed_command_line = *CommandLine::ForCurrentProcess();
+  if (parsed_command_line.HasSwitch(switches::kEnableTabbedOptions)) {
+    if (Browser* browser = ActivateBrowser([self defaultProfile])) {
+      // Show options tab in the active browser window.
+      browser->ShowOptionsTab(chrome::kDefaultOptionsSubPage);
+    } else {
+      // No browser window, so create one for the options tab.
+      Browser::OpenOptionsWindow([self defaultProfile]);
+    }
+  } else {
+    [self showPreferencesWindow:sender
+                           page:OPTIONS_PAGE_DEFAULT
+                        profile:[self defaultProfile]];
+  }
 }
 
 - (void)showPreferencesWindow:(id)sender
@@ -1013,7 +1060,7 @@ void RecordLastRunAppBundlePath() {
   [self commandDispatch:sender];
 }
 
-- (NSMenu*)applicationDockMenu:(id)sender {
+- (NSMenu*)applicationDockMenu:(NSApplication*)sender {
   NSMenu* dockMenu = [[[NSMenu alloc] initWithTitle: @""] autorelease];
   NSString* titleStr = l10n_util::GetNSStringWithFixup(IDS_NEW_WINDOW_MAC);
   scoped_nsobject<NSMenuItem> item([[NSMenuItem alloc]

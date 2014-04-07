@@ -12,11 +12,14 @@
 
 #ifndef CHROME_BROWSER_GTK_INFO_BUBBLE_GTK_H_
 #define CHROME_BROWSER_GTK_INFO_BUBBLE_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
 #include "app/gtk_signal.h"
+#include "app/gtk_signal_registrar.h"
 #include "base/basictypes.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "gfx/point.h"
 #include "gfx/rect.h"
@@ -141,14 +144,8 @@ class InfoBubbleGtk : public NotificationObserver {
   // sure that we have the input focus.
   void GrabPointerAndKeyboard();
 
-  static gboolean OnEscapeThunk(GtkAccelGroup* group,
-                                GObject* acceleratable,
-                                guint keyval,
-                                GdkModifierType modifier,
-                                gpointer user_data) {
-    return reinterpret_cast<InfoBubbleGtk*>(user_data)->OnEscape();
-  }
-  gboolean OnEscape();
+  CHROMEG_CALLBACK_3(InfoBubbleGtk, gboolean, OnEscape, GtkAccelGroup*,
+                     GObject*, guint, GdkModifierType);
 
   CHROMEGTK_CALLBACK_1(InfoBubbleGtk, gboolean, OnExpose, GdkEventExpose*);
   CHROMEGTK_CALLBACK_1(InfoBubbleGtk, void, OnSizeAllocate, GtkAllocation*);
@@ -208,6 +205,8 @@ class InfoBubbleGtk : public NotificationObserver {
   bool closed_by_escape_;
 
   NotificationRegistrar registrar_;
+
+  GtkSignalRegistrar signals_;
 
   DISALLOW_COPY_AND_ASSIGN(InfoBubbleGtk);
 };

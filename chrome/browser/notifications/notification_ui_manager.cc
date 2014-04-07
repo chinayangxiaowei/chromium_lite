@@ -10,6 +10,8 @@
 #include "chrome/browser/notifications/balloon_collection.h"
 #include "chrome/browser/notifications/notification.h"
 #include "chrome/browser/renderer_host/site_instance.h"
+#include "chrome/common/notification_service.h"
+#include "chrome/common/notification_type.h"
 
 // A class which represents a notification waiting to be shown.
 class QueuedNotification {
@@ -21,6 +23,10 @@ class QueuedNotification {
 
   const Notification& notification() const { return notification_; }
   Profile* profile() const { return profile_; }
+
+  void Replace(const Notification& new_notification) {
+    notification_ = new_notification;
+  }
 
  private:
   // The notification to be shown.
@@ -34,6 +40,8 @@ class QueuedNotification {
 
 NotificationUIManager::NotificationUIManager()
     : balloon_collection_(NULL) {
+  registrar_.Add(this, NotificationType::APP_TERMINATING,
+                 NotificationService::AllSources());
 }
 
 NotificationUIManager::~NotificationUIManager() {
@@ -51,6 +59,10 @@ NotificationUIManager* NotificationUIManager::Create() {
 
 void NotificationUIManager::Add(const Notification& notification,
                                 Profile* profile) {
+  if (TryReplacement(notification)) {
+    return;
+  }
+
   LOG(INFO) << "Added notification. URL: "
             << notification.content_url().spec().c_str();
   show_queue_.push_back(
@@ -71,6 +83,11 @@ bool NotificationUIManager::Cancel(const Notification& notification) {
   return balloon_collection_->Remove(notification);
 }
 
+void NotificationUIManager::CancelAll() {
+  STLDeleteElements(&show_queue_);
+  balloon_collection_->RemoveAll();
+}
+
 void NotificationUIManager::CheckAndShowNotifications() {
   // TODO(johnnyg): http://crbug.com/25061 - Check for user idle/presentation.
   ShowNotifications();
@@ -87,4 +104,47 @@ void NotificationUIManager::ShowNotifications() {
 
 void NotificationUIManager::OnBalloonSpaceChanged() {
   CheckAndShowNotifications();
+}
+
+bool NotificationUIManager::TryReplacement(const Notification& notification) {
+  const GURL& origin = notification.origin_url();
+  const string16& replace_id = notification.replace_id();
+
+  if (replace_id.empty())
+    return false;
+
+  // First check the queue of pending notifications for replacement.
+  // Then check the list of notifications already being shown.
+  NotificationDeque::iterator iter;
+  for (iter = show_queue_.begin(); iter != show_queue_.end(); ++iter) {
+    if (origin == (*iter)->notification().origin_url() &&
+        replace_id == (*iter)->notification().replace_id()) {
+      (*iter)->Replace(notification);
+      return true;
+    }
+  }
+
+  BalloonCollection::Balloons::iterator balloon_iter;
+  BalloonCollection::Balloons balloons =
+      balloon_collection_->GetActiveBalloons();
+  for (balloon_iter = balloons.begin();
+       balloon_iter != balloons.end();
+       ++balloon_iter) {
+    if (origin == (*balloon_iter)->notification().origin_url() &&
+        replace_id == (*balloon_iter)->notification().replace_id()) {
+      (*balloon_iter)->Update(notification);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void NotificationUIManager::Observe(NotificationType type,
+                                    const NotificationSource& source,
+                                    const NotificationDetails& details) {
+  if (type == NotificationType::APP_TERMINATING)
+    CancelAll();
+  else
+    NOTREACHED();
 }

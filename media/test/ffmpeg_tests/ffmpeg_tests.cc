@@ -15,8 +15,9 @@
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/md5.h"
-#include "base/utf_string_conversions.h"
+#include "base/string_util.h"
 #include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "media/base/djb2.h"
 #include "media/base/media.h"
 #include "media/ffmpeg/ffmpeg_common.h"
@@ -30,8 +31,14 @@
 #endif
 
 #if defined(OS_WIN)
+
+// Enable to build with exception handler
+//#define ENABLE_WINDOWS_EXCEPTIONS 1
+
+#ifdef ENABLE_WINDOWS_EXCEPTIONS
 // warning: disable warning about exception handler.
 #pragma warning(disable:4509)
+#endif
 
 // Thread priorities to make benchmark more stable.
 
@@ -64,7 +71,7 @@ int main(int argc, const char** argv) {
   CommandLine::Init(argc, argv);
   const CommandLine* cmd_line = CommandLine::ForCurrentProcess();
 
-  std::vector<std::wstring> filenames(cmd_line->GetLooseValues());
+  const std::vector<CommandLine::StringType>& filenames = cmd_line->args();
 
   if (filenames.empty()) {
     std::cerr << "Usage: " << argv[0] << " MEDIAFILE" << std::endl;
@@ -80,11 +87,10 @@ int main(int argc, const char** argv) {
   }
 
   // Retrieve command line options.
-  std::string in_path(WideToUTF8(filenames[0]));
-  std::string out_path;
-  if (filenames.size() > 1) {
-    out_path = WideToUTF8(filenames[1]);
-  }
+  FilePath in_path(filenames[0]);
+  FilePath out_path;
+  if (filenames.size() > 1)
+    out_path = FilePath(filenames[1]);
 
   // Default flags that match Chrome defaults.
   int video_threads = 2;
@@ -101,7 +107,7 @@ int main(int argc, const char** argv) {
   bool hash_md5 = false;
 
   std::ostream* log_out = &std::cout;
-#if defined(OS_WIN)
+#if defined(ENABLE_WINDOWS_EXCEPTIONS)
   // Catch exceptions so this tool can be used in automated testing.
   __try {
 #endif
@@ -110,19 +116,27 @@ int main(int argc, const char** argv) {
   avcodec_init();
   av_log_set_level(verbose_level);
   av_register_all();
-  av_register_protocol(&kFFmpegFileProtocol);
+  av_register_protocol2(&kFFmpegFileProtocol, sizeof(kFFmpegFileProtocol));
   AVFormatContext* format_context = NULL;
-  int result = av_open_input_file(&format_context, in_path.c_str(),
+  // av_open_input_file wants a char*, which can't work with wide paths.
+  // So we assume ASCII on Windows.  On other platforms we can pass the
+  // path bytes through verbatim.
+#if defined(OS_WIN)
+  std::string string_path = WideToASCII(in_path.value());
+#else
+  const std::string& string_path = in_path.value();
+#endif
+  int result = av_open_input_file(&format_context, string_path.c_str(),
                                   NULL, 0, NULL);
   if (result < 0) {
     switch (result) {
       case AVERROR_NOFMT:
         std::cerr << "Error: File format not supported "
-                  << in_path << std::endl;
+                  << in_path.value() << std::endl;
         break;
       default:
         std::cerr << "Error: Could not open input for "
-                  << in_path << std::endl;
+                  << in_path.value() << std::endl;
         break;
     }
     return 1;
@@ -131,10 +145,10 @@ int main(int argc, const char** argv) {
   // Open output file.
   FILE *output = NULL;
   if (!out_path.empty()) {
-    output = file_util::OpenFile(out_path.c_str(), "wb");
+    output = file_util::OpenFile(out_path, "wb");
     if (!output) {
       std::cerr << "Error: Could not open output "
-                << out_path << std::endl;
+                << out_path.value() << std::endl;
       return 1;
     }
   }
@@ -142,7 +156,7 @@ int main(int argc, const char** argv) {
   // Parse a little bit of the stream to fill out the format context.
   if (av_find_stream_info(format_context) < 0) {
     std::cerr << "Error: Could not find stream info for "
-              << in_path << std::endl;
+              << in_path.value() << std::endl;
     return 1;
   }
 
@@ -191,7 +205,7 @@ int main(int argc, const char** argv) {
   // Only continue if we found our target stream.
   if (target_stream < 0) {
     std::cerr << "Error: Could not find target stream "
-              << target_stream << " for " << in_path << std::endl;
+              << target_stream << " for " << in_path.value() << std::endl;
     return 1;
   }
 
@@ -203,18 +217,19 @@ int main(int argc, const char** argv) {
   // Only continue if we found our codec.
   if (!codec) {
     std::cerr << "Error: Could not find codec for "
-              << in_path << std::endl;
+              << in_path.value() << std::endl;
     return 1;
   }
 
   // TODO(fbarchard): On next ffmpeg roll, retest if this work around is needed.
   if (codec_context->codec_id == CODEC_ID_THEORA) {
     std::cerr << "Warning: Disabling threads to avoid Theora bug "
-              << in_path << std::endl;
+              << in_path.value() << std::endl;
     video_threads = 1;
   }
 
-  codec_context->flags2 |= CODEC_FLAG2_FAST;
+  codec_context->error_concealment = FF_EC_GUESS_MVS | FF_EC_DEBLOCK;
+  codec_context->error_recognition = FF_ER_CAREFUL;
 
   // Initialize threaded decode.
   if (target_codec == CODEC_TYPE_VIDEO && video_threads > 0) {
@@ -228,7 +243,7 @@ int main(int argc, const char** argv) {
   if (avcodec_open(codec_context, codec) < 0) {
     std::cerr << "Error: Could not open codec "
               << codec_context->codec->name << " for "
-              << in_path << std::endl;
+              << in_path.value() << std::endl;
     return 1;
   }
 
@@ -241,7 +256,7 @@ int main(int argc, const char** argv) {
       avcodec_alloc_frame());
   if (!frame.get()) {
     std::cerr << "Error: avcodec_alloc_frame for "
-              << in_path << std::endl;
+              << in_path.value() << std::endl;
     return 1;
   }
 
@@ -293,7 +308,8 @@ int main(int argc, const char** argv) {
             if (fwrite(samples.get(), 1, size_out, output) !=
                 static_cast<size_t>(size_out)) {
               std::cerr << "Error: Could not write "
-                        << size_out << " bytes for " << in_path << std::endl;
+                        << size_out << " bytes for " << in_path.value()
+                        << std::endl;
               return 1;
             }
           }
@@ -351,7 +367,7 @@ int main(int argc, const char** argv) {
                            bytes_per_line) {
                   std::cerr << "Error: Could not write data after "
                             << copy_lines << " lines for "
-                            << in_path << std::endl;
+                            << in_path.value() << std::endl;
                   return 1;
                 }
                 source += source_stride;
@@ -379,7 +395,7 @@ int main(int argc, const char** argv) {
       // Make sure our decoding went OK.
       if (result < 0) {
         std::cerr << "Error: avcodec_decode returned "
-                  << result << " for " << in_path << std::endl;
+                  << result << " for " << in_path.value() << std::endl;
         return 1;
       }
     }
@@ -464,19 +480,19 @@ int main(int argc, const char** argv) {
   }
   if (hash_djb2) {
     *log_out << "  DJB2 Hash:" << std::setw(11) << hash_value
-             << "  " << in_path << std::endl;
+             << "  " << in_path.value() << std::endl;
   }
   if (hash_md5) {
     MD5Digest digest;  // The result of the computation.
     MD5Final(&digest, &ctx);
     *log_out << "   MD5 Hash: " << MD5DigestToBase16(digest)
-             << " " << in_path << std::endl;
+             << " " << in_path.value() << std::endl;
   }
 #endif  // SHOW_VERBOSE
-#if defined(OS_WIN)
+#if defined(ENABLE_WINDOWS_EXCEPTIONS)
   } __except(EXCEPTION_EXECUTE_HANDLER) {
     *log_out << "  Exception:" << std::setw(11) << GetExceptionCode()
-             << " " << in_path << std::endl;
+             << " " << in_path.value() << std::endl;
     return 1;
   }
 #endif

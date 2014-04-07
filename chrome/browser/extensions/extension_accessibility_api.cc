@@ -18,6 +18,7 @@
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/notification_service.h"
 
 namespace keys = extension_accessibility_api_constants;
 
@@ -62,6 +63,12 @@ void ExtensionAccessibilityEventRouter::ObserveProfile(Profile* profile) {
                    NotificationService::AllSources());
     registrar_.Add(this,
                    NotificationType::ACCESSIBILITY_TEXT_CHANGED,
+                   NotificationService::AllSources());
+    registrar_.Add(this,
+                   NotificationType::ACCESSIBILITY_MENU_OPENED,
+                   NotificationService::AllSources());
+    registrar_.Add(this,
+                   NotificationType::ACCESSIBILITY_MENU_CLOSED,
                    NotificationService::AllSources());
   }
 }
@@ -176,13 +183,13 @@ void ExtensionAccessibilityEventRouter::DispatchEvent(
     const std::string& json_args) {
   if (enabled_ && profile && profile->GetExtensionMessageService()) {
     profile->GetExtensionMessageService()->DispatchEventToRenderers(
-        event_name, json_args, profile->IsOffTheRecord());
+        event_name, json_args, NULL, GURL());
   }
 }
 
 bool SetAccessibilityEnabledFunction::RunImpl() {
   bool enabled;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetAsBoolean(&enabled));
+  EXTENSION_FUNCTION_VALIDATE(args_->GetBoolean(0, &enabled));
   ExtensionAccessibilityEventRouter::GetInstance()
       ->SetAccessibilityEnabled(enabled);
   return true;

@@ -112,31 +112,48 @@ o3djs.canvas.create = function(pack, root, viewInfo) {
  *   1. Transforms the shape to screen space via the worldViewProjection matrix.
  *   2. Performs a texture lookup to display the contents of the texture
  *      bound to texSampler0.
- * @type {string}
+ * @return {string} The shader used canvas quads.
  */
-o3djs.canvas.FX_STRING =
-    'float4x4 worldViewProjection : WORLDVIEWPROJECTION;\n' +
-    'sampler texSampler0;\n' +
-    'struct VertexShaderInput {\n' +
-    ' float4 position : POSITION;\n' +
-    ' float2 texcoord : TEXCOORD0;\n' +
-    '};\n'+
-    'struct PixelShaderInput {\n' +
-    '  float4 position : POSITION;\n' +
-    '  float2 texcoord : TEXCOORD0;\n' +
-    '};\n' +
-    'PixelShaderInput vertexShaderFunction(VertexShaderInput input) {\n' +
-    '  PixelShaderInput output;\n' +
-    '  output.position = mul(input.position, worldViewProjection);\n' +
-    '  output.texcoord = input.texcoord;\n' +
-    '  return output;\n' +
-    '}\n' +
-    'float4 pixelShaderFunction(PixelShaderInput input): COLOR {\n' +
-    '  return tex2D(texSampler0, input.texcoord);\n' +
-    '}\n' +
-    '// #o3d VertexShaderEntryPoint vertexShaderFunction\n' +
-    '// #o3d PixelShaderEntryPoint pixelShaderFunction\n' +
-    '// #o3d MatrixLoadOrder RowMajor\n';
+o3djs.canvas.buildShaderString = function() {
+  var p = o3djs.effect;
+  var varyingDecls = p.BEGIN_OUT_STRUCT +
+      p.VARYING + p.FLOAT4 + ' ' +
+      p.VARYING_DECLARATION_PREFIX + 'position' +
+      p.semanticSuffix('POSITION') + ';\n' +
+      p.VARYING + p.FLOAT2 + ' ' +
+      p.VARYING_DECLARATION_PREFIX + 'texCoord' +
+      p.semanticSuffix('TEXCOORD0') + ';\n' +
+      p.END_STRUCT;
+
+  return 'uniform ' + p.MATRIX4 + ' worldViewProjection' +
+      p.semanticSuffix('WORLDVIEWPROJECTION') + ';\n\n' +
+      p.BEGIN_IN_STRUCT +
+      p.ATTRIBUTE + p.FLOAT4 + ' position' +
+      p.semanticSuffix('POSITION') + ';\n' +
+      p.ATTRIBUTE + p.FLOAT2 + ' texCoord0' +
+      p.semanticSuffix('TEXCOORD0') + ';\n' +
+      p.END_STRUCT +
+      '\n' +
+      varyingDecls +
+      '\n' +
+      p.beginVertexShaderMain() +
+      '  ' + p.VERTEX_VARYING_PREFIX + 'position = ' +
+      p.mul(p.ATTRIBUTE_PREFIX + 'position',
+          'worldViewProjection') + ';\n' +
+      '  ' + p.VERTEX_VARYING_PREFIX + 'texCoord = ' +
+      p.ATTRIBUTE_PREFIX + 'texCoord0;\n' +
+      p.endVertexShaderMain() +
+      '\n' +
+      p.pixelShaderHeader() +
+      'uniform ' + p.SAMPLER + ' texSampler0;\n' +
+      p.repeatVaryingDecls(varyingDecls) +
+      p.beginPixelShaderMain() +
+      p.endPixelShaderMain(p.TEXTURE + '2D' +
+          '(texSampler0, ' + p.PIXEL_VARYING_PREFIX + 'texCoord)') +
+      p.entryPoints() +
+      p.matrixLoadOrder();
+};
+
 
 /**
  * The CanvasInfo object creates and keeps references to the O3D objects
@@ -172,7 +189,7 @@ o3djs.canvas.CanvasInfo = function(pack, root, viewInfo) {
    * @type {!o3d.Effect}
    */
   this.effect_ = this.pack.createObject('Effect');
-  this.effect_.loadFromFXString(o3djs.canvas.FX_STRING);
+  this.effect_.loadFromFXString(o3djs.canvas.buildShaderString());
 
   /**
    * Material for canvases with transparent content
@@ -224,10 +241,10 @@ o3djs.canvas.CanvasInfo = function(pack, root, viewInfo) {
       1,
       1,
       1,
-      [[1, 0, 0, 0],
-       [0, 0, 1, 0],
-       [0, -1, 0, 0],
-       [0, 0, 0, 1]]);
+      o3djs.math.makeMatrix4(1, 0, 0, 0,
+                             0, 0, 1, 0,
+                             0, -1, 0 ,0,
+                             0, 0, 0, 1));
 
   /**
    * A shape for opaque quads.
@@ -240,10 +257,10 @@ o3djs.canvas.CanvasInfo = function(pack, root, viewInfo) {
       1,
       1,
       1,
-      [[1, 0, 0, 0],
-       [0, 0, 1, 0],
-       [0, -1, 0, 0],
-       [0, 0, 0, 1]]);
+      o3djs.math.makeMatrix4(1, 0, 0, 0,
+                             0, 0, 1, 0,
+                             0, -1, 0 ,0,
+                             0, 0, 0, 1));
 };
 /**
  * The CanvasQuad object encapsulates a Transform, a rectangle Shape,
@@ -417,3 +434,5 @@ o3djs.canvas.CanvasInfo.prototype.createQuad = function(width,
                                      transparent,
                                      opt_parent);
 };
+
+

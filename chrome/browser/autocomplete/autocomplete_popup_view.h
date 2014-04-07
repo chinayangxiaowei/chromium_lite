@@ -10,18 +10,11 @@
 
 #ifndef CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_POPUP_VIEW_H_
 #define CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_POPUP_VIEW_H_
+#pragma once
 
 #include "build/build_config.h"
 
-class AutocompleteEditView;
 class AutocompletePopupModel;
-class BubblePositioner;
-namespace gfx {
-class Font;
-}
-class AutocompleteEditViewWin;
-class AutocompleteEditModel;
-class Profile;
 
 class AutocompletePopupView {
  public:
@@ -37,6 +30,13 @@ class AutocompletePopupView {
   // mean opening or closing the window.
   virtual void UpdatePopupAppearance() = 0;
 
+#if defined(TOOLKIT_VIEWS)
+  // Returns the target bounds for the popup. This returns the popup's current
+  // bounds when not animating, or the desired target bounds when animating.
+  // The return value is in screen coordinates.
+  virtual gfx::Rect GetTargetBounds() = 0;
+#endif
+
   // Paint any pending updates.
   virtual void PaintUpdatesNow() = 0;
 
@@ -49,16 +49,8 @@ class AutocompletePopupView {
   // Returns the popup's model.
   virtual AutocompletePopupModel* GetModel() = 0;
 
-#if !defined(OS_MACOSX)
-  // Create a popup view implementation. It may make sense for this to become
-  // platform independent eventually.
-  static AutocompletePopupView* CreatePopupView(
-      const gfx::Font& font,
-      AutocompleteEditView* edit_view,
-      AutocompleteEditModel* edit_model,
-      Profile* profile,
-      const BubblePositioner* bubble_positioner);
-#endif
+  // Returns the max y coordinate of the popup in screen coordinates.
+  virtual int GetMaxYCoordinate() = 0;
 };
 
 #endif  // CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_POPUP_VIEW_H_

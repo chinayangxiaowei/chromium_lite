@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_APP_MODAL_DIALOG_QUEUE_H_
 #define CHROME_BROWSER_APP_MODAL_DIALOG_QUEUE_H_
+#pragma once
 
 #include <queue>
 
@@ -54,7 +55,8 @@ class AppModalDialogQueue {
  private:
   friend struct DefaultSingletonTraits<AppModalDialogQueue>;
 
-  AppModalDialogQueue() : active_dialog_(NULL), showing_modal_dialog_(false) {}
+  AppModalDialogQueue();
+  ~AppModalDialogQueue();
 
   // Shows |dialog| and notifies the BrowserList that a modal dialog is showing.
   void ShowModalDialog(AppModalDialog* dialog);

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,13 @@
 #include "base/scoped_ptr.h"
 #include "base/scoped_nsobject.h"
 #include "chrome/browser/options_window.h"
-#include "chrome/browser/pref_member.h"
+#include "chrome/browser/prefs/pref_member.h"
+#include "chrome/browser/prefs/pref_set_observer.h"
+#include "chrome/browser/prefs/pref_change_registrar.h"
 
 namespace PreferencesWindowControllerInternal {
-class PersonalDataManagerObserver;
 class PrefObserverBridge;
+class ManagedPrefsBannerState;
 }
 
 @class CustomHomePagesModel;
@@ -20,6 +22,8 @@ class PrefService;
 class Profile;
 class ProfileSyncService;
 @class SearchEngineListModel;
+@class VerticalGradientView;
+@class WindowSizeAutosaver;
 
 // A window controller that handles the preferences window. The bulk of the
 // work is handled via Cocoa Bindings and getter/setter methods that wrap
@@ -42,8 +46,16 @@ class ProfileSyncService;
   ProfileSyncService* syncService_;
   scoped_ptr<PreferencesWindowControllerInternal::PrefObserverBridge>
       observer_;  // Watches for pref changes.
+  PrefChangeRegistrar registrar_;  // Manages pref change observer registration.
+  scoped_nsobject<WindowSizeAutosaver> sizeSaver_;
+  NSView* currentPrefsView_;  // weak ref - current prefs page view.
+  scoped_ptr<PreferencesWindowControllerInternal::ManagedPrefsBannerState>
+      bannerState_;
+  BOOL managedPrefsBannerVisible_;
 
   IBOutlet NSToolbar* toolbar_;
+  IBOutlet VerticalGradientView* managedPrefsBannerView_;
+  IBOutlet NSImageView* managedPrefsBannerWarningImage_;
 
   // The views we'll rotate through
   IBOutlet NSView* basicsView_;
@@ -77,25 +89,29 @@ class ProfileSyncService;
   BooleanPrefMember newTabPageIsHomePage_;
   StringPrefMember homepage_;
   BooleanPrefMember showHomeButton_;
-  BooleanPrefMember showPageOptionButtons_;
   scoped_nsobject<SearchEngineListModel> searchEngineModel_;
   // Used when creating a new home page url to make the new cell editable.
   BOOL pendingSelectForEdit_;
+  BOOL restoreButtonsEnabled_;
+  BOOL restoreURLsEnabled_;
+  BOOL showHomeButtonEnabled_;
+  BOOL defaultSearchEngineEnabled_;
 
   // User Data panel
   BooleanPrefMember askSavePasswords_;
-  BooleanPrefMember formAutofill_;
-  // Manages PersonalDataManager loading.
-  scoped_ptr<PreferencesWindowControllerInternal::PersonalDataManagerObserver>
-      personalDataManagerObserver_;
+  BooleanPrefMember autoFillEnabled_;
   IBOutlet NSButton* autoFillSettingsButton_;
   IBOutlet NSButton* syncButton_;
   IBOutlet NSButton* syncCustomizeButton_;
   IBOutlet NSTextField* syncStatus_;
   IBOutlet NSButton* syncLink_;
+  IBOutlet NSButton* privacyDashboardLink_;
   scoped_nsobject<NSColor> syncStatusNoErrorBackgroundColor_;
   scoped_nsobject<NSColor> syncLinkNoErrorBackgroundColor_;
   scoped_nsobject<NSColor> syncErrorBackgroundColor_;
+  BOOL passwordManagerChoiceEnabled_;
+  BOOL passwordManagerButtonEnabled_;
+  BOOL autoFillSettingsButtonEnabled_;
 
   // Under the hood panel
   IBOutlet NSView* underTheHoodContentView_;
@@ -106,15 +122,30 @@ class ProfileSyncService;
   BooleanPrefMember useSuggest_;
   BooleanPrefMember dnsPrefetch_;
   BooleanPrefMember safeBrowsing_;
-  BooleanPrefMember metricsRecording_;
+  BooleanPrefMember metricsReporting_;
   IBOutlet NSPathControl* downloadLocationControl_;
   IBOutlet NSButton* downloadLocationButton_;
   StringPrefMember defaultDownloadLocation_;
   BooleanPrefMember askForSaveLocation_;
+  IBOutlet NSButton* resetFileHandlersButton_;
+  StringPrefMember autoOpenFiles_;
   BooleanPrefMember translateEnabled_;
+  BooleanPrefMember tabsToLinks_;
   FontLanguageSettingsController* fontLanguageSettings_;
   StringPrefMember currentTheme_;
   IBOutlet NSButton* enableLoggingCheckbox_;
+  scoped_ptr<PrefSetObserver> proxyPrefs_;
+  BOOL showAlternateErrorPagesEnabled_;
+  BOOL useSuggestEnabled_;
+  BOOL dnsPrefetchEnabled_;
+  BOOL safeBrowsingEnabled_;
+  BOOL metricsReportingEnabled_;
+  BOOL proxiesConfigureButtonEnabled_;
+  IBOutlet NSTextField* backgroundModeTitle_;
+  IBOutlet NSButton* backgroundModeCheckbox_;
+  IBOutlet NSTextField* backgroundModeDescription_;
+  IBOutlet NSButton* backgroundModeLearnMore_;
+  BooleanPrefMember backgroundModeEnabled_;
 }
 
 // Designated initializer. |profile| should not be NULL.
@@ -126,39 +157,62 @@ class ProfileSyncService;
 // Switch to the given preference page.
 - (void)switchToPage:(OptionsPage)page animate:(BOOL)animate;
 
+// Enables or disables the restoreOnStartup elements
+- (void) setEnabledStateOfRestoreOnStartup;
+
 // IBAction methods for responding to user actions.
 
 // Basics panel
-- (IBAction)makeDefaultBrowser:(id)sender;
 - (IBAction)addHomepage:(id)sender;
 - (IBAction)removeSelectedHomepages:(id)sender;
 - (IBAction)useCurrentPagesAsHomepage:(id)sender;
 - (IBAction)manageSearchEngines:(id)sender;
+- (IBAction)makeDefaultBrowser:(id)sender;
 
 // User Data panel
+- (IBAction)doSyncAction:(id)sender;
+- (IBAction)doSyncCustomize:(id)sender;
+- (IBAction)doSyncReauthentication:(id)sender;
+- (IBAction)showPrivacyDashboard:(id)sender;
 - (IBAction)showSavedPasswords:(id)sender;
 - (IBAction)showAutoFillSettings:(id)sender;
 - (IBAction)importData:(id)sender;
 - (IBAction)resetThemeToDefault:(id)sender;
 - (IBAction)themesGallery:(id)sender;
-- (IBAction)doSyncAction:(id)sender;
-- (IBAction)doSyncCustomize:(id)sender;
-- (IBAction)doSyncReauthentication:(id)sender;
 
 // Under the hood
-- (IBAction)browseDownloadLocation:(id)sender;
-- (IBAction)clearData:(id)sender;
 - (IBAction)showContentSettings:(id)sender;
+- (IBAction)clearData:(id)sender;
 - (IBAction)privacyLearnMore:(id)sender;
+- (IBAction)browseDownloadLocation:(id)sender;
+- (IBAction)resetAutoOpenFiles:(id)sender;
 - (IBAction)changeFontAndLanguageSettings:(id)sender;
+- (IBAction)openProxyPreferences:(id)sender;
 - (IBAction)showCertificates:(id)sender;
+- (IBAction)backgroundModeLearnMore:(id)sender;
+- (IBAction)resetToDefaults:(id)sender;
 
 // When a toolbar button is clicked
 - (IBAction)toolbarButtonSelected:(id)sender;
 
 // Usable from cocoa bindings to hook up the custom home pages table.
-@property(readonly) CustomHomePagesModel* customPagesSource;
+@property (nonatomic, readonly) CustomHomePagesModel* customPagesSource;
 
+// Properties for the enabled state of various UI elements. Keep these ordered
+// by occurrence on the dialog.
+@property (nonatomic) BOOL restoreButtonsEnabled;
+@property (nonatomic) BOOL restoreURLsEnabled;
+@property (nonatomic) BOOL showHomeButtonEnabled;
+@property (nonatomic) BOOL defaultSearchEngineEnabled;
+@property (nonatomic) BOOL passwordManagerChoiceEnabled;
+@property (nonatomic) BOOL passwordManagerButtonEnabled;
+@property (nonatomic) BOOL autoFillSettingsButtonEnabled;
+@property (nonatomic) BOOL showAlternateErrorPagesEnabled;
+@property (nonatomic) BOOL useSuggestEnabled;
+@property (nonatomic) BOOL dnsPrefetchEnabled;
+@property (nonatomic) BOOL safeBrowsingEnabled;
+@property (nonatomic) BOOL metricsReportingEnabled;
+@property (nonatomic) BOOL proxiesConfigureButtonEnabled;
 @end
 
 @interface PreferencesWindowController(Testing)
@@ -186,4 +240,3 @@ class ProfileSyncService;
 - (NSView*)getPrefsViewForPage:(OptionsPage)page;
 
 @end
-

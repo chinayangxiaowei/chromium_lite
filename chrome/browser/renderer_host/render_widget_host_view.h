@@ -4,17 +4,20 @@
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_VIEW_H_
 #define CHROME_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_VIEW_H_
+#pragma once
 
 #if defined(OS_MACOSX)
 #include <OpenGL/OpenGL.h>
 #endif
 
+#include <string>
+#include <vector>
+
 #include "app/surface/transport_dib.h"
-#include "base/shared_memory.h"
 #include "gfx/native_widget_types.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebPopupType.h"
-#include "webkit/glue/plugins/webplugin.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebTextInputType.h"
 
 namespace gfx {
 class Rect;
@@ -29,7 +32,14 @@ class RenderProcessHost;
 class RenderWidgetHost;
 class VideoLayer;
 class WebCursor;
+struct NativeWebKeyboardEvent;
+struct ViewHostMsg_AccessibilityNotification_Params;
 struct WebMenuItem;
+
+namespace webkit_glue {
+struct WebAccessibility;
+struct WebPluginGeometry;
+}
 
 // RenderWidgetHostView is an interface implemented by an object that acts as
 // the "View" portion of a RenderWidgetHost. The RenderWidgetHost and its
@@ -63,6 +73,10 @@ class RenderWidgetHostView {
   // a popup (such as a <select> dropdown), then shows the popup at |pos|.
   virtual void InitAsPopup(RenderWidgetHostView* parent_host_view,
                            const gfx::Rect& pos) = 0;
+
+  // Perform all the initialization steps necessary for this object to represent
+  // a full screen window.
+  virtual void InitAsFullscreen(RenderWidgetHostView* parent_host_view) = 0;
 
   // Returns the associated RenderWidgetHost.
   virtual RenderWidgetHost* GetRenderWidgetHost() const = 0;
@@ -108,11 +122,19 @@ class RenderWidgetHostView {
   // Indicates whether the page has finished loading.
   virtual void SetIsLoading(bool is_loading) = 0;
 
-  // Enable or disable IME for the view.
-  virtual void IMEUpdateStatus(int control, const gfx::Rect& caret_rect) = 0;
+  // Updates the state of the input method attached to the view.
+  virtual void ImeUpdateTextInputState(WebKit::WebTextInputType type,
+                                       const gfx::Rect& caret_rect) = 0;
 
-  // Informs the view that a portion of the widget's backing store was painted.
-  // The view should ensure this gets copied to the screen.
+  // Cancel the ongoing composition of the input method attached to the view.
+  virtual void ImeCancelComposition() = 0;
+
+  // Informs the view that a portion of the widget's backing store was scrolled
+  // and/or painted.  The view should ensure this gets copied to the screen.
+  //
+  // If the scroll_rect is non-empty, then a portion of the widget's backing
+  // store was scrolled by dx pixels horizontally and dy pixels vertically.
+  // The exposed rect from the scroll operation is included in copy_rects.
   //
   // There are subtle performance implications here.  The RenderWidget gets sent
   // a paint ack after this returns, so if the view only ever invalidates in
@@ -125,15 +147,9 @@ class RenderWidgetHostView {
   // (Worse, we might recursively call RenderWidgetHost::GetBackingStore().)
   // Thus implementers should generally paint as much of |rect| as possible
   // synchronously with as little overpainting as possible.
-  virtual void DidPaintBackingStoreRects(
-      const std::vector<gfx::Rect>& rects) = 0;
-
-  // Informs the view that a portion of the widget's backing store was scrolled
-  // by dx pixels horizontally and dy pixels vertically. The view should copy
-  // the exposed pixels from the backing store of the render widget (which has
-  // already been scrolled) onto the screen.
-  virtual void DidScrollBackingStoreRect(
-      const gfx::Rect& rect, int dx, int dy) = 0;
+  virtual void DidUpdateBackingStore(
+      const gfx::Rect& scroll_rect, int scroll_dx, int scroll_dy,
+      const std::vector<gfx::Rect>& copy_rects) = 0;
 
   // Notifies the View that the renderer has ceased to exist.
   virtual void RenderViewGone() = 0;
@@ -162,12 +178,19 @@ class RenderWidgetHostView {
   virtual VideoLayer* AllocVideoLayer(const gfx::Size& size) = 0;
 
 #if defined(OS_MACOSX)
+  // Tells the view whether or not to accept first responder status.  If |flag|
+  // is true, the view does not accept first responder status and instead
+  // manually becomes first responder when it receives a mouse down event.  If
+  // |flag| is false, the view participates in the key-view chain as normal.
+  virtual void SetTakesFocusOnlyOnMouseDown(bool flag) = 0;
+
   // Display a native control popup menu for WebKit.
   virtual void ShowPopupWithItems(gfx::Rect bounds,
                                   int item_height,
                                   double item_font_size,
                                   int selected_item,
-                                  const std::vector<WebMenuItem>& items) = 0;
+                                  const std::vector<WebMenuItem>& items,
+                                  bool right_aligned) = 0;
 
   // Get the view's position on the screen.
   virtual gfx::Rect GetWindowRect() = 0;
@@ -189,8 +212,19 @@ class RenderWidgetHostView {
   // Informs the view that its containing window's frame changed.
   virtual void WindowFrameChanged() = 0;
 
+  // Start or stop plugin IME for the given plugin.
+  virtual void SetPluginImeEnabled(bool enabled, int plugin_id) = 0;
+
+  // Does any event handling necessary for plugin IME; should be called after
+  // the plugin has already had a chance to process the event. If plugin IME is
+  // not enabled, this is a no-op, so it is always safe to call.
+  // Returns true if the event was handled by IME.
+  virtual bool PostProcessEventForPluginIme(
+      const NativeWebKeyboardEvent& event) = 0;
+
   // Methods associated with GPU-accelerated plug-in instances.
-  virtual gfx::PluginWindowHandle AllocateFakePluginWindowHandle() = 0;
+  virtual gfx::PluginWindowHandle AllocateFakePluginWindowHandle(
+      bool opaque, bool root) = 0;
   virtual void DestroyFakePluginWindowHandle(
       gfx::PluginWindowHandle window) = 0;
   virtual void AcceleratedSurfaceSetIOSurface(
@@ -205,11 +239,10 @@ class RenderWidgetHostView {
       TransportDIB::Handle transport_dib) = 0;
   virtual void AcceleratedSurfaceBuffersSwapped(
       gfx::PluginWindowHandle window) = 0;
-  // Draws the current GPU-accelerated plug-in instances into the given context.
-  virtual void DrawAcceleratedSurfaceInstances(CGLContextObj context) = 0;
+  virtual void GpuRenderingStateDidChange() = 0;
 #endif
 
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
   virtual void CreatePluginContainer(gfx::PluginWindowHandle id) = 0;
   virtual void DestroyPluginContainer(gfx::PluginWindowHandle id) = 0;
 #endif
@@ -233,6 +266,12 @@ class RenderWidgetHostView {
   // Returns true if the native view, |native_view|, is contained within in the
   // widget associated with this RenderWidgetHostView.
   virtual bool ContainsNativeView(gfx::NativeView native_view) const = 0;
+
+  virtual void UpdateAccessibilityTree(
+      const webkit_glue::WebAccessibility& tree) { }
+  virtual void OnAccessibilityNotifications(
+      const std::vector<ViewHostMsg_AccessibilityNotification_Params>& params) {
+  }
 
  protected:
   // Interface class only, do not construct.

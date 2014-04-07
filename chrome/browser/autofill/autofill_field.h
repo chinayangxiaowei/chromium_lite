@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_AUTOFILL_AUTOFILL_FIELD_H_
 #define CHROME_BROWSER_AUTOFILL_AUTOFILL_FIELD_H_
+#pragma once
 
 #include <string>
 
@@ -16,6 +17,7 @@ class AutoFillField : public webkit_glue::FormField {
   AutoFillField();
   AutoFillField(const webkit_glue::FormField& field,
                 const string16& unique_name);
+  virtual ~AutoFillField();
 
   const string16& unique_name() const { return unique_name_; }
 
@@ -57,6 +59,8 @@ class AutoFillField : public webkit_glue::FormField {
 
   // The set of possible types for this field.
   FieldTypeSet possible_types_;
+
+  DISALLOW_COPY_AND_ASSIGN(AutoFillField);
 };
 
 #endif  // CHROME_BROWSER_AUTOFILL_AUTOFILL_FIELD_H_

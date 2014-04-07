@@ -4,6 +4,8 @@
 
 #include "chrome/browser/extensions/extension_processes_api.h"
 
+#include "base/values.h"
+
 #include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/extensions/extension_processes_api_constants.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
@@ -20,7 +22,7 @@ DictionaryValue* CreateProcessValue(int process_id) {
 
 bool GetProcessForTabFunction::RunImpl() {
   int tab_id;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetAsInteger(&tab_id));
+  EXTENSION_FUNCTION_VALIDATE(args_->GetInteger(0, &tab_id));
 
   TabContents* contents = NULL;
   int tab_index = -1;

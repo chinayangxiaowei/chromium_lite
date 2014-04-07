@@ -11,9 +11,12 @@
 #include "base/histogram.h"
 #include "base/i18n/rtl.h"
 #include "base/process_util.h"
+#include "base/scoped_comptr_win.h"
 #include "base/thread.h"
 #include "base/win_util.h"
-#include "chrome/browser/browser_accessibility_manager.h"
+#include "chrome/browser/accessibility/browser_accessibility_win.h"
+#include "chrome/browser/accessibility/browser_accessibility_manager.h"
+#include "chrome/browser/accessibility/browser_accessibility_state.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_trial.h"
 #include "chrome/browser/chrome_thread.h"
@@ -26,9 +29,11 @@
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/native_web_keyboard_event.h"
+#include "chrome/common/notification_service.h"
 #include "chrome/common/plugin_messages.h"
 #include "chrome/common/render_messages.h"
 #include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/gdi_util.h"
 #include "gfx/rect.h"
 #include "grit/webkit_resources.h"
@@ -42,6 +47,8 @@
 #include "views/widget/widget_win.h"
 #include "webkit/glue/plugins/plugin_constants_win.h"
 #include "webkit/glue/plugins/webplugin_delegate_impl.h"
+#include "webkit/glue/plugins/webplugin.h"
+#include "webkit/glue/webaccessibility.h"
 #include "webkit/glue/webcursor.h"
 
 using base::TimeDelta;
@@ -59,6 +66,10 @@ const int kTooltipMaxWidthPixels = 300;
 
 // Maximum number of characters we allow in a tooltip.
 const int kMaxTooltipLength = 1024;
+
+// A custom MSAA object id used to determine if a screen reader is actively
+// listening for MSAA events.
+const int kIdCustom = 1;
 
 const wchar_t* kRenderWidgetHostViewKey = L"__RENDER_WIDGET_HOST_VIEW__";
 
@@ -178,7 +189,8 @@ class NotifyPluginProcessHostTask : public Task {
     DWORD plugin_process_id;
     bool found_starting_plugin_process = false;
     GetWindowThreadProcessId(window_, &plugin_process_id);
-    for (ChildProcessHost::Iterator iter(ChildProcessInfo::PLUGIN_PROCESS);
+    for (BrowserChildProcessHost::Iterator iter(
+             ChildProcessInfo::PLUGIN_PROCESS);
          !iter.Done(); ++iter) {
       PluginProcessHost* plugin = static_cast<PluginProcessHost*>(*iter);
       if (!plugin->handle()) {
@@ -233,7 +245,7 @@ BOOL CALLBACK DetachPluginWindowsCallback(HWND window, LPARAM param) {
 void DrawDeemphasized(const gfx::Rect& paint_rect,
                       HDC backing_store_dc,
                       HDC paint_dc) {
-  gfx::Canvas canvas(paint_rect.width(), paint_rect.height(), true);
+  gfx::CanvasSkia canvas(paint_rect.width(), paint_rect.height(), true);
   HDC dc = canvas.beginPlatformPaint();
   BitBlt(dc,
          0,
@@ -250,7 +262,6 @@ void DrawDeemphasized(const gfx::Rect& paint_rect,
                      paint_rect.width(), paint_rect.height());
   canvas.getTopPlatformDevice().drawToHDC(paint_dc, paint_rect.x(),
                                           paint_rect.y(), NULL);
-
 }
 
 }  // namespace
@@ -280,11 +291,12 @@ RenderWidgetHostViewWin::RenderWidgetHostViewWin(RenderWidgetHost* widget)
       shutdown_factory_(this),
       parent_hwnd_(NULL),
       is_loading_(false),
-      visually_deemphasized_(false) {
+      visually_deemphasized_(false),
+      text_input_type_(WebKit::WebTextInputTypeNone) {
   render_widget_host_->set_view(this);
-  renderer_accessible_ =
-      CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableRendererAccessibility);
+  registrar_.Add(this,
+                 NotificationType::RENDERER_PROCESS_TERMINATED,
+                 NotificationService::AllSources());
 }
 
 RenderWidgetHostViewWin::~RenderWidgetHostViewWin() {
@@ -318,6 +330,11 @@ void RenderWidgetHostViewWin::InitAsPopup(
   MoveWindow(pos.x(), pos.y(), pos.width(), pos.height(), TRUE);
   // Popups are not activated.
   ShowWindow(IsActivatable() ? SW_SHOW : SW_SHOWNA);
+}
+
+void RenderWidgetHostViewWin::InitAsFullscreen(
+    RenderWidgetHostView* parent_host_view) {
+  NOTIMPLEMENTED() << "Fullscreen not implemented on Win";
 }
 
 RenderWidgetHost* RenderWidgetHostViewWin::GetRenderWidgetHost() const {
@@ -493,8 +510,8 @@ HWND RenderWidgetHostViewWin::ReparentWindow(HWND window) {
       0, 0, 0, 0, ::GetParent(window), 0, GetModuleHandle(NULL), 0);
   DCHECK(parent);
   ::SetParent(window, parent);
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       new NotifyPluginProcessHostTask(window, parent));
   return parent;
 }
@@ -513,7 +530,7 @@ void RenderWidgetHostViewWin::Blur() {
   views::FocusManager* focus_manager =
       views::FocusManager::GetFocusManagerForNativeView(m_hWnd);
   // We don't have a FocusManager if we are hidden.
-  if (focus_manager && render_widget_host_->CanBlur())
+  if (focus_manager)
     focus_manager->ClearFocus();
 }
 
@@ -605,14 +622,24 @@ void RenderWidgetHostViewWin::SetIsLoading(bool is_loading) {
   UpdateCursorIfOverSelf();
 }
 
-void RenderWidgetHostViewWin::IMEUpdateStatus(int control,
-                                              const gfx::Rect& caret_rect) {
-  if (control == IME_DISABLE) {
-    ime_input_.DisableIME(m_hWnd);
-  } else {
-    ime_input_.EnableIME(m_hWnd, caret_rect,
-                         control == IME_COMPLETE_COMPOSITION);
+void RenderWidgetHostViewWin::ImeUpdateTextInputState(
+    WebKit::WebTextInputType type,
+    const gfx::Rect& caret_rect) {
+  if (text_input_type_ != type) {
+    text_input_type_ = type;
+    if (type == WebKit::WebTextInputTypeText)
+      ime_input_.EnableIME(m_hWnd);
+    else
+      ime_input_.DisableIME(m_hWnd);
   }
+
+  // Only update caret position if the input method is enabled.
+  if (type == WebKit::WebTextInputTypeText)
+    ime_input_.UpdateCaretRect(m_hWnd, caret_rect);
+}
+
+void RenderWidgetHostViewWin::ImeCancelComposition() {
+  ime_input_.CancelIME(m_hWnd);
 }
 
 BOOL CALLBACK EnumChildProc(HWND hwnd, LPARAM lparam) {
@@ -667,49 +694,46 @@ void RenderWidgetHostViewWin::DrawResizeCorner(const gfx::Rect& paint_rect,
   if (!paint_rect.Intersect(resize_corner_rect).IsEmpty()) {
     SkBitmap* bitmap = ResourceBundle::GetSharedInstance().
         GetBitmapNamed(IDR_TEXTAREA_RESIZER);
-    gfx::Canvas canvas(bitmap->width(), bitmap->height(), false);
+    gfx::CanvasSkia canvas(bitmap->width(), bitmap->height(), false);
     canvas.getDevice()->accessBitmap(true).eraseARGB(0, 0, 0, 0);
     int x = resize_corner_rect.x() + resize_corner_rect.width() -
         bitmap->width();
-    bool rtl_dir = base::i18n::IsRTL();
-    if (rtl_dir) {
+    canvas.save();
+    if (base::i18n::IsRTL()) {
       canvas.TranslateInt(bitmap->width(), 0);
       canvas.ScaleInt(-1, 1);
-      canvas.save();
       x = 0;
     }
     canvas.DrawBitmapInt(*bitmap, 0, 0);
     canvas.getTopPlatformDevice().drawToHDC(dc, x,
         resize_corner_rect.y() + resize_corner_rect.height() -
         bitmap->height(), NULL);
-    if (rtl_dir)
-      canvas.restore();
+    canvas.restore();
   }
 }
 
-void RenderWidgetHostViewWin::DidPaintBackingStoreRects(
-    const std::vector<gfx::Rect>& rects) {
+void RenderWidgetHostViewWin::DidUpdateBackingStore(
+    const gfx::Rect& scroll_rect, int scroll_dx, int scroll_dy,
+    const std::vector<gfx::Rect>& copy_rects) {
   if (is_hidden_)
     return;
 
-  for (size_t i = 0; i < rects.size(); ++i)
-    InvalidateRect(&rects[i].ToRECT(), false);
+  // Schedule invalidations first so that the ScrollWindowEx call is closer to
+  // Redraw.  That minimizes chances of "flicker" resulting if the screen
+  // refreshes before we have a chance to paint the exposed area.  Somewhat
+  // surprisingly, this ordering matters.
+
+  for (size_t i = 0; i < copy_rects.size(); ++i)
+    InvalidateRect(&copy_rects[i].ToRECT(), false);
+
+  if (!scroll_rect.IsEmpty()) {
+    RECT clip_rect = scroll_rect.ToRECT();
+    ScrollWindowEx(scroll_dx, scroll_dy, NULL, &clip_rect, NULL, NULL,
+                   SW_INVALIDATE);
+  }
 
   if (!about_to_validate_and_paint_)
     Redraw();
-}
-
-void RenderWidgetHostViewWin::DidScrollBackingStoreRect(
-    const gfx::Rect& rect, int dx, int dy) {
-  if (is_hidden_)
-    return;
-
-  // We need to pass in SW_INVALIDATE to ScrollWindowEx.  The documentation on
-  // MSDN states that it only applies to the HRGN argument, which is wrong.
-  // Not passing in this flag does not invalidate the region which was scrolled
-  // from, thus causing painting issues.
-  RECT clip_rect = rect.ToRECT();
-  ScrollWindowEx(dx, dy, NULL, &clip_rect, NULL, NULL, SW_INVALIDATE);
 }
 
 void RenderWidgetHostViewWin::RenderViewGone() {
@@ -871,6 +895,17 @@ void RenderWidgetHostViewWin::OnPaint(HDC unused_dc) {
     return;
   }
 
+  // If the GPU process is rendering directly into the View,
+  // call the compositor directly.
+  RenderWidgetHost* render_widget_host = GetRenderWidgetHost();
+  if (render_widget_host->is_gpu_rendering_active()) {
+    // We initialize paint_dc here so that BeginPaint()/EndPaint()
+    // get called to validate the region.
+    CPaintDC paint_dc(m_hWnd);
+    render_widget_host_->ScheduleComposite();
+    return;
+  }
+
   about_to_validate_and_paint_ = true;
   BackingStoreWin* backing_store = static_cast<BackingStoreWin*>(
       render_widget_host_->GetBackingStore(true));
@@ -972,9 +1007,9 @@ void RenderWidgetHostViewWin::OnPaint(HDC unused_dc) {
 void RenderWidgetHostViewWin::DrawBackground(const RECT& dirty_rect,
                                              CPaintDC* dc) {
   if (!background_.empty()) {
-    gfx::Canvas canvas(dirty_rect.right - dirty_rect.left,
-                       dirty_rect.bottom - dirty_rect.top,
-                       true);  // opaque
+    gfx::CanvasSkia canvas(dirty_rect.right - dirty_rect.left,
+                           dirty_rect.bottom - dirty_rect.top,
+                           true);  // opaque
     canvas.TranslateInt(-dirty_rect.left, -dirty_rect.top);
 
     const RECT& dc_rect = dc->m_ps.rcPaint;
@@ -1008,7 +1043,8 @@ LRESULT RenderWidgetHostViewWin::OnSetCursor(HWND window, UINT hittest_code,
 void RenderWidgetHostViewWin::OnSetFocus(HWND window) {
   views::FocusManager::GetWidgetFocusManager()->OnWidgetFocusEvent(window,
                                                                    m_hWnd);
-
+  if (browser_accessibility_manager_.get())
+    browser_accessibility_manager_->GotFocus();
   if (render_widget_host_)
     render_widget_host_->GotFocus();
 }
@@ -1077,8 +1113,8 @@ void RenderWidgetHostViewWin::OnInputLangChange(DWORD character_set,
   //   successfully (because Action 1 shows ime_status = !ime_notification_.)
   bool ime_status = ime_input_.SetInputLanguage();
   if (ime_status != ime_notification_) {
-    if (Send(new ViewMsg_ImeSetInputMode(render_widget_host_->routing_id(),
-                                         ime_status))) {
+    if (render_widget_host_) {
+      render_widget_host_->SetInputMethodActive(ime_status);
       ime_notification_ = ime_status;
     }
   }
@@ -1130,8 +1166,8 @@ LRESULT RenderWidgetHostViewWin::OnImeSetContext(
   // Therefore, we just start/stop status messages according to the activation
   // status of this application without checks.
   bool activated = (wparam == TRUE);
-  if (Send(new ViewMsg_ImeSetInputMode(
-      render_widget_host_->routing_id(), activated))) {
+  if (render_widget_host_) {
+    render_widget_host_->SetInputMethodActive(activated);
     ime_notification_ = activated;
   }
 
@@ -1170,12 +1206,7 @@ LRESULT RenderWidgetHostViewWin::OnImeComposition(
   // and send it to a renderer process.
   ImeComposition composition;
   if (ime_input_.GetResult(m_hWnd, lparam, &composition)) {
-    Send(new ViewMsg_ImeSetComposition(render_widget_host_->routing_id(),
-                                       WebKit::WebCompositionCommandConfirm,
-                                       composition.cursor_position,
-                                       composition.target_start,
-                                       composition.target_end,
-                                       composition.ime_string));
+    render_widget_host_->ImeConfirmComposition(composition.ime_string);
     ime_input_.ResetComposition(m_hWnd);
     // Fall though and try reading the composition string.
     // Japanese IMEs send a message containing both GCS_RESULTSTR and
@@ -1185,12 +1216,9 @@ LRESULT RenderWidgetHostViewWin::OnImeComposition(
   // Retrieve the composition string and its attributes of the ongoing
   // composition and send it to a renderer process.
   if (ime_input_.GetComposition(m_hWnd, lparam, &composition)) {
-    Send(new ViewMsg_ImeSetComposition(render_widget_host_->routing_id(),
-                                       WebKit::WebCompositionCommandSet,
-                                       composition.cursor_position,
-                                       composition.target_start,
-                                       composition.target_end,
-                                       composition.ime_string));
+    render_widget_host_->ImeSetComposition(
+        composition.ime_string, composition.underlines,
+        composition.selection_start, composition.selection_end);
   }
   // We have to prevent WTL from calling ::DefWindowProc() because we do not
   // want for the IMM (Input Method Manager) to send WM_IME_CHAR messages.
@@ -1208,10 +1236,7 @@ LRESULT RenderWidgetHostViewWin::OnImeEndComposition(
     // i.e. the ongoing composition has been canceled.
     // We need to reset the composition status both of the ImeInput object and
     // of the renderer process.
-    std::wstring empty_string;
-    Send(new ViewMsg_ImeSetComposition(render_widget_host_->routing_id(),
-                                       WebKit::WebCompositionCommandDiscard,
-                                       -1, -1, -1, empty_string));
+    render_widget_host_->ImeCancelComposition();
     ime_input_.ResetComposition(m_hWnd);
   }
   ime_input_.DestroyImeWindow(m_hWnd);
@@ -1264,9 +1289,13 @@ LRESULT RenderWidgetHostViewWin::OnMouseEvent(UINT message, WPARAM wparam,
     switch (message) {
       case WM_LBUTTONDOWN:
       case WM_MBUTTONDOWN:
+      case WM_RBUTTONDOWN:
+        // Finish the ongoing composition whenever a mouse click happens.
+        // It matches IE's behavior.
+        ime_input_.CleanupComposition(m_hWnd);
+        // Fall through.
       case WM_MOUSEMOVE:
-      case WM_MOUSELEAVE:
-      case WM_RBUTTONDOWN: {
+      case WM_MOUSELEAVE: {
         // Give the TabContents first crack at the message. It may want to
         // prevent forwarding to the renderer if some higher level browser
         // functionality is invoked.
@@ -1285,12 +1314,6 @@ LRESULT RenderWidgetHostViewWin::OnMouseEvent(UINT message, WPARAM wparam,
           return 1;
       }
     }
-
-    // WebKit does not update its IME status when a user clicks a mouse button
-    // to change the input focus onto a popup menu. As a workaround, we finish
-    // an ongoing composition every time when we click a left button.
-    if (message == WM_LBUTTONDOWN)
-      ime_input_.CleanupComposition(m_hWnd);
   }
 
   ForwardMouseEventToRenderer(message, wparam, lparam);
@@ -1431,7 +1454,9 @@ LRESULT RenderWidgetHostViewWin::OnWheelEvent(UINT message, WPARAM wparam,
   return 0;
 }
 
-LRESULT RenderWidgetHostViewWin::OnMouseActivate(UINT, WPARAM, LPARAM,
+LRESULT RenderWidgetHostViewWin::OnMouseActivate(UINT message,
+                                                 WPARAM wparam,
+                                                 LPARAM lparam,
                                                  BOOL& handled) {
   if (!IsActivatable())
     return MA_NOACTIVATE;
@@ -1450,7 +1475,7 @@ LRESULT RenderWidgetHostViewWin::OnMouseActivate(UINT, WPARAM, LPARAM,
     ::GetCursorPos(&cursor_pos);
     ::ScreenToClient(m_hWnd, &cursor_pos);
     HWND child_window = ::RealChildWindowFromPoint(m_hWnd, cursor_pos);
-    if (::IsWindow(child_window)) {
+    if (::IsWindow(child_window) && child_window != m_hWnd) {
       if (win_util::GetClassName(child_window) == kWrapperNativeWindowClassName)
         child_window = ::GetWindow(child_window, GW_CHILD);
 
@@ -1459,43 +1484,104 @@ LRESULT RenderWidgetHostViewWin::OnMouseActivate(UINT, WPARAM, LPARAM,
     }
   }
   handled = FALSE;
+  render_widget_host_->OnMouseActivate();
   return MA_ACTIVATE;
+}
+
+void RenderWidgetHostViewWin::OnAccessibilityNotifications(
+    const std::vector<ViewHostMsg_AccessibilityNotification_Params>& params) {
+  if (!browser_accessibility_manager_.get()) {
+    // Use empty document to process notifications
+    webkit_glue::WebAccessibility empty_document;
+    empty_document.role = WebAccessibility::ROLE_DOCUMENT;
+    empty_document.state = 0;
+    browser_accessibility_manager_.reset(
+        BrowserAccessibilityManager::Create(m_hWnd, empty_document, this));
+  }
+
+  browser_accessibility_manager_->OnAccessibilityNotifications(params);
+}
+
+void RenderWidgetHostViewWin::Observe(NotificationType type,
+                                      const NotificationSource& source,
+                                      const NotificationDetails& details) {
+  DCHECK(type == NotificationType::RENDERER_PROCESS_TERMINATED);
+
+  // Get the RenderProcessHost that posted this notification, and exit
+  // if it's not the one associated with this host view.
+  RenderProcessHost* render_process_host =
+      Source<RenderProcessHost>(source).ptr();
+  DCHECK(render_process_host);
+  if (!render_widget_host_ ||
+      render_process_host != render_widget_host_->process())
+    return;
+
+  // If it was our RenderProcessHost that posted the notification,
+  // clear the BrowserAccessibilityManager, because the renderer is
+  // dead and any accessibility information we have is now stale.
+  browser_accessibility_manager_.reset(NULL);
+}
+
+void RenderWidgetHostViewWin::SetAccessibilityFocus(int acc_obj_id) {
+  if (!browser_accessibility_manager_.get() ||
+      !render_widget_host_ ||
+      !render_widget_host_->process() ||
+      !render_widget_host_->process()->HasConnection()) {
+    return;
+  }
+
+  render_widget_host_->SetAccessibilityFocus(acc_obj_id);
+}
+
+void RenderWidgetHostViewWin::AccessibilityDoDefaultAction(int acc_obj_id) {
+  if (!browser_accessibility_manager_.get() ||
+      !render_widget_host_ ||
+      !render_widget_host_->process() ||
+      !render_widget_host_->process()->HasConnection()) {
+    return;
+  }
+
+  render_widget_host_->AccessibilityDoDefaultAction(acc_obj_id);
 }
 
 LRESULT RenderWidgetHostViewWin::OnGetObject(UINT message, WPARAM wparam,
                                              LPARAM lparam, BOOL& handled) {
-  LRESULT reference_result = static_cast<LRESULT>(0L);
-  // TODO(jcampan): http://b/issue?id=1432077 Disabling accessibility in the
-  // renderer is a temporary work-around until that bug is fixed.
-  if (!renderer_accessible_)
-    return reference_result;
+  if (kIdCustom == lparam) {
+    // An MSAA client requestes our custom id. Assume that we have detected an
+    // active windows screen reader.
+    Singleton<BrowserAccessibilityState>()->OnScreenReaderDetected();
+    render_widget_host_->EnableRendererAccessibility();
 
-  // Accessibility readers will send an OBJID_CLIENT message.
-  if (OBJID_CLIENT == lparam) {
-    // If our MSAA DOM root is already created, reuse that pointer. Otherwise,
-    // create a new one.
-    if (!browser_accessibility_root_) {
-      // Create a new instance of IAccessible. Root id is 1000, to avoid
-      // conflicts with the ids used by MSAA.
-      BrowserAccessibilityManager::GetInstance()->CreateAccessibilityInstance(
-          IID_IAccessible, 1000,
-          render_widget_host_->routing_id(),
-          render_widget_host_->process()->id(),
-          m_hWnd,
-          reinterpret_cast<void **>(browser_accessibility_root_.Receive()));
-
-      if (!browser_accessibility_root_) {
-        // No valid root found, return with failure.
-        return static_cast<LRESULT>(0L);
-      }
-    }
-
-    // Create a reference to BrowserAccessibility which MSAA will marshall to
-    // the client.
-    reference_result = LresultFromObject(IID_IAccessible, wparam,
-        static_cast<IAccessible*>(browser_accessibility_root_));
+    // Return with failure.
+    return static_cast<LRESULT>(0L);
   }
-  return reference_result;
+
+  if (lparam != OBJID_CLIENT) {
+    handled = false;
+    return static_cast<LRESULT>(0L);
+  }
+
+  if (render_widget_host_ && !render_widget_host_->renderer_accessible()) {
+    // Attempt to detect screen readers by sending an event with our custom id.
+    NotifyWinEvent(EVENT_SYSTEM_ALERT, m_hWnd, kIdCustom, CHILDID_SELF);
+  }
+
+  if (!browser_accessibility_manager_.get()) {
+    // Return busy document tree while renderer accessibility tree loads.
+    webkit_glue::WebAccessibility loading_tree;
+    loading_tree.role = WebAccessibility::ROLE_DOCUMENT;
+    loading_tree.state = (1 << WebAccessibility::STATE_BUSY);
+    browser_accessibility_manager_.reset(
+      BrowserAccessibilityManager::Create(m_hWnd, loading_tree, this));
+  }
+
+  ScopedComPtr<IAccessible> root(
+      browser_accessibility_manager_->GetRoot()->toBrowserAccessibilityWin());
+  if (root.get())
+    return LresultFromObject(IID_IAccessible, wparam, root.Detach());
+
+  handled = false;
+  return static_cast<LRESULT>(0L);
 }
 
 void RenderWidgetHostViewWin::OnFinalMessage(HWND window) {

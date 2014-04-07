@@ -1,5 +1,5 @@
 #!/usr/bin/python2.4
-# Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+# Copyright (c) 2010 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,6 +14,7 @@ import xml.sax.handler
 from grit import exception
 from grit.node import base
 from grit.node import mapping
+from grit.node import misc
 from grit import util
 
 
@@ -23,7 +24,7 @@ class StopParsingException(Exception):
 
 
 class GrdContentHandler(xml.sax.handler.ContentHandler):
-  def __init__(self, stop_after=None, debug=False):
+  def __init__(self, stop_after=None, debug=False, defines=None):
     # Invariant of data:
     # 'root' is the root of the parse tree being created, or None if we haven't
     # parsed out any elements.
@@ -34,6 +35,7 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
     self.stack = []
     self.stop_after = stop_after
     self.debug = debug
+    self.defines = defines
 
   def startElement(self, name, attrs):
     assert not self.root or len(self.stack) > 0
@@ -54,6 +56,8 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
 
     if not self.root:
       self.root = node
+      if self.defines:
+        self.root.SetDefines(self.defines)
 
     if len(self.stack) > 0:
       self.stack[-1].AddChild(node)
@@ -86,8 +90,9 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
     pass
 
 
-def Parse(filename_or_stream, dir = None, flexible_root = False,
-          stop_after=None, debug=False):
+def Parse(filename_or_stream, dir=None, flexible_root=False,
+          stop_after=None, debug=False, first_id_filename=None,
+          defines=None):
   '''Parses a GRD file into a tree of nodes (from grit.node).
 
   If flexible_root is False, the root node must be a <grit> element.  Otherwise
@@ -103,12 +108,17 @@ def Parse(filename_or_stream, dir = None, flexible_root = False,
   If 'debug' is true, lots of information about the parsing events will be
   printed out during parsing of the file.
 
+  If first_id_filename is provided, then we use the provided path instead of
+  resources_id to gather the first id values for resources.
+
   Args:
     filename_or_stream: './bla.xml'  (must be filename if dir is None)
     dir: '.' or None (only if filename_or_stream is a filename)
     flexible_root: True | False
     stop_after: 'inputs'
     debug: False
+    first_id_filename: None
+    defines: dictionary of defines, like {'chromeos': '1'}
 
   Return:
     Subclass of grit.node.base.Node
@@ -116,7 +126,8 @@ def Parse(filename_or_stream, dir = None, flexible_root = False,
   Throws:
     grit.exception.Parsing
   '''
-  handler = GrdContentHandler(stop_after=stop_after, debug=debug)
+  handler = GrdContentHandler(stop_after=stop_after, debug=debug,
+                              defines=defines)
   try:
     xml.sax.parse(filename_or_stream, handler)
   except StopParsingException:
@@ -133,10 +144,14 @@ def Parse(filename_or_stream, dir = None, flexible_root = False,
         dir = '.'
     # Fix up the base_dir so it is relative to the input file.
     handler.root.SetOwnDir(dir)
+
+  # Assign first ids to the nodes that don't have them.
+  if isinstance(handler.root, misc.GritNode) and first_id_filename != '':
+    handler.root.AssignFirstIds(filename_or_stream, first_id_filename)
+
   return handler.root
 
 
 if __name__ == '__main__':
   util.ChangeStdoutEncoding()
   print unicode(Parse(sys.argv[1]))
-

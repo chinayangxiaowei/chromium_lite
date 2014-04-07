@@ -11,14 +11,13 @@
 #include <vector>
 
 #include "build/build_config.h"
-#include "chrome/browser/sync/engine/net/http_return.h"
 #include "chrome/browser/sync/engine/net/url_translator.h"
 #include "chrome/browser/sync/engine/syncapi.h"
 #include "chrome/browser/sync/engine/syncer.h"
 #include "chrome/browser/sync/engine/syncproto.h"
 #include "chrome/browser/sync/protocol/sync.pb.h"
 #include "chrome/browser/sync/syncable/directory_manager.h"
-#include "chrome/browser/sync/util/event_sys-inl.h"
+#include "chrome/common/net/http_return.h"
 #include "googleurl/src/gurl.h"
 
 namespace browser_sync {
@@ -136,11 +135,9 @@ ServerConnectionManager::ServerConnectionManager(
     const string& server,
     int port,
     bool use_ssl,
-    const string& user_agent,
-    const string& client_id)
+    const string& user_agent)
     : sync_server_(server),
       sync_server_port_(port),
-      client_id_(client_id),
       user_agent_(user_agent),
       use_ssl_(use_ssl),
       proto_sync_path_(kSyncServerSyncPath),
@@ -164,20 +161,11 @@ void ServerConnectionManager::NotifyStatusChanged() {
   channel_->NotifyListeners(event);
 }
 
-// Uses currently set auth token. Set by AuthWatcher.
 bool ServerConnectionManager::PostBufferWithCachedAuth(
     const PostBufferParams* params, ScopedServerStatusWatcher* watcher) {
   string path =
       MakeSyncServerPath(proto_sync_path(), MakeSyncQueryString(client_id_));
   return PostBufferToPath(params, path, auth_token(), watcher);
-}
-
-bool ServerConnectionManager::PostBufferWithAuth(const PostBufferParams* params,
-    const string& auth_token, ScopedServerStatusWatcher* watcher) {
-  string path = MakeSyncServerPath(proto_sync_path(),
-                                   MakeSyncQueryString(client_id_));
-
-  return PostBufferToPath(params, path, auth_token, watcher);
 }
 
 bool ServerConnectionManager::PostBufferToPath(const PostBufferParams* params,
@@ -263,13 +251,6 @@ bool ServerConnectionManager::CheckServerReachable() {
     NotifyStatusChanged();
   }
   return server_is_reachable;
-}
-
-void ServerConnectionManager::SetServerUnreachable() {
-  if (server_reachable_) {
-    server_reachable_ = false;
-    NotifyStatusChanged();
-  }
 }
 
 void ServerConnectionManager::kill() {
@@ -364,12 +345,11 @@ bool FillMessageWithShareDetails(sync_pb::ClientToServerMessage* csm,
   return true;
 }
 
-}  // namespace browser_sync
-
-std::ostream& operator << (std::ostream& s,
-                           const struct browser_sync::HttpResponse& hr) {
+std::ostream& operator << (std::ostream& s, const struct HttpResponse& hr) {
   s << " Response Code (bogus on error): " << hr.response_code;
   s << " Content-Length (bogus on error): " << hr.content_length;
   s << " Server Status: " << hr.server_status;
   return s;
 }
+
+}  // namespace browser_sync

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #ifndef CHROME_BROWSER_VIEW_IDS_H_
 #define CHROME_BROWSER_VIEW_IDS_H_
+#pragma once
 
 enum ViewID {
   VIEW_ID_NONE = 0,
@@ -27,6 +28,9 @@ enum ViewID {
   VIEW_ID_TAB_9,
   VIEW_ID_TAB_LAST,
 
+  // ID for any tab. Currently only used on views.
+  VIEW_ID_TAB,
+
   VIEW_ID_TAB_STRIP,
 
   // Toolbar & toolbar elements.
@@ -37,16 +41,16 @@ enum ViewID {
   VIEW_ID_HOME_BUTTON,
   VIEW_ID_STAR_BUTTON,
   VIEW_ID_LOCATION_BAR,
-  VIEW_ID_GO_BUTTON,
-  VIEW_ID_PAGE_MENU,
   VIEW_ID_APP_MENU,
   VIEW_ID_AUTOCOMPLETE,
-  VIEW_ID_BOOKMARK_MENU,
   VIEW_ID_BROWSER_ACTION_TOOLBAR,
+  VIEW_ID_FEEDBACK_BUTTON,
 
   // The Bookmark Bar.
   VIEW_ID_BOOKMARK_BAR,
   VIEW_ID_OTHER_BOOKMARKS,
+  // Used for bookmarks/folders on the bookmark bar.
+  VIEW_ID_BOOKMARK_BAR_ELEMENT,
 
   // Find in page.
   VIEW_ID_FIND_IN_PAGE_TEXT_FIELD,
@@ -59,9 +63,6 @@ enum ViewID {
   // Docked dev tools.
   VIEW_ID_DEV_TOOLS_DOCKED,
 
-  // Bottom extension shelf.
-  VIEW_ID_DEV_EXTENSION_SHELF,
-
   // The contents split.
   VIEW_ID_CONTENTS_SPLIT,
 
@@ -70,6 +71,12 @@ enum ViewID {
 
   // The Download shelf.
   VIEW_ID_DOWNLOAD_SHELF,
+
+  // The Sidebar container.
+  VIEW_ID_SIDE_BAR_CONTAINER,
+
+  // The sidebar split.
+  VIEW_ID_SIDE_BAR_SPLIT,
 
   // Used in chrome/browser/gtk/view_id_util_browsertests.cc
   // If you add new ids, make sure the above test passes.

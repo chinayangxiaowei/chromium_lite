@@ -4,10 +4,9 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_TYPED_URL_CHANGE_PROCESSOR_H_
 #define CHROME_BROWSER_SYNC_GLUE_TYPED_URL_CHANGE_PROCESSOR_H_
+#pragma once
 
 #include "chrome/browser/sync/glue/change_processor.h"
-
-#include <vector>
 
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
@@ -24,6 +23,7 @@ namespace history {
 class HistoryBackend;
 struct URLsDeletedDetails;
 struct URLsModifiedDetails;
+struct URLVisitedDetails;
 class URLRow;
 };
 
@@ -60,16 +60,12 @@ class TypedUrlChangeProcessor : public ChangeProcessor,
   virtual void StopImpl();
 
  private:
-  bool WriteTypedUrl(sync_api::WriteNode* node,
-                     const string16& name,
-                     const string16& value,
-                     std::vector<base::Time>& timestamps);
-
   void StartObserving();
   void StopObserving();
 
   void HandleURLsModified(history::URLsModifiedDetails* details);
   void HandleURLsDeleted(history::URLsDeletedDetails* details);
+  void HandleURLsVisited(history::URLVisitedDetails* details);
 
   // The two models should be associated according to this ModelAssociator.
   TypedUrlModelAssociator* model_associator_;

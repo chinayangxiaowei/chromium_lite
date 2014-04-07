@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,10 @@
 #include "chrome/browser/renderer_host/resource_handler.h"
 #include "chrome/common/chrome_plugin_lib.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
+#include "chrome/common/resource_response.h"
 #include "net/base/net_errors.h"
+#include "net/base/upload_data.h"
 #include "net/http/http_util.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_job.h"
@@ -73,6 +76,7 @@ static ViewHostMsg_Resource_Request CreateResourceRequest(
   request.resource_type = type;
   request.request_context = 0;
   request.appcache_host_id = appcache::kNoHostId;
+  request.download_to_file = false;
   request.host_renderer_id = -1;
   request.host_render_view_id = -1;
   return request;
@@ -155,8 +159,8 @@ class ResourceDispatcherHostTest : public testing::Test,
  public:
   ResourceDispatcherHostTest()
       : Receiver(ChildProcessInfo::RENDER_PROCESS, -1),
-        ui_thread_(ChromeThread::UI, &message_loop_),
-        io_thread_(ChromeThread::IO, &message_loop_),
+        ui_thread_(BrowserThread::UI, &message_loop_),
+        io_thread_(BrowserThread::IO, &message_loop_),
         old_factory_(NULL),
         resource_type_(ResourceType::SUB_RESOURCE) {
     set_handle(base::GetCurrentProcessHandle());
@@ -262,8 +266,8 @@ class ResourceDispatcherHostTest : public testing::Test,
   }
 
   MessageLoopForIO message_loop_;
-  ChromeThread ui_thread_;
-  ChromeThread io_thread_;
+  BrowserThread ui_thread_;
+  BrowserThread io_thread_;
   ResourceDispatcherHost host_;
   ResourceIPCAccumulator accum_;
   std::string response_headers_;
@@ -309,7 +313,7 @@ void CheckSuccessfulRequest(const std::vector<IPC::Message>& messages,
   //
   // This function verifies that we received 4 messages and that they
   // are appropriate.
-  ASSERT_EQ(messages.size(), 3U);
+  ASSERT_EQ(3U, messages.size());
 
   // The first messages should be received response
   ASSERT_EQ(ViewMsg_Resource_ReceivedResponse::ID, messages[0].type());
@@ -348,7 +352,7 @@ TEST_F(ResourceDispatcherHostTest, TestMany) {
   MakeTestRequest(0, 3, URLRequestTestJob::test_url_3());
 
   // flush all the pending requests
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(0));
 
@@ -375,7 +379,7 @@ TEST_F(ResourceDispatcherHostTest, Cancel) {
   MakeCancelRequest(2);
 
   // flush all the pending requests
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
   MessageLoop::current()->RunAllPending();
 
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(0));
@@ -463,7 +467,7 @@ TEST_F(ResourceDispatcherHostTest, TestProcessCancel) {
   test_receiver.has_canceled_ = true;
 
   // Flush all the pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0, host_.pending_requests());
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(
@@ -496,7 +500,7 @@ TEST_F(ResourceDispatcherHostTest, TestBlockingResumingRequests) {
   MakeTestRequest(3, 6, URLRequestTestJob::test_url_3());
 
   // Flush all the pending requests
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   // Sort out all the messages we saw by request
   ResourceIPCAccumulator::ClassifiedMessages msgs;
@@ -511,7 +515,7 @@ TEST_F(ResourceDispatcherHostTest, TestBlockingResumingRequests) {
   // Resume requests for RVH 1 and flush pending requests.
   host_.ResumeBlockedRequestsForRoute(id(), 1);
   KickOffRequest();
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   msgs.clear();
   accum_.GetClassifiedMessages(&msgs);
@@ -521,7 +525,7 @@ TEST_F(ResourceDispatcherHostTest, TestBlockingResumingRequests) {
 
   // Test that new requests are not blocked for RVH 1.
   MakeTestRequest(1, 7, URLRequestTestJob::test_url_1());
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
   msgs.clear();
   accum_.GetClassifiedMessages(&msgs);
   ASSERT_EQ(1U, msgs.size());
@@ -531,7 +535,7 @@ TEST_F(ResourceDispatcherHostTest, TestBlockingResumingRequests) {
   host_.ResumeBlockedRequestsForRoute(id(), 2);
   host_.ResumeBlockedRequestsForRoute(id(), 3);
   KickOffRequest();
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0,
             host_.GetOutstandingRequestsMemoryCost(id()));
@@ -556,7 +560,7 @@ TEST_F(ResourceDispatcherHostTest, TestBlockingCancelingRequests) {
   MakeTestRequest(1, 4, URLRequestTestJob::test_url_1());
 
   // Flush all the pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   // Sort out all the messages we saw by request.
   ResourceIPCAccumulator::ClassifiedMessages msgs;
@@ -571,7 +575,7 @@ TEST_F(ResourceDispatcherHostTest, TestBlockingCancelingRequests) {
   // Cancel requests for RVH 1.
   host_.CancelBlockedRequestsForRoute(id(), 1);
   KickOffRequest();
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0,
             host_.GetOutstandingRequestsMemoryCost(id()));
@@ -602,7 +606,7 @@ TEST_F(ResourceDispatcherHostTest, TestBlockedRequestsProcessDies) {
   host_.CancelRequestsForProcess(second_receiver.id());
 
   // Flush all the pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(
       id()));
@@ -642,17 +646,17 @@ TEST_F(ResourceDispatcherHostTest, TestBlockedRequestsDontLeak) {
   MakeTestRequest(this, 2, 6, URLRequestTestJob::test_url_3());
 
   // Flush all the pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 }
 
 // Test the private helper method "CalculateApproximateMemoryCost()".
 TEST_F(ResourceDispatcherHostTest, CalculateApproximateMemoryCost) {
   URLRequest req(GURL("http://www.google.com"), NULL);
-  EXPECT_EQ(4425, ResourceDispatcherHost::CalculateApproximateMemoryCost(&req));
+  EXPECT_EQ(4427, ResourceDispatcherHost::CalculateApproximateMemoryCost(&req));
 
   // Add 9 bytes of referrer.
   req.set_referrer("123456789");
-  EXPECT_EQ(4434, ResourceDispatcherHost::CalculateApproximateMemoryCost(&req));
+  EXPECT_EQ(4436, ResourceDispatcherHost::CalculateApproximateMemoryCost(&req));
 
   // Add 33 bytes of upload content.
   std::string upload_content;
@@ -661,11 +665,11 @@ TEST_F(ResourceDispatcherHostTest, CalculateApproximateMemoryCost) {
   req.AppendBytesToUpload(upload_content.data(), upload_content.size());
 
   // Since the upload throttling is disabled, this has no effect on the cost.
-  EXPECT_EQ(4434, ResourceDispatcherHost::CalculateApproximateMemoryCost(&req));
+  EXPECT_EQ(4436, ResourceDispatcherHost::CalculateApproximateMemoryCost(&req));
 
   // Add a file upload -- should have no effect.
   req.AppendFileToUpload(FilePath(FILE_PATH_LITERAL("does-not-exist.png")));
-  EXPECT_EQ(4434, ResourceDispatcherHost::CalculateApproximateMemoryCost(&req));
+  EXPECT_EQ(4436, ResourceDispatcherHost::CalculateApproximateMemoryCost(&req));
 }
 
 // Test the private helper method "IncrementOutstandingRequestsMemoryCost()".
@@ -741,7 +745,7 @@ TEST_F(ResourceDispatcherHostTest, TooManyOutstandingRequests) {
                   URLRequestTestJob::test_url_2());
 
   // Flush all the pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
   MessageLoop::current()->RunAllPending();
 
   EXPECT_EQ(0,
@@ -801,7 +805,7 @@ TEST_F(ResourceDispatcherHostTest, MimeSniffed) {
   MakeTestRequest(0, 1, GURL("http:bla"));
 
   // Flush all pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(0));
 
@@ -830,7 +834,7 @@ TEST_F(ResourceDispatcherHostTest, MimeNotSniffed) {
   MakeTestRequest(0, 1, GURL("http:bla"));
 
   // Flush all pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(0));
 
@@ -858,7 +862,7 @@ TEST_F(ResourceDispatcherHostTest, MimeNotSniffed2) {
   MakeTestRequest(0, 1, GURL("http:bla"));
 
   // Flush all pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(0));
 
@@ -885,7 +889,7 @@ TEST_F(ResourceDispatcherHostTest, MimeSniff204) {
   MakeTestRequest(0, 1, GURL("http:bla"));
 
   // Flush all pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(0));
 
@@ -918,7 +922,7 @@ TEST_F(ResourceDispatcherHostTest, ForbiddenDownload) {
   MakeTestRequest(0, 1, GURL("http:bla"));
 
   // Flush all pending requests.
-  while (URLRequestTestJob::ProcessOnePendingMessage());
+  while (URLRequestTestJob::ProcessOnePendingMessage()) {}
 
   EXPECT_EQ(0, host_.GetOutstandingRequestsMemoryCost(0));
 
@@ -984,7 +988,7 @@ class DummyResourceHandler : public ResourceHandler {
   DISALLOW_COPY_AND_ASSIGN(DummyResourceHandler);
 };
 
-class ApplyExtensionMessageFilterPolicyTest : public testing::Test {
+class ApplyExtensionLocalizationFilterTest : public testing::Test {
  protected:
   void SetUp() {
     url_.reset(new GURL(
@@ -1007,45 +1011,25 @@ class ApplyExtensionMessageFilterPolicyTest : public testing::Test {
   scoped_ptr<ResourceDispatcherHostRequestInfo> request_info_;
 };
 
-TEST_F(ApplyExtensionMessageFilterPolicyTest, WrongScheme) {
+TEST_F(ApplyExtensionLocalizationFilterTest, WrongScheme) {
   url_.reset(new GURL("html://behllobkkfkfnphdnhnkndlbkcpglgmj/popup.html"));
-  ResourceDispatcherHost::ApplyExtensionMessageFilterPolicy(
-      *url_, resource_type_, request_info_.get());
+  ResourceDispatcherHost::ApplyExtensionLocalizationFilter(*url_,
+      resource_type_, request_info_.get());
 
-  EXPECT_EQ(FilterPolicy::DONT_FILTER, request_info_->filter_policy());
+  EXPECT_FALSE(request_info_->replace_extension_localization_templates());
 }
 
-TEST_F(ApplyExtensionMessageFilterPolicyTest, GoodScheme) {
-  ResourceDispatcherHost::ApplyExtensionMessageFilterPolicy(
-      *url_, resource_type_, request_info_.get());
+TEST_F(ApplyExtensionLocalizationFilterTest, GoodScheme) {
+  ResourceDispatcherHost::ApplyExtensionLocalizationFilter(*url_,
+      resource_type_, request_info_.get());
 
-  EXPECT_EQ(FilterPolicy::FILTER_EXTENSION_MESSAGES,
-            request_info_->filter_policy());
+  EXPECT_TRUE(request_info_->replace_extension_localization_templates());
 }
 
-TEST_F(ApplyExtensionMessageFilterPolicyTest, GoodSchemeWithSecurityFilter) {
-  request_info_->set_filter_policy(FilterPolicy::FILTER_ALL_EXCEPT_IMAGES);
-  ResourceDispatcherHost::ApplyExtensionMessageFilterPolicy(
-      *url_, resource_type_, request_info_.get());
-
-  EXPECT_EQ(FilterPolicy::FILTER_ALL_EXCEPT_IMAGES,
-            request_info_->filter_policy());
-}
-
-TEST_F(ApplyExtensionMessageFilterPolicyTest, GoodSchemeWrongResourceType) {
+TEST_F(ApplyExtensionLocalizationFilterTest, GoodSchemeWrongResourceType) {
   resource_type_ = ResourceType::MAIN_FRAME;
-  ResourceDispatcherHost::ApplyExtensionMessageFilterPolicy(
-      *url_, resource_type_, request_info_.get());
+  ResourceDispatcherHost::ApplyExtensionLocalizationFilter(*url_,
+      resource_type_, request_info_.get());
 
-  EXPECT_EQ(FilterPolicy::DONT_FILTER, request_info_->filter_policy());
-}
-
-TEST_F(ApplyExtensionMessageFilterPolicyTest, WrongSchemeResourceAndFilter) {
-  url_.reset(new GURL("html://behllobkkfkfnphdnhnkndlbkcpglgmj/popup.html"));
-  resource_type_ = ResourceType::MEDIA;
-  request_info_->set_filter_policy(FilterPolicy::FILTER_ALL);
-  ResourceDispatcherHost::ApplyExtensionMessageFilterPolicy(
-      *url_, resource_type_, request_info_.get());
-
-  EXPECT_EQ(FilterPolicy::FILTER_ALL, request_info_->filter_policy());
+  EXPECT_FALSE(request_info_->replace_extension_localization_templates());
 }

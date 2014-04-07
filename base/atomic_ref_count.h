@@ -10,9 +10,10 @@
 
 #ifndef BASE_ATOMIC_REF_COUNT_H_
 #define BASE_ATOMIC_REF_COUNT_H_
+#pragma once
 
 #include "base/atomicops.h"
-#include "base/dynamic_annotations.h"
+#include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 
 namespace base {
 

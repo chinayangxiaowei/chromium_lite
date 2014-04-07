@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include "base/file_util.h"
 #include "base/i18n/icu_string_conversions.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/tools/convert_dict/hunspell_reader.h"
@@ -46,9 +47,9 @@ void CollapseDuplicateSpaces(std::string* str) {
 
 }  // namespace
 
-AffReader::AffReader(const std::string& filename)
+AffReader::AffReader(const FilePath& path)
     : has_indexed_affixes_(false) {
-  file_ = file_util::OpenFile(filename, "r");
+  file_ = file_util::OpenFile(path, "r");
 
   // Default to Latin1 in case the file doesn't specify it.
   encoding_ = "ISO8859-1";

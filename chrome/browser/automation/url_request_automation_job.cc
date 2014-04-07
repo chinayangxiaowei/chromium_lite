@@ -7,7 +7,7 @@
 #include "base/message_loop.h"
 #include "base/time.h"
 #include "chrome/browser/automation/automation_resource_message_filter.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host_request_info.h"
@@ -15,6 +15,8 @@
 #include "net/base/cookie_monster.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_util.h"
 #include "net/url_request/url_request_context.h"
 
@@ -23,17 +25,10 @@ using base::TimeDelta;
 
 // The list of filtered headers that are removed from requests sent via
 // StartAsync(). These must be lower case.
-static const char* kFilteredHeaderStrings[] = {
-  "accept",
-  "cache-control",
+static const char* const kFilteredHeaderStrings[] = {
   "connection",
   "cookie",
   "expect",
-  "if-match",
-  "if-modified-since",
-  "if-none-match",
-  "if-range",
-  "if-unmodified-since",
   "max-forwards",
   "proxy-authorization",
   "te",
@@ -52,6 +47,7 @@ URLRequest::ProtocolFactory* URLRequestAutomationJob::old_https_factory_
 URLRequestAutomationJob::URLRequestAutomationJob(URLRequest* request, int tab,
     int request_id, AutomationResourceMessageFilter* filter, bool is_pending)
     : URLRequestJob(request),
+      id_(0),
       tab_(tab),
       message_filter_(filter),
       pending_buf_size_(0),
@@ -73,7 +69,7 @@ URLRequestAutomationJob::~URLRequestAutomationJob() {
 }
 
 bool URLRequestAutomationJob::EnsureProtocolFactoryRegistered() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
   if (!is_protocol_factory_registered_) {
     old_http_factory_ =
@@ -166,7 +162,7 @@ bool URLRequestAutomationJob::ReadRawData(
         buf_size));
     SetStatus(URLRequestStatus(URLRequestStatus::IO_PENDING, 0));
   } else {
-    ChromeThread::PostTask(ChromeThread::IO, FROM_HERE,
+    BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
         NewRunnableMethod(this,
                           &URLRequestAutomationJob::NotifyJobCompletionTask));
   }
@@ -387,20 +383,26 @@ void URLRequestAutomationJob::StartAsync() {
   message_filter_->RegisterRequest(this);
 
   // Strip unwanted headers.
-  std::string new_request_headers(
-      net::HttpUtil::StripHeaders(request_->extra_request_headers(),
-                                  kFilteredHeaderStrings,
-                                  arraysize(kFilteredHeaderStrings)));
+  net::HttpRequestHeaders new_request_headers;
+  new_request_headers.MergeFrom(request_->extra_request_headers());
+  for (size_t i = 0; i < arraysize(kFilteredHeaderStrings); ++i)
+    new_request_headers.RemoveHeader(kFilteredHeaderStrings[i]);
 
   if (request_->context()) {
     // Only add default Accept-Language and Accept-Charset if the request
     // didn't have them specified.
-    net::HttpUtil::AppendHeaderIfMissing(
-        "Accept-Language", request_->context()->accept_language(),
-        &new_request_headers);
-    net::HttpUtil::AppendHeaderIfMissing(
-        "Accept-Charset", request_->context()->accept_charset(),
-        &new_request_headers);
+    if (!new_request_headers.HasHeader(
+        net::HttpRequestHeaders::kAcceptLanguage) &&
+        !request_->context()->accept_language().empty()) {
+      new_request_headers.SetHeader(net::HttpRequestHeaders::kAcceptLanguage,
+                                    request_->context()->accept_language());
+    }
+    if (!new_request_headers.HasHeader(
+        net::HttpRequestHeaders::kAcceptCharset) &&
+        !request_->context()->accept_charset().empty()) {
+      new_request_headers.SetHeader(net::HttpRequestHeaders::kAcceptCharset,
+                                    request_->context()->accept_charset());
+    }
   }
 
   // Ensure that we do not send username and password fields in the referrer.
@@ -414,13 +416,22 @@ void URLRequestAutomationJob::StartAsync() {
     referrer = GURL();
   }
 
+  // Get the resource type (main_frame/script/image/stylesheet etc.
+  ResourceDispatcherHostRequestInfo* request_info =
+      ResourceDispatcherHost::InfoForRequest(request_);
+  ResourceType::Type resource_type = ResourceType::MAIN_FRAME;
+  if (request_info) {
+    resource_type = request_info->resource_type();
+  }
+
   // Ask automation to start this request.
   IPC::AutomationURLRequest automation_request = {
     request_->url().spec(),
     request_->method(),
     referrer.spec(),
-    new_request_headers,
-    request_->get_upload()
+    new_request_headers.ToString(),
+    request_->get_upload(),
+    resource_type
   };
 
   DCHECK(message_filter_);

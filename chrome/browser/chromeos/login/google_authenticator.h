@@ -4,30 +4,34 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_GOOGLE_AUTHENTICATOR_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_GOOGLE_AUTHENTICATOR_H_
+#pragma once
 
 #include <string>
 #include <vector>
+
 #include "base/basictypes.h"
-#include "base/file_path.h"
-#include "base/ref_counted.h"
-#include "base/sha2.h"
+#include "base/gtest_prod_util.h"
+#include "base/scoped_ptr.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/cryptohome_library.h"
 #include "chrome/browser/chromeos/login/authenticator.h"
-#include "chrome/browser/net/url_fetcher.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"  // For FRIEND_TEST
+#include "chrome/common/net/gaia/gaia_auth_consumer.h"
+#include "chrome/common/net/gaia/gaia_authenticator2.h"
 
 // Authenticates a Chromium OS user against the Google Accounts ClientLogin API.
 
+class Lock;
 class Profile;
+class GoogleServiceAuthError;
+class LoginFailure;
 
 namespace chromeos {
 
 class GoogleAuthenticatorTest;
 class LoginStatusConsumer;
+class UserManager;
 
-class GoogleAuthenticator : public Authenticator,
-                            public URLFetcher::Delegate {
+class GoogleAuthenticator : public Authenticator, public GaiaAuthConsumer {
  public:
   explicit GoogleAuthenticator(LoginStatusConsumer* consumer);
   virtual ~GoogleAuthenticator();
@@ -37,54 +41,75 @@ class GoogleAuthenticator : public Authenticator,
   // consumer_->OnLoginSuccess() with the |username| and a vector of
   // authentication cookies or a callback to consumer_->OnLoginFailure() with
   // an error message.  Uses |profile| when doing URL fetches.
-  // Should be called on the FILE thread!
+  // Optionally could pass CAPTCHA challenge token - |login_token| and
+  // |login_captcha| string that user has entered.
+  //
+  // NOTE: We do not allow HOSTED accounts to log in.  In the event that
+  // we are asked to authenticate valid HOSTED account creds, we will
+  // call OnLoginFailure() with HOSTED_NOT_ALLOWED.
   //
   // Returns true if the attempt gets sent successfully and false if not.
-  bool Authenticate(Profile* profile,
-                    const std::string& username,
-                    const std::string& password);
+  bool AuthenticateToLogin(Profile* profile,
+                           const std::string& username,
+                           const std::string& password,
+                           const std::string& login_token,
+                           const std::string& login_captcha);
 
-  // Overridden from URLFetcher::Delegate
-  // When the authentication attempt comes back, will call
-  // consumer_->OnLoginSuccess(|username|).
-  // On any failure, will call consumer_->OnLoginFailure().
-  virtual void OnURLFetchComplete(const URLFetcher* source,
-                                  const GURL& url,
-                                  const URLRequestStatus& status,
-                                  int response_code,
-                                  const ResponseCookies& cookies,
-                                  const std::string& data);
+  // Given a |username| and |password|, this method attempts to
+  // authenticate to the cached credentials. This will never contact
+  // the server even if it's online. The auth result is sent to
+  // LoginStatusConsumer in a same way as AuthenticateToLogin does.
+  bool AuthenticateToUnlock(const std::string& username,
+                            const std::string& password);
 
-
+  // Initiates off the record ("browse without signing in") login.
+  // Mounts tmpfs and notifies consumer on the success/failure.
+  void LoginOffTheRecord();
 
   // Public for testing.
-  void set_system_salt(const std::vector<unsigned char>& new_salt) {
+  void set_system_salt(const chromeos::CryptohomeBlob& new_salt) {
     system_salt_ = new_salt;
   }
-  void set_localaccount(const std::string& new_name) {
-    localaccount_ = new_name;
-    checked_for_localaccount_ = true;
-  }
   void set_username(const std::string& fake_user) { username_ = fake_user; }
+  void set_password(const std::string& fake_pass) { password_ = fake_pass; }
   void set_password_hash(const std::string& fake_hash) {
     ascii_hash_ = fake_hash;
   }
+  void set_user_manager(UserManager* new_manager) {
+    user_manager_ = new_manager;
+  }
+  void SetLocalaccount(const std::string& new_name);
 
   // These methods must be called on the UI thread, as they make DBus calls
   // and also call back to the login UI.
-  void OnLoginSuccess(const std::string& credentials);
-  void CheckOffline(const URLRequestStatus& status);
-  void CheckLocalaccount(const std::string& error);
-  void OnLoginFailure(const std::string& data);
+  void OnLoginSuccess(const GaiaAuthConsumer::ClientLoginResult& credentials,
+                      bool request_pending);
+  void CheckOffline(const LoginFailure& error);
+  void CheckLocalaccount(const LoginFailure& error);
+  void OnLoginFailure(const LoginFailure& error);
 
-  // The signal to cryptohomed that we want a tmpfs.
-  // TODO(cmasone): revisit this after cryptohome re-impl
-  static const char kTmpfsTrigger[];
+  // Call these methods on the UI thread.
+  void RecoverEncryptedData(
+      const std::string& old_password,
+      const GaiaAuthConsumer::ClientLoginResult& credentials);
+  void ResyncEncryptedData(
+      const GaiaAuthConsumer::ClientLoginResult& credentials);
+  void RetryAuth(Profile* profile,
+                 const std::string& username,
+                 const std::string& password,
+                 const std::string& login_token,
+                 const std::string& login_captcha);
+
+  // Callbacks from GaiaAuthenticator2
+  virtual void OnClientLoginFailure(
+      const GoogleServiceAuthError& error);
+  virtual void OnClientLoginSuccess(
+      const GaiaAuthConsumer::ClientLoginResult& credentials);
 
  private:
-  // If we don't have the system salt yet, loads it from |path|.
-  // Should only be called on the FILE thread.
-  void LoadSystemSalt(const FilePath& path);
+
+  // If we don't have the system salt yet, loads it from the CryptohomeLibrary.
+  void LoadSystemSalt();
 
   // If we haven't already, looks in a file called |filename| next to
   // the browser executable for a "localaccount" name, and retrieves it
@@ -95,10 +120,30 @@ class GoogleAuthenticator : public Authenticator,
   void LoadLocalaccount(const std::string& filename);
 
   // Stores a hash of |password|, salted with the ascii of |system_salt_|.
-  void StoreHashedPassword(const std::string& password);
+  std::string HashPassword(const std::string& password);
 
   // Returns the ascii encoding of the system salt.
   std::string SaltAsAscii();
+
+  // Save the current login attempt for use on the next TryClientLogin
+  // attempt.
+  void PrepareClientLoginAttempt(const std::string& password,
+                                 const std::string& login_token,
+                                 const std::string& login_captcha);
+  // Clear any cached credentials after we've given up trying to authenticate.
+  void ClearClientLoginAttempt();
+
+  // Start a client login attempt.  |hosted_policy_| governs whether we are
+  // willing to authenticate accounts that are HOSTED or not.
+  // You must set up |gaia_authenticator_| first.
+  // Reuses existing credentials from the last attempt. You must
+  // PrepareClientLoginAttempt before calling this.
+   void TryClientLogin();
+
+  // A callback for use on the UI thread. Cancel the current login
+  // attempt, and produce a login failure.
+  void CancelClientLogin();
+
 
   // Converts the binary data |binary| into an ascii hex string and stores
   // it in |hex_string|.  Not guaranteed to be NULL-terminated.
@@ -108,38 +153,78 @@ class GoogleAuthenticator : public Authenticator,
                           char* hex_string,
                           const unsigned int len);
 
-  // Constants to use in the ClientLogin request POST body.
-  static const char kCookiePersistence[];
-  static const char kAccountType[];
-  static const char kSource[];
+  void set_hosted_policy(GaiaAuthenticator2::HostedAccountsSetting policy) {
+    hosted_policy_ = policy;
+  }
 
-  // The format of said POST body.
-  static const char kFormat[];
+  // The format of said POST body when CAPTCHA token & answer are specified.
+  static const char kFormatCaptcha[];
 
-  // Chromium OS system salt stored here.
-  static const char kSystemSalt[];
-  // String that appears at the start of OpenSSL cipher text with embedded salt.
-  static const char kOpenSSLMagic[];
+  // Magic string indicating that, while a second factor is still
+  // needed to complete authentication, the user provided the right password.
+  static const char kSecondFactor[];
 
   // Name of a file, next to chrome, that contains a local account username.
   static const char kLocalaccountFile[];
 
-  URLFetcher* fetcher_;
-  URLRequestContextGetter* getter_;
+  // Handles all net communications with Gaia.
+  scoped_ptr<GaiaAuthenticator2> gaia_authenticator_;
+
+  // Allows us to look up users of the device.
+  UserManager* user_manager_;
+
+  // Milliseconds until we timeout our attempt to hit ClientLogin.
+  static const int kClientLoginTimeoutMs;
+
+  // Milliseconds until we re-check whether we've gotten the localaccount name.
+  static const int kLocalaccountRetryIntervalMs;
+
+  // Whether or not we're accepting HOSTED accounts on this auth attempt.
+  GaiaAuthenticator2::HostedAccountsSetting hosted_policy_;
+
   std::string username_;
+  // These fields are saved so we can retry client login.
+  std::string password_;
+  std::string login_token_;
+  std::string login_captcha_;
+
   std::string ascii_hash_;
-  std::vector<unsigned char> system_salt_;
+  chromeos::CryptohomeBlob system_salt_;
+  bool unlock_;  // True if authenticating to unlock the computer.
+  bool try_again_;  // True if we're willing to retry the login attempt.
+
   std::string localaccount_;
-  bool checked_for_localaccount_;  // needed becasuse empty localaccount_ is ok.
+  bool checked_for_localaccount_;  // needed because empty localaccount_ is ok.
+  Lock localaccount_lock_;  // a lock around checked_for_localaccount_.
 
   friend class GoogleAuthenticatorTest;
-  FRIEND_TEST(GoogleAuthenticatorTest, SaltToAsciiTest);
-  FRIEND_TEST(GoogleAuthenticatorTest, ReadSaltTest);
-  FRIEND_TEST(GoogleAuthenticatorTest, ReadLocalaccountTest);
-  FRIEND_TEST(GoogleAuthenticatorTest, ReadLocalaccountTrailingWSTest);
-  FRIEND_TEST(GoogleAuthenticatorTest, ReadNoLocalaccountTest);
-  FRIEND_TEST(GoogleAuthenticatorTest, LoginNetFailureTest);
-  FRIEND_TEST(GoogleAuthenticatorTest, LoginDeniedTest);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, SaltToAscii);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, CheckTwoFactorResponse);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, CheckNormalErrorCode);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, EmailAddressNoOp);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, EmailAddressIgnoreCaps);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest,
+                           EmailAddressIgnoreDomainCaps);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest,
+                           EmailAddressIgnoreOneUsernameDot);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest,
+                           EmailAddressIgnoreManyUsernameDots);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest,
+                           EmailAddressIgnoreConsecutiveUsernameDots);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest,
+                           EmailAddressDifferentOnesRejected);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest,
+                           EmailAddressIgnorePlusSuffix);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest,
+                           EmailAddressIgnoreMultiPlusSuffix);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, ReadSaltOnlyOnce);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, LocalaccountLogin);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, ReadLocalaccount);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, ReadLocalaccountTrailingWS);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, ReadNoLocalaccount);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, LoginNetFailure);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, LoginDenied);
+  FRIEND_TEST_ALL_PREFIXES(GoogleAuthenticatorTest, TwoFactorLogin);
 
   DISALLOW_COPY_AND_ASSIGN(GoogleAuthenticator);
 };

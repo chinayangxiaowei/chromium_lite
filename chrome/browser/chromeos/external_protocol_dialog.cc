@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_contents_view.h"
 #include "chrome/browser/tab_contents/tab_util.h"
+#include "chrome/browser/views/window.h"
 #include "googleurl/src/gurl.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -81,8 +82,8 @@ views::View* ExternalProtocolDialog::GetContentsView() {
 
 ExternalProtocolDialog::ExternalProtocolDialog(TabContents* tab_contents,
                                                const GURL& url)
-    : creation_time_(base::Time::Now()),
-      scheme_(UTF8ToWide(url.scheme())) {
+    : creation_time_(base::TimeTicks::Now()),
+      scheme_(url.scheme()) {
   const int kMaxUrlWithoutSchemeSize = 256;
   std::wstring elided_url_without_scheme;
   ElideString(ASCIIToWide(url.possibly_invalid_spec()),
@@ -107,5 +108,5 @@ ExternalProtocolDialog::ExternalProtocolDialog(TabContents* tab_contents,
     // Dialog is top level if we don't have a tab_contents associated with us.
     parent_window = NULL;
   }
-  views::Window::CreateChromeWindow(parent_window, gfx::Rect(), this)->Show();
+  browser::CreateViewsWindow(parent_window, gfx::Rect(), this)->Show();
 }

@@ -540,6 +540,9 @@ o3djs.primitives.VertexInfoBase.prototype.createShapeByType = function(
             requiredStream.addElement(1, 1, 1, 1);
           }
           break;
+        case o3djs.base.o3d.Stream.INFLUENCE_WEIGHTS:
+        case o3djs.base.o3d.Stream.INFLUENCE_INDICES:
+          break;
         default:
           throw 'Missing stream for semantic ' + semantic +
               ' with semantic index ' + semanticIndex;
@@ -704,7 +707,8 @@ o3djs.primitives.VertexInfo.prototype.addTangentStreams =
     if (!frame) {
       frame = [[0, 0, 0], [0, 0, 0]];
     }
-    frame = math.addMatrix(frame, [tangent, binormal]);
+    math.addVector3To(frame[0], tangent, frame[0]);
+    math.addVector3To(frame[1], binormal, frame[1]);
     tangentFrames[key] = frame;
   }
 
@@ -1051,10 +1055,10 @@ o3djs.primitives.createBox = function(pack,
                                       depth,
                                       opt_matrix) {
   var vertexInfo = o3djs.primitives.createCubeVertices(1);
-  vertexInfo.reorient([[width, 0, 0, 0],
-                       [0, height, 0, 0],
-                       [0, 0, depth, 0],
-                       [0, 0, 0, 1]]);
+  vertexInfo.reorient(o3djs.math.makeMatrix4(width, 0, 0, 0,
+                                            0, height, 0, 0,
+                                            0, 0, depth, 0,
+                                            0, 0, 0, 1));
 
   if (opt_matrix) {
     vertexInfo.reorient(opt_matrix);

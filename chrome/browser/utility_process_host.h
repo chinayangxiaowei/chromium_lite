@@ -1,28 +1,35 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UTILITY_PROCESS_HOST_H_
 #define CHROME_BROWSER_UTILITY_PROCESS_HOST_H_
+#pragma once
 
 #include <string>
+#include <vector>
 
 #include "base/basictypes.h"
 #include "base/ref_counted.h"
 #include "base/task.h"
-#include "chrome/browser/child_process_host.h"
+#include "chrome/browser/browser_child_process_host.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/common/extensions/update_manifest.h"
 #include "ipc/ipc_channel.h"
 
-class CommandLine;
 class DictionaryValue;
-class ListValue;
+class IndexedDBKey;
+class SerializedScriptValue;
+class SkBitmap;
 
 // This class acts as the browser-side host to a utility child process.  A
 // utility process is a short-lived sandboxed process that is created to run
 // a specific task.  This class lives solely on the IO thread.
-class UtilityProcessHost : public ChildProcessHost {
+// If you need a single method call in the sandbox, use StartFooBar(p).
+// If you need multiple batches of work to be done in the sandboxed process,
+// use StartBatchMode(), then multiple calls to StartFooBar(p),
+// then finish with EndBatchMode().
+class UtilityProcessHost : public BrowserChildProcessHost {
  public:
   // An interface to be implemented by consumers of the utility process to
   // get results back.  All functions are called on the thread passed along
@@ -63,6 +70,26 @@ class UtilityProcessHost : public ChildProcessHost {
     virtual void OnParseUpdateManifestFailed(
         const std::string& error_message) {}
 
+    // Called when image data was successfully decoded. |decoded_image|
+    // stores the result.
+    virtual void OnDecodeImageSucceeded(
+        const SkBitmap& decoded_image) {}
+
+    // Called when image data decoding failed.
+    virtual void OnDecodeImageFailed() {}
+
+    // Called when we have successfully obtained the IndexedDBKey after
+    // a call to StartIDBKeysFromValuesAndKeyPath.
+    // |id| is the corresponding identifier.
+    // |keys| the corresponding IndexedDBKey.
+    virtual void OnIDBKeysFromValuesAndKeyPathSucceeded(
+        int id, const std::vector<IndexedDBKey>& keys) {}
+
+    // Called when IDBKeyPath has failed.
+    // |id| is the corresponding identifier passed on
+    // StartIDBKeysFromValuesAndKeyPath.
+    virtual void OnIDBKeysFromValuesAndKeyPathFailed(int id) {}
+
    protected:
     friend class base::RefCountedThreadSafe<Client>;
 
@@ -77,7 +104,7 @@ class UtilityProcessHost : public ChildProcessHost {
   };
 
   UtilityProcessHost(ResourceDispatcherHost* rdh, Client* client,
-                     ChromeThread::ID client_thread_id);
+                     BrowserThread::ID client_thread_id);
   virtual ~UtilityProcessHost();
 
   // Start a process to unpack the extension at the given path.  The process
@@ -97,18 +124,35 @@ class UtilityProcessHost : public ChildProcessHost {
   // Start parsing an extensions auto-update manifest xml file.
   bool StartUpdateManifestParse(const std::string& xml);
 
+  // Start image decoding.
+  bool StartImageDecoding(const std::vector<unsigned char>& encoded_data);
+
+  // Starts extracting |key_path| from |serialized_values|, and replies with the
+  // corresponding IndexedDBKeys via OnIDBKeysFromValuesAndKeyPathSucceeded.
+  bool StartIDBKeysFromValuesAndKeyPath(
+      int id, const std::vector<SerializedScriptValue>& serialized_values,
+      const string16& key_path);
+
+  // Starts utility process in batch mode. Caller must call EndBatchMode()
+  // to finish the utility process.
+  bool StartBatchMode();
+
+  // Ends the utility process. Must be called after StartBatchMode().
+  void EndBatchMode();
+
  protected:
   // Allow these methods to be overridden for tests.
   virtual FilePath GetUtilityProcessCmd();
 
  private:
-  // Starts a process.  Returns true iff it succeeded.
+  // Starts a process if necessary.  Returns true if it succeeded or a process
+  // has already been started via StartBatchMode().
   bool StartProcess(const FilePath& exposed_dir);
 
   // IPC messages:
   void OnMessageReceived(const IPC::Message& message);
 
-  // ChildProcessHost:
+  // BrowserChildProcessHost:
   virtual void OnProcessCrashed();
   virtual bool CanShutdown() { return true; }
   virtual URLRequestContext* GetRequestContext(
@@ -119,7 +163,10 @@ class UtilityProcessHost : public ChildProcessHost {
 
   // A pointer to our client interface, who will be informed of progress.
   scoped_refptr<Client> client_;
-  ChromeThread::ID client_thread_id_;
+  BrowserThread::ID client_thread_id_;
+  // True when running in batch mode, i.e., StartBatchMode() has been called
+  // and the utility process will run until EndBatchMode().
+  bool is_batch_mode_;
 
   DISALLOW_COPY_AND_ASSIGN(UtilityProcessHost);
 };

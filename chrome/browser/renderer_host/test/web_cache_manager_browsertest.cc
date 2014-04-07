@@ -5,6 +5,7 @@
 #include <string>
 
 #include "base/message_loop.h"
+#include "base/process_util.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/web_cache_manager.h"
@@ -18,8 +19,8 @@ class WebCacheManagerBrowserTest : public InProcessBrowserTest {
 
 // Regression test for http://crbug.com/12362.  If a renderer crashes and the
 // user navigates to another tab and back, the browser doesn't crash.
-// TODO(jam): http://crbug.com/15288 disabled because it fails on the build bot.
-IN_PROC_BROWSER_TEST_F(WebCacheManagerBrowserTest, DISABLED_CrashOnceOnly) {
+// Flaky, http://crbug.com/15288.
+IN_PROC_BROWSER_TEST_F(WebCacheManagerBrowserTest, FLAKY_CrashOnceOnly) {
   const FilePath kTestDir(FILE_PATH_LITERAL("google"));
   const FilePath kTestFile(FILE_PATH_LITERAL("google.html"));
   GURL url(ui_test_utils::GetTestUrl(kTestDir, kTestFile));

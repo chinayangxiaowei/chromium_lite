@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_URL_REQUEST_URL_REQUEST_FILE_JOB_H_
 #define NET_URL_REQUEST_URL_REQUEST_FILE_JOB_H_
+#pragma once
 
 #include <string>
 
@@ -30,9 +31,13 @@ class URLRequestFileJob : public URLRequestJob {
   virtual bool GetContentEncodings(
       std::vector<Filter::FilterType>* encoding_type);
   virtual bool GetMimeType(std::string* mime_type) const;
-  virtual void SetExtraRequestHeaders(const std::string& headers);
+  virtual void SetExtraRequestHeaders(const net::HttpRequestHeaders& headers);
 
   static URLRequest::ProtocolFactory Factory;
+
+#if defined(OS_CHROMEOS)
+  static bool AccessDisabled(const FilePath& file_path);
+#endif
 
  protected:
   virtual ~URLRequestFileJob();
@@ -41,7 +46,7 @@ class URLRequestFileJob : public URLRequestJob {
   FilePath file_path_;
 
  private:
-  void DidResolve(bool exists, const file_util::FileInfo& file_info);
+  void DidResolve(bool exists, const base::PlatformFileInfo& file_info);
   void DidRead(int result);
 
   net::CompletionCallbackImpl<URLRequestFileJob> io_callback_;

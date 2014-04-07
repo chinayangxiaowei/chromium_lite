@@ -1,7 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/command_line.h"
+#include "base/file_path.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_init.h"
 #include "chrome/browser/browser_list.h"
@@ -43,12 +46,13 @@ IN_PROC_BROWSER_TEST_F(BrowserInitTest, OpenURLsPopup) {
   OpenURLsPopupObserver observer;
   BrowserList::AddObserver(&observer);
 
-  Browser* popup = Browser::CreateForPopup(browser()->profile());
+  Browser* popup = Browser::CreateForType(Browser::TYPE_POPUP,
+                                          browser()->profile());
   ASSERT_EQ(popup->type(), Browser::TYPE_POPUP);
   ASSERT_EQ(popup, observer.added_browser_);
 
   CommandLine dummy(CommandLine::ARGUMENTS_ONLY);
-  BrowserInit::LaunchWithProfile launch(std::wstring(), dummy);
+  BrowserInit::LaunchWithProfile launch(FilePath(), dummy);
   // This should create a new window, but re-use the profile from |popup|. If
   // it used a NULL or invalid profile, it would crash.
   launch.OpenURLsInBrowser(popup, false, urls);
@@ -62,19 +66,19 @@ IN_PROC_BROWSER_TEST_F(BrowserInitTest, OpenURLsPopup) {
 // to start on most BuildBot runs and I don't want to add longer delays to
 // the test. I'll circle back and make this work properly when i get a chance.
 IN_PROC_BROWSER_TEST_F(BrowserInitTest, FLAKY_BlockBadURLs) {
-  const std::wstring testurlstr(L"http://localhost/");
-  const GURL testurl(WideToUTF16Hack(testurlstr));
+  const char* testurlstr = "http://localhost/";
+  const GURL testurl(testurlstr);
   CommandLine cmdline(CommandLine::ARGUMENTS_ONLY);
-  cmdline.AppendLooseValue(testurlstr);
-  cmdline.AppendLooseValue(std::wstring(L"javascript:alert('boo')"));
-  cmdline.AppendLooseValue(testurlstr);
-  cmdline.AppendLooseValue(std::wstring(L"view-source:http://localhost/"));
+  cmdline.AppendArg(testurlstr);
+  cmdline.AppendArg("javascript:alert('boo')");
+  cmdline.AppendArg(testurlstr);
+  cmdline.AppendArg("view-source:http://localhost/");
 
   // This will pick up the current browser instance.
-  BrowserInit::LaunchWithProfile launch(std::wstring(), cmdline);
+  BrowserInit::LaunchWithProfile launch(FilePath(), cmdline);
   launch.Launch(browser()->profile(), false);
 
-  // Give the browser a chance to start first. FIXME(jschuh)
+  // TODO(jschuh): Give the browser a chance to start first.
   PlatformThread::Sleep(50);
 
   // Skip about:blank in the first tab

@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
 #ifndef CHROME_BROWSER_DOWNLOAD_SAVE_ITEM_H__
 #define CHROME_BROWSER_DOWNLOAD_SAVE_ITEM_H__
+#pragma once
 
 #include "base/basictypes.h"
 #include "base/file_path.h"
@@ -105,7 +106,7 @@ class SaveItem {
   // Our owning object.
   SavePackage* package_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(SaveItem);
+  DISALLOW_COPY_AND_ASSIGN(SaveItem);
 };
 
 #endif  // CHROME_BROWSER_DOWNLOAD_SAVE_ITEM_H__

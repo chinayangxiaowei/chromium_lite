@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "chrome_frame/crash_reporting/nt_loader.h"
@@ -6,10 +6,14 @@
 #include <tlhelp32.h>
 #include <winnt.h>
 #include <base/at_exit.h>
+#include <base/environment.h>
+#include <base/message_loop.h>
 #include <base/scoped_handle.h>
+#include <base/scoped_ptr.h>
 #include <base/string_util.h>
 #include <base/sys_info.h>
 #include <base/thread.h>
+#include <base/utf_string_conversions.h>
 #include "chrome_frame/crash_reporting/crash_dll.h"
 #include "gtest/gtest.h"
 
@@ -27,7 +31,8 @@ void AssertIsCriticalSection(CRITICAL_SECTION* critsec) {
 
 class ScopedEnterCriticalSection {
  public:
-  ScopedEnterCriticalSection(CRITICAL_SECTION* critsec) : critsec_(critsec) {
+  explicit ScopedEnterCriticalSection(CRITICAL_SECTION* critsec)
+      : critsec_(critsec) {
     ::EnterCriticalSection(critsec_);
   }
 
@@ -165,7 +170,7 @@ TEST(NtLoader, GetLoaderEntry) {
         EXPECT_TRUE(is_shimeng || (flags & LDRP_PROCESS_ATTACH_CALLED));
       }
     }
-  } while(::Module32Next(snap.Get(), &module));
+  } while (::Module32Next(snap.Get(), &module));
 }
 
 namespace {
@@ -189,8 +194,9 @@ class NtLoaderTest: public testing::Test {
     EXPECT_TRUE(veh_id_ != NULL);
 
     // Clear the crash DLL environment.
-    ::SetEnvironmentVariable(kCrashOnLoadMode, NULL);
-    ::SetEnvironmentVariable(kCrashOnUnloadMode, NULL);
+    scoped_ptr<base::Environment> env(base::Environment::Create());
+    env->UnSetVar(WideToASCII(kCrashOnLoadMode).c_str());
+    env->UnSetVar(WideToASCII(kCrashOnUnloadMode).c_str());
   }
 
   void TearDown() {
@@ -198,8 +204,9 @@ class NtLoaderTest: public testing::Test {
       EXPECT_NE(0, ::RemoveVectoredExceptionHandler(veh_id_));
 
     // Clear the crash DLL environment.
-    ::SetEnvironmentVariable(kCrashOnLoadMode, NULL);
-    ::SetEnvironmentVariable(kCrashOnUnloadMode, NULL);
+    scoped_ptr<base::Environment> env(base::Environment::Create());
+    env->UnSetVar(WideToASCII(kCrashOnLoadMode).c_str());
+    env->UnSetVar(WideToASCII(kCrashOnUnloadMode).c_str());
   }
 
   void set_exception_function(ExceptionFunction func) {
@@ -257,7 +264,8 @@ TEST_F(NtLoaderTest, CrashOnLoadLibrary) {
   set_exception_function(OnCrashDuringLoadLibrary);
 
   // Setup to crash on load.
-  ::SetEnvironmentVariable(kCrashOnLoadMode, L"1");
+  scoped_ptr<base::Environment> env(base::Environment::Create());
+  env->SetVar(WideToASCII(kCrashOnLoadMode).c_str(), "1");
 
   // And load it.
   HMODULE module = ::LoadLibrary(kCrashDllName);
@@ -292,7 +300,8 @@ static void OnCrashDuringUnloadLibrary(EXCEPTION_POINTERS* ex_ptrs) {
 
 TEST_F(NtLoaderTest, CrashOnUnloadLibrary) {
   // Setup to crash on unload.
-  ::SetEnvironmentVariable(kCrashOnUnloadMode, L"1");
+  scoped_ptr<base::Environment> env(base::Environment::Create());
+  env->SetVar(WideToASCII(kCrashOnUnloadMode).c_str(), "1");
 
   // And load it.
   HMODULE module = ::LoadLibrary(kCrashDllName);

@@ -18,37 +18,29 @@ list {
 }
 
 list > * {
-  text-decoration: none;
-  padding: 0 3px;
   color: hsl(0, 0%, 70%);
+  padding: 0 3px;
+  -webkit-padding-end: 20px;
+  text-decoration: none;
+  white-space: nowrap;
 }
 
 list > * > * {
+  -webkit-box-sizing: border-box;
+  -webkit-padding-start: 20px;
+  background: 0 50% no-repeat;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  -webkit-box-sizing: border-box;
-  background: 0 50% no-repeat;
-  -webkit-padding-start: 20px;
+  white-space: pre; /* Don't collapse whitespace */
 }
 
 list > * > .label {
   -webkit-transition: all .15s;
-  cursor: pointer;
-}
-
-list .label {
   color: black;
-}
-
-list > :hover > .label {
-  text-decoration: underline;
-  color: blue;
+  display: inline-block; /* We need to use inline-block here due to RTL. */
 }
 
 list > * > .url {
-  padding: 3px;
-  -webkit-padding-start: 15px;
   display: none;
 }
 
@@ -62,7 +54,7 @@ html[dir=rtl] list .label {
 }
 
 list > .folder > .label {
-  background-image: url("../images/folder_closed.png");
+  background-image: url("../../../../../app/resources/folder_closed.png");
 }
 
 /* We need to ensure that even empty labels take up space */
@@ -76,6 +68,40 @@ list > .folder > .url:empty:after {
   content: "";
 }
 
+list > * > button {
+  -webkit-transition: opacity .15s;
+  background: #fff -webkit-canvas(drop-down-arrow) no-repeat center center;
+  border: 1px solid hsl(214, 91%, 85%);
+  border-radius: 3px;
+  bottom: 1px;
+  display: none;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  right: 3px;
+  top: 1px;
+  width: 15px;
+}
+
+list > [selected]:hover > button,
+list > * > button[menu-shown] {
+  border-color: hsl(214, 91%, 65%);
+}
+
+list > :hover > button {
+  display: block;
+}
+
+list > * > button:hover,
+list > * > button[menu-shown] {
+  display: block;
+}
+
+html[dir=rtl] list > * > button {
+  right: auto;
+  left: 3px;
+}
+
 /*
 /* Edit mode
 */
@@ -86,16 +112,19 @@ list .url input {
   font-family: inherit;
   font-size: inherit;
   font-weight: inherit;
-  margin: -2px 4px -2px -4px;
-  padding: 1px 3px 1px 1px;
-  outline: none;
+  margin: 0;
+  -webkit-margin-start: -4px;
+  -webkit-margin-end: 4px;
+  max-width: 40%;
+  padding: 0;
+  -webkit-padding-start: 1px;
+  -webkit-padding-end: 3px;
   text-decoration: none;
 }
 
-html[dir=rtl] list .label input,
-html[dir=rtl] list .url input {
-  margin: -2px -4px -2px 4px;
-  padding: 1px 1px 1px 3px;
+html:not([os=mac]) list .label input,
+html:not([os=mac]) list .url input {
+  outline: none;
 }
 
 list > [editing] {
@@ -110,7 +139,7 @@ list [editing] > * {
 }
 
 list [editing] .url {
-  -webkit-padding-start: 5px;
+  -webkit-padding-start: 10px;
 }
 
 list .url form {
@@ -120,25 +149,25 @@ list .url form {
 /* end editing */
 
 html[dir=rtl] list > .folder > .label {
-  background-image: url("../images/folder_closed_rtl.png");
+  background-image: url("../../../../../app/resources/folder_closed_rtl.png");
 }
 
 html[os=mac] list > .folder > .label {
-  background-image: url("../images/bookmark_bar_folder_mac.png");
+  background-image: url("../../../../app/theme/bookmark_bar_folder_mac.png");
 }
 
 html[os=mac] .tree-label {
-  background-image: url("../images/bookmark_bar_folder_mac.png");
+  background-image: url("../../../../app/theme/bookmark_bar_folder_mac.png");
 }
 
 html[os=mac] .tree-row[selected] > .tree-label {
-  background-image: url("../images/bookmark_bar_folder_mac.png");
+  background-image: url("../../../../app/theme/bookmark_bar_folder_mac.png");
 }
 
 .main {
   position: absolute;
   display: -webkit-box;
-  top: 114px;
+  top: 79px;
   left: 0;
   right: 0;
   bottom: 0;
@@ -155,11 +184,8 @@ html[os=mac] .tree-row[selected] > .tree-label {
   max-width: 50%;
   overflow: auto;
   -webkit-box-sizing: border-box;
-  padding: 5px 5px 5px 10px;
-}
-
-html[dir=rtl] #tree-container {
-  padding: 5px 10px 5px 5px;
+  padding: 5px;
+  -webkit-padding-start: 10px;
 }
 
 #tree {
@@ -187,27 +213,17 @@ html[os=mac] .splitter {
 .logo {
   -webkit-appearance: none;
   border: 0;
-  background: 50% 50% no-repeat url("../images/bookmarks_section.png");
-  width: 67px;
-  height: 67px;
+  background: url("../images/bookmarks_section_32.png") no-repeat 50% 50%;
+  width: 32px;
+  height: 32px;
   cursor: pointer;
   margin: 10px;
   float: left;
 }
 
-html[dir=rtl] #tree-container {
-  left: auto;
-  right: 0;
-}
-
-html[dir=rtl] #list {
-  left: 0;
-  right: 200px;
-}
-
 .header form {
   float: left;
-  margin: 32px 2px;
+  margin: 14px 2px;
   margin-bottom: 0;
 }
 
@@ -265,12 +281,10 @@ html[dir=rtl] .header form {
   font: inherit;
   padding: 0;
   background: -webkit-canvas(drop-down-arrow) 100% 50% no-repeat;
-  padding-right: 11px;
+  -webkit-padding-end: 11px;
   -webkit-margin-start: 10px;
 }
 
 html[dir=rtl] .summary button {
   background-position: 0% 50%;
-  padding-right: 0;
-  padding-left: 11px;
 }

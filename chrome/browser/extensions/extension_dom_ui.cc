@@ -6,44 +6,32 @@
 
 #include <set>
 
-#include "base/file_path.h"
-#include "base/file_util.h"
 #include "net/base/file_stream.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/extensions/extension_bookmark_manager_api.h"
 #include "chrome/browser/extensions/extensions_service.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/extensions/image_loading_tracker.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_widget_host_view.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/bindings_policy.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/page_transition_types.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/extension_icon_set.h"
+#include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/url_constants.h"
+#include "gfx/codec/png_codec.h"
+#include "gfx/favicon_size.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 namespace {
-// Returns a piece of memory with the contents of the file |path|.
-RefCountedMemory* ReadFileData(const FilePath& path) {
-  // TODO(arv): We currently read this on the UI thread since extension objects
-  // can only safely be accessed on the UI thread. Read the file on the FILE
-  // thread and cache the result on the UI thread instead.
-  if (path.empty())
-    return NULL;
-
-  RefCountedBytes* result = new RefCountedBytes;
-  std::string content;
-  if (!file_util::ReadFileToString(path, &content))
-    return NULL;
-
-  result->data.resize(content.size());
-  std::copy(content.begin(), content.end(),
-            result->data.begin());
-
-  return result;
-}
 
 // De-dupes the items in |list|. Assumes the values are strings.
 void CleanUpDuplicates(ListValue* list) {
@@ -64,40 +52,118 @@ void CleanUpDuplicates(ListValue* list) {
   }
 }
 
+// Helper class that is used to track the loading of the favicon of an
+// extension.
+class ExtensionDOMUIImageLoadingTracker : public ImageLoadingTracker::Observer {
+ public:
+  ExtensionDOMUIImageLoadingTracker(Profile* profile,
+                                    FaviconService::GetFaviconRequest* request,
+                                    const GURL& page_url)
+      : ALLOW_THIS_IN_INITIALIZER_LIST(tracker_(this)),
+        request_(request),
+        extension_(NULL) {
+    // Even when the extensions service is enabled by default, it's still
+    // disabled in incognito mode.
+    ExtensionsService* service = profile->GetExtensionsService();
+    if (service)
+      extension_ = service->GetExtensionByURL(page_url);
+  }
+
+  void Init() {
+    if (extension_) {
+      ExtensionResource icon_resource =
+          extension_->GetIconResource(Extension::EXTENSION_ICON_BITTY,
+                                      ExtensionIconSet::MATCH_EXACTLY);
+
+      tracker_.LoadImage(extension_, icon_resource,
+                         gfx::Size(kFavIconSize, kFavIconSize),
+                         ImageLoadingTracker::DONT_CACHE);
+    } else {
+      ForwardResult(NULL);
+    }
+  }
+
+  virtual void OnImageLoaded(SkBitmap* image, ExtensionResource resource,
+                             int index) {
+    if (image) {
+      std::vector<unsigned char> image_data;
+      if (!gfx::PNGCodec::EncodeBGRASkBitmap(*image, false, &image_data)) {
+        NOTREACHED() << "Could not encode extension favicon";
+      }
+      ForwardResult(RefCountedBytes::TakeVector(&image_data));
+    } else {
+      ForwardResult(NULL);
+    }
+  }
+
+ private:
+  ~ExtensionDOMUIImageLoadingTracker() {}
+
+  // Forwards the result on the request. If no favicon was available then
+  // |icon_data| may be backed by NULL. Once the result has been forwarded the
+  // instance is deleted.
+  void ForwardResult(scoped_refptr<RefCountedMemory> icon_data) {
+    bool know_icon = icon_data.get() != NULL && icon_data->size() > 0;
+    request_->ForwardResultAsync(
+        FaviconService::FaviconDataCallback::TupleType(request_->handle(),
+            know_icon, icon_data, false, GURL()));
+    delete this;
+  }
+
+  ImageLoadingTracker tracker_;
+  scoped_refptr<FaviconService::GetFaviconRequest> request_;
+  Extension* extension_;
+
+  DISALLOW_COPY_AND_ASSIGN(ExtensionDOMUIImageLoadingTracker);
+};
+
 }  // namespace
 
-const wchar_t ExtensionDOMUI::kExtensionURLOverrides[] =
-    L"extensions.chrome_url_overrides";
+const char ExtensionDOMUI::kExtensionURLOverrides[] =
+    "extensions.chrome_url_overrides";
 
-ExtensionDOMUI::ExtensionDOMUI(TabContents* tab_contents)
-    : DOMUI(tab_contents) {
-  should_hide_url_ = true;
+ExtensionDOMUI::ExtensionDOMUI(TabContents* tab_contents, GURL url)
+    : DOMUI(tab_contents),
+      url_(url) {
+  ExtensionsService* service = tab_contents->profile()->GetExtensionsService();
+  Extension* extension = service->GetExtensionByURL(url);
+  if (!extension)
+    extension = service->GetExtensionByWebExtent(url);
+  DCHECK(extension);
+  // Only hide the url for internal pages (e.g. chrome-extension or packaged
+  // component apps like bookmark manager.
+  should_hide_url_ = !extension->is_hosted_app();
+
   bindings_ = BindingsPolicy::EXTENSION;
-
+  // Bind externalHost to Extension DOMUI loaded in Chrome Frame.
+  const CommandLine& browser_command_line = *CommandLine::ForCurrentProcess();
+  if (browser_command_line.HasSwitch(switches::kChromeFrame))
+    bindings_ |= BindingsPolicy::EXTERNAL_HOST;
   // For chrome:// overrides, some of the defaults are a little different.
-  GURL url = tab_contents->GetURL();
-  if (url.SchemeIs(chrome::kChromeUIScheme) &&
-      url.host() == chrome::kChromeUINewTabHost) {
+  GURL effective_url = tab_contents->GetURL();
+  if (effective_url.SchemeIs(chrome::kChromeUIScheme) &&
+      effective_url.host() == chrome::kChromeUINewTabHost) {
     focus_location_bar_by_default_ = true;
   }
 }
 
 void ExtensionDOMUI::ResetExtensionFunctionDispatcher(
     RenderViewHost* render_view_host) {
-  // Use the NavigationController to get the URL rather than the TabContents
-  // since this is the real underlying URL (see HandleChromeURLOverride).
-  NavigationController& controller = tab_contents()->controller();
-  const GURL& url = controller.GetActiveEntry()->url();
+  // TODO(jcivelli): http://crbug.com/60608 we should get the URL out of the
+  //                 active entry of the navigation controller.
   extension_function_dispatcher_.reset(
-      ExtensionFunctionDispatcher::Create(render_view_host, this, url));
+      ExtensionFunctionDispatcher::Create(render_view_host, this, url_));
   DCHECK(extension_function_dispatcher_.get());
 }
 
 void ExtensionDOMUI::ResetExtensionBookmarkManagerEventRouter() {
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableTabbedBookmarkManager)) {
+  // Hack: A few things we specialize just for the bookmark manager.
+  if (extension_function_dispatcher_->extension_id() ==
+      extension_misc::kBookmarkManagerId) {
     extension_bookmark_manager_event_router_.reset(
         new ExtensionBookmarkManagerEventRouter(GetProfile(), tab_contents()));
+
+    link_transition_type_ = PageTransition::AUTO_BOOKMARK;
   }
 }
 
@@ -111,25 +177,15 @@ void ExtensionDOMUI::RenderViewReused(RenderViewHost* render_view_host) {
   ResetExtensionBookmarkManagerEventRouter();
 }
 
-void ExtensionDOMUI::ProcessDOMUIMessage(const std::string& message,
-                                         const Value* content,
-                                         const GURL& source_url,
-                                         int request_id,
-                                         bool has_callback) {
-  extension_function_dispatcher_->HandleRequest(message,
-                                                content,
-                                                source_url,
-                                                request_id,
-                                                has_callback);
+void ExtensionDOMUI::ProcessDOMUIMessage(
+    const ViewHostMsg_DomMessage_Params& params) {
+  extension_function_dispatcher_->HandleRequest(params);
 }
 
 Browser* ExtensionDOMUI::GetBrowser() const {
-  Browser* browser = NULL;
-  TabContentsDelegate* tab_contents_delegate = tab_contents()->delegate();
-  if (tab_contents_delegate)
-    browser = tab_contents_delegate->GetBrowser();
-
-  return browser;
+  // TODO(beng): This is an improper direct dependency on Browser. Route this
+  // through some sort of delegate.
+  return BrowserList::FindBrowserWithProfile(DOMUI::GetProfile());
 }
 
 Profile* ExtensionDOMUI::GetProfile() {
@@ -167,15 +223,11 @@ bool ExtensionDOMUI::HandleChromeURLOverride(GURL* url, Profile* profile) {
   if (!url->SchemeIs(chrome::kChromeUIScheme))
     return false;
 
-  // We can't handle chrome-extension URLs in incognito mode.
-  if (profile->IsOffTheRecord())
-    return false;
-
   const DictionaryValue* overrides =
       profile->GetPrefs()->GetDictionary(kExtensionURLOverrides);
   std::string page = url->host();
   ListValue* url_list;
-  if (!overrides || !overrides->GetList(UTF8ToWide(page), &url_list))
+  if (!overrides || !overrides->GetList(page, &url_list))
     return false;
 
   ExtensionsService* service = profile->GetExtensionsService();
@@ -187,9 +239,10 @@ bool ExtensionDOMUI::HandleChromeURLOverride(GURL* url, Profile* profile) {
     return false;
   }
 
-  while (url_list->GetSize()) {
-    Value* val;
-    url_list->Get(0, &val);
+  size_t i = 0;
+  while (i < url_list->GetSize()) {
+    Value* val = NULL;
+    url_list->Get(i, &val);
 
     // Verify that the override value is good.  If not, unregister it and find
     // the next one.
@@ -217,6 +270,16 @@ bool ExtensionDOMUI::HandleChromeURLOverride(GURL* url, Profile* profile) {
       continue;
     }
 
+    // We can't handle chrome-extension URLs in incognito mode unless the
+    // extension uses split mode.
+    bool incognito_override_allowed =
+        extension->incognito_split_mode() &&
+        service->IsIncognitoEnabled(extension);
+    if (profile->IsOffTheRecord() && !incognito_override_allowed) {
+      ++i;
+      continue;
+    }
+
     *url = extension_url;
     return true;
   }
@@ -236,8 +299,8 @@ void ExtensionDOMUI::RegisterChromeURLOverrides(
   // For each override provided by the extension, add it to the front of
   // the override list if it's not already in the list.
   Extension::URLOverrideMap::const_iterator iter = overrides.begin();
-  for (;iter != overrides.end(); ++iter) {
-    const std::wstring key = UTF8ToWide((*iter).first);
+  for (; iter != overrides.end(); ++iter) {
+    const std::string& key = iter->first;
     ListValue* page_overrides;
     if (!all_overrides->GetList(key, &page_overrides)) {
       page_overrides = new ListValue();
@@ -253,7 +316,7 @@ void ExtensionDOMUI::RegisterChromeURLOverrides(
           NOTREACHED();
           continue;
         }
-        if (override_val == (*iter).second.spec())
+        if (override_val == iter->second.spec())
           break;
       }
       // This value is already in the list, leave it alone.
@@ -262,7 +325,7 @@ void ExtensionDOMUI::RegisterChromeURLOverrides(
     }
     // Insert the override at the front of the list.  Last registered override
     // wins.
-    page_overrides->Insert(0, new StringValue((*iter).second.spec()));
+    page_overrides->Insert(0, new StringValue(iter->second.spec()));
   }
 }
 
@@ -298,7 +361,7 @@ void ExtensionDOMUI::UnregisterChromeURLOverride(const std::string& page,
   DictionaryValue* all_overrides =
       prefs->GetMutableDictionary(kExtensionURLOverrides);
   ListValue* page_overrides;
-  if (!all_overrides->GetList(UTF8ToWide(page), &page_overrides)) {
+  if (!all_overrides->GetList(page, &page_overrides)) {
     // If it's being unregistered, it should already be in the list.
     NOTREACHED();
     return;
@@ -316,39 +379,26 @@ void ExtensionDOMUI::UnregisterChromeURLOverrides(
   DictionaryValue* all_overrides =
       prefs->GetMutableDictionary(kExtensionURLOverrides);
   Extension::URLOverrideMap::const_iterator iter = overrides.begin();
-  for (;iter != overrides.end(); ++iter) {
-    std::wstring page = UTF8ToWide((*iter).first);
+  for (; iter != overrides.end(); ++iter) {
+    const std::string& page = iter->first;
     ListValue* page_overrides;
     if (!all_overrides->GetList(page, &page_overrides)) {
       // If it's being unregistered, it should already be in the list.
       NOTREACHED();
       continue;
     } else {
-      StringValue override((*iter).second.spec());
-      UnregisterAndReplaceOverride((*iter).first, profile,
+      StringValue override(iter->second.spec());
+      UnregisterAndReplaceOverride(iter->first, profile,
                                    page_overrides, &override);
     }
   }
 }
 
 // static
-RefCountedMemory* ExtensionDOMUI::GetFaviconResourceBytes(Profile* profile,
-                                                          GURL page_url) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI)) << "The extension "
-      "objects should only be accessed on the UI thread.";
-
-  // Even when the extensions service is enabled by default, it's still
-  // disabled in incognito mode.
-  ExtensionsService* service = profile->GetExtensionsService();
-  if (!service)
-    return NULL;
-
-  Extension* extension = service->GetExtensionByURL(page_url);
-  if (!extension)
-    return NULL;
-
-  // TODO(arv): Move this off of the UI thread and onto the File thread. If
-  //            possible to do this asynchronously, use ImageLoadingTracker.
-  return ReadFileData(extension->GetIconPath(
-      Extension::EXTENSION_ICON_BITTY).GetFilePathOnAnyThreadHack());
+void ExtensionDOMUI::GetFaviconForURL(Profile* profile,
+    FaviconService::GetFaviconRequest* request, const GURL& page_url) {
+  // tracker deletes itself when done.
+  ExtensionDOMUIImageLoadingTracker* tracker =
+      new ExtensionDOMUIImageLoadingTracker(profile, request, page_url);
+  tracker->Init();
 }

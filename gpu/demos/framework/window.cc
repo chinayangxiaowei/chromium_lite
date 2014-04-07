@@ -61,7 +61,8 @@ bool Window::CreateRenderContext(gfx::PluginWindowHandle hwnd) {
 
   GPUProcessor* gpu_processor(
       new GPUProcessor(command_buffer.get()));
-  if (!gpu_processor->Initialize(hwnd, gfx::Size(), NULL, 0)) {
+  if (!gpu_processor->Initialize(hwnd, gfx::Size(), std::vector<int32>(),
+                                 NULL, 0)) {
     return false;
   }
 
@@ -69,7 +70,7 @@ bool Window::CreateRenderContext(gfx::PluginWindowHandle hwnd) {
       NewCallback(gpu_processor, &GPUProcessor::ProcessCommands));
 
   GLES2CmdHelper* helper = new GLES2CmdHelper(command_buffer.get());
-  if (!helper->Initialize()) {
+  if (!helper->Initialize(kCommandBufferSize)) {
     // TODO(alokp): cleanup.
     return false;
   }
@@ -84,10 +85,10 @@ bool Window::CreateRenderContext(gfx::PluginWindowHandle hwnd) {
   ::gles2::SetGLContext(new GLES2Implementation(helper,
                                                 transfer_buffer.size,
                                                 transfer_buffer.ptr,
-                                                transfer_buffer_id));
+                                                transfer_buffer_id,
+                                                false));
   return command_buffer.release() != NULL;
 }
 
 }  // namespace demos
 }  // namespace gpu
-

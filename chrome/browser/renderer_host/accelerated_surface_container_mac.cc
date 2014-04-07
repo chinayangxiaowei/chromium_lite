@@ -10,19 +10,21 @@
 #include "webkit/glue/plugins/webplugin.h"
 
 AcceleratedSurfaceContainerMac::AcceleratedSurfaceContainerMac(
-    AcceleratedSurfaceContainerManagerMac* manager)
+    AcceleratedSurfaceContainerManagerMac* manager,
+    bool opaque)
     : manager_(manager),
-      x_(0),
-      y_(0),
+      opaque_(opaque),
       surface_(NULL),
       width_(0),
       height_(0),
       texture_(0),
-      texture_needs_upload_(true) {
+      texture_needs_upload_(true),
+      texture_pending_deletion_(0),
+      visible_(false),
+      was_painted_to_(false) {
 }
 
 AcceleratedSurfaceContainerMac::~AcceleratedSurfaceContainerMac() {
-  EnqueueTextureForDeletion();
   ReleaseIOSurface();
 }
 
@@ -60,17 +62,28 @@ void AcceleratedSurfaceContainerMac::SetSizeAndTransportDIB(
   }
 }
 
-void AcceleratedSurfaceContainerMac::MoveTo(
+void AcceleratedSurfaceContainerMac::SetGeometry(
     const webkit_glue::WebPluginGeometry& geom) {
-  x_ = geom.window_rect.x();
-  y_ = geom.window_rect.y();
-  // TODO(kbr): may need to pay attention to cutout rects.
+  visible_ = geom.visible;
   clipRect_ = geom.clip_rect;
 }
 
 void AcceleratedSurfaceContainerMac::Draw(CGLContextObj context) {
   IOSurfaceSupport* io_surface_support = IOSurfaceSupport::Initialize();
   GLenum target = GL_TEXTURE_RECTANGLE_ARB;
+  if (texture_pending_deletion_) {
+    // Clean up an old texture object. This is essentially a pre-emptive
+    // cleanup, as the resources will be released when the OpenGL context
+    // associated with our containing NSView is destroyed. However, if we
+    // resize a plugin often, we might generate a lot of textures, so we
+    // should try to eagerly reclaim their resources. Note also that the
+    // OpenGL context must be current when performing the deletion, and it
+    // seems risky to make the OpenGL context current at an arbitrary point
+    // in time, which is why the deletion does not occur in the container's
+    // destructor.
+    glDeleteTextures(1, &texture_pending_deletion_);
+    texture_pending_deletion_ = 0;
+  }
   if (!texture_) {
     if ((io_surface_support && !surface_) ||
         (!io_surface_support && !transport_dib_.get()))
@@ -133,25 +146,56 @@ void AcceleratedSurfaceContainerMac::Draw(CGLContextObj context) {
   }
 
   if (texture_) {
-    // TODO(kbr): convert this to use only OpenGL ES 2.0 functionality
-    glBindTexture(target, texture_);
-    glEnable(target);
-    glBegin(GL_TRIANGLE_STRIP);
+    // TODO(kbr): convert this to use only OpenGL ES 2.0 functionality.
+
     // TODO(kbr): may need to pay attention to cutout rects.
     int clipX = clipRect_.x();
     int clipY = clipRect_.y();
     int clipWidth = clipRect_.width();
     int clipHeight = clipRect_.height();
-    int x = x_ + clipX;
-    int y = y_ + clipY;
-    glTexCoord2f(clipX, height_ - clipY);
-    glVertex3f(x, y, 0);
-    glTexCoord2f(clipX + clipWidth, height_ - clipY);
-    glVertex3f(x + clipWidth, y, 0);
-    glTexCoord2f(clipX, height_ - clipY - clipHeight);
-    glVertex3f(x, y + clipHeight, 0);
-    glTexCoord2f(clipX + clipWidth, height_ - clipY - clipHeight);
-    glVertex3f(x + clipWidth, y + clipHeight, 0);
+
+    if (opaque_) {
+      // Pepper 3D's output is currently considered opaque even if the
+      // program draws pixels with alpha less than 1. In order to have
+      // this effect, we need to drop the alpha channel of the input,
+      // replacing it with alpha = 1.
+
+      // First fill the rectangle with alpha=1.
+      glColorMask(false, false, false, true);
+      glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
+      glBegin(GL_TRIANGLE_STRIP);
+      glVertex3f(0, 0, 0);
+      glVertex3f(clipWidth, 0, 0);
+      glVertex3f(0, clipHeight, 0);
+      glVertex3f(clipWidth, clipHeight, 0);
+      glEnd();
+
+      // Now draw the color channels from the incoming texture.
+      glColorMask(true, true, true, false);
+      // This call shouldn't be necessary -- we are using the GL_REPLACE
+      // texture environment mode -- but it appears to be.
+      glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    } else {
+      glColorMask(true, true, true, true);
+    }
+
+    // Draw the color channels from the incoming texture.
+    glBindTexture(target, texture_);
+    glEnable(target);
+    glBegin(GL_TRIANGLE_STRIP);
+
+      glTexCoord2f(clipX, height_ - clipY);
+      glVertex3f(0, 0, 0);
+
+      glTexCoord2f(clipX + clipWidth, height_ - clipY);
+      glVertex3f(clipWidth, 0, 0);
+
+      glTexCoord2f(clipX, height_ - clipY - clipHeight);
+      glVertex3f(0, clipHeight, 0);
+
+      glTexCoord2f(clipX + clipWidth, height_ - clipY - clipHeight);
+      glVertex3f(clipWidth, clipHeight, 0);
+
     glEnd();
     glDisable(target);
   }
@@ -159,7 +203,8 @@ void AcceleratedSurfaceContainerMac::Draw(CGLContextObj context) {
 
 void AcceleratedSurfaceContainerMac::EnqueueTextureForDeletion() {
   if (texture_) {
-    manager_->EnqueueTextureForDeletion(texture_);
+    DCHECK(texture_pending_deletion_ == 0);
+    texture_pending_deletion_ = texture_;
     texture_ = 0;
   }
 }

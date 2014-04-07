@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_FRAME_BROWSER_FRAME_CHROMEOS_H_
 #define CHROME_BROWSER_CHROMEOS_FRAME_BROWSER_FRAME_CHROMEOS_H_
+#pragma once
 
 #include "chrome/browser/views/frame/browser_frame_gtk.h"
 
@@ -21,9 +22,6 @@ class BrowserFrameChromeos : public BrowserFrameGtk {
   virtual bool IsMaximized() const;
 
  private:
-  // Returns true if the browser instance is for panel/popup window.
-  bool IsPanel() const;
-
   DISALLOW_COPY_AND_ASSIGN(BrowserFrameChromeos);
 };
 

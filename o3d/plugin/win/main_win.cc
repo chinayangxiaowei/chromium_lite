@@ -41,6 +41,7 @@
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
+#include "base/file_util.h"
 #include "base/logging.h"
 #include "base/ref_counted.h"
 #include "core/cross/display_mode.h"
@@ -488,7 +489,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
       // If rendering continuously, invalidate the window and force a paint if
       // it is visible. The paint invalidates the renderer and Tick will later
       // repaint the window.
-      if (obj->client()->render_mode() == o3d::Client::RENDERMODE_CONTINUOUS) {
+      if (obj->client()->NeedsContinuousRender()) {
         InvalidateRect(obj->GetHWnd(), NULL, FALSE);
         UpdateWindow(obj->GetHWnd());
       }
@@ -665,7 +666,12 @@ NPError InitializePlugin() {
 
   // Turn on the logging.
   CommandLine::Init(0, NULL);
-  InitLogging(L"debug.log",
+
+  FilePath log;
+  file_util::GetTempDir(&log);
+  log.Append(L"debug.log");
+
+  InitLogging(log.value().c_str(),
               logging::LOG_TO_BOTH_FILE_AND_SYSTEM_DEBUG_LOG,
               logging::DONT_LOCK_LOG_FILE,
               logging::APPEND_TO_OLD_LOG_FILE);

@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,8 +35,8 @@ void CheckPathIsValid(const std::string& path) {
 // |container| an ancestor of |path|?
 bool IsEnclosingPath(const std::string& container, const std::string& path) {
   DCHECK(container.empty() || *(container.end() - 1) == '/');
-  return (container.empty() && path.empty()) ||
-         (!container.empty() && StartsWithASCII(path, container, true));
+  return ((container.empty() && path.empty()) ||
+          (!container.empty() && StartsWithASCII(path, container, true)));
 }
 
 // Debug helper to check that |origin| arguments are properly formed.
@@ -48,28 +48,36 @@ void CheckOriginIsValid(const GURL& origin) {
 
 // Functor used by remove_if.
 struct IsEnclosedBy {
-  IsEnclosedBy(const std::string& path) : path(path) { }
+  explicit IsEnclosedBy(const std::string& path) : path(path) { }
   bool operator() (const std::string& x) {
     return IsEnclosingPath(path, x);
   }
   const std::string& path;
 };
 
-} // namespace
+}  // namespace
 
 namespace net {
 
+HttpAuthCache::HttpAuthCache() {
+}
+
+HttpAuthCache::~HttpAuthCache() {
+}
+
 // Performance: O(n), where n is the number of realm entries.
-HttpAuthCache::Entry* HttpAuthCache::LookupByRealm(const GURL& origin,
-                                                   const std::string& realm) {
+HttpAuthCache::Entry* HttpAuthCache::Lookup(const GURL& origin,
+                                            const std::string& realm,
+                                            const std::string& scheme) {
   CheckOriginIsValid(origin);
 
   // Linear scan through the realm entries.
   for (EntryList::iterator it = entries_.begin(); it != entries_.end(); ++it) {
-    if (it->origin() == origin && it->realm() == realm)
+    if (it->origin() == origin && it->realm() == realm &&
+        it->scheme() == scheme)
       return &(*it);
   }
-  return NULL; // No realm entry found.
+  return NULL;  // No realm entry found.
 }
 
 // Performance: O(n*m), where n is the number of realm entries, m is the number
@@ -91,20 +99,21 @@ HttpAuthCache::Entry* HttpAuthCache::LookupByPath(const GURL& origin,
     if (it->origin() == origin && it->HasEnclosingPath(parent_dir))
       return &(*it);
   }
-  return NULL; // No entry found.
+  return NULL;  // No entry found.
 }
 
 HttpAuthCache::Entry* HttpAuthCache::Add(const GURL& origin,
-                                         HttpAuthHandler* handler,
-                                         const std::wstring& username,
-                                         const std::wstring& password,
+                                         const std::string& realm,
+                                         const std::string& scheme,
+                                         const std::string& auth_challenge,
+                                         const string16& username,
+                                         const string16& password,
                                          const std::string& path) {
   CheckOriginIsValid(origin);
   CheckPathIsValid(path);
 
   // Check for existing entry (we will re-use it if present).
-  HttpAuthCache::Entry* entry = LookupByRealm(origin, handler->realm());
-
+  HttpAuthCache::Entry* entry = Lookup(origin, realm, scheme);
   if (!entry) {
     // Failsafe to prevent unbounded memory growth of the cache.
     if (entries_.size() >= kMaxNumRealmEntries) {
@@ -115,14 +124,27 @@ HttpAuthCache::Entry* HttpAuthCache::Add(const GURL& origin,
     entries_.push_front(Entry());
     entry = &entries_.front();
     entry->origin_ = origin;
+    entry->realm_ = realm;
+    entry->scheme_ = scheme;
   }
+  DCHECK_EQ(origin, entry->origin_);
+  DCHECK_EQ(realm, entry->realm_);
+  DCHECK_EQ(scheme, entry->scheme_);
 
+  entry->auth_challenge_ = auth_challenge;
   entry->username_ = username;
   entry->password_ = password;
-  entry->handler_ = handler;
+  entry->nonce_count_ = 1;
   entry->AddPath(path);
 
   return entry;
+}
+
+HttpAuthCache::Entry::~Entry() {
+}
+
+HttpAuthCache::Entry::Entry()
+    : nonce_count_(0) {
 }
 
 void HttpAuthCache::Entry::AddPath(const std::string& path) {
@@ -153,12 +175,20 @@ bool HttpAuthCache::Entry::HasEnclosingPath(const std::string& dir) {
   return false;
 }
 
+void HttpAuthCache::Entry::UpdateStaleChallenge(
+    const std::string& auth_challenge) {
+  auth_challenge_ = auth_challenge;
+  nonce_count_ = 1;
+}
+
 bool HttpAuthCache::Remove(const GURL& origin,
                            const std::string& realm,
-                           const std::wstring& username,
-                           const std::wstring& password) {
+                           const std::string& scheme,
+                           const string16& username,
+                           const string16& password) {
   for (EntryList::iterator it = entries_.begin(); it != entries_.end(); ++it) {
-    if (it->origin() == origin && it->realm() == realm) {
+    if (it->origin() == origin && it->realm() == realm &&
+        it->scheme() == scheme) {
       if (username == it->username() && password == it->password()) {
         entries_.erase(it);
         return true;
@@ -169,4 +199,15 @@ bool HttpAuthCache::Remove(const GURL& origin,
   return false;
 }
 
-} // namespace net
+bool HttpAuthCache::UpdateStaleChallenge(const GURL& origin,
+                                         const std::string& realm,
+                                         const std::string& scheme,
+                                         const std::string& auth_challenge) {
+  HttpAuthCache::Entry* entry = Lookup(origin, realm, scheme);
+  if (!entry)
+    return false;
+  entry->UpdateStaleChallenge(auth_challenge);
+  return true;
+}
+
+}  // namespace net

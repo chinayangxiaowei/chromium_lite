@@ -4,20 +4,20 @@
 
 #include "chrome/browser/gtk/repost_form_warning_gtk.h"
 
-#include "app/gtk_util.h"
 #include "app/l10n_util.h"
 #include "base/message_loop.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/repost_form_warning_controller.h"
 #include "chrome/browser/tab_contents/navigation_controller.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/chrome_thread.h"
 #include "chrome/common/notification_type.h"
 #include "grit/generated_resources.h"
 
 RepostFormWarningGtk::RepostFormWarningGtk(GtkWindow* parent,
                                            TabContents* tab_contents)
     : controller_(new RepostFormWarningController(tab_contents)) {
-  dialog_ = gtk_vbox_new(NULL, gtk_util::kContentAreaBorder);
+  dialog_ = gtk_vbox_new(FALSE, gtk_util::kContentAreaBorder);
   gtk_box_set_spacing(GTK_BOX(dialog_), gtk_util::kContentAreaSpacing);
   GtkWidget* label = gtk_label_new(
       l10n_util::GetStringUTF8(IDS_HTTP_POST_WARNING).c_str());
@@ -82,10 +82,9 @@ void RepostFormWarningGtk::OnCancel(GtkWidget* widget) {
 
 void RepostFormWarningGtk::OnHierarchyChanged(GtkWidget* root,
                                               GtkWidget* previous_toplevel) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   if (!GTK_WIDGET_TOPLEVEL(gtk_widget_get_toplevel(cancel_))) {
     return;
   }
   gtk_widget_grab_focus(cancel_);
 }
-

@@ -3,6 +3,8 @@
 # Copyright 2007 Google Inc. All Rights Reserved.
 # Author: shess@google.com (Scott Hess)
 
+cd src
+
 mkdir bld
 cd bld
 ../configure
@@ -11,7 +13,7 @@ OPTS=""
 # These options should match those in ../../tools/config.mk.
 OPTS="$OPTS -DSQLITE_OMIT_LOAD_EXTENSION=1"
 make "OPTS=$OPTS" $FILES
-cp -f $FILES ../preprocessed
+cp -f $FILES ../../preprocessed
 
 cd ..
 rm -rf bld

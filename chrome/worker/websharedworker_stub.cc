@@ -4,6 +4,8 @@
 
 #include "chrome/worker/websharedworker_stub.h"
 
+#include "chrome/common/child_thread.h"
+#include "chrome/common/file_system/file_system_dispatcher.h"
 #include "chrome/common/webmessageportchannel_impl.h"
 #include "chrome/common/worker_messages.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebSharedWorker.h"
@@ -11,14 +13,13 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
 
 WebSharedWorkerStub::WebSharedWorkerStub(
-    const string16& name, int route_id)
-    : WebWorkerStubBase(route_id),
+    const string16& name, int route_id,
+    const WorkerAppCacheInitInfo& appcache_init_info)
+    : WebWorkerStubBase(route_id, appcache_init_info),
       name_(name),
       started_(false) {
-
   // TODO(atwilson): Add support for NaCl when they support MessagePorts.
   impl_ = WebKit::WebSharedWorker::create(client());
-
 }
 
 WebSharedWorkerStub::~WebSharedWorkerStub() {
@@ -44,8 +45,10 @@ void WebSharedWorkerStub::OnStartWorkerContext(
   // try to start it simultaneously).
   if (started_)
     return;
-  impl_->startWorkerContext(url, name_, user_agent, source_code);
+
+  impl_->startWorkerContext(url, name_, user_agent, source_code, 0);
   started_ = true;
+  url_ = url;
 
   // Process any pending connections.
   for (PendingConnectInfoList::const_iterator iter = pending_connects_.begin();

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #endif
 
 #include "base/eintr_wrapper.h"
+#include "base/test/test_timeouts.h"
 #include "net/base/net_util.h"
 #include "testing/platform_test.h"
 
@@ -41,14 +42,13 @@ static const char* kTwoMessages =
 
 static const int kMaxQueueSize = 20;
 static const char* kLoopback = "127.0.0.1";
-static const int kDefaultTimeoutMs = 5000;
 #if defined(OS_POSIX)
 static const char* kSemaphoreName = "chromium.listen_socket";
 #endif
 
 
 ListenSocket* DevToolsRemoteListenSocketTester::DoListen() {
-  return DevToolsRemoteListenSocket::Listen(kLoopback, kTestPort, this, this);
+  return DevToolsRemoteListenSocket::Listen(kLoopback, kTestPort, this);
 }
 
 void DevToolsRemoteListenSocketTester::SetUp() {
@@ -73,13 +73,13 @@ void DevToolsRemoteListenSocketTester::SetUp() {
       this, &DevToolsRemoteListenSocketTester::Listen));
 
   // verify Listen succeeded
-  ASSERT_TRUE(NextAction(kDefaultTimeoutMs));
+  ASSERT_TRUE(NextAction(TestTimeouts::action_timeout_ms()));
   ASSERT_FALSE(server_ == NULL);
   ASSERT_EQ(ACTION_LISTEN, last_action_.type());
 
   // verify the connect/accept and setup test_socket_
   test_socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  ASSERT_NE(-1, test_socket_);
+  ASSERT_NE(INVALID_SOCKET, test_socket_);
   struct sockaddr_in client;
   client.sin_family = AF_INET;
   client.sin_addr.s_addr = inet_addr(kLoopback);
@@ -90,7 +90,7 @@ void DevToolsRemoteListenSocketTester::SetUp() {
   ASSERT_NE(ret, SOCKET_ERROR);
 
   net::SetNonBlocking(test_socket_);
-  ASSERT_TRUE(NextAction(kDefaultTimeoutMs));
+  ASSERT_TRUE(NextAction(TestTimeouts::action_timeout_ms()));
   ASSERT_EQ(ACTION_ACCEPT, last_action_.type());
 }
 
@@ -99,14 +99,15 @@ void DevToolsRemoteListenSocketTester::TearDown() {
 #if defined(OS_WIN)
   closesocket(test_socket_);
 #elif defined(OS_POSIX)
-  HANDLE_EINTR(close(test_socket_));
+  int ret = HANDLE_EINTR(close(test_socket_));
+  ASSERT_EQ(ret, 0);
 #endif
-  ASSERT_TRUE(NextAction(kDefaultTimeoutMs));
+  ASSERT_TRUE(NextAction(TestTimeouts::action_timeout_ms()));
   ASSERT_EQ(ACTION_CLOSE, last_action_.type());
 
   loop_->PostTask(FROM_HERE, NewRunnableMethod(
       this, &DevToolsRemoteListenSocketTester::Shutdown));
-  ASSERT_TRUE(NextAction(kDefaultTimeoutMs));
+  ASSERT_TRUE(NextAction(TestTimeouts::action_timeout_ms()));
   ASSERT_EQ(ACTION_SHUTDOWN, last_action_.type());
 
 #if defined(OS_WIN)
@@ -210,8 +211,6 @@ int DevToolsRemoteListenSocketTester::ClearTestSocket() {
 }
 
 void DevToolsRemoteListenSocketTester::Shutdown() {
-  connection_->Release();
-  connection_ = NULL;
   server_->Release();
   server_ = NULL;
   ReportAction(ListenSocketTestAction(ACTION_SHUTDOWN));
@@ -219,10 +218,8 @@ void DevToolsRemoteListenSocketTester::Shutdown() {
 
 void DevToolsRemoteListenSocketTester::Listen() {
   server_ = DoListen();
-  if (server_) {
-    server_->AddRef();
-    ReportAction(ListenSocketTestAction(ACTION_LISTEN));
-  }
+  server_->AddRef();
+  ReportAction(ListenSocketTestAction(ACTION_LISTEN));
 }
 
 void DevToolsRemoteListenSocketTester::SendFromTester() {
@@ -230,19 +227,14 @@ void DevToolsRemoteListenSocketTester::SendFromTester() {
   ReportAction(ListenSocketTestAction(ACTION_SEND));
 }
 
-void DevToolsRemoteListenSocketTester::DidAccept(ListenSocket *server,
-                                                 ListenSocket *connection) {
+void DevToolsRemoteListenSocketTester::OnAcceptConnection(
+    ListenSocket* connection) {
   connection_ = connection;
-  connection_->AddRef();
   ReportAction(ListenSocketTestAction(ACTION_ACCEPT));
 }
 
-void DevToolsRemoteListenSocketTester::DidRead(ListenSocket *connection,
-                                 const std::string& data) {
-  ReportAction(ListenSocketTestAction(ACTION_READ, data));
-}
-
-void DevToolsRemoteListenSocketTester::DidClose(ListenSocket *sock) {
+void DevToolsRemoteListenSocketTester::OnConnectionLost() {
+  connection_ = NULL;
   ReportAction(ListenSocketTestAction(ACTION_CLOSE));
 }
 
@@ -271,7 +263,7 @@ void DevToolsRemoteListenSocketTester::TestClientSend() {
     // sleep for 10ms to test message split between \r and \n
     PlatformThread::Sleep(10);
     ASSERT_TRUE(Send(test_socket_, kSimpleMessagePart2));
-    ASSERT_TRUE(NextAction(kDefaultTimeoutMs));
+    ASSERT_TRUE(NextAction(TestTimeouts::action_timeout_ms()));
     ASSERT_EQ(ACTION_READ_MESSAGE, last_action_.type());
     const DevToolsRemoteMessage& message = last_action_.message();
     ASSERT_STREQ("V8Debugger", message.GetHeaderWithEmptyDefault(
@@ -284,7 +276,7 @@ void DevToolsRemoteListenSocketTester::TestClientSend() {
   }
   ASSERT_TRUE(Send(test_socket_, kTwoMessages));
   {
-    ASSERT_TRUE(NextAction(kDefaultTimeoutMs));
+    ASSERT_TRUE(NextAction(TestTimeouts::action_timeout_ms()));
     ASSERT_EQ(ACTION_READ_MESSAGE, last_action_.type());
     const DevToolsRemoteMessage& message = last_action_.message();
     ASSERT_STREQ("DevToolsService", message.tool().c_str());
@@ -297,7 +289,7 @@ void DevToolsRemoteListenSocketTester::TestClientSend() {
     }
   }
   {
-    ASSERT_TRUE(NextAction(kDefaultTimeoutMs));
+    ASSERT_TRUE(NextAction(TestTimeouts::action_timeout_ms()));
     ASSERT_EQ(ACTION_READ_MESSAGE, last_action_.type());
     const DevToolsRemoteMessage& message = last_action_.message();
     ASSERT_STREQ("V8Debugger", message.GetHeaderWithEmptyDefault(
@@ -314,7 +306,7 @@ void DevToolsRemoteListenSocketTester::TestClientSend() {
 void DevToolsRemoteListenSocketTester::TestServerSend() {
   loop_->PostTask(FROM_HERE, NewRunnableMethod(
       this, &DevToolsRemoteListenSocketTester::SendFromTester));
-  ASSERT_TRUE(NextAction(kDefaultTimeoutMs));
+  ASSERT_TRUE(NextAction(TestTimeouts::action_timeout_ms()));
   ASSERT_EQ(ACTION_SEND, last_action_.type());
   // TODO(erikkay): Without this sleep, the recv seems to fail a small amount
   // of the time.  I could fix this by making the socket blocking, but then
@@ -351,7 +343,9 @@ class DevToolsRemoteListenSocketTest: public PlatformTest {
   scoped_refptr<DevToolsRemoteListenSocketTester> tester_;
 };
 
-TEST_F(DevToolsRemoteListenSocketTest, ServerSend) {
+// This test is flaky; see comment in ::TestServerSend.
+// http://code.google.com/p/chromium/issues/detail?id=48562
+TEST_F(DevToolsRemoteListenSocketTest, FLAKY_ServerSend) {
   tester_->TestServerSend();
 }
 

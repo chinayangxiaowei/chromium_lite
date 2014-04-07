@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/google_update.h"
+#include "chrome/browser/google/google_update.h"
 
 #include "base/message_loop.h"
 #include "base/path_service.h"
@@ -10,9 +10,9 @@
 #include "base/task.h"
 #include "base/thread.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
-#include "third_party/cros/chromeos_update.h"
+#include "cros/chromeos_update.h"
 #include "views/window/window.h"
 
 using views::Window;
@@ -34,8 +34,8 @@ GoogleUpdate::~GoogleUpdate() {
 void GoogleUpdate::CheckForUpdate(bool install_if_newer, Window* window) {
   // We need to shunt this request over to InitiateGoogleUpdateCheck and have
   // it run in the file thread.
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(
           this, &GoogleUpdate::InitiateGoogleUpdateCheck, install_if_newer,
           window, MessageLoop::current()));

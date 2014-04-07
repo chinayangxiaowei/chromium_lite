@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -81,7 +81,7 @@ bool ExternalProtocolDialog::Cancel() {
   // button.
   if (message_box_view_->IsCheckBoxSelected()) {
     ExternalProtocolHandler::SetBlockState(
-        UTF8ToWide(url_.scheme()), ExternalProtocolHandler::BLOCK);
+        url_.scheme(), ExternalProtocolHandler::BLOCK);
   }
 
   // Returning true closes the dialog.
@@ -93,11 +93,11 @@ bool ExternalProtocolDialog::Accept() {
   // users start accepting these dialogs too quickly, we should worry about
   // clickjacking.
   UMA_HISTOGRAM_LONG_TIMES("clickjacking.launch_url",
-                           base::Time::Now() - creation_time_);
+                           base::TimeTicks::Now() - creation_time_);
 
   if (message_box_view_->IsCheckBoxSelected()) {
     ExternalProtocolHandler::SetBlockState(
-        UTF8ToWide(url_.scheme()), ExternalProtocolHandler::DONT_BLOCK);
+        url_.scheme(), ExternalProtocolHandler::DONT_BLOCK);
   }
 
   ExternalProtocolHandler::LaunchUrlWithoutSecurityCheck(url_);
@@ -117,7 +117,7 @@ ExternalProtocolDialog::ExternalProtocolDialog(TabContents* tab_contents,
                                                const std::wstring& command)
     : tab_contents_(tab_contents),
       url_(url),
-      creation_time_(base::Time::Now()) {
+      creation_time_(base::TimeTicks::Now()) {
   const int kMaxUrlWithoutSchemeSize = 256;
   const int kMaxCommandSize = 256;
   std::wstring elided_url_without_scheme;

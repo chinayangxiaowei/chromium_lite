@@ -4,11 +4,14 @@
 
 #ifndef CHROME_BROWSER_VIEWS_TAB_CONTENTS_TAB_CONTENTS_DRAG_WIN_H_
 #define CHROME_BROWSER_VIEWS_TAB_CONTENTS_TAB_CONTENTS_DRAG_WIN_H_
+#pragma once
 
 #include "app/os_exchange_data_provider_win.h"
 #include "base/platform_thread.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
+#include "gfx/point.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDragOperation.h"
 
 class DragDropThread;
@@ -30,7 +33,9 @@ class TabContentsDragWin
 
   // Called on UI thread.
   void StartDragging(const WebDropData& drop_data,
-                     WebKit::WebDragOperationsMask ops);
+                     WebKit::WebDragOperationsMask ops,
+                     const SkBitmap& image,
+                     const gfx::Point& image_offset);
   void CancelDrag();
 
   // DataObjectImpl::Observer implementation.
@@ -50,13 +55,17 @@ class TabContentsDragWin
   void DoDragging(const WebDropData& drop_data,
                   WebKit::WebDragOperationsMask ops,
                   const GURL& page_url,
-                  const std::string& page_encoding);
+                  const std::string& page_encoding,
+                  const SkBitmap& image,
+                  const gfx::Point& image_offset);
 
   // Called on drag-and-drop thread.
   void StartBackgroundDragging(const WebDropData& drop_data,
                                WebKit::WebDragOperationsMask ops,
                                const GURL& page_url,
-                               const std::string& page_encoding);
+                               const std::string& page_encoding,
+                               const SkBitmap& image,
+                               const gfx::Point& image_offset);
   // Called on UI thread.
   void EndDragging(bool restore_suspended_state);
   void CloseThread();

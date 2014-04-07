@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include "chrome/browser/cocoa/infobar.h"
 #import "chrome/browser/cocoa/infobar_container_controller.h"
 #import "chrome/browser/cocoa/infobar_controller.h"
-#include "chrome/browser/cocoa/tab_strip_model_observer_bridge.h"
+#import "chrome/browser/cocoa/view_id_util.h"
+#include "chrome/browser/tab_contents/infobar_delegate.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/notification_service.h"
 #include "skia/ext/skia_utils_mac.h"
@@ -62,25 +63,15 @@ class InfoBarNotificationObserver : public NotificationObserver {
 // adding together the heights of all its subviews.
 - (CGFloat)desiredHeight;
 
-// Modifies this container to display infobars for the given
-// |contents|.  Registers for INFOBAR_ADDED and INFOBAR_REMOVED
-// notifications for |contents|.  If we are currently showing any
-// infobars, removes them first and deregisters for any
-// notifications.  |contents| can be NULL, in which case no infobars
-// are shown and no notifications are registered for.
-- (void)changeTabContents:(TabContents*)contents;
-
 @end
 
 
 @implementation InfoBarContainerController
-- (id)initWithTabStripModel:(TabStripModel*)model
-             resizeDelegate:(id<ViewResizer>)resizeDelegate {
+- (id)initWithResizeDelegate:(id<ViewResizer>)resizeDelegate {
   DCHECK(resizeDelegate);
   if ((self = [super initWithNibName:@"InfoBarContainer"
                               bundle:mac_util::MainAppBundle()])) {
     resizeDelegate_ = resizeDelegate;
-    tabObserver_.reset(new TabStripModelObserverBridge(model, self));
     infoBarObserver_.reset(new InfoBarNotificationObserver(self));
 
     // NSMutableArray needs an initial capacity, and we rarely ever see
@@ -92,7 +83,14 @@ class InfoBarNotificationObserver : public NotificationObserver {
 
 - (void)dealloc {
   DCHECK([infobarControllers_ count] == 0);
+  view_id_util::UnsetID([self view]);
   [super dealloc];
+}
+
+- (void)awakeFromNib {
+  // The info bar container view is an ordinary NSView object, so we set its
+  // ViewID here.
+  view_id_util::SetID([self view], VIEW_ID_INFO_BAR_CONTAINER);
 }
 
 - (void)removeDelegate:(InfoBarDelegate*)delegate {
@@ -111,42 +109,6 @@ class InfoBarNotificationObserver : public NotificationObserver {
   [[controller view] removeFromSuperview];
   [infobarControllers_ removeObject:controller];
   [self positionInfoBarsAndRedraw];
-}
-
-// TabStripModelObserverBridge notifications
-- (void)selectTabWithContents:(TabContents*)newContents
-             previousContents:(TabContents*)oldContents
-                      atIndex:(NSInteger)index
-                  userGesture:(bool)wasUserGesture {
-  [self changeTabContents:newContents];
-}
-
-- (void)tabDetachedWithContents:(TabContents*)contents
-                        atIndex:(NSInteger)index {
-  [self changeTabContents:NULL];
-}
-
-- (void)resizeView:(NSView*)view newHeight:(CGFloat)height {
-  NSRect frame = [view frame];
-  frame.size.height = height;
-  [view setFrame:frame];
-  [self positionInfoBarsAndRedraw];
-}
-
-- (void)setAnimationInProgress:(BOOL)inProgress {
-  if ([resizeDelegate_ respondsToSelector:@selector(setAnimationInProgress:)])
-    [resizeDelegate_ setAnimationInProgress:inProgress];
-}
-
-@end
-
-@implementation InfoBarContainerController (PrivateMethods)
-
-- (CGFloat)desiredHeight {
-  CGFloat height = 0;
-  for (InfoBarController* controller in infobarControllers_.get())
-    height += NSHeight([[controller view] frame]);
-  return height;
 }
 
 - (void)changeTabContents:(TabContents*)contents {
@@ -170,6 +132,34 @@ class InfoBarNotificationObserver : public NotificationObserver {
   }
 
   [self positionInfoBarsAndRedraw];
+}
+
+- (void)tabDetachedWithContents:(TabContents*)contents {
+  if (currentTabContents_ == contents)
+    [self changeTabContents:NULL];
+}
+
+- (void)resizeView:(NSView*)view newHeight:(CGFloat)height {
+  NSRect frame = [view frame];
+  frame.size.height = height;
+  [view setFrame:frame];
+  [self positionInfoBarsAndRedraw];
+}
+
+- (void)setAnimationInProgress:(BOOL)inProgress {
+  if ([resizeDelegate_ respondsToSelector:@selector(setAnimationInProgress:)])
+    [resizeDelegate_ setAnimationInProgress:inProgress];
+}
+
+@end
+
+@implementation InfoBarContainerController (PrivateMethods)
+
+- (CGFloat)desiredHeight {
+  CGFloat height = 0;
+  for (InfoBarController* controller in infobarControllers_.get())
+    height += NSHeight([[controller view] frame]);
+  return height;
 }
 
 - (void)addInfoBar:(InfoBarDelegate*)delegate animate:(BOOL)animate {

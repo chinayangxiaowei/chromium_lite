@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_AUTOCOMPLETE_HISTORY_CONTENTS_PROVIDER_H_
 #define CHROME_BROWSER_AUTOCOMPLETE_HISTORY_CONTENTS_PROVIDER_H_
+#pragma once
 
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/history/history.h"
@@ -21,16 +22,7 @@ struct TitleMatch;
 //   This is synchronous.
 class HistoryContentsProvider : public AutocompleteProvider {
  public:
-  HistoryContentsProvider(ACProviderListener* listener, Profile* profile)
-      : AutocompleteProvider(listener, profile, "HistoryContents"),
-        star_title_count_(0),
-        star_contents_count_(0),
-        title_count_(0),
-        contents_count_(0),
-        input_type_(AutocompleteInput::INVALID),
-        trim_http_(false),
-        have_results_(false) {
-  }
+  HistoryContentsProvider(ACProviderListener* listener, Profile* profile);
 
   // As necessary asks the history service for the relevant results. When
   // done SetResults is invoked.
@@ -49,7 +41,7 @@ class HistoryContentsProvider : public AutocompleteProvider {
   static const size_t kMaxMatchCount = 50;
 
  private:
-  ~HistoryContentsProvider() {}
+  ~HistoryContentsProvider();
 
   void QueryComplete(HistoryService::Handle handle,
                      history::QueryResults* results);
@@ -104,7 +96,7 @@ class HistoryContentsProvider : public AutocompleteProvider {
   // Current query string.
   std::wstring query_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(HistoryContentsProvider);
+  DISALLOW_COPY_AND_ASSIGN(HistoryContentsProvider);
 };
 
 #endif  // CHROME_BROWSER_AUTOCOMPLETE_HISTORY_CONTENTS_PROVIDER_H_

@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "base/message_loop.h"
+#include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
 #include "base/thread.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_logging.h"
@@ -31,6 +33,30 @@ class SendTask : public Task {
 
   DISALLOW_COPY_AND_ASSIGN(SendTask);
 };
+
+//------------------------------------------------------------------------------
+
+ChannelProxy::MessageFilter::MessageFilter() {}
+
+ChannelProxy::MessageFilter::~MessageFilter() {}
+
+void ChannelProxy::MessageFilter::OnFilterAdded(Channel* channel) {}
+
+void ChannelProxy::MessageFilter::OnFilterRemoved() {}
+
+void ChannelProxy::MessageFilter::OnChannelConnected(int32 peer_pid) {}
+
+void ChannelProxy::MessageFilter::OnChannelError() {}
+
+void ChannelProxy::MessageFilter::OnChannelClosing() {}
+
+bool ChannelProxy::MessageFilter::OnMessageReceived(const Message& message) {
+  return false;
+}
+
+void ChannelProxy::MessageFilter::OnDestruct() {
+  delete this;
+}
 
 //------------------------------------------------------------------------------
 
@@ -153,6 +179,11 @@ void ChannelProxy::Context::OnChannelClosed() {
 
 // Called on the IPC::Channel thread
 void ChannelProxy::Context::OnSendMessage(Message* message) {
+  if (!channel_) {
+    delete message;
+    OnChannelClosed();
+    return;
+  }
   if (!channel_->Send(message))
     OnChannelError();
 }
@@ -239,6 +270,10 @@ ChannelProxy::ChannelProxy(const std::string& channel_id, Channel::Mode mode,
                            bool create_pipe_now)
     : context_(context) {
   Init(channel_id, mode, ipc_thread, create_pipe_now);
+}
+
+ChannelProxy::~ChannelProxy() {
+  Close();
 }
 
 void ChannelProxy::Init(const std::string& channel_id, Channel::Mode mode,

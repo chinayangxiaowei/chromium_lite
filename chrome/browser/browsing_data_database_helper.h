@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_BROWSING_DATA_DATABASE_HELPER_H_
 #define CHROME_BROWSER_BROWSING_DATA_DATABASE_HELPER_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "base/callback.h"
 #include "base/scoped_ptr.h"
 #include "chrome/common/url_constants.h"
+#include "googleurl/src/gurl.h"
 #include "webkit/database/database_tracker.h"
 
 class Profile;
@@ -32,12 +34,14 @@ class BrowsingDataDatabaseHelper
                  const std::string& database_name,
                  const std::string& origin_identifier,
                  const std::string& description,
+                 const std::string& origin,
                  int64 size,
                  base::Time last_modified)
         : host(host),
           database_name(database_name),
           origin_identifier(origin_identifier),
           description(description),
+          origin(origin),
           size(size),
           last_modified(last_modified) {
     }
@@ -52,6 +56,7 @@ class BrowsingDataDatabaseHelper
     std::string database_name;
     std::string origin_identifier;
     std::string description;
+    std::string origin;
     int64 size;
     base::Time last_modified;
   };
@@ -74,12 +79,14 @@ class BrowsingDataDatabaseHelper
   virtual void DeleteDatabase(const std::string& origin,
                               const std::string& name);
 
- private:
+ protected:
   friend class base::RefCountedThreadSafe<BrowsingDataDatabaseHelper>;
-  friend class MockBrowsingDataDatabaseHelper;
-
   virtual ~BrowsingDataDatabaseHelper();
 
+  // This only mutates in the FILE thread.
+  std::vector<DatabaseInfo> database_info_;
+
+ private:
   // Enumerates all databases. This must be called in the FILE thread.
   void FetchDatabaseInfoInFileThread();
 
@@ -102,10 +109,37 @@ class BrowsingDataDatabaseHelper
   // This only mutates on the UI thread.
   bool is_fetching_;
 
-  // This only mutates in the FILE thread.
-  std::vector<DatabaseInfo> database_info_;
-
   DISALLOW_COPY_AND_ASSIGN(BrowsingDataDatabaseHelper);
+};
+
+// This class is a thin wrapper around BrowsingDataDatabaseHelper that does not
+// fetch its information from the database tracker, but gets them passed as
+// a parameter during construction.
+class CannedBrowsingDataDatabaseHelper : public BrowsingDataDatabaseHelper {
+ public:
+  explicit CannedBrowsingDataDatabaseHelper(Profile* profile);
+
+  // Add a database to the set of canned databases that is returned by this
+  // helper.
+  void AddDatabase(const GURL& origin,
+                   const std::string& name,
+                   const std::string& description);
+
+  // Clear the list of canned databases.
+  void Reset();
+
+  // True if no databases are currently stored.
+  bool empty() const;
+
+  // BrowsingDataDatabaseHelper methods.
+  virtual void StartFetching(
+      Callback1<const std::vector<DatabaseInfo>& >::Type* callback);
+  virtual void CancelNotification() {}
+
+ private:
+  virtual ~CannedBrowsingDataDatabaseHelper() {}
+
+  DISALLOW_COPY_AND_ASSIGN(CannedBrowsingDataDatabaseHelper);
 };
 
 #endif  // CHROME_BROWSER_BROWSING_DATA_DATABASE_HELPER_H_

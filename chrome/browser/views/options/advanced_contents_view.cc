@@ -12,35 +12,43 @@
 #include <vsstyle.h>
 #include <vssym32.h>
 
-#include "app/combobox_model.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
+#include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/i18n/rtl.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
+#include "base/scoped_callback_factory.h"
 #include "base/thread.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/gears_integration.h"
-#include "chrome/browser/net/dns_global.h"
 #include "chrome/browser/options_util.h"
-#include "chrome/browser/pref_member.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_member.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/pref_set_observer.h"
+#include "chrome/browser/printing/cloud_print/cloud_print_proxy_service.h"
+#include "chrome/browser/printing/cloud_print/cloud_print_setup_flow.h"
+#include "chrome/browser/printing/cloud_print/cloud_print_url.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/shell_dialogs.h"
+#include "chrome/browser/show_options_url.h"
 #include "chrome/browser/views/browser_dialogs.h"
 #include "chrome/browser/views/clear_browsing_data.h"
 #include "chrome/browser/views/list_background.h"
 #include "chrome/browser/views/options/content_settings_window_view.h"
 #include "chrome/browser/views/options/fonts_languages_window_view.h"
 #include "chrome/browser/views/restart_message_box.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/native_theme_win.h"
 #include "grit/app_resources.h"
 #include "grit/chromium_strings.h"
@@ -107,7 +115,7 @@ class FileDisplayArea : public views::View {
   static void InitClass();
   static SkBitmap default_folder_icon_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(FileDisplayArea);
+  DISALLOW_COPY_AND_ASSIGN(FileDisplayArea);
 };
 
 // static
@@ -135,12 +143,12 @@ void FileDisplayArea::SetFile(const FilePath& file_path) {
 }
 
 void FileDisplayArea::Paint(gfx::Canvas* canvas) {
-  HDC dc = canvas->beginPlatformPaint();
+  HDC dc = canvas->BeginPlatformPaint();
   RECT rect = { 0, 0, width(), height() };
   gfx::NativeTheme::instance()->PaintTextField(
       dc, EP_EDITTEXT, ETS_READONLY, 0, &rect,
       skia::SkColorToCOLORREF(text_field_background_color_), true, true);
-  canvas->endPlatformPaint();
+  canvas->EndPlatformPaint();
   // Mirror left point for icon_bounds_ to draw icon in RTL locales correctly.
   canvas->DrawBitmapInt(default_folder_icon_,
                         MirroredLeftPointForRect(icon_bounds_),
@@ -186,7 +194,7 @@ void FileDisplayArea::Init() {
 void FileDisplayArea::InitClass() {
   static bool initialized = false;
   if (!initialized) {
-    // We'd prefer to use UILayoutIsRightToLeft() to perform the RTL
+    // We'd prefer to use base::i18n::IsRTL() to perform the RTL
     // environment check, but it's nonstatic, so, instead, we check whether the
     // locale is RTL.
     bool ui_is_rtl = base::i18n::IsRTL();
@@ -287,7 +295,6 @@ AdvancedSection::AdvancedSection(Profile* profile,
 void AdvancedSection::DidChangeBounds(const gfx::Rect& previous,
                                       const gfx::Rect& current) {
   Layout();
-  contents_->Layout();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -434,13 +441,10 @@ class PrivacySection : public AdvancedSection,
   // Overridden from views::LinkController:
   virtual void LinkActivated(views::Link* source, int event_flags);
 
-  // Overridden from views::View:
-  virtual void Layout();
-
  protected:
   // OptionsPageView overrides:
   virtual void InitControlLayout();
-  virtual void NotifyPrefChanged(const std::wstring* pref_name);
+  virtual void NotifyPrefChanged(const std::string* pref_name);
 
  private:
   // Controls for this section:
@@ -503,7 +507,6 @@ void PrivacySection::ButtonPressed(
                                 "Options_DnsPrefetchCheckbox_Disable"),
                             profile()->GetPrefs());
     dns_prefetch_enabled_.SetValue(enabled);
-    chrome_browser_net::EnableDnsPrefetch(enabled);
   } else if (sender == enable_safe_browsing_checkbox_) {
     bool enabled = enable_safe_browsing_checkbox_->checked();
     UserMetricsRecordAction(UserMetricsAction(enabled ?
@@ -540,29 +543,10 @@ void PrivacySection::ButtonPressed(
 }
 
 void PrivacySection::LinkActivated(views::Link* source, int event_flags) {
-  if (source == learn_more_link_) {
-    // We open a new browser window so the Options dialog doesn't get lost
-    // behind other windows.
-    Browser* browser = Browser::Create(profile());
-    browser->OpenURL(GURL(l10n_util::GetString(IDS_LEARN_MORE_PRIVACY_URL)),
-                     GURL(), NEW_WINDOW, PageTransition::LINK);
-  }
-}
-
-void PrivacySection::Layout() {
-  if (reporting_enabled_checkbox_) {
-    // We override this to try and set the width of the enable logging checkbox
-    // to the width of the parent less some fudging since the checkbox's
-    // preferred size calculation code is dependent on its width, and if we
-    // don't do this then it will return 0 as a preferred width when GridLayout
-    // (called from View::Layout) tries to access it.
-    views::View* parent = GetParent();
-    if (parent && parent->width()) {
-      const int parent_width = parent->width();
-      reporting_enabled_checkbox_->SetBounds(0, 0, parent_width - 20, 0);
-    }
-  }
-  View::Layout();
+  DCHECK(source == learn_more_link_);
+  browser::ShowOptionsURL(
+      profile(),
+      GURL(l10n_util::GetString(IDS_LEARN_MORE_PRIVACY_URL)));
 }
 
 void PrivacySection::InitControlLayout() {
@@ -636,8 +620,8 @@ void PrivacySection::InitControlLayout() {
                          reporting_enabled_checkbox_ != NULL);
   // The "Help make Google Chrome better" checkbox.
   if (reporting_enabled_checkbox_) {
-    AddLeadingControl(layout, reporting_enabled_checkbox_, indented_view_set_id,
-                      false);
+    AddWrappingCheckboxRow(layout, reporting_enabled_checkbox_,
+                           indented_view_set_id, false);
   }
 
   // Init member prefs so we can update the controls if prefs change.
@@ -652,23 +636,31 @@ void PrivacySection::InitControlLayout() {
                                  g_browser_process->local_state(), this);
 }
 
-void PrivacySection::NotifyPrefChanged(const std::wstring* pref_name) {
+void PrivacySection::NotifyPrefChanged(const std::string* pref_name) {
   if (!pref_name || *pref_name == prefs::kAlternateErrorPagesEnabled) {
+    enable_link_doctor_checkbox_->SetEnabled(
+        !alternate_error_pages_.IsManaged());
     enable_link_doctor_checkbox_->SetChecked(
         alternate_error_pages_.GetValue());
   }
   if (!pref_name || *pref_name == prefs::kSearchSuggestEnabled) {
+    enable_suggest_checkbox_->SetEnabled(!use_suggest_.IsManaged());
     enable_suggest_checkbox_->SetChecked(use_suggest_.GetValue());
   }
   if (!pref_name || *pref_name == prefs::kDnsPrefetchingEnabled) {
+    enable_dns_prefetching_checkbox_->SetEnabled(
+        !dns_prefetch_enabled_.IsManaged());
     bool enabled = dns_prefetch_enabled_.GetValue();
     enable_dns_prefetching_checkbox_->SetChecked(enabled);
-    chrome_browser_net::EnableDnsPrefetch(enabled);
   }
-  if (!pref_name || *pref_name == prefs::kSafeBrowsingEnabled)
+  if (!pref_name || *pref_name == prefs::kSafeBrowsingEnabled) {
+    enable_safe_browsing_checkbox_->SetEnabled(!safe_browsing_.IsManaged());
     enable_safe_browsing_checkbox_->SetChecked(safe_browsing_.GetValue());
+  }
   if (reporting_enabled_checkbox_ &&
       (!pref_name || *pref_name == prefs::kMetricsReportingEnabled)) {
+    reporting_enabled_checkbox_->SetEnabled(
+        !enable_metrics_recording_.IsManaged());
     reporting_enabled_checkbox_->SetChecked(
         enable_metrics_recording_.GetValue());
     ResolveMetricsReportingEnabled();
@@ -795,7 +787,7 @@ class SecuritySection : public AdvancedSection,
  protected:
   // OptionsPageView overrides:
   virtual void InitControlLayout();
-  virtual void NotifyPrefChanged(const std::wstring* pref_name);
+  virtual void NotifyPrefChanged(const std::string* pref_name);
 
  private:
   // Controls for this section:
@@ -891,7 +883,7 @@ void SecuritySection::InitControlLayout() {
 }
 
 // This method is called with a null pref_name when the dialog is initialized.
-void SecuritySection::NotifyPrefChanged(const std::wstring* pref_name) {
+void SecuritySection::NotifyPrefChanged(const std::string* pref_name) {
   // These SSL options are system settings and stored in the OS.
   if (!pref_name) {
     net::SSLConfig config;
@@ -955,12 +947,15 @@ class NetworkSection : public AdvancedSection,
  protected:
   // OptionsPageView overrides:
   virtual void InitControlLayout();
-  virtual void NotifyPrefChanged(const std::wstring* pref_name);
+  virtual void NotifyPrefChanged(const std::string* pref_name);
 
  private:
   // Controls for this section:
   views::Label* change_proxies_label_;
   views::NativeButton* change_proxies_button_;
+
+  // Tracks the proxy preferences.
+  scoped_ptr<PrefSetObserver> proxy_prefs_;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkSection);
 };
@@ -1007,9 +1002,16 @@ void NetworkSection::InitControlLayout() {
                       true);
   AddLeadingControl(layout, change_proxies_button_, indented_view_set_id,
                     false);
+
+  proxy_prefs_.reset(PrefSetObserver::CreateProxyPrefSetObserver(
+      profile()->GetPrefs(), this));
+  NotifyPrefChanged(NULL);
 }
 
-void NetworkSection::NotifyPrefChanged(const std::wstring* pref_name) {
+void NetworkSection::NotifyPrefChanged(const std::string* pref_name) {
+  if (!pref_name || proxy_prefs_->IsObserved(*pref_name)) {
+    change_proxies_button_->SetEnabled(!proxy_prefs_->IsManaged());
+  }
 }
 
 }  // namespace
@@ -1038,7 +1040,7 @@ class DownloadSection : public AdvancedSection,
  protected:
   // OptionsPageView overrides.
   virtual void InitControlLayout();
-  virtual void NotifyPrefChanged(const std::wstring* pref_name);
+  virtual void NotifyPrefChanged(const std::string* pref_name);
 
  private:
   // Controls for this section.
@@ -1051,7 +1053,7 @@ class DownloadSection : public AdvancedSection,
   views::NativeButton* reset_file_handlers_button_;
 
   // Pref members.
-  StringPrefMember default_download_location_;
+  FilePathPrefMember default_download_location_;
   BooleanPrefMember ask_for_save_location_;
 
   // Updates the directory displayed in the default download location view with
@@ -1083,9 +1085,8 @@ void DownloadSection::ButtonPressed(
        l10n_util::GetString(IDS_OPTIONS_DOWNLOADLOCATION_BROWSE_TITLE);
     select_file_dialog_->SelectFile(SelectFileDialog::SELECT_FOLDER,
                                     dialog_title,
-                                    FilePath::FromWStringHack(
-                                        profile()->GetPrefs()->GetString(
-                                        prefs::kDownloadDefaultDirectory)),
+                                    profile()->GetPrefs()->GetFilePath(
+                                        prefs::kDownloadDefaultDirectory),
                                     NULL, 0, std::wstring(),
                                     GetWindow()->GetNativeWindow(),
                                     NULL);
@@ -1102,7 +1103,7 @@ void DownloadSection::ButtonPressed(
     }
     ask_for_save_location_.SetValue(enabled);
   } else if (sender == reset_file_handlers_button_) {
-    profile()->GetDownloadManager()->ResetAutoOpenFiles();
+    profile()->GetDownloadManager()->download_prefs()->ResetAutoOpen();
     UserMetricsRecordAction(UserMetricsAction("Options_ResetAutoOpenFiles"),
                             profile()->GetPrefs());
   }
@@ -1112,7 +1113,7 @@ void DownloadSection::FileSelected(const FilePath& path,
                                    int index, void* params) {
   UserMetricsRecordAction(UserMetricsAction("Options_SetDownloadDirectory"),
                           profile()->GetPrefs());
-  default_download_location_.SetValue(path.ToWStringHack());
+  default_download_location_.SetValue(path);
   // We need to call this manually here since because we're setting the value
   // through the pref member which avoids notifying the listener that set the
   // value.
@@ -1188,7 +1189,7 @@ void DownloadSection::InitControlLayout() {
                         this);
 }
 
-void DownloadSection::NotifyPrefChanged(const std::wstring* pref_name) {
+void DownloadSection::NotifyPrefChanged(const std::string* pref_name) {
   if (!pref_name || *pref_name == prefs::kDownloadDefaultDirectory)
     UpdateDownloadDirectoryDisplay();
 
@@ -1199,7 +1200,7 @@ void DownloadSection::NotifyPrefChanged(const std::wstring* pref_name) {
 
   if (!pref_name || *pref_name == prefs::kDownloadExtensionsToOpen) {
     bool enabled =
-        profile()->GetDownloadManager()->HasAutoOpenFileTypesRegistered();
+        profile()->GetDownloadManager()->download_prefs()->IsAutoOpenUsed();
     reset_file_handlers_label_->SetEnabled(enabled);
     reset_file_handlers_button_->SetEnabled(enabled);
   }
@@ -1207,7 +1208,7 @@ void DownloadSection::NotifyPrefChanged(const std::wstring* pref_name) {
 
 void DownloadSection::UpdateDownloadDirectoryDisplay() {
   download_default_download_location_display_->SetFile(
-      FilePath::FromWStringHack(default_download_location_.GetValue()));
+      default_download_location_.GetValue());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1225,7 +1226,7 @@ class TranslateSection : public AdvancedSection,
  protected:
   // OptionsPageView overrides:
   virtual void InitControlLayout();
-  virtual void NotifyPrefChanged(const std::wstring* pref_name);
+  virtual void NotifyPrefChanged(const std::string* pref_name);
 
  private:
   // Control for this section:
@@ -1271,9 +1272,278 @@ void TranslateSection::InitControlLayout() {
   enable_translate_.Init(prefs::kEnableTranslate, profile()->GetPrefs(), this);
 }
 
-void TranslateSection::NotifyPrefChanged(const std::wstring* pref_name) {
+void TranslateSection::NotifyPrefChanged(const std::string* pref_name) {
   if (!pref_name || *pref_name == prefs::kEnableTranslate)
     enable_translate_checkbox_->SetChecked(enable_translate_.GetValue());
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ChromeAppsSection
+
+class ChromeAppsSection : public AdvancedSection,
+                          public views::ButtonListener,
+                          public views::LinkController {
+ public:
+  explicit ChromeAppsSection(Profile* profile);
+  virtual ~ChromeAppsSection() {}
+
+  // Overridden from views::ButtonListener:
+  virtual void ButtonPressed(views::Button* sender, const views::Event& event);
+  // Overridden from views::LinkController:
+  virtual void LinkActivated(views::Link* source, int event_flags);
+
+ protected:
+  // OptionsPageView overrides:
+  virtual void InitControlLayout();
+  virtual void NotifyPrefChanged(const std::string* pref_name);
+
+ private:
+  // Controls for this section:
+  views::Checkbox* enable_background_mode_checkbox_;
+  views::Link* learn_more_link_;
+
+  // Preferences for this section:
+  BooleanPrefMember enable_background_mode_;
+
+  DISALLOW_COPY_AND_ASSIGN(ChromeAppsSection);
+};
+
+ChromeAppsSection::ChromeAppsSection(Profile* profile)
+    : enable_background_mode_checkbox_(NULL),
+      learn_more_link_(NULL),
+      AdvancedSection(profile, l10n_util::GetString(
+          IDS_OPTIONS_ADVANCED_SECTION_TITLE_CHROME_APPS)) {
+}
+
+void ChromeAppsSection::ButtonPressed(
+    views::Button* sender, const views::Event& event) {
+  DCHECK(sender == enable_background_mode_checkbox_);
+  bool enabled = enable_background_mode_checkbox_->checked();
+  UserMetricsRecordAction(enabled ?
+                          UserMetricsAction("Options_BackgroundMode_Enable") :
+                          UserMetricsAction("Options_BackgroundMode_Disable"),
+                          profile()->GetPrefs());
+  enable_background_mode_.SetValue(enabled);
+}
+
+void ChromeAppsSection::LinkActivated(views::Link* source, int event_flags) {
+  DCHECK(source == learn_more_link_);
+  browser::ShowOptionsURL(
+      profile(),
+      GURL(l10n_util::GetString(IDS_LEARN_MORE_BACKGROUND_MODE_URL)));
+}
+
+void ChromeAppsSection::InitControlLayout() {
+  AdvancedSection::InitControlLayout();
+
+  GridLayout* layout = new GridLayout(contents_);
+  contents_->SetLayoutManager(layout);
+
+  AddIndentedColumnSet(layout, 0);
+
+  enable_background_mode_checkbox_ = new views::Checkbox(
+      l10n_util::GetString(IDS_OPTIONS_CHROME_APPS_ENABLE_BACKGROUND_MODE));
+  enable_background_mode_checkbox_->set_listener(this);
+  AddWrappingCheckboxRow(layout, enable_background_mode_checkbox_, 0, true);
+
+  // Init member pref so we can update the controls if prefs change.
+  enable_background_mode_.Init(prefs::kBackgroundModeEnabled,
+      profile()->GetPrefs(), this);
+
+  // Add our link to the help center page for this feature.
+  learn_more_link_ = new views::Link(l10n_util::GetString(IDS_LEARN_MORE));
+  learn_more_link_->SetController(this);
+  AddLeadingControl(layout, learn_more_link_, 0, false);
+}
+
+void ChromeAppsSection::NotifyPrefChanged(const std::string* pref_name) {
+  if (!pref_name || *pref_name == prefs::kBackgroundModeEnabled) {
+    enable_background_mode_checkbox_->SetChecked(
+        enable_background_mode_.GetValue());
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// CloudPrintProxySection
+
+class CloudPrintProxySection : public AdvancedSection,
+                               public views::ButtonListener,
+                               public CloudPrintSetupFlow::Delegate {
+ public:
+  explicit CloudPrintProxySection(Profile* profile);
+  virtual ~CloudPrintProxySection() {}
+
+  // Overridden from views::ButtonListener:
+  virtual void ButtonPressed(views::Button* sender, const views::Event& event);
+
+  // CloudPrintSetupFlow::Delegate implementation.
+  virtual void OnDialogClosed();
+
+ protected:
+  // OptionsPageView overrides:
+  virtual void InitControlLayout();
+  virtual void NotifyPrefChanged(const std::string* pref_name);
+
+ private:
+  bool Enabled() const;
+
+  // Controls for this section:
+  views::Label* section_description_label_;
+  views::NativeButton* enable_disable_button_;
+  views::NativeButton* manage_printer_button_;
+
+  // Preferences we tie things to.
+  StringPrefMember cloud_print_proxy_email_;
+
+  base::ScopedCallbackFactory<CloudPrintProxySection> factory_;
+
+  DISALLOW_COPY_AND_ASSIGN(CloudPrintProxySection);
+};
+
+CloudPrintProxySection::CloudPrintProxySection(Profile* profile)
+    : section_description_label_(NULL),
+      enable_disable_button_(NULL),
+      manage_printer_button_(NULL),
+      factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
+      AdvancedSection(profile,
+                      l10n_util::GetString(
+                          IDS_OPTIONS_ADVANCED_SECTION_TITLE_CLOUD_PRINT)) {
+}
+
+void CloudPrintProxySection::ButtonPressed(views::Button* sender,
+                                           const views::Event& event) {
+  if (sender == enable_disable_button_) {
+    if (Enabled()) {
+      // Enabled, we must be the disable button.
+      UserMetricsRecordAction(
+          UserMetricsAction("Options_DisableCloudPrintProxy"), NULL);
+      profile()->GetCloudPrintProxyService()->DisableForUser();
+    } else {
+      UserMetricsRecordAction(
+          UserMetricsAction("Options_EnableCloudPrintProxy"), NULL);
+      // We open a new browser window so the Options dialog doesn't
+      // get lost behind other windows.
+      enable_disable_button_->SetEnabled(false);
+      enable_disable_button_->SetLabel(
+          l10n_util::GetString(IDS_OPTIONS_CLOUD_PRINT_PROXY_ENABLING_BUTTON));
+      enable_disable_button_->InvalidateLayout();
+      Layout();
+      CloudPrintSetupFlow::OpenDialog(profile(), this,
+                                      GetWindow()->GetNativeWindow());
+    }
+  } else if (sender == manage_printer_button_) {
+    UserMetricsRecordAction(
+        UserMetricsAction("Options_ManageCloudPrinters"), NULL);
+    browser::ShowOptionsURL(
+        profile(),
+        CloudPrintURL(profile()).GetCloudPrintServiceManageURL());
+  }
+}
+
+void CloudPrintProxySection::OnDialogClosed() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  enable_disable_button_->SetEnabled(true);
+  // If the dialog is canceled, the preference won't change, and so we
+  // have to revert the button text back to the disabled state.
+  if (!Enabled()) {
+    enable_disable_button_->SetLabel(
+        l10n_util::GetString(IDS_OPTIONS_CLOUD_PRINT_PROXY_DISABLED_BUTTON));
+    enable_disable_button_->InvalidateLayout();
+    Layout();
+  }
+}
+
+void CloudPrintProxySection::InitControlLayout() {
+  AdvancedSection::InitControlLayout();
+
+  section_description_label_ = new views::Label(
+      l10n_util::GetString(IDS_OPTIONS_CLOUD_PRINT_PROXY_DISABLED_LABEL));
+  enable_disable_button_ = new views::NativeButton(this,
+      l10n_util::GetString(IDS_OPTIONS_CLOUD_PRINT_PROXY_DISABLED_BUTTON));
+  manage_printer_button_ = new views::NativeButton(this,
+      l10n_util::GetString(
+          IDS_OPTIONS_CLOUD_PRINT_PROXY_ENABLED_MANAGE_BUTTON));
+
+  GridLayout* layout = new GridLayout(contents_);
+  contents_->SetLayoutManager(layout);
+
+  const int single_column_view_set_id = 0;
+  AddWrappingColumnSet(layout, single_column_view_set_id);
+  const int control_view_set_id = 1;
+  AddDependentTwoColumnSet(layout, control_view_set_id);
+
+  // The description label at the top and label.
+  section_description_label_->SetMultiLine(true);
+  AddWrappingLabelRow(layout, section_description_label_,
+                       single_column_view_set_id, true);
+
+  // The enable / disable button and manage button.
+  AddTwoColumnRow(layout, enable_disable_button_, manage_printer_button_, false,
+                  control_view_set_id, kRelatedControlVerticalSpacing);
+
+  // Attach the preferences so we can flip things appropriately.
+  cloud_print_proxy_email_.Init(prefs::kCloudPrintEmail,
+                                profile()->GetPrefs(), this);
+
+  // Start the UI off in the state we think it should be in.
+  std::string pref_string(prefs::kCloudPrintEmail);
+  NotifyPrefChanged(&pref_string);
+
+  // Kick off a task to ask the background service what the real
+  // answer is.
+  profile()->GetCloudPrintProxyService()->RefreshStatusFromService();
+}
+
+void CloudPrintProxySection::NotifyPrefChanged(const std::string* pref_name) {
+  if (pref_name == NULL)
+    return;
+
+  if (*pref_name == prefs::kCloudPrintEmail) {
+    if (Enabled()) {
+      std::string email;
+      if (profile()->GetPrefs()->HasPrefPath(prefs::kCloudPrintEmail))
+        email = profile()->GetPrefs()->GetString(prefs::kCloudPrintEmail);
+
+      section_description_label_->SetText(
+          l10n_util::GetStringF(IDS_OPTIONS_CLOUD_PRINT_PROXY_ENABLED_LABEL,
+                                UTF8ToWide(email)));
+      enable_disable_button_->SetLabel(
+          l10n_util::GetString(IDS_OPTIONS_CLOUD_PRINT_PROXY_ENABLED_BUTTON));
+      enable_disable_button_->InvalidateLayout();
+      manage_printer_button_->SetVisible(true);
+      manage_printer_button_->InvalidateLayout();
+    } else {
+      section_description_label_->SetText(
+          l10n_util::GetString(IDS_OPTIONS_CLOUD_PRINT_PROXY_DISABLED_LABEL));
+      enable_disable_button_->SetLabel(
+          l10n_util::GetString(IDS_OPTIONS_CLOUD_PRINT_PROXY_DISABLED_BUTTON));
+      enable_disable_button_->InvalidateLayout();
+      manage_printer_button_->SetVisible(false);
+    }
+
+    // Find the parent ScrollView, and ask it to re-layout since it's
+    // possible that the section_description_label_ has changed
+    // heights.  And scroll us back to being visible in that case, to
+    // be nice to the user.
+    views::View* view = section_description_label_->GetParent();
+    while (view && view->GetClassName() != views::ScrollView::kViewClassName)
+      view = view->GetParent();
+    if (view) {
+      gfx::Rect visible_bounds = GetVisibleBounds();
+      bool was_all_visible = (visible_bounds.size() == bounds().size());
+      // Our bounds can change across this call, so we have to use the
+      // new bounds if we want to stay completely visible.
+      view->Layout();
+      ScrollRectToVisible(was_all_visible ? bounds() : visible_bounds);
+    } else {
+      Layout();
+    }
+  }
+}
+
+bool CloudPrintProxySection::Enabled() const {
+  return profile()->GetPrefs()->HasPrefPath(prefs::kCloudPrintEmail) &&
+      !profile()->GetPrefs()->GetString(prefs::kCloudPrintEmail).empty();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1373,6 +1643,16 @@ void AdvancedContentsView::InitControlLayout() {
   layout->AddView(new WebContentSection(profile()));
   layout->StartRow(0, single_column_view_set_id);
   layout->AddView(new SecuritySection(profile()));
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableCloudPrintProxy)) {
+    layout->StartRow(0, single_column_view_set_id);
+    layout->AddView(new CloudPrintProxySection(profile()));
+  }
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableBackgroundMode)) {
+    layout->StartRow(0, single_column_view_set_id);
+    layout->AddView(new ChromeAppsSection(profile()));
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1382,7 +1662,7 @@ void AdvancedContentsView::InitClass() {
   static bool initialized = false;
   if (!initialized) {
     ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    line_height_ = rb.GetFont(ResourceBundle::BaseFont).height();
+    line_height_ = rb.GetFont(ResourceBundle::BaseFont).GetHeight();
     initialized = true;
   }
 }
@@ -1411,5 +1691,4 @@ void AdvancedScrollViewContainer::Layout() {
       gfx::NativeTheme::LIST);
   lb.Inset(border.width(), border.height());
   scroll_view_->SetBounds(lb);
-  scroll_view_->Layout();
 }

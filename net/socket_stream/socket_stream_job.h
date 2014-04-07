@@ -4,10 +4,12 @@
 
 #ifndef NET_SOCKET_STREAM_SOCKET_STREAM_JOB_H_
 #define NET_SOCKET_STREAM_SOCKET_STREAM_JOB_H_
+#pragma once
 
 #include <string>
 
 #include "base/ref_counted.h"
+#include "base/string16.h"
 #include "net/socket_stream/socket_stream.h"
 
 class GURL;
@@ -32,17 +34,13 @@ class SocketStreamJob : public base::RefCountedThreadSafe<SocketStreamJob> {
   static SocketStreamJob* CreateSocketStreamJob(
       const GURL& url, SocketStream::Delegate* delegate);
 
-  SocketStreamJob() {}
+  SocketStreamJob();
   void InitSocketStream(SocketStream* socket) {
     socket_ = socket;
   }
 
-  virtual SocketStream::UserData *GetUserData(const void* key) const {
-    return socket_->GetUserData(key);
-  }
-  virtual void SetUserData(const void* key, SocketStream::UserData* data) {
-    socket_->SetUserData(key, data);
-  }
+  virtual SocketStream::UserData* GetUserData(const void* key) const;
+  virtual void SetUserData(const void* key, SocketStream::UserData* data);
 
   URLRequestContext* context() const {
     return socket_->context();
@@ -51,31 +49,20 @@ class SocketStreamJob : public base::RefCountedThreadSafe<SocketStreamJob> {
     socket_->set_context(context);
   }
 
-  virtual void Connect() {
-    socket_->Connect();
-  }
+  virtual void Connect();
 
-  virtual bool SendData(const char* data, int len) {
-    return socket_->SendData(data, len);
-  }
+  virtual bool SendData(const char* data, int len);
 
-  virtual void Close() {
-    socket_->Close();
-  }
+  virtual void Close();
 
-  virtual void RestartWithAuth(
-      const std::wstring& username,
-      const std::wstring& password) {
-    socket_->RestartWithAuth(username, password);
-  }
+  virtual void RestartWithAuth(const string16& username,
+                               const string16& password);
 
-  virtual void DetachDelegate() {
-    socket_->DetachDelegate();
-  }
+  virtual void DetachDelegate();
 
  protected:
   friend class base::RefCountedThreadSafe<SocketStreamJob>;
-  virtual ~SocketStreamJob() {}
+  virtual ~SocketStreamJob();
 
   scoped_refptr<SocketStream> socket_;
 

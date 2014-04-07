@@ -32,6 +32,7 @@
 
 #include <vector>
 
+#include "base/logging.h"
 #include "base/ref_counted.h"
 #include "media/base/filters.h"
 
@@ -66,34 +67,25 @@ class FilterFactory : public base::RefCountedThreadSafe<FilterFactory> {
                               const MediaFormat& media_format) = 0;
 
   friend class base::RefCountedThreadSafe<FilterFactory>;
-  virtual ~FilterFactory() {}
+  FilterFactory();
+  virtual ~FilterFactory();
 };
 
 
 // Maintains a collection of FilterFactories.
 class FilterFactoryCollection : public FilterFactory {
  public:
-  FilterFactoryCollection() {}
+  FilterFactoryCollection();
 
   // Adds a factory to the end of the collection.
-  void AddFactory(FilterFactory* factory) {
-    factories_.push_back(factory);
-  }
+  void AddFactory(FilterFactory* factory);
 
  protected:
   // Attempts to create a filter by walking down the list of filter factories.
-  MediaFilter* Create(FilterType filter_type, const MediaFormat& media_format) {
-    MediaFilter* filter = NULL;
-    for (FactoryVector::iterator factory = factories_.begin();
-         !filter && factory != factories_.end();
-         ++factory) {
-      filter = (*factory)->Create(filter_type, media_format);
-    }
-    return filter;
-  }
+  MediaFilter* Create(FilterType filter_type, const MediaFormat& media_format);
 
  private:
-  ~FilterFactoryCollection() {}
+  ~FilterFactoryCollection();
 
   typedef std::vector< scoped_refptr<FilterFactory> > FactoryVector;
   FactoryVector factories_;
@@ -185,6 +177,32 @@ class FilterFactoryImpl2 : public FilterFactory {
   B const b_;
 
   DISALLOW_COPY_AND_ASSIGN(FilterFactoryImpl2);
+};
+
+template <class Filter, class A, class B, class C>
+class FilterFactoryImpl3 : public FilterFactory {
+ public:
+  FilterFactoryImpl3(A a, B b, C c) : a_(a), b_(b), c_(c) {}
+
+ protected:
+  virtual MediaFilter* Create(FilterType filter_type,
+                              const MediaFormat& media_format) {
+    Filter* filter = NULL;
+    if (Filter::filter_type() == filter_type &&
+        Filter::IsMediaFormatSupported(media_format)) {
+      filter = new Filter(a_, b_, c_);
+    }
+    return filter;
+  }
+
+ private:
+  ~FilterFactoryImpl3() {}
+
+  A const a_;
+  B const b_;
+  C const c_;
+
+  DISALLOW_COPY_AND_ASSIGN(FilterFactoryImpl3);
 };
 
 //------------------------------------------------------------------------------

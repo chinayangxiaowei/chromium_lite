@@ -1,5 +1,5 @@
 #!/usr/bin/python2.4
-# Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+# Copyright (c) 2010 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 '''
 
 import os.path
+import sys
 
 from grit.node import base
 from grit.node import message
@@ -35,6 +36,9 @@ class IfNode(base.Node):
     elif isinstance(self.parent, empty.StructuresNode):
       from grit.node import structure
       return isinstance(child, structure.StructureNode)
+    elif isinstance(self.parent, empty.OutputsNode):
+      from grit.node import io
+      return isinstance(child, io.OutputNode)
     else:
       return False
 
@@ -203,12 +207,31 @@ class GritNode(base.Node):
     '''
     return self.attrs['base_dir']
 
+  def _CollectOutputFiles(self, nodes, output_files):
+    '''Recursively filters the list of nodes that may contain other lists
+    in <if> nodes, and collects all the nodes that are not enclosed by
+    unsatisfied <if> conditionals and not <if> nodes themselves.
+
+    Args:
+      nodes: The list of nodes to filter.
+      output_files: The list of satisfying nodes.
+    '''
+    for node in nodes:
+      if node.name == 'if':
+        if node.IsConditionSatisfied():
+          self._CollectOutputFiles(node.children, output_files)
+      else:
+        output_files.append(node)
+
   def GetOutputFiles(self):
-    '''Returns the list of <file> nodes that are children of this node's
-    <outputs> child.'''
+    '''Returns the list of <output> nodes that are descendants of this node's
+    <outputs> child and are not enclosed by unsatisfied <if> conditionals.
+    '''
     for child in self.children:
       if child.name == 'outputs':
-        return child.children
+        output_files = []
+        self._CollectOutputFiles(child.children, output_files)
+        return output_files
     raise exception.MissingElement()
 
   def ItemFormatter(self, t):
@@ -221,18 +244,73 @@ class GritNode(base.Node):
     elif t == 'resource_map_header':
       from grit.format import resource_map
       return resource_map.HeaderTopLevel()
-    elif t == 'resource_map_source':
+    elif t in ('resource_map_source', 'resource_file_map_source'):
       from grit.format import resource_map
       return resource_map.SourceTopLevel()
     elif t == 'js_map_format':
       from grit.format import js_map_format
       return js_map_format.TopLevel()
+    elif t in ('adm', 'plist', 'plist_strings', 'admx', 'adml', 'doc'):
+      from grit.format.policy_templates import template_formatter
+      return template_formatter.TemplateFormatter(t)
     else:
       return super(type(self), self).ItemFormatter(t)
 
   def SetOutputContext(self, output_language, defines):
     self.output_language = output_language
     self.defines = defines
+
+  def SetDefines(self, defines):
+    self.defines = defines
+
+  def AssignFirstIds(self, filename_or_stream, first_id_filename):
+    '''Assign first ids to each grouping node based on values from
+    tools/grit/resource_ids.'''
+    # If the input is a stream, then we're probably in a unit test and
+    # should skip this step.
+    if type(filename_or_stream) not in (str, unicode):
+      return
+
+    # By default, we use the the file resources_ids next to grit.py
+    # to determine what ids to assign to resources.
+    if not first_id_filename:
+      first_id_filename = os.path.join(os.path.dirname(
+          os.path.abspath(sys.argv[0])), 'resource_ids')
+
+    first_ids = None
+    from grit.node import empty
+    for node in self.inorder():
+      if isinstance(node, empty.GroupingNode):
+        # The checkout base directory is 2 directories up from grit.py.
+        src_root_dir = os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(sys.argv[0]))))
+
+        filename = os.path.abspath(filename_or_stream)[
+            len(src_root_dir) + 1:]
+        filename = filename.replace('\\', '/')
+        if not first_ids:
+          first_ids = eval(open(first_id_filename).read())
+
+        if node.attrs['first_id'] != '':
+          raise Exception("Don't set the first_id attribute, update "
+              "%s instead." % first_id_filename)
+
+        try:
+          id_list = first_ids[filename][node.name]
+        except KeyError, e:
+          print '-' * 78
+          print 'Resource id not set for %s (%s)!' % (filename, node.name)
+          print ('Please update %s to include an entry for %s.  See the '
+              'comments in resource_ids for information on why you need to '
+              'update that file.' % (first_id_filename, filename))
+          print '-' * 78
+          raise e
+
+        try:
+          node.attrs['first_id'] = str(id_list.pop(0))
+        except IndexError, e:
+          raise Exception('Please update %s and add a first id for %s (%s).'
+              % (first_id_filename, filename, node.name))
 
 
 class IdentifierNode(base.Node):

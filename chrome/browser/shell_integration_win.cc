@@ -9,7 +9,6 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 
-#include "app/win_util.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/message_loop.h"
@@ -18,6 +17,7 @@
 #include "base/scoped_comptr_win.h"
 #include "base/string_util.h"
 #include "base/task.h"
+#include "base/utf_string_conversions.h"
 #include "base/win_util.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/web_applications/web_app.h"
@@ -96,7 +96,7 @@ class MigrateChromiumShortcutsTask : public Task {
 
 void MigrateChromiumShortcutsTask::Run() {
   // This should run on the file thread.
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   MigrateWin7Shortcuts();
 }
@@ -218,20 +218,20 @@ bool MigrateChromiumShortcutsTask::GetExpectedAppId(
 
   FilePath profile_path;
   if (command_line.HasSwitch(switches::kUserDataDir)) {
-    profile_path = FilePath(command_line.GetSwitchValue(
-        switches::kUserDataDir)).Append(chrome::kNotSignedInProfile);
+    profile_path =
+        command_line.GetSwitchValuePath(switches::kUserDataDir).Append(
+            chrome::kNotSignedInProfile);
   }
 
   std::wstring app_name;
   if (command_line.HasSwitch(switches::kApp)) {
-    app_name = web_app::GenerateApplicationNameFromURL(
-        GURL(command_line.GetSwitchValueASCII(switches::kApp)));
+    app_name = UTF8ToWide(web_app::GenerateApplicationNameFromURL(
+        GURL(command_line.GetSwitchValueASCII(switches::kApp))));
   } else {
-    app_name = chrome::kBrowserAppID;
+    app_name = BrowserDistribution::GetDistribution()->GetBrowserAppId();
   }
 
-  expected_app_id->assign(ShellIntegration::GetAppId(app_name.c_str(),
-                                                     profile_path));
+  expected_app_id->assign(ShellIntegration::GetAppId(app_name, profile_path));
   return true;
 }
 
@@ -386,7 +386,7 @@ bool ShellIntegration::IsFirefoxDefaultBrowser() {
   return ff_default;
 }
 
-std::wstring ShellIntegration::GetAppId(const wchar_t* app_name,
+std::wstring ShellIntegration::GetAppId(const std::wstring& app_name,
                                         const FilePath& profile_path) {
   std::wstring app_id(app_name);
 
@@ -402,13 +402,14 @@ std::wstring ShellIntegration::GetAppId(const wchar_t* app_name,
 }
 
 std::wstring ShellIntegration::GetChromiumAppId(const FilePath& profile_path) {
-  return GetAppId(chrome::kBrowserAppID, profile_path);
+  return GetAppId(BrowserDistribution::GetDistribution()->GetBrowserAppId(),
+                  profile_path);
 }
 
 void ShellIntegration::MigrateChromiumShortcuts() {
   if (win_util::GetWinVersion() < win_util::WINVERSION_WIN7)
     return;
 
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE, new MigrateChromiumShortcutsTask());
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE, new MigrateChromiumShortcutsTask());
 }

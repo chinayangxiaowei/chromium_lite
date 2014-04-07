@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -81,7 +81,7 @@ class SimpleDataSourceTest : public testing::Test {
   }
 
   void RequestSucceeded(bool is_loaded) {
-    ResourceLoaderBridge::ResponseInfo info;
+    ResourceResponseInfo info;
     info.content_length = kDataSize;
 
     data_source_->OnReceivedResponse(info, false);
@@ -105,7 +105,7 @@ class SimpleDataSourceTest : public testing::Test {
     URLRequestStatus status;
     status.set_status(URLRequestStatus::SUCCESS);
     status.set_os_error(0);
-    data_source_->OnCompletedRequest(status, "");
+    data_source_->OnCompletedRequest(status, "", base::Time());
 
     // Let the tasks to be executed.
     MessageLoop::current()->RunAllPending();
@@ -122,7 +122,7 @@ class SimpleDataSourceTest : public testing::Test {
     URLRequestStatus status;
     status.set_status(URLRequestStatus::FAILED);
     status.set_os_error(100);
-    data_source_->OnCompletedRequest(status, "");
+    data_source_->OnCompletedRequest(status, "", base::Time());
 
     // Let the tasks to be executed.
     MessageLoop::current()->RunAllPending();
@@ -132,7 +132,10 @@ class SimpleDataSourceTest : public testing::Test {
     EXPECT_CALL(*bridge_factory_, OnDestroy())
         .WillOnce(Invoke(this, &SimpleDataSourceTest::ReleaseBridgeFactory));
 
-    data_source_->Stop();
+    StrictMock<media::MockFilterCallback> callback;
+    EXPECT_CALL(callback, OnFilterCallback());
+    EXPECT_CALL(callback, OnCallbackDestroyed());
+    data_source_->Stop(callback.NewCallback());
     MessageLoop::current()->RunAllPending();
 
     data_source_ = NULL;
@@ -151,11 +154,11 @@ class SimpleDataSourceTest : public testing::Test {
   }
 
   void ReleaseBridge() {
-    bridge_.release();
+    ignore_result(bridge_.release());
   }
 
   void ReleaseBridgeFactory() {
-    bridge_factory_.release();
+    ignore_result(bridge_factory_.release());
   }
 
   MOCK_METHOD1(ReadCallback, void(size_t size));

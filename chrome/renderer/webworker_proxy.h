@@ -4,6 +4,7 @@
 
 #ifndef CHROME_RENDERER_WEBWORKER_PROXY_H_
 #define CHROME_RENDERER_WEBWORKER_PROXY_H_
+#pragma once
 
 #include <vector>
 
@@ -26,7 +27,8 @@ class WebWorkerProxy : public WebKit::WebWorker, private WebWorkerBase {
  public:
   WebWorkerProxy(WebKit::WebWorkerClient* client,
                  ChildThread* child_thread,
-                 int render_view_route_id);
+                 int render_view_route_id,
+                 int parent_appcache_host_id);
   ~WebWorkerProxy();
 
   // WebWorker implementation.

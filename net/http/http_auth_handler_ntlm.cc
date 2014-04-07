@@ -4,7 +4,9 @@
 
 #include "net/http/http_auth_handler_ntlm.h"
 
+#if !defined(NTLM_SSPI)
 #include "base/base64.h"
+#endif
 #include "base/logging.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
@@ -13,21 +15,24 @@
 
 namespace net {
 
-int HttpAuthHandlerNTLM::GenerateAuthToken(
-    const std::wstring& username,
-    const std::wstring& password,
+int HttpAuthHandlerNTLM::GenerateAuthTokenImpl(
+    const string16* username,
+    const string16* password,
     const HttpRequestInfo* request,
-    const ProxyInfo* proxy,
+    CompletionCallback* callback,
     std::string* auth_token) {
 #if defined(NTLM_SSPI)
   return auth_sspi_.GenerateAuthToken(
-      &username,
-      &password,
+      username,
+      password,
       CreateSPN(origin_),
-      request,
-      proxy,
       auth_token);
 #else  // !defined(NTLM_SSPI)
+  // TODO(cbentzel): Shouldn't be hitting this case.
+  if (!username || !password) {
+    LOG(ERROR) << "Username and password are expected to be non-NULL.";
+    return ERR_MISSING_AUTH_CREDENTIALS;
+  }
   // TODO(wtc): See if we can use char* instead of void* for in_buf and
   // out_buf.  This change will need to propagate to GetNextToken,
   // GenerateType1Msg, and GenerateType3Msg, and perhaps further.
@@ -38,18 +43,19 @@ int HttpAuthHandlerNTLM::GenerateAuthToken(
 
   // |username| may be in the form "DOMAIN\user".  Parse it into the two
   // components.
-  std::wstring domain;
-  std::wstring user;
-  size_t backslash_idx = username.find(L'\\');
-  if (backslash_idx == std::wstring::npos) {
-    user = username;
+  string16 domain;
+  string16 user;
+  const char16 backslash_character = '\\';
+  size_t backslash_idx = username->find(backslash_character);
+  if (backslash_idx == string16::npos) {
+    user = *username;
   } else {
-    domain = username.substr(0, backslash_idx);
-    user = username.substr(backslash_idx + 1);
+    domain = username->substr(0, backslash_idx);
+    user = username->substr(backslash_idx + 1);
   }
-  domain_ = WideToUTF16(domain);
-  username_ = WideToUTF16(user);
-  password_ = WideToUTF16(password);
+  domain_ = domain;
+  username_ = user;
+  password_ = *password;
 
   // Initial challenge.
   if (auth_data_.empty()) {
@@ -86,27 +92,50 @@ int HttpAuthHandlerNTLM::GenerateAuthToken(
 #endif
 }
 
-// The NTLM challenge header looks like:
-//   WWW-Authenticate: NTLM auth-data
-bool HttpAuthHandlerNTLM::ParseChallenge(
-    HttpAuth::ChallengeTokenizer* tok) {
+bool HttpAuthHandlerNTLM::Init(HttpAuth::ChallengeTokenizer* tok) {
   scheme_ = "ntlm";
   score_ = 3;
   properties_ = ENCRYPTS_IDENTITY | IS_CONNECTION_BASED;
 
+  return ParseChallenge(tok, true) == HttpAuth::AUTHORIZATION_RESULT_ACCEPT;
+}
+
+HttpAuth::AuthorizationResult HttpAuthHandlerNTLM::HandleAnotherChallenge(
+    HttpAuth::ChallengeTokenizer* challenge) {
+  return ParseChallenge(challenge, false);
+}
+
+// The NTLM challenge header looks like:
+//   WWW-Authenticate: NTLM auth-data
+HttpAuth::AuthorizationResult HttpAuthHandlerNTLM::ParseChallenge(
+    HttpAuth::ChallengeTokenizer* tok, bool initial_challenge) {
 #if defined(NTLM_SSPI)
+  // auth_sspi_ contains state for whether or not this is the initial challenge.
   return auth_sspi_.ParseChallenge(tok);
 #else
+  // TODO(cbentzel): Most of the logic between SSPI, GSSAPI, and portable NTLM
+  // authentication parsing could probably be shared - just need to know if
+  // there was previously a challenge round.
+  // TODO(cbentzel): Write a test case to validate that auth_data_ is left empty
+  // in all failure conditions.
   auth_data_.clear();
 
   // Verify the challenge's auth-scheme.
-  if (!tok->valid() || !LowerCaseEqualsASCII(tok->scheme(), "ntlm"))
-    return false;
+  if (!LowerCaseEqualsASCII(tok->scheme(), "ntlm"))
+    return HttpAuth::AUTHORIZATION_RESULT_INVALID;
 
-  tok->set_expect_base64_token(true);
-  if (tok->GetNext())
-    auth_data_.assign(tok->value_begin(), tok->value_end());
-  return true;
+  std::string base64_param = tok->base64_param();
+  if (base64_param.empty()) {
+    if (!initial_challenge)
+      return HttpAuth::AUTHORIZATION_RESULT_REJECT;
+    return HttpAuth::AUTHORIZATION_RESULT_ACCEPT;
+  } else {
+    if (initial_challenge)
+      return HttpAuth::AUTHORIZATION_RESULT_INVALID;
+  }
+
+  auth_data_ = base64_param;
+  return HttpAuth::AUTHORIZATION_RESULT_ACCEPT;
 #endif  // defined(NTLM_SSPI)
 }
 

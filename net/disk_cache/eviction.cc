@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 // only one list in use (Rankings::NO_USE), and elements are sent to the front
 // of the list whenever they are accessed.
 
-// The new (in-development) eviction policy ads re-use as a factor to evict
+// The new (in-development) eviction policy adds re-use as a factor to evict
 // an entry. The story so far:
 
 // Entries are linked on separate lists depending on how often they are used.
@@ -28,12 +28,14 @@
 
 #include "net/disk_cache/eviction.h"
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "base/time.h"
 #include "net/disk_cache/backend_impl.h"
 #include "net/disk_cache/entry_impl.h"
+#include "net/disk_cache/experiments.h"
 #include "net/disk_cache/histogram_macros.h"
 #include "net/disk_cache/trace.h"
 
@@ -58,6 +60,15 @@ int LowWaterAdjust(int high_water) {
 
 namespace disk_cache {
 
+Eviction::Eviction()
+    : backend_(NULL),
+      init_(false),
+      ALLOW_THIS_IN_INITIALIZER_LIST(factory_(this)) {
+}
+
+Eviction::~Eviction() {
+}
+
 void Eviction::Init(BackendImpl* backend) {
   // We grab a bunch of info from the backend to make the code a little cleaner
   // when we're actually doing work.
@@ -70,6 +81,21 @@ void Eviction::Init(BackendImpl* backend) {
   trimming_ = false;
   delay_trim_ = false;
   trim_delays_ = 0;
+  init_ = true;
+  in_experiment_ = (header_->experiment == EXPERIMENT_DELETED_LIST_IN);
+}
+
+void Eviction::Stop() {
+  // It is possible for the backend initialization to fail, in which case this
+  // object was never initialized... and there is nothing to do.
+  if (!init_)
+    return;
+
+  // We want to stop further evictions, so let's pretend that we are busy from
+  // this point on.
+  DCHECK(!trimming_);
+  trimming_ = true;
+  factory_.RevokeAll();
 }
 
 void Eviction::TrimCache(bool empty) {
@@ -224,7 +250,7 @@ bool Eviction::EvictEntry(CacheRankingsBlock* node, bool empty) {
 
   ReportTrimTimes(entry);
   if (empty || !new_eviction_) {
-    entry->Doom();
+    entry->DoomImpl();
   } else {
     entry->DeleteEntryData(false);
     EntryStore* info = entry->entry()->Data();
@@ -427,8 +453,14 @@ void Eviction::TrimDeleted(bool empty) {
     deleted |= RemoveDeletedNode(node.get());
   }
 
+  // Normally we use 25% for each list. The experiment doubles the number of
+  // deleted entries, so the total number of entries increases by 25%. Using
+  // 40% of that value for deleted entries leaves the size of the other three
+  // lists intact.
+  int max_length = in_experiment_ ? header_->num_entries * 2 / 5 :
+                                    header_->num_entries / 4;
   if (deleted && !empty &&
-      header_->lru.sizes[Rankings::DELETED] > header_->num_entries / 4)
+      header_->lru.sizes[Rankings::DELETED] > max_length)
     MessageLoop::current()->PostTask(FROM_HERE,
         factory_.NewRunnableMethod(&Eviction::TrimDeleted, false));
 
@@ -453,7 +485,7 @@ bool Eviction::RemoveDeletedNode(CacheRankingsBlock* node) {
   }
   bool doomed = (entry->entry()->Data()->state == ENTRY_DOOMED);
   entry->entry()->Data()->state = ENTRY_DOOMED;
-  entry->Doom();
+  entry->DoomImpl();
   entry->Release();
   return !doomed;
 }

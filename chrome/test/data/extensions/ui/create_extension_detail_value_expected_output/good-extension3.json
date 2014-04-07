@@ -6,9 +6,13 @@
   "description": "",
   "permissions": [],
   "allow_reload": false,
+  "is_hosted_app": false,
   "order": 2,
   "enabledIncognito": false,
+  "wantsFileAccess": false,
+  "allowFileAccess": false,
   "content_scripts": [],
   "views": [],
-  "hasPopupAction": false
+  "hasPopupAction": false,
+  "galleryUrl": ""
 }

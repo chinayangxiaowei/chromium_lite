@@ -4,10 +4,19 @@
 
 #include "chrome/browser/sync/sessions/ordered_commit_set.h"
 
+#include <algorithm>
+
 #include "base/logging.h"
 
 namespace browser_sync {
 namespace sessions {
+
+OrderedCommitSet::OrderedCommitSet(
+    const browser_sync::ModelSafeRoutingInfo& routes)
+    : routes_(routes) {
+}
+
+OrderedCommitSet::~OrderedCommitSet() {}
 
 void OrderedCommitSet::AddCommitItem(const int64 metahandle,
                                      const syncable::Id& commit_id,

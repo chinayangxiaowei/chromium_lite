@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include "chrome/browser/chromeos/status/clock_menu_button.h"
-#include "chrome/browser/chromeos/status/language_menu_button.h"
+#include "chrome/browser/chromeos/status/input_method_menu_button.h"
 #include "chrome/browser/chromeos/status/network_menu_button.h"
 #include "chrome/browser/chromeos/status/power_menu_button.h"
 #include "chrome/browser/chromeos/status/status_area_host.h"
@@ -16,27 +16,24 @@
 namespace chromeos {
 
 // Number of pixels to separate each icon.
-const int kSeparation = 6;
-
-// BrowserWindowGtk tiles its image with this offset
-const int kCustomFrameBackgroundVerticalOffset = 15;
-
-// Default to opening new tabs on the left.
-StatusAreaView::OpenTabsMode StatusAreaView::open_tabs_mode_ =
-    StatusAreaView::OPEN_TABS_ON_LEFT;
+const int kSeparation = 1;
 
 StatusAreaView::StatusAreaView(StatusAreaHost* host)
     : host_(host),
       clock_view_(NULL),
-      language_view_(NULL),
+      input_method_view_(NULL),
       network_view_(NULL),
       power_view_(NULL) {
 }
 
 void StatusAreaView::Init() {
-  // Language.
-  language_view_ = new LanguageMenuButton(host_);
-  AddChildView(language_view_);
+  // Clock.
+  clock_view_ = new ClockMenuButton(host_);
+  AddChildView(clock_view_);
+
+  // InputMethod.
+  input_method_view_ = new InputMethodMenuButton(host_);
+  AddChildView(input_method_view_);
 
   // Network.
   network_view_ = new NetworkMenuButton(host_);
@@ -45,17 +42,6 @@ void StatusAreaView::Init() {
   // Power.
   power_view_ = new PowerMenuButton();
   AddChildView(power_view_);
-
-  // Clock.
-  clock_view_ = new ClockMenuButton(host_);
-  AddChildView(clock_view_);
-}
-
-void StatusAreaView::Update() {
-  for (int i = 0; i < GetChildViewCount(); ++i) {
-    views::View* cur = GetChildViewAt(i);
-    cur->SetVisible(host_->IsButtonVisible(cur));
-  }
 }
 
 gfx::Size StatusAreaView::GetPreferredSize() {
@@ -88,7 +74,8 @@ void StatusAreaView::Layout() {
       // Put next in row horizontally, and center vertically.
       cur->SetBounds(cur_x, cur_y, cur_size.width(), cur_size.height());
 
-      cur_x += cur_size.width() + kSeparation;
+      if (cur_size.width() > 0)
+        cur_x += cur_size.width() + kSeparation;
     }
   }
 }
@@ -101,14 +88,11 @@ void StatusAreaView::ChildPreferredSizeChanged(View* child) {
   PreferredSizeChanged();
 }
 
-// static
-StatusAreaView::OpenTabsMode StatusAreaView::GetOpenTabsMode() {
-  return open_tabs_mode_;
-}
-
-// static
-void StatusAreaView::SetOpenTabsMode(OpenTabsMode mode) {
-  open_tabs_mode_ = mode;
+void StatusAreaView::EnableButtons(bool enable) {
+  clock_view()->Enable(enable);
+  input_method_view()->Enable(enable);
+  network_view()->Enable(enable);
+  power_view()->Enable(enable);
 }
 
 }  // namespace chromeos

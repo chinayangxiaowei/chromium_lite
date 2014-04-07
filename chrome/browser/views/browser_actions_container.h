@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_VIEWS_BROWSER_ACTIONS_CONTAINER_H_
 #define CHROME_BROWSER_VIEWS_BROWSER_ACTIONS_CONTAINER_H_
+#pragma once
 
 #include <set>
 #include <string>
@@ -21,7 +22,7 @@
 #include "chrome/common/notification_registrar.h"
 #include "views/controls/button/menu_button.h"
 #include "views/controls/menu/view_menu_delegate.h"
-#include "views/controls/resize_gripper.h"
+#include "views/controls/resize_area.h"
 #include "views/view.h"
 
 class Browser;
@@ -33,6 +34,10 @@ class ExtensionAction;
 class ExtensionPopup;
 class PrefService;
 class Profile;
+
+namespace gfx {
+class CanvasSkia;
+}
 
 namespace views {
 class Menu2;
@@ -63,9 +68,8 @@ class BrowserActionButton : public views::MenuButton,
   // Returns the default icon, if any.
   const SkBitmap& default_icon() const { return default_icon_; }
 
-  // Overridden from views::View. Return a 0-inset so the icon can draw all the
-  // way to the edge of the view if it wants.
-  virtual gfx::Insets GetInsets() const;
+  // Overridden from views::View:
+  virtual void ViewHierarchyChanged(bool is_add, View* parent, View* child);
 
   // Overridden from views::ButtonListener:
   virtual void ButtonPressed(views::Button* sender, const views::Event& event);
@@ -89,6 +93,7 @@ class BrowserActionButton : public views::MenuButton,
   virtual void OnMouseReleased(const views::MouseEvent& e, bool canceled);
   virtual bool OnKeyReleased(const views::KeyEvent& e);
   virtual void OnMouseExited(const views::MouseEvent& event);
+  virtual void ShowContextMenu(const gfx::Point& p, bool is_mouse_gesture);
 
   // Does this button's action have a popup?
   virtual bool IsPopup();
@@ -152,7 +157,7 @@ class BrowserActionView : public views::View {
   gfx::Canvas* GetIconWithBadge();
 
   // Accessibility accessors, overridden from View.
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
  private:
   virtual void Layout();
@@ -174,32 +179,32 @@ class BrowserActionView : public views::View {
 // The BrowserActionsContainer is a container view, responsible for drawing the
 // browser action icons (extensions that add icons to the toolbar).
 //
-// The BrowserActionsContainer (when it contains one or more icons) consists of
-// the following elements, numbered as seen below the line:
-//
-//    || _ Icon _ Icon _ Icon _ [chevron] _ | _
-//    -----------------------------------------
-//     1 2   3  4                   5     6 7 8
-//
-// 1) The ResizeGripper view.
-// 2) Padding  (kHorizontalPadding).
-// 3) The browser action icon button (BrowserActionView).
-// 4) Padding to visually separate icons from one another
-//    (kBrowserActionButtonPadding). Not included if only one icon visible.
-// 5) The chevron menu (MenuButton), shown when there is not enough room to show
-//    all the icons.
-// 6) Padding  (kDividerHorizontalMargin).
-// 7) A thin vertical divider drawn during Paint to create visual separation for
-//    the container from the Page and Wrench menus.
-// 8) Padding  (kChevronRightMargin).
+// The container is placed flush against the omnibox and wrench menu, and its
+// layout looks like:
+//   rI_I_IcCs
+// Where the letters are as follows:
+//   r: An invisible resize area.  This is ToolbarView::kStandardSpacing pixels
+//      wide and directly adjacent to the omnibox.
+//   I: An icon.  This is as wide as the IDR_BROWSER_ACTION image.
+//   _: kItemSpacing pixels of empty space.
+//   c: kChevronSpacing pixels of empty space.  Only present if C is present.
+//   C: An optional chevron, visible for overflow.  As wide as the
+//      IDR_BROWSER_ACTIONS_OVERFLOW image.
+//   s: ToolbarView::kStandardSpacing pixels of empty space (before the wrench
+//      menu).
+// The reason the container contains the trailing space "s", rather than having
+// it be handled by the parent view, is so that when the chevron is invisible
+// and the user starts dragging an icon around, we have the space to draw the
+// ultimate drop indicator.  (Otherwise, we'd be trying to draw it into the
+// padding beyond our right edge, and it wouldn't appear.)
 //
 // The BrowserActionsContainer follows a few rules, in terms of user experience:
 //
 // 1) The container can never grow beyond the space needed to show all icons
 // (hereby referred to as the max width).
 // 2) The container can never shrink below the space needed to show just the
-// resize gripper and the chevron (ignoring the case where there are no icons to
-// show, in which case the container won't be visible anyway).
+// initial padding and the chevron (ignoring the case where there are no icons
+// to show, in which case the container won't be visible anyway).
 // 3) The container snaps into place (to the pixel count that fits the visible
 // icons) to make sure there is no wasted space at the edges of the container.
 // 4) If the user adds or removes icons (read: installs/uninstalls browser
@@ -213,12 +218,11 @@ class BrowserActionView : public views::View {
 //
 // Resizing the BrowserActionsContainer:
 //
-// The ResizeGripper view sends OnResize messages to the BrowserActionsContainer
-// class as the user drags the gripper. This modifies the value for
-// |resize_amount_|. That indicates to the container that a resize is in
-// progress and is used to calculate the size in GetPreferredSize(), though
-// that function never exceeds the defined minimum and maximum size of the
-// container.
+// The ResizeArea view sends OnResize messages to the BrowserActionsContainer
+// class as the user drags it. This modifies the value for |resize_amount_|.
+// That indicates to the container that a resize is in progress and is used to
+// calculate the size in GetPreferredSize(), though that function never exceeds
+// the defined minimum and maximum size of the container.
 //
 // When the user releases the mouse (ends the resize), we calculate a target
 // size for the container (animation_target_size_), clamp that value to the
@@ -231,9 +235,9 @@ class BrowserActionView : public views::View {
 // visible icons. This can be triggered when the user finishes resizing the
 // container or when Browser Actions are added/removed.
 //
-// We always animate from the current width (container_size_.width()) to the
-// target size (animation_target_size_), using |resize_amount| to keep track of
-// the animation progress.
+// We always animate from the current width (container_width_) to the target
+// size (animation_target_size_), using |resize_amount| to keep track of the
+// animation progress.
 //
 // NOTE: When adding Browser Actions to a maximum width container (no overflow)
 // we make sure to suppress the chevron menu if it wasn't visible. This is
@@ -243,23 +247,22 @@ class BrowserActionView : public views::View {
 //
 ////////////////////////////////////////////////////////////////////////////////
 class BrowserActionsContainer
-  : public views::View,
-    public views::ViewMenuDelegate,
-    public views::DragController,
-    public views::ResizeGripper::ResizeGripperDelegate,
-    public AnimationDelegate,
-    public ExtensionToolbarModel::Observer,
-    public BrowserActionOverflowMenuController::Observer,
-    public ExtensionContextMenuModel::PopupDelegate,
-    public ExtensionPopup::Observer {
+    : public views::View,
+      public views::ViewMenuDelegate,
+      public views::DragController,
+      public views::ResizeArea::ResizeAreaDelegate,
+      public AnimationDelegate,
+      public ExtensionToolbarModel::Observer,
+      public BrowserActionOverflowMenuController::Observer,
+      public ExtensionContextMenuModel::PopupDelegate,
+      public ExtensionPopup::Observer {
  public:
-  // If |should_save_size| is false, container resizes will not persist across
-  // browser restarts.
-  BrowserActionsContainer(Browser* browser, views::View* owner_view,
-                          bool should_save_size);
+  BrowserActionsContainer(Browser* browser, views::View* owner_view);
   virtual ~BrowserActionsContainer();
 
   static void RegisterUserPrefs(PrefService* prefs);
+
+  void Init();
 
   // Get the number of browser actions being displayed.
   int num_browser_actions() const { return browser_action_views_.size(); }
@@ -321,7 +324,8 @@ class BrowserActionsContainer
   virtual int OnDragUpdated(const views::DropTargetEvent& event);
   virtual void OnDragExited();
   virtual int OnPerformDrop(const views::DropTargetEvent& event);
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual void OnThemeChanged();
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
   // Overridden from views::ViewMenuDelegate:
   virtual void RunMenu(View* source, const gfx::Point& pt);
@@ -335,7 +339,7 @@ class BrowserActionsContainer
                             const gfx::Point& press_pt,
                             const gfx::Point& p);
 
-  // Overridden from ResizeGripper::ResizeGripperDelegate:
+  // Overridden from ResizeArea::ResizeAreaDelegate:
   virtual void OnResize(int resize_amount, bool done_resizing);
 
   // Overridden from AnimationDelegate:
@@ -350,7 +354,7 @@ class BrowserActionsContainer
   virtual void InspectPopup(ExtensionAction* action);
 
   // Overriden from ExtensionPopup::Delegate
-  virtual void ExtensionPopupClosed(ExtensionPopup* popup);
+  virtual void ExtensionPopupIsClosing(ExtensionPopup* popup);
 
   // Moves a browser action with |id| to |new_index|.
   void MoveBrowserAction(const std::string& extension_id, size_t new_index);
@@ -375,15 +379,24 @@ class BrowserActionsContainer
   static bool disable_animations_during_testing_;
 
  private:
+  friend class BrowserActionView;  // So it can access IconHeight().
   friend class ShowFolderMenuTask;
 
   typedef std::vector<BrowserActionView*> BrowserActionViews;
+
+  // Returns the width of an icon, optionally with its padding.
+  static int IconWidth(bool include_padding);
+
+  // Returns the height of an icon.
+  static int IconHeight();
 
   // ExtensionToolbarModel::Observer implementation.
   virtual void BrowserActionAdded(Extension* extension, int index);
   virtual void BrowserActionRemoved(Extension* extension);
   virtual void BrowserActionMoved(Extension* extension, int index);
   virtual void ModelLoaded();
+
+  void LoadImages();
 
   // Sets the initial container width.
   void SetContainerWidth();
@@ -404,31 +417,26 @@ class BrowserActionsContainer
   // changed).
   void SetDropIndicator(int x_pos);
 
-  // Takes a width in pixels, calculates how many icons fit within that space
-  // (up to the maximum number of icons in our vector) and shaves off the
-  // excess pixels. |allow_shrink_to_minimum| specifies whether this function
-  // clamps the size down further (down to ContainerMinSize()) if there is not
-  // room for even one icon. When determining how large the container should be
-  // this should be |true|. When determining where to place items, such as the
-  // drop indicator, this should be |false|.
-  int ClampToNearestIconCount(int pixels, bool allow_shrink_to_minimum) const;
+  // Given a number of |icons| and whether to |display_chevron|, returns the
+  // amount of pixels needed to draw the entire container.  For convenience,
+  // callers can set |icons| to -1 to mean "all icons".
+  int IconCountToWidth(int icons, bool display_chevron) const;
 
-  // Calculates the width of the container area NOT used to show the icons (the
-  // controls to the left and to the right of the icons).
-  int WidthOfNonIconArea() const;
-
-  // Given a number of |icons| return the amount of pixels needed to draw it,
-  // including the controls (chevron if visible and resize gripper).
-  int IconCountToWidth(int icons) const;
+  // Given a pixel width, returns the number of icons that fit.  (This
+  // automatically determines whether a chevron will be needed and includes it
+  // in the calculation.)
+  size_t WidthToIconCount(int pixels) const;
 
   // Returns the absolute minimum size you can shrink the container down to and
-  // still show it. We account for the chevron and the resize gripper, but not
-  // all the padding that we normally show if there are icons.
+  // still show it.  This assumes a visible chevron because the only way we
+  // would not have a chevron when shrinking down this far is if there were no
+  // icons, in which case the container wouldn't be shown at all.
   int ContainerMinSize() const;
 
-  // Animate to the target value (unless testing, in which case we go straight
-  // to the target size).
-  void Animate(SlideAnimation::TweenType tween_type, int target_size);
+  // Animate to the target size (unless testing, in which case we go straight to
+  // the target size).  This also saves the target number of visible icons in
+  // the pref if we're not off the record.
+  void SaveDesiredSizeAndAnimate(Tween::Type type, size_t num_visible_icons);
 
   // Returns true if this extension should be shown in this toolbar. This can
   // return false if we are in an incognito window and the extension is disabled
@@ -448,9 +456,6 @@ class BrowserActionsContainer
   // The view that owns us.
   views::View* owner_view_;
 
-  // True if we should save the size of the container to the global prefs.
-  bool should_save_size_;
-
   // The current popup and the button it came from.  NULL if no popup.
   ExtensionPopup* popup_;
 
@@ -461,11 +466,11 @@ class BrowserActionsContainer
   // The model that tracks the order of the toolbar icons.
   ExtensionToolbarModel* model_;
 
-  // The current size of the container.
-  gfx::Size container_size_;
+  // The current width of the container.
+  int container_width_;
 
-  // The resize gripper for the container.
-  views::ResizeGripper* resize_gripper_;
+  // The resize area for the container.
+  views::ResizeArea* resize_area_;
 
   // The chevron for accessing the overflow items.
   views::MenuButton* chevron_;

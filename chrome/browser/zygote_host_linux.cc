@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,17 @@
 
 #include "base/command_line.h"
 #include "base/eintr_wrapper.h"
+#include "base/environment.h"
 #include "base/linux_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/pickle.h"
 #include "base/process_util.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/scoped_ptr.h"
 #include "base/unix_domain_socket_posix.h"
+#include "base/utf_string_conversions.h"
 
 #include "chrome/browser/renderer_host/render_sandbox_host_linux.h"
 #include "chrome/common/chrome_constants.h"
@@ -37,11 +41,12 @@ static void SaveSUIDUnsafeEnvironmentVariables() {
     if (!saved_envvar)
       continue;
 
-    const char* const value = getenv(envvar);
-    if (value)
-      setenv(saved_envvar, value, 1 /* overwrite */);
+    scoped_ptr<base::Environment> env(base::Environment::Create());
+    std::string value;
+    if (env->GetVar(envvar, &value))
+      env->SetVar(saved_envvar, value);
     else
-      unsetenv(saved_envvar);
+      env->UnSetVar(saved_envvar);
 
     free(saved_envvar);
   }
@@ -50,7 +55,8 @@ static void SaveSUIDUnsafeEnvironmentVariables() {
 ZygoteHost::ZygoteHost()
     : pid_(-1),
       init_(false),
-      using_suid_sandbox_(false) {
+      using_suid_sandbox_(false),
+      have_read_sandbox_status_word_(false) {
 }
 
 ZygoteHost::~ZygoteHost() {
@@ -66,8 +72,7 @@ void ZygoteHost::Init(const std::string& sandbox_cmd) {
   CHECK(PathService::Get(base::FILE_EXE, &chrome_path));
   CommandLine cmd_line(chrome_path);
 
-  cmd_line.AppendSwitchWithValue(switches::kProcessType,
-                                 switches::kZygoteProcess);
+  cmd_line.AppendSwitchASCII(switches::kProcessType, switches::kZygoteProcess);
 
   int fds[2];
   CHECK(socketpair(PF_UNIX, SOCK_SEQPACKET, 0, fds) == 0);
@@ -76,40 +81,29 @@ void ZygoteHost::Init(const std::string& sandbox_cmd) {
 
   const CommandLine& browser_command_line = *CommandLine::ForCurrentProcess();
   if (browser_command_line.HasSwitch(switches::kZygoteCmdPrefix)) {
-    const std::wstring prefix =
-        browser_command_line.GetSwitchValue(switches::kZygoteCmdPrefix);
-    cmd_line.PrependWrapper(prefix);
+    cmd_line.PrependWrapper(
+        browser_command_line.GetSwitchValueNative(switches::kZygoteCmdPrefix));
   }
   // Append any switches from the browser process that need to be forwarded on
   // to the zygote/renderers.
   // Should this list be obtained from browser_render_process_host.cc?
-  if (browser_command_line.HasSwitch(switches::kAllowSandboxDebugging)) {
-    cmd_line.AppendSwitch(switches::kAllowSandboxDebugging);
-  }
-  if (browser_command_line.HasSwitch(switches::kLoggingLevel)) {
-    cmd_line.AppendSwitchWithValue(switches::kLoggingLevel,
-                                   browser_command_line.GetSwitchValueASCII(
-                                       switches::kLoggingLevel));
-  }
-  if (browser_command_line.HasSwitch(switches::kEnableLogging)) {
-    // Append with value to support --enable-logging=stderr.
-    cmd_line.AppendSwitchWithValue(switches::kEnableLogging,
-                                   browser_command_line.GetSwitchValueASCII(
-                                       switches::kEnableLogging));
-  }
-  if (browser_command_line.HasSwitch(switches::kUserDataDir)) {
-    // Append with value so logs go to the right file.
-    cmd_line.AppendSwitchWithValue(switches::kUserDataDir,
-                                   browser_command_line.GetSwitchValueASCII(
-                                       switches::kUserDataDir));
-  }
+  static const char* kForwardSwitches[] = {
+    switches::kAllowSandboxDebugging,
+    switches::kLoggingLevel,
+    switches::kEnableLogging,  // Support, e.g., --enable-logging=stderr.
+    switches::kV,
+    switches::kVModule,
+    switches::kUserDataDir,  // Make logs go to the right file.
+    // Load (in-process) Pepper plugins in-process in the zygote pre-sandbox.
+    switches::kRegisterPepperPlugins,
 #if defined(USE_SECCOMP_SANDBOX)
-  if (browser_command_line.HasSwitch(switches::kDisableSeccompSandbox))
-    cmd_line.AppendSwitch(switches::kDisableSeccompSandbox);
+    switches::kDisableSeccompSandbox,
 #else
-  if (browser_command_line.HasSwitch(switches::kEnableSeccompSandbox))
-    cmd_line.AppendSwitch(switches::kEnableSeccompSandbox);
+    switches::kEnableSeccompSandbox,
 #endif
+  };
+  cmd_line.CopySwitchesFrom(browser_command_line, kForwardSwitches,
+                            arraysize(kForwardSwitches));
 
   sandbox_binary_ = sandbox_cmd.c_str();
   struct stat st;
@@ -120,7 +114,7 @@ void ZygoteHost::Init(const std::string& sandbox_cmd) {
         (st.st_mode & S_ISUID) &&
         (st.st_mode & S_IXOTH)) {
       using_suid_sandbox_ = true;
-      cmd_line.PrependWrapper(ASCIIToWide(sandbox_binary_.c_str()));
+      cmd_line.PrependWrapper(sandbox_binary_);
 
       SaveSUIDUnsafeEnvironmentVariables();
     } else {
@@ -168,10 +162,10 @@ void ZygoteHost::Init(const std::string& sandbox_cmd) {
       std::vector<std::string> get_inode_cmdline;
       get_inode_cmdline.push_back(sandbox_binary_);
       get_inode_cmdline.push_back(base::kFindInodeSwitch);
-      get_inode_cmdline.push_back(Int64ToString(inode));
+      get_inode_cmdline.push_back(base::Int64ToString(inode));
       CommandLine get_inode_cmd(get_inode_cmdline);
       if (base::GetAppOutput(get_inode_cmd, &inode_output)) {
-        StringToInt(inode_output, &pid_);
+        base::StringToInt(inode_output, &pid_);
       }
     }
     CHECK(pid_ > 0) << "Did not find zygote process (using sandbox binary "
@@ -188,6 +182,29 @@ void ZygoteHost::Init(const std::string& sandbox_cmd) {
 
   close(fds[1]);
   control_fd_ = fds[0];
+
+  Pickle pickle;
+  pickle.WriteInt(kCmdGetSandboxStatus);
+  std::vector<int> empty_fds;
+  if (!base::SendMsg(control_fd_, pickle.data(), pickle.size(), empty_fds))
+    LOG(FATAL) << "Cannot communicate with zygote";
+  // We don't wait for the reply. We'll read it in ReadReply.
+}
+
+ssize_t ZygoteHost::ReadReply(void* buf, size_t buf_len) {
+  // At startup we send a kCmdGetSandboxStatus request to the zygote, but don't
+  // wait for the reply. Thus, the first time that we read from the zygote, we
+  // get the reply to that request.
+  if (!have_read_sandbox_status_word_) {
+    if (HANDLE_EINTR(read(control_fd_, &sandbox_status_,
+                          sizeof(sandbox_status_))) !=
+        sizeof(sandbox_status_)) {
+      return -1;
+    }
+    have_read_sandbox_status_word_ = true;
+  }
+
+  return HANDLE_EINTR(read(control_fd_, buf, buf_len));
 }
 
 pid_t ZygoteHost::ForkRenderer(
@@ -211,33 +228,74 @@ pid_t ZygoteHost::ForkRenderer(
     fds.push_back(i->second);
   }
 
-  if (!base::SendMsg(control_fd_, pickle.data(), pickle.size(), fds))
-    return base::kNullProcessHandle;
-
   pid_t pid;
-  if (HANDLE_EINTR(read(control_fd_, &pid, sizeof(pid))) != sizeof(pid))
-    return base::kNullProcessHandle;
+  {
+    AutoLock lock(control_lock_);
+    if (!base::SendMsg(control_fd_, pickle.data(), pickle.size(), fds))
+      return base::kNullProcessHandle;
+
+    if (ReadReply(&pid, sizeof(pid)) != sizeof(pid))
+      return base::kNullProcessHandle;
+    if (pid <= 0)
+      return base::kNullProcessHandle;
+  }
 
   const int kRendererScore = 5;
-  if (using_suid_sandbox_) {
+  AdjustRendererOOMScore(pid, kRendererScore);
+
+  return pid;
+}
+
+void ZygoteHost::AdjustRendererOOMScore(base::ProcessHandle pid, int score) {
+  // 1) You can't change the oom_adj of a non-dumpable process (EPERM) unless
+  //    you're root. Because of this, we can't set the oom_adj from the browser
+  //    process.
+  //
+  // 2) We can't set the oom_adj before entering the sandbox because the
+  //    zygote is in the sandbox and the zygote is as critical as the browser
+  //    process. Its oom_adj value shouldn't be changed.
+  //
+  // 3) A non-dumpable process can't even change its own oom_adj because it's
+  //    root owned 0644. The sandboxed processes don't even have /proc, but one
+  //    could imagine passing in a descriptor from outside.
+  //
+  // So, in the normal case, we use the SUID binary to change it for us.
+  // However, Fedora (and other SELinux systems) don't like us touching other
+  // process's oom_adj values
+  // (https://bugzilla.redhat.com/show_bug.cgi?id=581256).
+  //
+  // The offical way to get the SELinux mode is selinux_getenforcemode, but I
+  // don't want to add another library to the build as it's sure to cause
+  // problems with other, non-SELinux distros.
+  //
+  // So we just check for /selinux. This isn't foolproof, but it's not bad
+  // and it's easy.
+
+  static bool selinux;
+  static bool selinux_valid = false;
+
+  if (!selinux_valid) {
+    selinux = access("/selinux", X_OK) == 0;
+    selinux_valid = true;
+  }
+
+  if (using_suid_sandbox_ && !selinux) {
     base::ProcessHandle sandbox_helper_process;
-    base::file_handle_mapping_vector dummy_map;
     std::vector<std::string> adj_oom_score_cmdline;
 
     adj_oom_score_cmdline.push_back(sandbox_binary_);
     adj_oom_score_cmdline.push_back(base::kAdjustOOMScoreSwitch);
-    adj_oom_score_cmdline.push_back(Int64ToString(pid));
-    adj_oom_score_cmdline.push_back(IntToString(kRendererScore));
+    adj_oom_score_cmdline.push_back(base::Int64ToString(pid));
+    adj_oom_score_cmdline.push_back(base::IntToString(score));
     CommandLine adj_oom_score_cmd(adj_oom_score_cmdline);
-    if (base::LaunchApp(adj_oom_score_cmdline, dummy_map, false,
+    if (base::LaunchApp(adj_oom_score_cmd, false, true,
                         &sandbox_helper_process)) {
       ProcessWatcher::EnsureProcessGetsReaped(sandbox_helper_process);
     }
-  } else {
-    base::AdjustOOMScore(pid, kRendererScore);
+  } else if (!using_suid_sandbox_) {
+    if (!base::AdjustOOMScore(pid, score))
+      PLOG(ERROR) << "Failed to adjust OOM score of renderer with pid " << pid;
   }
-
-  return pid;
 }
 
 void ZygoteHost::EnsureProcessTerminated(pid_t process) {
@@ -247,7 +305,8 @@ void ZygoteHost::EnsureProcessTerminated(pid_t process) {
   pickle.WriteInt(kCmdReap);
   pickle.WriteInt(process);
 
-  HANDLE_EINTR(write(control_fd_, pickle.data(), pickle.size()));
+  if (HANDLE_EINTR(write(control_fd_, pickle.data(), pickle.size())) < 0)
+    PLOG(ERROR) << "write";
 }
 
 bool ZygoteHost::DidProcessCrash(base::ProcessHandle handle,
@@ -257,11 +316,16 @@ bool ZygoteHost::DidProcessCrash(base::ProcessHandle handle,
   pickle.WriteInt(kCmdDidProcessCrash);
   pickle.WriteInt(handle);
 
-  HANDLE_EINTR(write(control_fd_, pickle.data(), pickle.size()));
-
   static const unsigned kMaxMessageLength = 128;
   char buf[kMaxMessageLength];
-  const ssize_t len = HANDLE_EINTR(read(control_fd_, buf, sizeof(buf)));
+  ssize_t len;
+  {
+    AutoLock lock(control_lock_);
+    if (HANDLE_EINTR(write(control_fd_, pickle.data(), pickle.size())) < 0)
+      PLOG(ERROR) << "write";
+
+    len = ReadReply(buf, sizeof(buf));
+  }
 
   if (len == -1) {
     LOG(WARNING) << "Error reading message from zygote: " << errno;

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "base/hash_tables.h"
 #include "base/message_loop.h"
 #include "base/task.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/profile.h"
@@ -93,7 +94,7 @@ const BookmarkNode* BookmarkNodeFinder::FindBookmarkNode(
     const sync_api::BaseNode& sync_node) {
   // Create a bookmark node from the given sync node.
   BookmarkNode temp_node(sync_node.GetURL());
-  temp_node.SetTitle(sync_node.GetTitle());
+  temp_node.SetTitle(WideToUTF16Hack(sync_node.GetTitle()));
   if (sync_node.GetIsFolder())
     temp_node.set_type(BookmarkNode::FOLDER);
   else
@@ -155,16 +156,17 @@ const BookmarkNode* BookmarkNodeIdIndex::Find(int64 id) const {
 
 BookmarkModelAssociator::BookmarkModelAssociator(
     ProfileSyncService* sync_service,
-    UnrecoverableErrorHandler* error_handler)
+    UnrecoverableErrorHandler* persist_ids_error_handler)
     : sync_service_(sync_service),
-      error_handler_(error_handler),
+      persist_ids_error_handler_(persist_ids_error_handler),
       ALLOW_THIS_IN_INITIALIZER_LIST(persist_associations_(this)) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(sync_service_);
+  DCHECK(persist_ids_error_handler_);
 }
 
 BookmarkModelAssociator::~BookmarkModelAssociator() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
 bool BookmarkModelAssociator::DisassociateModels() {
@@ -200,7 +202,7 @@ bool BookmarkModelAssociator::InitSyncNodeFromChromeId(
 
 void BookmarkModelAssociator::Associate(const BookmarkNode* node,
                                         int64 sync_id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   int64 node_id = node->id();
   DCHECK_NE(sync_id, sync_api::kInvalidId);
   DCHECK(id_map_.find(node_id) == id_map_.end());
@@ -212,23 +214,13 @@ void BookmarkModelAssociator::Associate(const BookmarkNode* node,
 }
 
 void BookmarkModelAssociator::Disassociate(int64 sync_id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   SyncIdToBookmarkNodeMap::iterator iter = id_map_inverse_.find(sync_id);
   if (iter == id_map_inverse_.end())
     return;
   id_map_.erase(iter->second->id());
   id_map_inverse_.erase(iter);
   dirty_associations_sync_ids_.erase(sync_id);
-}
-
-bool BookmarkModelAssociator::ChromeModelHasUserCreatedNodes(bool* has_nodes) {
-  DCHECK(has_nodes);
-  BookmarkModel* model = sync_service_->profile()->GetBookmarkModel();
-  DCHECK(model->IsLoaded());
-
-  *has_nodes =  model->GetBookmarkBarNode()->GetChildCount() > 0 ||
-      model->other_node()->GetChildCount() > 0;
-  return true;
 }
 
 bool BookmarkModelAssociator::SyncModelHasUserCreatedNodes(bool* has_nodes) {
@@ -265,7 +257,7 @@ bool BookmarkModelAssociator::SyncModelHasUserCreatedNodes(bool* has_nodes) {
 
 bool BookmarkModelAssociator::NodesMatch(const BookmarkNode* bookmark,
     const sync_api::BaseNode* sync_node) const {
-  if (bookmark->GetTitle() != sync_node->GetTitle())
+  if (bookmark->GetTitle() != WideToUTF16Hack(sync_node->GetTitle()))
     return false;
   if (bookmark->is_folder() != sync_node->GetIsFolder())
     return false;
@@ -455,7 +447,8 @@ void BookmarkModelAssociator::PersistAssociations() {
     int64 sync_id = *iter;
     sync_api::WriteNode sync_node(&trans);
     if (!sync_node.InitByIdLookup(sync_id)) {
-      error_handler_->OnUnrecoverableError();
+      persist_ids_error_handler_->OnUnrecoverableError(FROM_HERE,
+          "Could not lookup bookmark node for ID persistence.");
       return;
     }
     const BookmarkNode* node = GetChromeNodeFromSyncId(sync_id);

@@ -10,12 +10,11 @@
 #endif
 
 #include "app/drag_drop_types.h"
-#include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/scoped_handle.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/path.h"
 #include "third_party/skia/include/core/SkShader.h"
 #include "views/background.h"
@@ -55,7 +54,9 @@ View::View()
       group_(-1),
       enabled_(true),
       focusable_(false),
+      accessibility_focusable_(false),
       bounds_(0, 0, 0, 0),
+      needs_layout_(true),
       parent_(NULL),
       is_visible_(true),
       is_parent_owned_(true),
@@ -71,7 +72,6 @@ View::View()
       accessibility_(NULL),
 #endif
       drag_controller_(NULL),
-      ui_mirroring_is_enabled_for_rtl_languages_(true),
       flip_canvas_on_paint_for_rtl_ui_(false) {
 }
 
@@ -166,6 +166,7 @@ void View::SizeToPreferredSize() {
 }
 
 void View::PreferredSizeChanged() {
+  InvalidateLayout();
   if (parent_)
     parent_->ChildPreferredSizeChanged(this);
 }
@@ -182,6 +183,7 @@ int View::GetHeightForWidth(int w) {
 
 void View::DidChangeBounds(const gfx::Rect& previous,
                            const gfx::Rect& current) {
+  needs_layout_ = false;
   Layout();
 }
 
@@ -204,21 +206,35 @@ void View::ScrollRectToVisible(const gfx::Rect& rect) {
 /////////////////////////////////////////////////////////////////////////////
 
 void View::Layout() {
-  // Layout child Views
+  needs_layout_ = false;
+
+  // If we have a layout manager, let it handle the layout for us.
   if (layout_manager_.get()) {
     layout_manager_->Layout(this);
     SchedulePaint();
-    // TODO(beng): We believe the right thing to do here is return since the
-    //             layout manager should be handling things, but it causes
-    //             regressions (missing options from Options dialog and a hang
-    //             in interactive_ui_tests).
   }
 
-  // Lay out contents of child Views
+  // Make sure to propagate the Layout() call to any children that haven't
+  // received it yet through the layout manager and need to be laid out. This
+  // is needed for the case when the child requires a layout but its bounds
+  // weren't changed by the layout manager. If there is no layout manager, we
+  // just propagate the Layout() call down the hierarchy, so whoever receives
+  // the call can take appropriate action.
   for (int i = 0, count = GetChildViewCount(); i < count; ++i) {
     View* child = GetChildViewAt(i);
-    child->Layout();
+    if (child->needs_layout_ || !layout_manager_.get()) {
+      child->needs_layout_ = false;
+      child->Layout();
+    }
   }
+}
+
+void View::InvalidateLayout() {
+  if (needs_layout_)
+    return;
+  needs_layout_ = true;
+  if (parent_)
+    parent_->InvalidateLayout();
 }
 
 LayoutManager* View::GetLayoutManager() const {
@@ -234,10 +250,6 @@ void View::SetLayoutManager(LayoutManager* layout_manager) {
     layout_manager_->Installed(this);
 }
 
-bool View::UILayoutIsRightToLeft() const {
-  return (ui_mirroring_is_enabled_for_rtl_languages_ && base::i18n::IsRTL());
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 //
 // View - Right-to-left UI layout
@@ -250,7 +262,7 @@ int View::MirroredX() const {
 }
 
 int View::MirroredLeftPointForRect(const gfx::Rect& bounds) const {
-  return UILayoutIsRightToLeft() ?
+  return base::i18n::IsRTL() ?
       (width() - bounds.x() - bounds.width()) : bounds.x();
 }
 
@@ -271,12 +283,17 @@ void View::SetEnabled(bool state) {
   }
 }
 
-bool View::IsFocusable() const {
-  return focusable_ && enabled_ && is_visible_;
-}
-
 void View::SetFocusable(bool focusable) {
   focusable_ = focusable;
+}
+
+bool View::IsFocusableInRootView() const {
+  return IsFocusable() && IsVisibleInRootView();
+}
+
+bool View::IsAccessibilityFocusableInRootView() const {
+  return (focusable_ || accessibility_focusable_) && IsEnabled() &&
+      IsVisibleInRootView();
 }
 
 FocusManager* View::GetFocusManager() {
@@ -297,6 +314,13 @@ void View::Focus() {
   FocusManager* focus_manager = GetFocusManager();
   if (focus_manager)
     focus_manager->ClearNativeFocus();
+
+  // Notify assistive technologies of the focus change.
+  NotifyAccessibilityEvent(AccessibilityTypes::EVENT_FOCUS);
+}
+
+void View::NotifyAccessibilityEvent(AccessibilityTypes::Event event_type) {
+  NotifyAccessibilityEvent(event_type, true);
 }
 
 void View::SetHotTracked(bool flag) {
@@ -342,7 +366,7 @@ void View::PaintBorder(gfx::Canvas* canvas) {
 }
 
 void View::PaintFocusBorder(gfx::Canvas* canvas) {
-  if (HasFocus() && IsFocusable())
+  if (HasFocus() && (IsFocusable() || IsAccessibilityFocusableInRootView()))
     canvas->DrawFocusRect(0, 0, width(), height());
 }
 
@@ -362,7 +386,7 @@ void View::ProcessPaint(gfx::Canvas* canvas) {
     return;
 
   // We're going to modify the canvas, save it's state first.
-  canvas->save();
+  canvas->Save();
 
   // Paint this View and its children, setting the clip rect to the bounds
   // of this View and translating the origin to the local bounds' top left
@@ -376,16 +400,12 @@ void View::ProcessPaint(gfx::Canvas* canvas) {
     // where this view is located (related to its parent).
     canvas->TranslateInt(MirroredX(), y());
 
-    // Save the state again, so that any changes don't effect PaintChildren.
-    canvas->save();
-
     // If the View we are about to paint requested the canvas to be flipped, we
     // should change the transform appropriately.
-    bool flip_canvas = FlipCanvasOnPaintForRTLUI();
-    if (flip_canvas) {
+    canvas->Save();
+    if (FlipCanvasOnPaintForRTLUI()) {
       canvas->TranslateInt(width(), 0);
       canvas->ScaleInt(-1, 1);
-      canvas->save();
     }
 
     Paint(canvas);
@@ -393,15 +413,13 @@ void View::ProcessPaint(gfx::Canvas* canvas) {
     // We must undo the canvas mirroring once the View is done painting so that
     // we don't pass the canvas with the mirrored transform to Views that
     // didn't request the canvas to be flipped.
-    if (flip_canvas)
-      canvas->restore();
+    canvas->Restore();
 
-    canvas->restore();
     PaintChildren(canvas);
   }
 
   // Restore the canvas's original transform.
-  canvas->restore();
+  canvas->Restore();
 }
 
 void View::PaintNow() {
@@ -463,7 +481,7 @@ void View::ShowContextMenu(const gfx::Point& p, bool is_mouse_gesture) {
 /////////////////////////////////////////////////////////////////////////////
 
 bool View::ProcessMousePressed(const MouseEvent& e, DragInfo* drag_info) {
-  const bool enabled = enabled_;
+  const bool enabled = IsEnabled();
   int drag_operations =
       (enabled && e.IsOnlyLeftMouseButton() && HitTest(e.location())) ?
       GetDragOperations(e.location()) : 0;
@@ -517,6 +535,15 @@ void View::ProcessMouseReleased(const MouseEvent& e, bool canceled) {
   }
   // WARNING: we may have been deleted.
 }
+
+#if defined(TOUCH_UI)
+bool View::ProcessTouchEvent(const TouchEvent& e) {
+  // TODO(rjkroege): Implement a grab scheme similar to as
+  // as is found in MousePressed.
+  const bool result = OnTouchEvent(e);
+  return result;
+}
+#endif
 
 void View::AddChildView(View* v) {
   AddChildView(static_cast<int>(child_views_.size()), v);
@@ -646,14 +673,20 @@ void View::PropagateAddNotifications(View* parent, View* child) {
   ViewHierarchyChangedImpl(true, true, parent, child);
 }
 
-void View::ThemeChanged() {
-  for (int i = GetChildViewCount() - 1; i >= 0; --i)
-    GetChildViewAt(i)->ThemeChanged();
+bool View::IsFocusable() const {
+  return focusable_ && IsEnabled() && IsVisible();
 }
 
-void View::LocaleChanged() {
+void View::PropagateThemeChanged() {
   for (int i = GetChildViewCount() - 1; i >= 0; --i)
-    GetChildViewAt(i)->LocaleChanged();
+    GetChildViewAt(i)->PropagateThemeChanged();
+  OnThemeChanged();
+}
+
+void View::PropagateLocaleChanged() {
+  for (int i = GetChildViewCount() - 1; i >= 0; --i)
+    GetChildViewAt(i)->PropagateLocaleChanged();
+  OnLocaleChanged();
 }
 
 #ifndef NDEBUG
@@ -705,6 +738,7 @@ void View::ViewHierarchyChangedImpl(bool register_accelerators,
   }
 
   ViewHierarchyChanged(is_add, parent, child);
+  parent->needs_layout_ = true;
 }
 
 void View::PropagateVisibilityNotifications(View* start, bool is_visible) {
@@ -865,7 +899,7 @@ bool View::IsParentOf(View* v) const {
   return false;
 }
 
-int View::GetChildIndex(View* v) const {
+int View::GetChildIndex(const View* v) const {
   for (int i = 0, count = GetChildViewCount(); i < count; i++) {
     if (v == GetChildViewAt(i))
       return i;
@@ -1132,6 +1166,10 @@ bool View::GetAccessibleName(std::wstring* name) {
   return true;
 }
 
+AccessibilityTypes::Role View::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_CLIENT;
+}
+
 void View::SetAccessibleName(const std::wstring& name) {
   accessible_name_ = name;
 }
@@ -1220,6 +1258,12 @@ void View::ConvertPointToScreen(const View* src, gfx::Point* p) {
   }
 }
 
+gfx::Rect View::GetScreenBounds() const {
+  gfx::Point origin;
+  View::ConvertPointToScreen(this, &origin);
+  return gfx::Rect(origin, size());
+}
+
 /////////////////////////////////////////////////////////////////////////////
 //
 // View - event handlers
@@ -1245,6 +1289,13 @@ void View::OnMouseEntered(const MouseEvent& e) {
 
 void View::OnMouseExited(const MouseEvent& e) {
 }
+
+#if defined(TOUCH_UI)
+bool View::OnTouchEvent(const TouchEvent& event) {
+  DLOG(INFO) << "visited the OnTouchEvent";
+  return false;
+}
+#endif
 
 void View::SetMouseHandler(View *new_mouse_handler) {
   // It is valid for new_mouse_handler to be NULL
@@ -1286,7 +1337,7 @@ bool View::IsVisibleInRootView() const {
 
 void View::RequestFocus() {
   RootView* rv = GetRootView();
-  if (rv && IsFocusable())
+  if (rv && IsFocusableInRootView())
     rv->FocusView(this);
 }
 

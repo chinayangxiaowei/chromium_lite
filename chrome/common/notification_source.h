@@ -7,6 +7,7 @@
 
 #ifndef CHROME_COMMON_NOTIFICATION_SOURCE_H__
 #define CHROME_COMMON_NOTIFICATION_SOURCE_H__
+#pragma once
 
 #include "base/basictypes.h"
 
@@ -15,8 +16,8 @@
 // NotificationService::AllSources().
 class NotificationSource {
  public:
-  NotificationSource(const NotificationSource& other) : ptr_(other.ptr_) { }
-  ~NotificationSource() {}
+  NotificationSource(const NotificationSource& other);
+  ~NotificationSource();
 
   // NotificationSource can be used as the index for a map; this method
   // returns the pointer to the current source as an identifier, for use as a
@@ -31,7 +32,7 @@ class NotificationSource {
   }
 
  protected:
-  explicit NotificationSource(const void* ptr) : ptr_(ptr) {}
+  explicit NotificationSource(const void* ptr);
 
   // Declaring this const allows Source<T> to be used with both T = Foo and
   // T = const Foo.
@@ -42,7 +43,7 @@ template <class T>
 class Source : public NotificationSource {
  public:
   // TODO(erg): Our code hard relies on implicit conversion
-  Source(T* ptr) : NotificationSource(ptr) {}  // NOLINT
+  Source(const T* ptr) : NotificationSource(ptr) {}  // NOLINT
   Source(const NotificationSource& other)      // NOLINT
     : NotificationSource(other) {}
 

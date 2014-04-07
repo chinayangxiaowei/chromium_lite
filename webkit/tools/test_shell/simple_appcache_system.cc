@@ -59,16 +59,17 @@ class SimpleFrontendProxy
 
   void clear_appcache_system() { system_ = NULL; }
 
-  virtual void OnCacheSelected(int host_id, int64 cache_id ,
-                               appcache::Status status) {
+  virtual void OnCacheSelected(int host_id,
+      const appcache::AppCacheInfo& info) {
     if (!system_)
       return;
     if (system_->is_io_thread())
       system_->ui_message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
           this, &SimpleFrontendProxy::OnCacheSelected,
-          host_id, cache_id, status));
-    else if (system_->is_ui_thread())
-      system_->frontend_impl_.OnCacheSelected(host_id, cache_id, status);
+          host_id, info));
+    else if (system_->is_ui_thread()) {
+      system_->frontend_impl_.OnCacheSelected(host_id, info);
+    }
     else
       NOTREACHED();
   }
@@ -99,7 +100,54 @@ class SimpleFrontendProxy
       NOTREACHED();
   }
 
-  virtual void OnContentBlocked(int host_id) {}
+  virtual void OnProgressEventRaised(const std::vector<int>& host_ids,
+                                     const GURL& url,
+                                     int num_total, int num_complete) {
+    if (!system_)
+      return;
+    if (system_->is_io_thread())
+      system_->ui_message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+          this, &SimpleFrontendProxy::OnProgressEventRaised,
+          host_ids, url, num_total, num_complete));
+    else if (system_->is_ui_thread())
+      system_->frontend_impl_.OnProgressEventRaised(
+          host_ids, url, num_total, num_complete);
+    else
+      NOTREACHED();
+  }
+
+  virtual void OnErrorEventRaised(const std::vector<int>& host_ids,
+                                  const std::string& message) {
+    if (!system_)
+      return;
+    if (system_->is_io_thread())
+      system_->ui_message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+          this, &SimpleFrontendProxy::OnErrorEventRaised,
+          host_ids, message));
+    else if (system_->is_ui_thread())
+      system_->frontend_impl_.OnErrorEventRaised(
+          host_ids, message);
+    else
+      NOTREACHED();
+  }
+
+  virtual void OnLogMessage(int host_id,
+                            appcache::LogLevel log_level,
+                            const std::string& message) {
+    if (!system_)
+      return;
+    if (system_->is_io_thread())
+      system_->ui_message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+          this, &SimpleFrontendProxy::OnLogMessage,
+          host_id, log_level, message));
+    else if (system_->is_ui_thread())
+      system_->frontend_impl_.OnLogMessage(
+          host_id, log_level, message);
+    else
+      NOTREACHED();
+  }
+
+  virtual void OnContentBlocked(int host_id, const GURL& manifest_url) {}
 
  private:
   friend class base::RefCountedThreadSafe<SimpleFrontendProxy>;
@@ -164,6 +212,33 @@ class SimpleBackendProxy
     } else {
       NOTREACHED();
     }
+  }
+
+  virtual void GetResourceList(
+      int host_id,
+      std::vector<appcache::AppCacheResourceInfo>* resource_infos) {
+    if (system_->is_ui_thread()) {
+      system_->io_message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+          this, &SimpleBackendProxy::GetResourceList,
+          host_id, resource_infos));
+    } else if (system_->is_io_thread()) {
+      system_->backend_impl_->GetResourceList(host_id, resource_infos);
+    } else {
+      NOTREACHED();
+    }
+  }
+
+  virtual void SelectCacheForWorker(
+                           int host_id,
+                           int parent_process_id,
+                           int parent_host_id) {
+    NOTIMPLEMENTED();  // Workers are not supported in test_shell.
+  }
+
+  virtual void SelectCacheForSharedWorker(
+                           int host_id,
+                           int64 appcache_id) {
+    NOTIMPLEMENTED();  // Workers are not supported in test_shell.
   }
 
   virtual void MarkAsForeignEntry(int host_id, const GURL& document_url,
@@ -302,11 +377,9 @@ SimpleAppCacheSystem::~SimpleAppCacheSystem() {
   }
 }
 
-void SimpleAppCacheSystem::InitOnUIThread(
-    const FilePath& cache_directory) {
+void SimpleAppCacheSystem::InitOnUIThread(const FilePath& cache_directory) {
   DCHECK(!ui_message_loop_);
-  // TODO(michaeln): provide a cache_thread message loop
-  AppCacheThread::Init(DB_THREAD_ID, IO_THREAD_ID, NULL);
+  AppCacheThread::Init(DB_THREAD_ID, IO_THREAD_ID);
   ui_message_loop_ = MessageLoop::current();
   cache_directory_ = cache_directory;
 }
@@ -325,7 +398,8 @@ void SimpleAppCacheSystem::InitOnIOThread(URLRequestContext* request_context) {
   // Recreate and initialize per each IO thread.
   service_ = new appcache::AppCacheService();
   backend_impl_ = new appcache::AppCacheBackendImpl();
-  service_->Initialize(cache_directory_);
+  service_->Initialize(cache_directory_,
+                       SimpleResourceLoaderBridge::GetCacheThread());
   service_->set_request_context(request_context);
   backend_impl_->Initialize(service_, frontend_proxy_.get(), kSingleProcessId);
 
@@ -367,7 +441,6 @@ void SimpleAppCacheSystem::GetExtraResponseBits(
 
 void SimpleAppCacheSystem::WillDestroyCurrentMessageLoop() {
   DCHECK(is_io_thread());
-  DCHECK(backend_impl_->hosts().empty());
 
   delete backend_impl_;
   delete service_;

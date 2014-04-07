@@ -4,15 +4,13 @@
 
 #ifndef CHROME_APP_BREAKPAD_WIN_H_
 #define CHROME_APP_BREAKPAD_WIN_H_
+#pragma once
 
 #include <windows.h>
 #include <string>
 
 // The maximum number of 64-char URL chunks we will report.
 static const int kMaxUrlChunks = 8;
-
-// The maximum number of active extensions we will report.
-static const int kMaxReportedActiveExtensions = 10;
 
 // Calls InitCrashReporterThread in it's own thread for the browser process
 // or directly for the plugin and renderer process.

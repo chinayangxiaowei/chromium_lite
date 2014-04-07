@@ -19,6 +19,7 @@
     'screenshotsdir': 'o3d_assets/tests/screenshots',
     'seleniumdir': 'third_party/selenium_rc/files',
     'skiadir': 'third_party/skia/include',
+    'txcdir': 'third_party/libtxc_dxtn/files',
     'zlibdir': 'third_party/zlib',
 
     # Hack to ensure that these variables (specifically "renderer") are
@@ -108,6 +109,13 @@
           ],
         },
       ],
+      ['renderer == "cairo"',
+        {
+          'defines': [
+            'RENDERER_CAIRO',
+          ],
+        },
+      ],
       ['renderer == "gles2"',
         {
           'defines': [
@@ -160,6 +168,13 @@
           ],
           # Disable warning: "'this' : used in base member initialization list."
           'msvs_disabled_warnings': [4355],
+          'msvs_settings': {
+            'VCCLCompilerTool': {
+              'WarnAsError': 'false',
+              # Turn off errors for signed/unsigned mismatch from Chromium build/common.gypi.
+              'AdditionalOptions!': ['/we4389'],
+            },
+          },
         },
       },
     ],
@@ -187,6 +202,7 @@
                '-fno-eliminate-unused-debug-symbols',
                '-mmacosx-version-min=10.5'],
             'WARNING_CFLAGS': ['-Wno-deprecated-declarations'],
+            'WARNING_CFLAGS!': ['-Wall', '-Wextra'],
             'WARNING_CXXFLAGS': ['-Wstrict-aliasing',
                                  '-Wno-deprecated',],
           },
@@ -208,6 +224,10 @@
           'cflags': [
             '-fvisibility=hidden',
             '-Wstrict-aliasing',
+            # We always want debugging information, even for release builds. It
+            # is stripped by the packager into the -dbgsym package, so it
+            # doesn't affect what we ship.
+            '-g',
           ],
         },
       },

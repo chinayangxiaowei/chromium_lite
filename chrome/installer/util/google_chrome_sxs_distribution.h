@@ -4,6 +4,7 @@
 
 #ifndef CHROME_INSTALLER_UTIL_GOOGLE_CHROME_SXS_DISTRIBUTION_H_
 #define CHROME_INSTALLER_UTIL_GOOGLE_CHROME_SXS_DISTRIBUTION_H_
+#pragma once
 
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/google_chrome_distribution.h"
@@ -20,10 +21,15 @@
 class GoogleChromeSxSDistribution : public GoogleChromeDistribution {
  public:
   virtual std::wstring GetAppShortCutName();
+  virtual std::wstring GetBrowserAppId();
   virtual std::wstring GetInstallSubDir();
   virtual std::wstring GetUninstallRegPath();
+  virtual std::wstring GetEnvVersionKey();
   virtual bool CanSetAsDefault();
-
+  virtual int GetIconIndex();
+  virtual bool GetChromeChannel(std::wstring* channel);
+  // returns the channel name for GoogleChromeSxSDistribution
+  static std::wstring ChannelName();
  private:
   friend class BrowserDistribution;
 

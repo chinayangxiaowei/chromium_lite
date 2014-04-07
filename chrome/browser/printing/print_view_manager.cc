@@ -6,6 +6,7 @@
 
 #include "app/l10n_util.h"
 #include "base/scoped_ptr.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/printing/print_job.h"
 #include "chrome/browser/printing/print_job_manager.h"
@@ -14,7 +15,7 @@
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/notification_service.h"
-#include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "grit/generated_resources.h"
 #include "printing/native_metafile.h"
 #include "printing/printed_document.h"
@@ -56,10 +57,10 @@ bool PrintViewManager::OnRenderViewGone(RenderViewHost* render_view_host) {
   return true;
 }
 
-std::wstring PrintViewManager::RenderSourceName() {
-  std::wstring name(UTF16ToWideHack(owner_.GetTitle()));
+string16 PrintViewManager::RenderSourceName() {
+  string16 name(owner_.GetTitle());
   if (name.empty())
-    name = l10n_util::GetString(IDS_DEFAULT_PRINT_DOCUMENT_TITLE);
+    name = l10n_util::GetStringUTF16(IDS_DEFAULT_PRINT_DOCUMENT_TITLE);
   return name;
 }
 
@@ -124,7 +125,7 @@ void PrintViewManager::DidPrintPage(
   NOTIMPLEMENTED() << " this printing code doesn't quite work yet.";
 #else
   scoped_ptr<NativeMetafile> metafile(new NativeMetafile());
-  if (!metafile->CreateFromData(shared_buf.memory(), params.data_size)) {
+  if (!metafile->Init(shared_buf.memory(), params.data_size)) {
     NOTREACHED() << "Invalid metafile header";
     owner_.Stop();
     return;
@@ -133,7 +134,10 @@ void PrintViewManager::DidPrintPage(
   // Update the rendered document. It will send notifications to the listener.
   document->SetPage(params.page_number,
                     metafile.release(),
-                    params.actual_shrink);
+                    params.actual_shrink,
+                    params.page_size,
+                    params.content_area,
+                    params.has_visible_overlays);
 #endif
   ShouldQuitFromInnerMessageLoop();
 }
@@ -338,17 +342,6 @@ void PrintViewManager::ReleasePrintJob() {
   print_job_->DisconnectSource();
   // Don't close the worker thread.
   print_job_ = NULL;
-}
-
-void PrintViewManager::PrintNowInternal() {
-  DCHECK(waiting_to_print_);
-
-  // Settings are already loaded. Go ahead. This will set
-  // print_job_->is_job_pending() to true.
-  print_job_->StartPrinting();
-
-  DCHECK(print_job_->document());
-  DCHECK(print_job_->document()->IsComplete());
 }
 
 bool PrintViewManager::RunInnerMessageLoop() {

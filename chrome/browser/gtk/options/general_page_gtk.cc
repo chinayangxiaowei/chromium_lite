@@ -4,25 +4,30 @@
 
 #include "chrome/browser/gtk/options/general_page_gtk.h"
 
+#include <set>
+#include <vector>
+
 #include "app/l10n_util.h"
 #include "base/callback.h"
-#include "chrome/browser/browser.h"
-#include "chrome/browser/browser_list.h"
+#include "base/gtk_util.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/custom_home_pages_table_model.h"
 #include "chrome/browser/gtk/accessible_widget_helper_gtk.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/gtk/keyword_editor_view.h"
-#include "chrome/browser/gtk/list_store_favicon_loader.h"
+#include "chrome/browser/gtk/options/managed_prefs_banner_gtk.h"
 #include "chrome/browser/gtk/options/options_layout_gtk.h"
 #include "chrome/browser/gtk/options/url_picker_dialog_gtk.h"
 #include "chrome/browser/net/url_fixer_upper.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
-#include "chrome/browser/session_startup_pref.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "gfx/gtk_util.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 
@@ -37,11 +42,11 @@ const char kDefaultBrowserLabelColor[] = "008700";
 // Color of the default browser text when Chromium is not the default browser
 const char kNotDefaultBrowserLabelColor[] = "870000";
 
-// Column ids for |startup_custom_pages_model_|.
+// Column ids for |startup_custom_pages_store_|.
 enum {
-  COL_FAVICON_HANDLE,
   COL_FAVICON,
   COL_URL,
+  COL_TOOLTIP,
   COL_COUNT,
 };
 
@@ -51,6 +56,10 @@ enum {
   SEARCH_ENGINES_COL_TITLE,
   SEARCH_ENGINES_COL_COUNT,
 };
+
+bool IsNewTabUIURLString(const GURL& url) {
+  return url == GURL(chrome::kChromeUINewTabURL);
+}
 
 }  // namespace
 
@@ -63,29 +72,32 @@ GeneralPageGtk::GeneralPageGtk(Profile* profile)
       default_search_initializing_(true),
       initializing_(true),
       default_browser_worker_(
-          new ShellIntegration::DefaultBrowserWorker(this)) {
-  OptionsLayoutBuilderGtk options_builder;
-  page_ = options_builder.get_page_widget();
-  accessible_widget_helper_.reset(new AccessibleWidgetHelper(
-      page_, profile));
+          new ShellIntegration::DefaultBrowserWorker(this)),
+      managed_prefs_banner_(profile->GetPrefs(), OPTIONS_PAGE_GENERAL) {
+  scoped_ptr<OptionsLayoutBuilderGtk>
+    options_builder(OptionsLayoutBuilderGtk::CreateOptionallyCompactLayout());
+  page_ = options_builder->get_page_widget();
+  accessible_widget_helper_.reset(new AccessibleWidgetHelper(page_, profile));
 
-  options_builder.AddOptionGroup(
+  options_builder->AddWidget(managed_prefs_banner_.banner_widget(), false);
+  options_builder->AddOptionGroup(
       l10n_util::GetStringUTF8(IDS_OPTIONS_STARTUP_GROUP_NAME),
       InitStartupGroup(), true);
-  options_builder.AddOptionGroup(
+  options_builder->AddOptionGroup(
       l10n_util::GetStringUTF8(IDS_OPTIONS_HOMEPAGE_GROUP_NAME),
       InitHomepageGroup(), false);
-  options_builder.AddOptionGroup(
+  options_builder->AddOptionGroup(
       l10n_util::GetStringUTF8(IDS_OPTIONS_DEFAULTSEARCH_GROUP_NAME),
       InitDefaultSearchGroup(), false);
 #if !defined(OS_CHROMEOS)
-  options_builder.AddOptionGroup(
+  options_builder->AddOptionGroup(
       l10n_util::GetStringUTF8(IDS_OPTIONS_DEFAULTBROWSER_GROUP_NAME),
       InitDefaultBrowserGroup(), false);
 #endif
 
-  profile->GetPrefs()->AddPrefObserver(prefs::kRestoreOnStartup, this);
-  profile->GetPrefs()->AddPrefObserver(prefs::kURLsToRestoreOnStartup, this);
+  registrar_.Init(profile->GetPrefs());
+  registrar_.Add(prefs::kRestoreOnStartup, this);
+  registrar_.Add(prefs::kURLsToRestoreOnStartup, this);
 
   new_tab_page_is_home_page_.Init(prefs::kHomePageIsNewTabPage,
       profile->GetPrefs(), this);
@@ -97,10 +109,6 @@ GeneralPageGtk::GeneralPageGtk(Profile* profile)
 }
 
 GeneralPageGtk::~GeneralPageGtk() {
-  profile()->GetPrefs()->RemovePrefObserver(prefs::kRestoreOnStartup, this);
-  profile()->GetPrefs()->RemovePrefObserver(
-      prefs::kURLsToRestoreOnStartup, this);
-
   if (template_url_model_)
     template_url_model_->RemoveObserver(this);
 
@@ -110,65 +118,75 @@ GeneralPageGtk::~GeneralPageGtk() {
 ///////////////////////////////////////////////////////////////////////////////
 // GeneralPageGtk, OptionsPageBase overrides:
 
-void GeneralPageGtk::NotifyPrefChanged(const std::wstring* pref_name) {
+void GeneralPageGtk::NotifyPrefChanged(const std::string* pref_name) {
   initializing_ = true;
-  if (!pref_name || *pref_name == prefs::kRestoreOnStartup) {
+  if (!pref_name ||
+      *pref_name == prefs::kRestoreOnStartup ||
+      *pref_name == prefs::kURLsToRestoreOnStartup) {
     PrefService* prefs = profile()->GetPrefs();
     const SessionStartupPref startup_pref =
         SessionStartupPref::GetStartupPref(prefs);
+    bool radio_buttons_enabled = !SessionStartupPref::TypeIsManaged(prefs);
+    bool restore_urls_enabled = !SessionStartupPref::URLsAreManaged(prefs);
     switch (startup_pref.type) {
     case SessionStartupPref::DEFAULT:
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(startup_homepage_radio_),
                                    TRUE);
-      EnableCustomHomepagesControls(false);
+      restore_urls_enabled = false;
       break;
 
     case SessionStartupPref::LAST:
       gtk_toggle_button_set_active(
           GTK_TOGGLE_BUTTON(startup_last_session_radio_), TRUE);
-      EnableCustomHomepagesControls(false);
+      restore_urls_enabled = false;
       break;
 
     case SessionStartupPref::URLS:
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(startup_custom_radio_),
                                    TRUE);
-      EnableCustomHomepagesControls(true);
       break;
     }
+    gtk_widget_set_sensitive(startup_homepage_radio_, radio_buttons_enabled);
+    gtk_widget_set_sensitive(startup_last_session_radio_,
+                             radio_buttons_enabled);
+    gtk_widget_set_sensitive(startup_custom_radio_, radio_buttons_enabled);
+    EnableCustomHomepagesControls(restore_urls_enabled);
+    startup_custom_pages_table_model_->SetURLs(startup_pref.urls);
   }
 
-  if (!pref_name || *pref_name == prefs::kURLsToRestoreOnStartup) {
-    PrefService* prefs = profile()->GetPrefs();
-    const SessionStartupPref startup_pref =
-        SessionStartupPref::GetStartupPref(prefs);
-    PopulateCustomUrlList(startup_pref.urls);
-  }
-
-  if (!pref_name || *pref_name == prefs::kHomePageIsNewTabPage) {
-    if (new_tab_page_is_home_page_.GetValue()) {
-      gtk_toggle_button_set_active(
-          GTK_TOGGLE_BUTTON(homepage_use_newtab_radio_), TRUE);
-      gtk_widget_set_sensitive(homepage_use_url_entry_, FALSE);
-    } else {
-      gtk_toggle_button_set_active(
-          GTK_TOGGLE_BUTTON(homepage_use_url_radio_), TRUE);
-      gtk_widget_set_sensitive(homepage_use_url_entry_, TRUE);
-    }
-  }
-
-  if (!pref_name || *pref_name == prefs::kHomePage) {
-    bool enabled = homepage_.GetValue() !=
-        UTF8ToWide(chrome::kChromeUINewTabURL);
-    if (enabled)
+  if (!pref_name ||
+      *pref_name == prefs::kHomePageIsNewTabPage ||
+      *pref_name == prefs::kHomePage) {
+    bool new_tab_page_is_home_page_managed =
+        new_tab_page_is_home_page_.IsManaged();
+    bool homepage_managed = homepage_.IsManaged();
+    bool homepage_url_is_new_tab =
+        IsNewTabUIURLString(GURL(homepage_.GetValue()));
+    bool homepage_is_new_tab = homepage_url_is_new_tab ||
+        new_tab_page_is_home_page_.GetValue();
+    // If HomepageIsNewTab is managed or
+    // Homepage is 'chrome://newtab' and managed, disable the radios.
+    bool disable_homepage_choice_buttons =
+        new_tab_page_is_home_page_managed ||
+        (homepage_managed && homepage_url_is_new_tab);
+    if (!homepage_url_is_new_tab) {
       gtk_entry_set_text(GTK_ENTRY(homepage_use_url_entry_),
-                         WideToUTF8(homepage_.GetValue()).c_str());
+                         homepage_.GetValue().c_str());
+    }
+    UpdateHomepageIsNewTabRadio(
+        homepage_is_new_tab, !disable_homepage_choice_buttons);
+    EnableHomepageURLField(!homepage_is_new_tab);
   }
 
   if (!pref_name || *pref_name == prefs::kShowHomeButton) {
     gtk_toggle_button_set_active(
         GTK_TOGGLE_BUTTON(homepage_show_home_button_checkbox_),
         show_home_button_.GetValue());
+    gtk_widget_set_sensitive(
+        homepage_show_home_button_checkbox_,
+        !show_home_button_.IsManaged());
   }
+
   initializing_ = false;
 }
 
@@ -216,18 +234,20 @@ GtkWidget* GeneralPageGtk::InitStartupGroup() {
                                       GTK_SHADOW_ETCHED_IN);
   gtk_container_add(GTK_CONTAINER(url_list_container),
                     scroll_window);
-  startup_custom_pages_model_ = gtk_list_store_new(COL_COUNT,
-                                                   G_TYPE_INT,
+  startup_custom_pages_store_ = gtk_list_store_new(COL_COUNT,
                                                    GDK_TYPE_PIXBUF,
+                                                   G_TYPE_STRING,
                                                    G_TYPE_STRING);
   startup_custom_pages_tree_ = gtk_tree_view_new_with_model(
-      GTK_TREE_MODEL(startup_custom_pages_model_));
+      GTK_TREE_MODEL(startup_custom_pages_store_));
   gtk_container_add(GTK_CONTAINER(scroll_window), startup_custom_pages_tree_);
 
-  // Release |startup_custom_pages_model_| so that |startup_custom_pages_tree_|
+  // Release |startup_custom_pages_store_| so that |startup_custom_pages_tree_|
   // owns the model.
-  g_object_unref(startup_custom_pages_model_);
+  g_object_unref(startup_custom_pages_store_);
 
+  gtk_tree_view_set_tooltip_column(GTK_TREE_VIEW(startup_custom_pages_tree_),
+                                   COL_TOOLTIP);
   gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(startup_custom_pages_tree_),
                                     FALSE);
   GtkTreeViewColumn* column = gtk_tree_view_column_new();
@@ -244,12 +264,13 @@ GtkWidget* GeneralPageGtk::InitStartupGroup() {
   gtk_tree_selection_set_mode(startup_custom_pages_selection_,
                               GTK_SELECTION_MULTIPLE);
   g_signal_connect(startup_custom_pages_selection_, "changed",
-                   G_CALLBACK(OnStartupPagesSelectionChanged), this);
-  favicon_loader_.reset(new ListStoreFavIconLoader(startup_custom_pages_model_,
-                                                   COL_FAVICON,
-                                                   COL_FAVICON_HANDLE,
-                                                   profile(),
-                                                   &fav_icon_consumer_));
+                   G_CALLBACK(OnStartupPagesSelectionChangedThunk), this);
+
+  startup_custom_pages_table_model_.reset(
+      new CustomHomePagesTableModel(profile()));
+  startup_custom_pages_table_adapter_.reset(
+      new gtk_tree::TableAdapter(this, startup_custom_pages_store_,
+                                 startup_custom_pages_table_model_.get()));
 
   GtkWidget* url_list_buttons = gtk_vbox_new(FALSE, gtk_util::kControlSpacing);
   gtk_box_pack_end(GTK_BOX(url_list_container), url_list_buttons,
@@ -420,10 +441,9 @@ void GeneralPageGtk::OnStartupUseCurrentPageClicked(GtkWidget* button) {
   SetCustomUrlListFromCurrentPages();
 }
 
-// static
 void GeneralPageGtk::OnStartupPagesSelectionChanged(
-    GtkTreeSelection* selection, GeneralPageGtk* general_page) {
-  general_page->EnableCustomHomepagesControls(true);
+    GtkTreeSelection* selection) {
+  EnableCustomHomepagesControls(true);
 }
 
 void GeneralPageGtk::OnNewTabIsHomePageToggled(GtkWidget* toggle_button) {
@@ -434,22 +454,22 @@ void GeneralPageGtk::OnNewTabIsHomePageToggled(GtkWidget* toggle_button) {
     return;
   }
   if (toggle_button == homepage_use_newtab_radio_) {
-    SetHomepage(GURL());
     UserMetricsRecordAction(UserMetricsAction("Options_Homepage_UseNewTab"),
                             profile()->GetPrefs());
-    gtk_widget_set_sensitive(homepage_use_url_entry_, FALSE);
+    UpdateHomepagePrefs();
+    EnableHomepageURLField(false);
   } else if (toggle_button == homepage_use_url_radio_) {
-    SetHomepageFromEntry();
     UserMetricsRecordAction(UserMetricsAction("Options_Homepage_UseURL"),
                             profile()->GetPrefs());
-    gtk_widget_set_sensitive(homepage_use_url_entry_, TRUE);
+    UpdateHomepagePrefs();
+    EnableHomepageURLField(true);
   }
 }
 
 void GeneralPageGtk::OnHomepageUseUrlEntryChanged(GtkWidget* editable) {
   if (initializing_)
     return;
-  SetHomepageFromEntry();
+  UpdateHomepagePrefs();
 }
 
 void GeneralPageGtk::OnShowHomeButtonToggled(GtkWidget* toggle_button) {
@@ -498,106 +518,78 @@ void GeneralPageGtk::SaveStartupPref() {
     pref.type = SessionStartupPref::URLS;
   }
 
-  pref.urls = GetCustomUrlList();
+  pref.urls = startup_custom_pages_table_model_->GetURLs();
 
   SessionStartupPref::SetStartupPref(profile()->GetPrefs(), pref);
 }
 
-void GeneralPageGtk::PopulateCustomUrlList(const std::vector<GURL>& urls) {
-  gtk_list_store_clear(startup_custom_pages_model_);
-  for (size_t i = 0; i < urls.size(); ++i) {
-    GtkTreeIter iter;
-    gtk_list_store_append(startup_custom_pages_model_, &iter);
-    PopulateCustomUrlRow(urls[i], &iter);
-  }
-}
-
-void GeneralPageGtk::PopulateCustomUrlRow(const GURL& url, GtkTreeIter* iter) {
-  favicon_loader_->LoadFaviconForRow(url, iter);
-  gtk_list_store_set(startup_custom_pages_model_, iter,
-                     COL_URL, url.spec().c_str(),
+void GeneralPageGtk::SetColumnValues(int row, GtkTreeIter* iter) {
+  SkBitmap bitmap = startup_custom_pages_table_model_->GetIcon(row);
+  GdkPixbuf* pixbuf = gfx::GdkPixbufFromSkBitmap(&bitmap);
+  std::wstring text = startup_custom_pages_table_model_->GetText(row, 0);
+  std::string tooltip =
+      WideToUTF8(startup_custom_pages_table_model_->GetTooltip(row));
+  gchar* escaped_tooltip = g_markup_escape_text(tooltip.c_str(),
+                                                tooltip.size());
+  gtk_list_store_set(startup_custom_pages_store_, iter,
+                     COL_FAVICON, pixbuf,
+                     COL_URL, WideToUTF8(text).c_str(),
+                     COL_TOOLTIP, escaped_tooltip,
                      -1);
+  g_object_unref(pixbuf);
+  g_free(escaped_tooltip);
 }
 
 void GeneralPageGtk::SetCustomUrlListFromCurrentPages() {
-  std::vector<GURL> urls;
-  for (BrowserList::const_iterator browser_i = BrowserList::begin();
-       browser_i != BrowserList::end(); ++browser_i) {
-    Browser* browser = *browser_i;
-    if (browser->profile() != profile())
-      continue;  // Only want entries for open profile.
+  startup_custom_pages_table_model_->SetToCurrentlyOpenPages();
 
-    for (int tab_index = 0; tab_index < browser->tab_count(); ++tab_index) {
-      TabContents* tab = browser->GetTabContentsAt(tab_index);
-      if (tab->ShouldDisplayURL()) {
-        const GURL url = browser->GetTabContentsAt(tab_index)->GetURL();
-        if (!url.is_empty())
-          urls.push_back(url);
-      }
-    }
-  }
-  PopulateCustomUrlList(urls);
   SaveStartupPref();
 }
 
 void GeneralPageGtk::OnAddCustomUrl(const GURL& url) {
-  GtkTreeIter iter;
-  if (gtk_tree_selection_count_selected_rows(
-      startup_custom_pages_selection_) == 1) {
-    GList* list = gtk_tree_selection_get_selected_rows(
-        startup_custom_pages_selection_, NULL);
-    GtkTreeIter sibling;
-    gtk_tree_model_get_iter(GTK_TREE_MODEL(startup_custom_pages_model_),
-                            &sibling, static_cast<GtkTreePath*>(list->data));
-    g_list_foreach(list, (GFunc)gtk_tree_path_free, NULL);
-    g_list_free(list);
+  // The restore URLs policy might have become managed while the dialog is
+  // displayed.  While the model makes sure that no changes are made in this
+  // condition, we should still avoid the rest of the method otherwise
+  // graphic elements will become enabled.
+  if (SessionStartupPref::URLsAreManaged(profile()->GetPrefs()))
+    return;
+  std::set<int> indices;
+  gtk_tree::GetSelectedIndices(startup_custom_pages_selection_, &indices);
+  int index;
+  if (indices.empty())
+    index = startup_custom_pages_table_model_->RowCount();
+  else
+    index = *indices.begin() + 1;
+  startup_custom_pages_table_model_->Add(index, url);
 
-    gtk_list_store_insert_before(startup_custom_pages_model_,
-                                 &iter, &sibling);
-  } else {
-    gtk_list_store_append(startup_custom_pages_model_, &iter);
-  }
-  PopulateCustomUrlRow(url, &iter);
   SaveStartupPref();
+
+  gtk_tree::SelectAndFocusRowNum(index,
+                                 GTK_TREE_VIEW(startup_custom_pages_tree_));
 }
 
 void GeneralPageGtk::RemoveSelectedCustomUrls() {
-  GList* list = gtk_tree_selection_get_selected_rows(
-      startup_custom_pages_selection_, NULL);
-  std::vector<GtkTreeIter> selected_iters(
-      gtk_tree_selection_count_selected_rows(startup_custom_pages_selection_));
-  GList* node;
-  size_t i;
-  for (i = 0, node = list; node != NULL; ++i, node = node->next) {
-    gtk_tree_model_get_iter(GTK_TREE_MODEL(startup_custom_pages_model_),
-                            &selected_iters[i],
-                            static_cast<GtkTreePath*>(node->data));
-  }
-  g_list_foreach(list, (GFunc)gtk_tree_path_free, NULL);
-  g_list_free(list);
+  std::set<int> indices;
+  gtk_tree::GetSelectedIndices(startup_custom_pages_selection_, &indices);
 
-  for (i = 0; i < selected_iters.size(); ++i) {
-    gtk_list_store_remove(startup_custom_pages_model_, &selected_iters[i]);
+  int selected_row = 0;
+  for (std::set<int>::reverse_iterator i = indices.rbegin();
+       i != indices.rend(); ++i) {
+    startup_custom_pages_table_model_->Remove(*i);
+    selected_row = *i;
   }
+
   SaveStartupPref();
-}
 
-std::vector<GURL> GeneralPageGtk::GetCustomUrlList() const {
-  std::vector<GURL> urls;
-  GtkTreeIter iter;
-  gboolean valid = gtk_tree_model_get_iter_first(
-      GTK_TREE_MODEL(startup_custom_pages_model_), &iter);
-  while (valid) {
-    gchar* url_data;
-    gtk_tree_model_get(GTK_TREE_MODEL(startup_custom_pages_model_), &iter,
-                       COL_URL, &url_data,
-                       -1);
-    urls.push_back(GURL(url_data));
-    g_free(url_data);
-    valid = gtk_tree_model_iter_next(
-        GTK_TREE_MODEL(startup_custom_pages_model_), &iter);
+  // Select the next row after the last row deleted, or the above item if the
+  // latest item was deleted or nothing when the table doesn't have any items.
+  int row_count = startup_custom_pages_table_model_->RowCount();
+  if (selected_row >= row_count)
+    selected_row = row_count - 1;
+  if (selected_row >= 0) {
+    gtk_tree::SelectAndFocusRowNum(selected_row,
+                                   GTK_TREE_VIEW(startup_custom_pages_tree_));
   }
-  return urls;
 }
 
 void GeneralPageGtk::OnTemplateURLModelChanged() {
@@ -629,7 +621,8 @@ void GeneralPageGtk::OnTemplateURLModelChanged() {
           GTK_COMBO_BOX(default_search_engine_combobox_), &iter);
     }
   }
-  EnableDefaultSearchEngineComboBox(populated);
+  EnableDefaultSearchEngineComboBox(populated &&
+      !template_url_model_->is_default_search_managed());
   default_search_initializing_ = false;
 }
 
@@ -655,19 +648,39 @@ void GeneralPageGtk::EnableDefaultSearchEngineComboBox(bool enable) {
   gtk_widget_set_sensitive(default_search_engine_combobox_, enable);
 }
 
-void GeneralPageGtk::SetHomepage(const GURL& homepage) {
-  if (!homepage.is_valid() || homepage.spec() == chrome::kChromeUINewTabURL) {
-    new_tab_page_is_home_page_.SetValue(true);
+void GeneralPageGtk::UpdateHomepagePrefs() {
+  const GURL& homepage = URLFixerUpper::FixupURL(
+      gtk_entry_get_text(GTK_ENTRY(homepage_use_url_entry_)), std::string());
+  bool new_tab_page_is_home_page =
+    gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(homepage_use_newtab_radio_));
+  if (IsNewTabUIURLString(homepage)) {
+    new_tab_page_is_home_page = true;
+    homepage_.SetValueIfNotManaged(std::string());
+  } else if (!homepage.is_valid()) {
+    new_tab_page_is_home_page = true;
+    if (!homepage.has_host())
+      homepage_.SetValueIfNotManaged(std::string());
   } else {
-    new_tab_page_is_home_page_.SetValue(false);
-    homepage_.SetValue(UTF8ToWide(homepage.spec()));
+    homepage_.SetValueIfNotManaged(homepage.spec());
   }
+  new_tab_page_is_home_page_.SetValueIfNotManaged(new_tab_page_is_home_page);
 }
 
-void GeneralPageGtk::SetHomepageFromEntry() {
-  GURL url(URLFixerUpper::FixupURL(
-      gtk_entry_get_text(GTK_ENTRY(homepage_use_url_entry_)), ""));
-  SetHomepage(url);
+void GeneralPageGtk::UpdateHomepageIsNewTabRadio(bool homepage_is_new_tab,
+                                                 bool enabled) {
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(homepage_use_newtab_radio_),
+                               homepage_is_new_tab);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(homepage_use_url_radio_),
+                               !homepage_is_new_tab);
+  gtk_widget_set_sensitive(homepage_use_newtab_radio_, enabled);
+  gtk_widget_set_sensitive(homepage_use_url_radio_, enabled);
+}
+
+void GeneralPageGtk::EnableHomepageURLField(bool enabled) {
+  if (homepage_.IsManaged()) {
+    enabled = false;
+  }
+  gtk_widget_set_sensitive(homepage_use_url_entry_, enabled);
 }
 
 void GeneralPageGtk::EnableCustomHomepagesControls(bool enable) {

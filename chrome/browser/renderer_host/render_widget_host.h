@@ -4,11 +4,14 @@
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_H_
 #define CHROME_BROWSER_RENDERER_HOST_RENDER_WIDGET_HOST_H_
+#pragma once
 
 #include <deque>
+#include <string>
+#include <vector>
 
 #include "app/surface/transport_dib.h"
-#include "base/process.h"
+#include "base/gtest_prod_util.h"
 #include "base/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/timer.h"
@@ -18,9 +21,9 @@
 #include "gfx/native_widget_types.h"
 #include "gfx/size.h"
 #include "ipc/ipc_channel.h"
-#include "ipc/ipc_channel_handle.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebInputEvent.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebTextDirection.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebTextInputType.h"
 
 namespace gfx {
 class Rect;
@@ -29,7 +32,7 @@ class Rect;
 namespace WebKit {
 class WebInputEvent;
 class WebMouseEvent;
-class WebMouseWheelEvent;
+struct WebCompositionUnderline;
 struct WebScreenInfo;
 }
 
@@ -121,11 +124,11 @@ struct ViewHostMsg_UpdateRect_Params;
 class RenderWidgetHost : public IPC::Channel::Listener,
                          public IPC::Channel::Sender {
  public:
-  // An interface that gets called whenever a paint occurs.
-  // Used in performance tests.
+  // An interface that gets called before and after a paint.
   class PaintObserver {
    public:
     virtual ~PaintObserver() {}
+    virtual void RenderWidgetHostWillPaint(RenderWidgetHost* rhw) = 0;
     virtual void RenderWidgetHostDidPaint(RenderWidgetHost* rwh) = 0;
   };
 
@@ -143,6 +146,7 @@ class RenderWidgetHost : public IPC::Channel::Listener,
 
   RenderProcessHost* process() const { return process_; }
   int routing_id() const { return routing_id_; }
+  bool renderer_accessible() { return renderer_accessible_; }
 
   // Set the PaintObserver on this object. Takes ownership.
   void set_paint_observer(PaintObserver* paint_observer) {
@@ -197,13 +201,30 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   // Tells the renderer it got/lost focus.
   void Focus();
   void Blur();
-  void LostCapture();
+  virtual void LostCapture();
+
+  // Tells us whether the page is rendered directly via the GPU process.
+  bool is_gpu_rendering_active() { return is_gpu_rendering_active_; }
 
   // Notifies the RenderWidgetHost that the View was destroyed.
   void ViewDestroyed();
 
   // Indicates if the page has finished loading.
   void SetIsLoading(bool is_loading);
+
+  // This tells the renderer to paint into a bitmap and return it,
+  // regardless of whether the tab is hidden or not.  It resizes the
+  // web widget to match the |page_size| and then returns the bitmap
+  // scaled so it matches the |desired_size|, so that the scaling
+  // happens on the rendering thread.  When the bitmap is ready, the
+  // renderer sends a PaintAtSizeACK to this host, and the painting
+  // observer is notified.  Note that this bypasses most of the update
+  // logic that is normally invoked, and doesn't put the results into
+  // the backing store.
+  void PaintAtSize(TransportDIB::Handle dib_handle,
+                   int tag,
+                   const gfx::Size& page_size,
+                   const gfx::Size& desired_size);
 
   // Get access to the widget's backing store.  If a resize is in progress,
   // then the current size of the backing store may be less than the size of
@@ -222,11 +243,13 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   // renderer to send another paint.
   void DonePaintingToBackingStore();
 
+  // GPU accelerated version of GetBackingStore function. This will
+  // trigger a re-composite to the view. If a resize is pending, it will
+  // block briefly waiting for an ack from the renderer.
+  void ScheduleComposite();
+
   // Returns the video layer if it exists, NULL otherwise.
   VideoLayer* video_layer() const { return video_layer_.get(); }
-
-  // Checks to see if we can give up focus to this widget through a JS call.
-  virtual bool CanBlur() const { return true; }
 
   // Starts a hang monitor timeout. If there's already a hang monitor timeout
   // the new one will only fire if it has a shorter delay than the time
@@ -252,6 +275,8 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   // Forwards the given message to the renderer. These are called by the view
   // when it has received a message.
   virtual void ForwardMouseEvent(const WebKit::WebMouseEvent& mouse_event);
+  // Called when a mouse click activates the renderer.
+  virtual void OnMouseActivate();
   void ForwardWheelEvent(const WebKit::WebMouseWheelEvent& wheel_event);
   virtual void ForwardKeyboardEvent(const NativeWebKeyboardEvent& key_event);
   virtual void ForwardEditCommand(const std::string& name,
@@ -273,9 +298,9 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   //     NotifyTextDirection();
   //   }
   // 2. Change the text direction when pressing a set of keys.
-  // Becauses of auto-repeat, we may receive the same key-press event many
+  // Because of auto-repeat, we may receive the same key-press event many
   // times while we presses the keys and it is nonsense to send the same IPC
-  // messsage every time when we receive a key-press event.
+  // message every time when we receive a key-press event.
   // To suppress the number of IPC messages, we just update the text direction
   // when receiving a key-press event and send an IPC message when we release
   // the keys as listed in the following snippet.
@@ -298,19 +323,19 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   void CancelUpdateTextDirection();
   void NotifyTextDirection();
 
-  // Notifies the renderer whether or not the IME attached to this process is
-  // activated.
-  // When the IME is activated, a renderer process sends IPC messages to notify
-  // the status of its composition node. (This message is mainly used for
-  // notifying the position of the input cursor so that the browser can
-  // display IME windows under the cursor.)
-  void ImeSetInputMode(bool activate);
+  // Notifies the renderer whether or not the input method attached to this
+  // process is activated.
+  // When the input method is activated, a renderer process sends IPC messages
+  // to notify the status of its composition node. (This message is mainly used
+  // for notifying the position of the input cursor so that the browser can
+  // display input method windows under the cursor.)
+  void SetInputMethodActive(bool activate);
 
   // Update the composition node of the renderer (or WebKit).
-  // WebKit has a special node (a composition node) for IMEs to change its text
-  // without affecting any other DOM nodes. When the IME (attached to the
-  // browser) updates its text, the browser sends IPC messages to update the
-  // composition node of the renderer.
+  // WebKit has a special node (a composition node) for input method to change
+  // its text without affecting any other DOM nodes. When the input method
+  // (attached to the browser) updates its text, the browser sends IPC messages
+  // to update the composition node of the renderer.
   // (Read the comments of each function for its detail.)
 
   // Sets the text of the composition node.
@@ -321,10 +346,11 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   //   (on Windows);
   // * when it receives a "preedit_changed" signal of GtkIMContext (on Linux);
   // * when markedText of NSTextInput is called (on Mac).
-  void ImeSetComposition(const string16& ime_string,
-                         int cursor_position,
-                         int target_start,
-                         int target_end);
+  void ImeSetComposition(
+      const string16& text,
+      const std::vector<WebKit::WebCompositionUnderline>& underlines,
+      int selection_start,
+      int selection_end);
 
   // Finishes an ongoing composition with the specified text.
   // A browser should call this function:
@@ -332,7 +358,11 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   //   (on Windows);
   // * when it receives a "commit" signal of GtkIMContext (on Linux);
   // * when insertText of NSTextInput is called (on Mac).
-  void ImeConfirmComposition(const string16& ime_string);
+  void ImeConfirmComposition(const string16& text);
+
+  // Finishes an ongoing composition with the composition text set by last
+  // SetComposition() call.
+  void ImeConfirmComposition();
 
   // Cancels an ongoing composition.
   void ImeCancelComposition();
@@ -350,6 +380,21 @@ class RenderWidgetHost : public IPC::Channel::Listener,
 
   // Makes an IPC call to tell webkit to advance to the next misspelling.
   void AdvanceToNextMisspelling();
+
+  // Enable renderer accessibility. This should only be called when a
+  // screenreader is detected.
+  void EnableRendererAccessibility();
+
+  // Relays a request from assistive technology to set focus to the
+  // node with this accessibility object id.
+  void SetAccessibilityFocus(int acc_obj_id);
+
+  // Relays a request from assistive technology to perform the default action
+  // on a node with this accessibility object id.
+  void AccessibilityDoDefaultAction(int acc_obj_id);
+
+  // Acknowledges a ViewHostMsg_AccessibilityNotifications message.
+  void AccessibilityNotificationsAck();
 
   // Sets the active state (i.e., control tints).
   virtual void SetActive(bool active);
@@ -410,9 +455,10 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   bool renderer_initialized_;
 
  private:
-  FRIEND_TEST(RenderWidgetHostTest, Resize);
-  FRIEND_TEST(RenderWidgetHostTest, ResizeThenCrash);
-  FRIEND_TEST(RenderWidgetHostTest, HiddenPaint);
+  FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostTest, Resize);
+  FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostTest, ResizeThenCrash);
+  FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostTest, HiddenPaint);
+  FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostTest, PaintAtSize);
 
   // Tell this object to destroy itself.
   void Destroy();
@@ -421,7 +467,7 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   // if it is.
   void CheckRendererIsUnresponsive();
 
-  // Called if we know the renderer is responsive. When we currently thing the
+  // Called if we know the renderer is responsive. When we currently think the
   // renderer is unresponsive, this will clear that state and call
   // NotifyRendererResponsive.
   void RendererIsResponsive();
@@ -431,30 +477,32 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   void OnMsgRenderViewGone();
   void OnMsgClose();
   void OnMsgRequestMove(const gfx::Rect& pos);
+  void OnMsgPaintAtSizeAck(int tag, const gfx::Size& size);
   void OnMsgUpdateRect(const ViewHostMsg_UpdateRect_Params& params);
   void OnMsgCreateVideo(const gfx::Size& size);
   void OnMsgUpdateVideo(TransportDIB::Id bitmap, const gfx::Rect& bitmap_rect);
   void OnMsgDestroyVideo();
   void OnMsgInputEventAck(const IPC::Message& message);
-  void OnMsgFocus();
-  void OnMsgBlur();
-  virtual void OnMsgFocusedNodeChanged();
+  virtual void OnMsgFocus();
+  virtual void OnMsgBlur();
 
   void OnMsgSetCursor(const WebCursor& cursor);
-  // Using int instead of ViewHostMsg_ImeControl for control's type to avoid
-  // having to bring in render_messages.h in a header file.
-  void OnMsgImeUpdateStatus(int control, const gfx::Rect& caret_rect);
+  void OnMsgImeUpdateTextInputState(WebKit::WebTextInputType type,
+                                    const gfx::Rect& caret_rect);
+  void OnMsgImeCancelComposition();
 
-#if defined(OS_LINUX)
-  void OnMsgCreatePluginContainer(gfx::PluginWindowHandle id);
-  void OnMsgDestroyPluginContainer(gfx::PluginWindowHandle id);
-#elif defined(OS_MACOSX)
+  void OnMsgGpuRenderingActivated(bool activated);
+
+#if defined(OS_MACOSX)
   void OnMsgShowPopup(const ViewHostMsg_ShowPopup_Params& params);
   void OnMsgGetScreenInfo(gfx::NativeViewId view,
                           WebKit::WebScreenInfo* results);
   void OnMsgGetWindowRect(gfx::NativeViewId window_id, gfx::Rect* results);
   void OnMsgGetRootWindowRect(gfx::NativeViewId window_id, gfx::Rect* results);
-  void OnAllocateFakePluginWindowHandle(gfx::PluginWindowHandle* id);
+  void OnMsgSetPluginImeEnabled(bool enabled, int plugin_id);
+  void OnAllocateFakePluginWindowHandle(bool opaque,
+                                        bool root,
+                                        gfx::PluginWindowHandle* id);
   void OnDestroyFakePluginWindowHandle(gfx::PluginWindowHandle id);
   void OnAcceleratedSurfaceSetIOSurface(gfx::PluginWindowHandle window,
                                         int32 width,
@@ -465,6 +513,9 @@ class RenderWidgetHost : public IPC::Channel::Listener,
                                            int32 height,
                                            TransportDIB::Handle transport_dib);
   void OnAcceleratedSurfaceBuffersSwapped(gfx::PluginWindowHandle window);
+#elif defined(OS_POSIX)
+  void OnMsgCreatePluginContainer(gfx::PluginWindowHandle id);
+  void OnMsgDestroyPluginContainer(gfx::PluginWindowHandle id);
 #endif
 
   // Paints the given bitmap to the current backing store at the given location.
@@ -493,6 +544,15 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   // Called by OnMsgInputEventAck() to process a keyboard event ack message.
   void ProcessKeyboardEventAck(int type, bool processed);
 
+  // Called by OnMsgInputEventAck() to process a wheel event ack message.
+  // This could result in a task being posted to allow additional wheel
+  // input messages to be coalesced.
+  void ProcessWheelAck();
+
+  // True if renderer accessibility is enabled. This should only be set when a
+  // screenreader is detected as it can potentially slow down Chrome.
+  bool renderer_accessible_;
+
   // The View associated with the RenderViewHost. The lifetime of this object
   // is associated with the lifetime of the Render process. If the Renderer
   // crashes, its View is destroyed and this pointer becomes NULL, even though
@@ -520,6 +580,9 @@ class RenderWidgetHost : public IPC::Channel::Listener,
 
   // Indicates whether a page is hidden or not.
   bool is_hidden_;
+
+  // True when a page is rendered directly via the GPU process.
+  bool is_gpu_rendering_active_;
 
   // Set if we are waiting for a repaint ack for the view.
   bool repaint_ack_pending_;
@@ -582,7 +645,7 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   // Optional observer that listens for notifications of painting.
   scoped_ptr<PaintObserver> paint_observer_;
 
-  // Flag to detect recurive calls to GetBackingStore().
+  // Flag to detect recursive calls to GetBackingStore().
   bool in_get_backing_store_;
 
   // Set when we call DidPaintRect/DidScrollRect on the view.
@@ -616,7 +679,7 @@ class RenderWidgetHost : public IPC::Channel::Listener,
   // System may translate a RawKeyDown event into zero or more Char events,
   // usually we send them to the renderer directly in sequence. However, If a
   // RawKeyDown event was not handled by the renderer but was handled by
-  // our UnhandledKeyboardEvent() method, eg. as an accelerator key, then we
+  // our UnhandledKeyboardEvent() method, e.g. as an accelerator key, then we
   // shall not send the following sequence of Char events, which was generated
   // by this RawKeyDown event, to the renderer. Otherwise the renderer may
   // handle the Char events and cause unexpected behavior.

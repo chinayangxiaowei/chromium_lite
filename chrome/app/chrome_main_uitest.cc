@@ -39,10 +39,13 @@ TEST_F(ChromeMainTest, AppTestingInterface) {
   EXPECT_EQ(1, GetTabCount());
 }
 
+#if !defined(OS_MACOSX)
+// These tests don't apply to the Mac version; see
+// LaunchAnotherBrowserBlockUntilClosed for details.
+
 // Make sure that the second invocation creates a new window.
 TEST_F(ChromeMainTest, SecondLaunch) {
   include_testing_id_ = false;
-  use_existing_browser_ = true;
 
   ASSERT_TRUE(LaunchAnotherBrowserBlockUntilClosed(
                   CommandLine(CommandLine::ARGUMENTS_ONLY)));
@@ -52,13 +55,14 @@ TEST_F(ChromeMainTest, SecondLaunch) {
 
 TEST_F(ChromeMainTest, ReuseBrowserInstanceWhenOpeningFile) {
   include_testing_id_ = false;
-  use_existing_browser_ = true;
 
   FilePath test_file = test_data_directory_.AppendASCII("empty.html");
 
   CommandLine command_line(CommandLine::ARGUMENTS_ONLY);
-  command_line.AppendLooseValue(test_file.ToWStringHack());
+  command_line.AppendArgPath(test_file);
   ASSERT_TRUE(LaunchAnotherBrowserBlockUntilClosed(command_line));
 
   ASSERT_TRUE(automation()->IsURLDisplayed(net::FilePathToFileURL(test_file)));
 }
+
+#endif  // !OS_MACOSX

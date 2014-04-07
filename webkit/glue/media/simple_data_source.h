@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,13 +15,14 @@
 #include "media/base/factory.h"
 #include "media/base/filters.h"
 #include "webkit/glue/media/media_resource_loader_bridge_factory.h"
+#include "webkit/glue/media/web_data_source.h"
 
 class MessageLoop;
 class WebMediaPlayerDelegateImpl;
 
 namespace webkit_glue {
 
-class SimpleDataSource : public media::DataSource,
+class SimpleDataSource : public WebDataSource,
                          public webkit_glue::ResourceLoaderBridge::Peer {
  public:
   static media::FilterFactory* CreateFactory(
@@ -39,7 +40,7 @@ class SimpleDataSource : public media::DataSource,
       const media::MediaFormat& media_format);
 
   // MediaFilter implementation.
-  virtual void Stop();
+  virtual void Stop(media::FilterCallback* callback);
 
   // DataSource implementation.
   virtual void Initialize(const std::string& url,
@@ -51,20 +52,25 @@ class SimpleDataSource : public media::DataSource,
   virtual bool IsStreaming();
 
   // webkit_glue::ResourceLoaderBridge::Peer implementation.
-  virtual void OnDownloadProgress(uint64 position, uint64 size);
-  virtual void OnUploadProgress(uint64 position, uint64 size);
+  virtual void OnUploadProgress(uint64 position, uint64 size) {}
   virtual bool OnReceivedRedirect(
       const GURL& new_url,
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info,
+      const webkit_glue::ResourceResponseInfo& info,
       bool* has_new_first_party_for_cookies,
       GURL* new_first_party_for_cookies);
   virtual void OnReceivedResponse(
-      const webkit_glue::ResourceLoaderBridge::ResponseInfo& info,
+      const webkit_glue::ResourceResponseInfo& info,
       bool content_filtered);
+  virtual void OnDownloadedData(int len) {}
   virtual void OnReceivedData(const char* data, int len);
   virtual void OnCompletedRequest(const URLRequestStatus& status,
-                                  const std::string& security_info);
+                                  const std::string& security_info,
+                                  const base::Time& completion_time);
   virtual GURL GetURLForDebugging() const;
+
+  // webkit_glue::WebDataSource implementation.
+  virtual bool HasSingleOrigin();
+  virtual void Abort();
 
  private:
   friend class media::FilterFactoryImpl2<
@@ -101,6 +107,7 @@ class SimpleDataSource : public media::DataSource,
   GURL url_;
   std::string data_;
   int64 size_;
+  bool single_origin_;
 
   // Simple state tracking variable.
   enum State {

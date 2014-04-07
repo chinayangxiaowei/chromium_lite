@@ -305,13 +305,13 @@ TEST_F(TransportSecurityStateTest, IsPreloaded) {
       TransportSecurityState::CanonicaliseHost("aypal.com");
 
   bool b;
-  EXPECT_FALSE(TransportSecurityState::isPreloadedSTS(paypal, &b));
-  EXPECT_TRUE(TransportSecurityState::isPreloadedSTS(www_paypal, &b));
+  EXPECT_FALSE(TransportSecurityState::IsPreloadedSTS(paypal, &b));
+  EXPECT_TRUE(TransportSecurityState::IsPreloadedSTS(www_paypal, &b));
   EXPECT_FALSE(b);
-  EXPECT_FALSE(TransportSecurityState::isPreloadedSTS(a_www_paypal, &b));
-  EXPECT_FALSE(TransportSecurityState::isPreloadedSTS(abc_paypal, &b));
-  EXPECT_FALSE(TransportSecurityState::isPreloadedSTS(example, &b));
-  EXPECT_FALSE(TransportSecurityState::isPreloadedSTS(aypal, &b));
+  EXPECT_FALSE(TransportSecurityState::IsPreloadedSTS(a_www_paypal, &b));
+  EXPECT_FALSE(TransportSecurityState::IsPreloadedSTS(abc_paypal, &b));
+  EXPECT_FALSE(TransportSecurityState::IsPreloadedSTS(example, &b));
+  EXPECT_FALSE(TransportSecurityState::IsPreloadedSTS(aypal, &b));
 }
 
 TEST_F(TransportSecurityStateTest, Preloaded) {
@@ -325,6 +325,37 @@ TEST_F(TransportSecurityStateTest, Preloaded) {
   EXPECT_FALSE(domain_state.include_subdomains);
   EXPECT_FALSE(state->IsEnabledForHost(&domain_state, "www2.paypal.com"));
   EXPECT_FALSE(state->IsEnabledForHost(&domain_state, "a.www.paypal.com"));
+
+  EXPECT_FALSE(state->IsEnabledForHost(&domain_state, "elanex.biz"));
+  EXPECT_TRUE(state->IsEnabledForHost(&domain_state, "www.elanex.biz"));
+  EXPECT_EQ(domain_state.mode,
+            TransportSecurityState::DomainState::MODE_STRICT);
+  EXPECT_FALSE(state->IsEnabledForHost(&domain_state, "foo.elanex.biz"));
+  EXPECT_FALSE(state->IsEnabledForHost(&domain_state, "a.foo.elanex.biz"));
+
+  EXPECT_TRUE(state->IsEnabledForHost(&domain_state, "sunshinepress.org"));
+  EXPECT_EQ(domain_state.mode,
+            TransportSecurityState::DomainState::MODE_STRICT);
+  EXPECT_TRUE(state->IsEnabledForHost(&domain_state, "www.sunshinepress.org"));
+  EXPECT_TRUE(state->IsEnabledForHost(&domain_state, "a.b.sunshinepress.org"));
+
+  EXPECT_TRUE(state->IsEnabledForHost(&domain_state, "www.noisebridge.net"));
+  EXPECT_FALSE(state->IsEnabledForHost(&domain_state, "noisebridge.net"));
+  EXPECT_FALSE(state->IsEnabledForHost(&domain_state, "foo.noisebridge.net"));
+
+  EXPECT_TRUE(state->IsEnabledForHost(&domain_state, "neg9.org"));
+  EXPECT_FALSE(state->IsEnabledForHost(&domain_state, "www.neg9.org"));
+}
+
+TEST_F(TransportSecurityStateTest, LongNames) {
+  scoped_refptr<TransportSecurityState> state(
+      new TransportSecurityState);
+  const char kLongName[] =
+      "lookupByWaveIdHashAndWaveIdIdAndWaveIdDomainAndWaveletIdIdAnd"
+      "WaveletIdDomainAndBlipBlipid";
+  TransportSecurityState::DomainState domain_state;
+  // Just checks that we don't hit a NOTREACHED.
+  EXPECT_FALSE(state->IsEnabledForHost(&domain_state, kLongName));
 }
 
 }  // namespace net

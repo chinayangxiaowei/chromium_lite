@@ -5,7 +5,9 @@
 #include "chrome/renderer/audio_message_filter.h"
 
 #include "base/message_loop.h"
+#include "base/time.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "ipc/ipc_logging.h"
 
 AudioMessageFilter::AudioMessageFilter(int32 route_id)
@@ -70,8 +72,7 @@ void AudioMessageFilter::OnChannelClosing() {
 
 void AudioMessageFilter::OnRequestPacket(const IPC::Message& msg,
                                          int stream_id,
-                                         uint32 bytes_in_buffer,
-                                         int64 message_timestamp) {
+                                         AudioBuffersState buffers_state) {
   Delegate* delegate = delegates_.Lookup(stream_id);
   if (!delegate) {
     DLOG(WARNING) << "Got audio packet request for a non-existent or removed"
@@ -79,8 +80,7 @@ void AudioMessageFilter::OnRequestPacket(const IPC::Message& msg,
     return;
   }
 
-  delegate->OnRequestPacket(bytes_in_buffer,
-                            base::Time::FromInternalValue(message_timestamp));
+  delegate->OnRequestPacket(buffers_state);
 }
 
 void AudioMessageFilter::OnStreamCreated(int stream_id,

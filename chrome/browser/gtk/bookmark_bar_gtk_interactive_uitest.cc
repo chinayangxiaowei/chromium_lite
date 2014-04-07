@@ -7,13 +7,14 @@
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/gtk/view_id_util.h"
+#include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
+#include "net/test/test_server.h"
 
 namespace {
 
-const wchar_t kDocRoot[] = L"chrome/test/data";
-const wchar_t kSimplePage[] = L"404_is_enough_for_us.html";
+const char kSimplePage[] = "404_is_enough_for_us.html";
 
 void OnClicked(GtkWidget* widget, bool* clicked_bit) {
   *clicked_bit = true;
@@ -27,18 +28,17 @@ class BookmarkBarGtkBrowserTest : public InProcessBrowserTest {
 // Makes sure that when you switch back to an NTP with an active findbar,
 // the findbar is above the floating bookmark bar.
 IN_PROC_BROWSER_TEST_F(BookmarkBarGtkBrowserTest, FindBarTest) {
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(kDocRoot, NULL);
-  ASSERT_TRUE(NULL != server.get());
+  ASSERT_TRUE(test_server()->Start());
 
   // Create new tab; open findbar.
   browser()->NewTab();
   browser()->Find();
 
   // Create new tab with an arbitrary URL.
-  GURL url = server->TestServerPageW(kSimplePage);
-  browser()->AddTabWithURL(url, GURL(), PageTransition::TYPED, true, -1,
-                           false, NULL);
+  GURL url = test_server()->GetURL(kSimplePage);
+  Browser::AddTabWithURLParams params(url, PageTransition::TYPED);
+  browser()->AddTabWithURL(&params);
+  EXPECT_EQ(browser(), params.target);
 
   // Switch back to the NTP with the active findbar.
   browser()->SelectTabContentsAt(1, false);
@@ -55,9 +55,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkBarGtkBrowserTest, FindBarTest) {
 
 // Makes sure that you can click on the floating bookmark bar.
 IN_PROC_BROWSER_TEST_F(BookmarkBarGtkBrowserTest, ClickOnFloatingTest) {
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(kDocRoot, NULL);
-  ASSERT_TRUE(NULL != server.get());
+  ASSERT_TRUE(test_server()->Start());
 
   GtkWidget* other_bookmarks =
       ViewIDUtil::GetWidget(GTK_WIDGET(browser()->window()->GetNativeHandle()),

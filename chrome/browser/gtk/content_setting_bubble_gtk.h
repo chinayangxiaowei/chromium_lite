@@ -4,13 +4,15 @@
 
 #ifndef CHROME_BROWSER_GTK_CONTENT_SETTING_BUBBLE_GTK_H_
 #define CHROME_BROWSER_GTK_CONTENT_SETTING_BUBBLE_GTK_H_
+#pragma once
 
 #include <map>
-#include <string>
 
+#include "app/gtk_signal.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/gtk/info_bubble_gtk.h"
 #include "chrome/common/content_settings_types.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 
 class ContentSettingBubbleModel;
@@ -50,19 +52,15 @@ class ContentSettingBubbleGtk : public InfoBubbleGtkDelegate,
   void BuildBubble();
 
   // Widget callback methods.
-  static void OnPopupIconButtonPress(GtkWidget* icon,
-                                     GdkEventButton* event,
-                                     ContentSettingBubbleGtk* bubble);
-  static void OnPopupLinkClicked(GtkWidget* button,
-                                 ContentSettingBubbleGtk* bubble);
-  static void OnRadioToggled(GtkWidget* widget,
-                             ContentSettingBubbleGtk* bubble);
-  static void OnCloseButtonClicked(GtkButton *button,
-                                   ContentSettingBubbleGtk* bubble);
-  static void OnManageLinkClicked(GtkButton* button,
-                                  ContentSettingBubbleGtk* bubble);
-  static void OnClearLinkClicked(GtkButton* button,
-                                 ContentSettingBubbleGtk* bubble);
+  CHROMEGTK_CALLBACK_1(ContentSettingBubbleGtk, void, OnPopupIconButtonPress,
+                       GdkEventButton*);
+  CHROMEGTK_CALLBACK_0(ContentSettingBubbleGtk, void, OnPopupLinkClicked);
+  CHROMEGTK_CALLBACK_0(ContentSettingBubbleGtk, void, OnRadioToggled);
+  CHROMEGTK_CALLBACK_0(ContentSettingBubbleGtk, void, OnCloseButtonClicked);
+  CHROMEGTK_CALLBACK_0(ContentSettingBubbleGtk, void, OnManageLinkClicked);
+  CHROMEGTK_CALLBACK_0(ContentSettingBubbleGtk, void, OnClearLinkClicked);
+  CHROMEGTK_CALLBACK_0(ContentSettingBubbleGtk, void, OnInfoLinkClicked);
+  CHROMEGTK_CALLBACK_0(ContentSettingBubbleGtk, void, OnLoadPluginsLinkClicked);
 
   // We position the bubble near this widget.
   GtkWidget* anchor_;
@@ -91,6 +89,8 @@ class ContentSettingBubbleGtk : public InfoBubbleGtkDelegate,
 
   typedef std::vector<GtkWidget*> RadioGroupGtk;
   RadioGroupGtk radio_group_gtk_;
+
+  GtkWidget* load_plugins_link_;
 };
 
 #endif  // CHROME_BROWSER_GTK_CONTENT_SETTING_BUBBLE_GTK_H_

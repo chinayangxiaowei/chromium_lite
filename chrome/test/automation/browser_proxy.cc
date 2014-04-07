@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include <vector>
 
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/platform_thread.h"
 #include "base/time.h"
@@ -52,12 +54,12 @@ bool BrowserProxy::BringToFront() {
   return succeeded;
 }
 
-bool BrowserProxy::IsPageMenuCommandEnabled(int id, bool* enabled) {
+bool BrowserProxy::IsMenuCommandEnabled(int id, bool* enabled) {
   if (!is_valid())
     return false;
 
-  return sender_->Send(new AutomationMsg_IsPageMenuCommandEnabled(
-                           0, handle_, id, enabled));
+  return sender_->Send(new AutomationMsg_IsMenuCommandEnabled(0, handle_, id,
+                                                              enabled));
 }
 
 bool BrowserProxy::AppendTab(const GURL& tab_url) {
@@ -190,19 +192,14 @@ bool BrowserProxy::SimulateDrag(const gfx::Point& start,
   return result;
 }
 
-bool BrowserProxy::WaitForTabCountToBecome(int count, int wait_timeout) {
-  const TimeTicks start = TimeTicks::Now();
-  const TimeDelta timeout = TimeDelta::FromMilliseconds(wait_timeout);
-  while (TimeTicks::Now() - start < timeout) {
-    PlatformThread::Sleep(automation::kSleepTime);
-    int new_count;
-    if (!GetTabCount(&new_count))
-      return false;
-    if (count == new_count)
-      return true;
+bool BrowserProxy::WaitForTabCountToBecome(int count) {
+  bool success = false;
+  if (!sender_->Send(new AutomationMsg_WaitForTabCountToBecome(
+                         0, handle_, count, &success))) {
+    return false;
   }
-  // If we get here, the tab count doesn't match.
-  return false;
+
+  return success;
 }
 
 bool BrowserProxy::WaitForTabToBecomeActive(int tab,
@@ -398,7 +395,7 @@ bool BrowserProxy::SetShelfVisible(bool is_visible) {
                                                             is_visible));
 }
 
-bool BrowserProxy::SetIntPreference(const std::wstring& name, int value) {
+bool BrowserProxy::SetIntPreference(const std::string& name, int value) {
   if (!is_valid())
     return false;
 
@@ -409,8 +406,8 @@ bool BrowserProxy::SetIntPreference(const std::wstring& name, int value) {
   return result;
 }
 
-bool BrowserProxy::SetStringPreference(const std::wstring& name,
-                                       const std::wstring& value) {
+bool BrowserProxy::SetStringPreference(const std::string& name,
+                                       const std::string& value) {
   if (!is_valid())
     return false;
 
@@ -421,7 +418,7 @@ bool BrowserProxy::SetStringPreference(const std::wstring& name,
   return result;
 }
 
-bool BrowserProxy::GetBooleanPreference(const std::wstring& name,
+bool BrowserProxy::GetBooleanPreference(const std::string& name,
                                         bool* value) {
   if (!is_valid())
     return false;
@@ -433,7 +430,7 @@ bool BrowserProxy::GetBooleanPreference(const std::wstring& name,
   return result;
 }
 
-bool BrowserProxy::SetBooleanPreference(const std::wstring& name,
+bool BrowserProxy::SetBooleanPreference(const std::string& name,
                                         bool value) {
   if (!is_valid())
     return false;
@@ -593,4 +590,64 @@ bool BrowserProxy::SendJSONRequest(const std::string& request,
                                                          request, response,
                                                          &result));
   return result;
+}
+
+bool BrowserProxy::GetInitialLoadTimes(float* min_start_time,
+                                       float* max_stop_time,
+                                       std::vector<float>* stop_times) {
+  std::string json_response;
+  const char* kJSONCommand = "{\"command\": \"GetInitialLoadTimes\"}";
+
+  *max_stop_time = 0;
+  *min_start_time = -1;
+  if (!SendJSONRequest(kJSONCommand, &json_response)) {
+    // Older browser versions do not support GetInitialLoadTimes.
+    // Fail gracefully and do not record them in this case.
+    return false;
+  }
+  std::string error;
+  base::JSONReader reader;
+  scoped_ptr<Value> values(reader.ReadAndReturnError(json_response, true,
+                                                     NULL, &error));
+  if (!error.empty() || values->GetType() != Value::TYPE_DICTIONARY)
+    return false;
+
+  DictionaryValue* values_dict = static_cast<DictionaryValue*>(values.get());
+
+  Value* tabs_value;
+  if (!values_dict->Get("tabs", &tabs_value) ||
+      tabs_value->GetType() != Value::TYPE_LIST)
+    return false;
+
+  ListValue* tabs_list = static_cast<ListValue*>(tabs_value);
+
+  for (size_t i = 0; i < tabs_list->GetSize(); i++) {
+    float stop_ms = 0;
+    float start_ms = 0;
+    Value* tab_value;
+    DictionaryValue* tab_dict;
+
+    if (!tabs_list->Get(i, &tab_value) ||
+        tab_value->GetType() != Value::TYPE_DICTIONARY)
+      return false;
+    tab_dict = static_cast<DictionaryValue*>(tab_value);
+
+    double temp;
+    if (!tab_dict->GetReal("load_start_ms", &temp))
+      return false;
+    start_ms = static_cast<float>(temp);
+    // load_stop_ms can only be null if WaitForInitialLoads did not run.
+    if (!tab_dict->GetReal("load_stop_ms", &temp))
+      return false;
+    stop_ms = static_cast<float>(temp);
+
+    if (i == 0)
+      *min_start_time = start_ms;
+
+    *min_start_time = std::min(start_ms, *min_start_time);
+    *max_stop_time = std::max(stop_ms, *max_stop_time);
+    stop_times->push_back(stop_ms);
+  }
+  std::sort(stop_times->begin(), stop_times->end());
+  return true;
 }

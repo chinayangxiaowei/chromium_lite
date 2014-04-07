@@ -1,14 +1,19 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.  Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "net/proxy/proxy_script_fetcher.h"
 
+#include <set>
+
+#include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/i18n/icu_string_conversions.h"
+#include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/ref_counted.h"
+#include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "net/base/io_buffer.h"
@@ -45,9 +50,12 @@ bool IsPacMimeType(const std::string& mime_type) {
   return false;
 }
 
-// Convert |bytes| (which is encoded by |charset|) in place to UTF8.
+// Converts |bytes| (which is encoded by |charset|) to UTF16, saving the resul
+// to |*utf16|.
 // If |charset| is empty, then we don't know what it was and guess.
-void ConvertResponseToUTF8(const std::string& charset, std::string* bytes) {
+void ConvertResponseToUTF16(const std::string& charset,
+                            const std::string& bytes,
+                            string16* utf16) {
   const char* codepage;
 
   if (charset.empty()) {
@@ -61,15 +69,51 @@ void ConvertResponseToUTF8(const std::string& charset, std::string* bytes) {
   // We will be generous in the conversion -- if any characters lie
   // outside of |charset| (i.e. invalid), then substitute them with
   // U+FFFD rather than failing.
-  std::wstring tmp_wide;
-  base::CodepageToWide(*bytes, codepage,
-                       base::OnStringConversionError::SUBSTITUTE,
-                       &tmp_wide);
-  // TODO(eroman): would be nice to have a CodepageToUTF8() function.
-  *bytes = WideToUTF8(tmp_wide);
+  base::CodepageToUTF16(bytes, codepage,
+                        base::OnStringConversionError::SUBSTITUTE,
+                        utf16);
 }
 
+class ProxyScriptFetcherTracker {
+ public:
+  void AddFetcher(ProxyScriptFetcher* fetcher) {
+    DCHECK(!ContainsKey(fetchers_, fetcher));
+    fetchers_.insert(fetcher);
+  }
+
+  void RemoveFetcher(ProxyScriptFetcher* fetcher) {
+    DCHECK(ContainsKey(fetchers_, fetcher));
+    fetchers_.erase(fetcher);
+  }
+
+  void CancelAllFetches() {
+    for (std::set<ProxyScriptFetcher*>::const_iterator it = fetchers_.begin();
+         it != fetchers_.end(); ++it) {
+      (*it)->Cancel();
+    }
+  }
+
+ private:
+  ProxyScriptFetcherTracker();
+  ~ProxyScriptFetcherTracker();
+
+  friend struct base::DefaultLazyInstanceTraits<ProxyScriptFetcherTracker>;
+
+  std::set<ProxyScriptFetcher*> fetchers_;
+  DISALLOW_COPY_AND_ASSIGN(ProxyScriptFetcherTracker);
+};
+
+ProxyScriptFetcherTracker::ProxyScriptFetcherTracker() {}
+ProxyScriptFetcherTracker::~ProxyScriptFetcherTracker() {}
+
+base::LazyInstance<ProxyScriptFetcherTracker>
+    g_fetcher_tracker(base::LINKER_INITIALIZED);
+
 }  // namespace
+
+void EnsureNoProxyScriptFetches() {
+  g_fetcher_tracker.Get().CancelAllFetches();
+}
 
 class ProxyScriptFetcherImpl : public ProxyScriptFetcher,
                                public URLRequest::Delegate {
@@ -83,7 +127,7 @@ class ProxyScriptFetcherImpl : public ProxyScriptFetcher,
 
   // ProxyScriptFetcher methods:
 
-  virtual int Fetch(const GURL& url, std::string* bytes,
+  virtual int Fetch(const GURL& url, string16* text,
                     CompletionCallback* callback);
   virtual void Cancel();
   virtual URLRequestContext* GetRequestContext();
@@ -103,7 +147,7 @@ class ProxyScriptFetcherImpl : public ProxyScriptFetcher,
   void ReadBody(URLRequest* request);
 
   // Called once the request has completed to notify the caller of
-  // |response_code_| and |response_bytes_|.
+  // |response_code_| and |response_text_|.
   void FetchCompleted();
 
   // Clear out the state for the current request.
@@ -140,9 +184,12 @@ class ProxyScriptFetcherImpl : public ProxyScriptFetcher,
   // Holds the error condition that was hit on the current request, or OK.
   int result_code_;
 
-  // Holds the bytes read so far. Will not exceed |max_response_bytes|. This
-  // buffer is owned by the owner of |callback|.
-  std::string* result_bytes_;
+  // Holds the bytes read so far. Will not exceed |max_response_bytes|.
+  std::string bytes_read_so_far_;
+
+  // This buffer is owned by the owner of |callback|, and will be filled with
+  // UTF16 response on completion.
+  string16* result_text_;
 };
 
 ProxyScriptFetcherImpl::ProxyScriptFetcherImpl(
@@ -155,23 +202,25 @@ ProxyScriptFetcherImpl::ProxyScriptFetcherImpl(
       cur_request_id_(0),
       callback_(NULL),
       result_code_(OK),
-      result_bytes_(NULL) {
+      result_text_(NULL) {
   DCHECK(url_request_context);
+  g_fetcher_tracker.Get().AddFetcher(this);
 }
 
 ProxyScriptFetcherImpl::~ProxyScriptFetcherImpl() {
+  g_fetcher_tracker.Get().RemoveFetcher(this);
   // The URLRequest's destructor will cancel the outstanding request, and
   // ensure that the delegate (this) is not called again.
 }
 
 int ProxyScriptFetcherImpl::Fetch(const GURL& url,
-                                  std::string* bytes,
+                                  string16* text,
                                   CompletionCallback* callback) {
   // It is invalid to call Fetch() while a request is already in progress.
   DCHECK(!cur_request_.get());
 
   DCHECK(callback);
-  DCHECK(bytes);
+  DCHECK(text);
 
   cur_request_.reset(new URLRequest(url, this));
   cur_request_->set_context(url_request_context_);
@@ -186,8 +235,9 @@ int ProxyScriptFetcherImpl::Fetch(const GURL& url,
 
   // Save the caller's info for notification on completion.
   callback_ = callback;
-  result_bytes_ = bytes;
-  result_bytes_->clear();
+  result_text_ = text;
+
+  bytes_read_so_far_.clear();
 
   // Post a task to timeout this request if it takes too long.
   cur_request_id_ = ++next_id_;
@@ -269,13 +319,13 @@ void ProxyScriptFetcherImpl::OnReadCompleted(URLRequest* request,
   DCHECK(request == cur_request_.get());
   if (num_bytes > 0) {
     // Enforce maximum size bound.
-    if (num_bytes + result_bytes_->size() >
+    if (num_bytes + bytes_read_so_far_.size() >
         static_cast<size_t>(max_response_bytes)) {
       result_code_ = ERR_FILE_TOO_BIG;
       request->Cancel();
       return;
     }
-    result_bytes_->append(buf_->data(), num_bytes);
+    bytes_read_so_far_.append(buf_->data(), num_bytes);
     ReadBody(request);
   } else {  // Error while reading, or EOF
     OnResponseCompleted(request);
@@ -305,13 +355,13 @@ void ProxyScriptFetcherImpl::ReadBody(URLRequest* request) {
 
 void ProxyScriptFetcherImpl::FetchCompleted() {
   if (result_code_ == OK) {
-    // The caller expects the response to be encoded as UTF8.
+    // The caller expects the response to be encoded as UTF16.
     std::string charset;
     cur_request_->GetCharset(&charset);
-    ConvertResponseToUTF8(charset, result_bytes_);
+    ConvertResponseToUTF16(charset, bytes_read_so_far_, result_text_);
   } else {
     // On error, the caller expects empty string for bytes.
-    result_bytes_->clear();
+    result_text_->clear();
   }
 
   int result_code = result_code_;
@@ -327,7 +377,7 @@ void ProxyScriptFetcherImpl::ResetCurRequestState() {
   cur_request_id_ = 0;
   callback_ = NULL;
   result_code_ = OK;
-  result_bytes_ = NULL;
+  result_text_ = NULL;
 }
 
 void ProxyScriptFetcherImpl::OnTimeout(int id) {
@@ -361,5 +411,6 @@ size_t ProxyScriptFetcher::SetSizeConstraintForUnittest(size_t size_bytes) {
   max_response_bytes = size_bytes;
   return prev;
 }
+
 
 }  // namespace net

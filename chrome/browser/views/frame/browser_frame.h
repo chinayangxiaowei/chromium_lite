@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VIEWS_FRAME_BROWSER_FRAME_H_
 #define CHROME_BROWSER_VIEWS_FRAME_BROWSER_FRAME_H_
+#pragma once
 
 #include "build/build_config.h"
 #include "views/window/non_client_view.h"
@@ -41,10 +42,6 @@ class BrowserFrame {
   // construction.
   virtual views::Window* GetWindow() = 0;
 
-  // Notification that the tab strip has been created. This should let the
-  // BrowserRootView know about it so it can enable drag and drop.
-  virtual void TabStripCreated(BaseTabStrip* tabstrip) = 0;
-
   // Determine the distance of the left edge of the minimize button from the
   // left edge of the window. Used in our Non-Client View's Layout.
   virtual int GetMinimizeButtonOffset() const = 0;
@@ -52,6 +49,11 @@ class BrowserFrame {
   // Retrieves the bounds, in non-client view coordinates for the specified
   // TabStrip.
   virtual gfx::Rect GetBoundsForTabStrip(BaseTabStrip* tabstrip) const = 0;
+
+  // Returns the y coordinate within the window at which the horizontal TabStrip
+  // begins (or would begin).  If |restored| is true, this is calculated as if
+  // we were in restored mode regardless of the current mode.
+  virtual int GetHorizontalTabStripVerticalOffset(bool restored) const = 0;
 
   // Tells the frame to update the throbber.
   virtual void UpdateThrobber(bool running) = 0;
@@ -70,10 +72,9 @@ class BrowserFrame {
   // Returns the NonClientFrameView of this frame.
   virtual views::View* GetFrameView() const = 0;
 
-  // Paints the shadow edge along the side of the side tabstrip. The BrowserView
-  // calls this method _after_ the TabStrip has painted itself so the shadow is
-  // rendered above the tabs.
-  virtual void PaintTabStripShadow(gfx::Canvas* canvas) = 0;
+  // Notifies the frame that the tab strip display mode changed so it can update
+  // its frame treatment if necessary.
+  virtual void TabStripDisplayModeChanged() = 0;
 };
 
 #endif  // CHROME_BROWSER_VIEWS_FRAME_BROWSER_FRAME_H_

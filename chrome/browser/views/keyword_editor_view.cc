@@ -9,7 +9,8 @@
 #include "app/l10n_util.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
-#include "chrome/browser/pref_service.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_model.h"
@@ -100,9 +101,9 @@ KeywordEditorView::~KeywordEditorView() {
 }
 
 void KeywordEditorView::OnEditedKeyword(const TemplateURL* template_url,
-                                        const std::wstring& title,
-                                        const std::wstring& keyword,
-                                        const std::wstring& url) {
+                                        const string16& title,
+                                        const string16& keyword,
+                                        const std::string& url) {
   if (template_url) {
     controller_->ModifyTemplateURL(template_url, title, keyword, url);
 
@@ -129,7 +130,7 @@ std::wstring KeywordEditorView::GetWindowTitle() const {
 }
 
 std::wstring KeywordEditorView::GetWindowName() const {
-  return prefs::kKeywordEditorWindowPlacement;
+  return UTF8ToWide(prefs::kKeywordEditorWindowPlacement);
 }
 
 int KeywordEditorView::GetDialogButtons() const {
@@ -137,17 +138,11 @@ int KeywordEditorView::GetDialogButtons() const {
 }
 
 bool KeywordEditorView::Accept() {
-  if (observer_)
-      observer_->SearchEngineChosen(
-          profile_->GetTemplateURLModel()->GetDefaultSearchProvider());
   open_window = NULL;
   return true;
 }
 
 bool KeywordEditorView::Cancel() {
-  if (observer_)
-      observer_->SearchEngineChosen(
-          profile_->GetTemplateURLModel()->GetDefaultSearchProvider());
   open_window = NULL;
   return true;
 }
@@ -174,7 +169,7 @@ void KeywordEditorView::Init() {
       this, l10n_util::GetString(IDS_SEARCH_ENGINES_EDITOR_NEW_BUTTON));
   add_button_->SetEnabled(controller_->loaded());
   add_button_->AddAccelerator(
-      views::Accelerator(base::VKEY_A, false, false, true));
+      views::Accelerator(app::VKEY_A, false, false, true));
   add_button_->SetAccessibleKeyboardShortcut(L"A");
 
   edit_button_ = new views::NativeButton(
@@ -185,7 +180,7 @@ void KeywordEditorView::Init() {
       this, l10n_util::GetString(IDS_SEARCH_ENGINES_EDITOR_REMOVE_BUTTON));
   remove_button_->SetEnabled(false);
   remove_button_->AddAccelerator(
-      views::Accelerator(base::VKEY_R, false, false, true));
+      views::Accelerator(app::VKEY_R, false, false, true));
   remove_button_->SetAccessibleKeyboardShortcut(L"R");
 
   make_default_button_ = new views::NativeButton(
@@ -236,9 +231,9 @@ void KeywordEditorView::OnSelectionChanged() {
   bool only_one_url_left =
       controller_->url_model()->GetTemplateURLs().size() == 1;
   if (table_view_->SelectedRowCount() == 1) {
-    edit_button_->SetEnabled(true);
     const TemplateURL* selected_url =
         controller_->GetTemplateURL(table_view_->FirstSelectedRow());
+    edit_button_->SetEnabled(controller_->CanEdit(selected_url));
     make_default_button_->SetEnabled(controller_->CanMakeDefault(selected_url));
     remove_button_->SetEnabled(!only_one_url_left &&
                                controller_->CanRemove(selected_url));
@@ -278,13 +273,13 @@ void KeywordEditorView::ButtonPressed(
     int last_view_row = -1;
     for (views::TableView::iterator i = table_view_->SelectionBegin();
          i != table_view_->SelectionEnd(); ++i) {
-      last_view_row = table_view_->model_to_view(*i);
+      last_view_row = table_view_->ModelToView(*i);
       controller_->RemoveTemplateURL(*i);
     }
     if (last_view_row >= controller_->table_model()->RowCount())
       last_view_row = controller_->table_model()->RowCount() - 1;
     if (last_view_row >= 0)
-      table_view_->Select(table_view_->view_to_model(last_view_row));
+      table_view_->Select(table_view_->ViewToModel(last_view_row));
   } else if (sender == edit_button_) {
     const int selected_row = table_view_->FirstSelectedRow();
     const TemplateURL* template_url =

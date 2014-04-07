@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_EXTENSION_VIEW_MAC_H_
 #define CHROME_BROWSER_COCOA_EXTENSION_VIEW_MAC_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "gfx/native_widget_types.h"
@@ -48,6 +49,9 @@ class ExtensionViewMac {
   // Method for the ExtensionHost to notify us when the RenderViewHost has a
   // connection.
   void RenderViewCreated();
+
+  // Informs the view that its containing window's frame changed.
+  void WindowFrameChanged();
 
   // The minimum/maximum dimensions of the popup.
   // The minimum is just a little larger than the size of the button itself.

@@ -1,4 +1,4 @@
-// Copyright 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 #include "base/string_util.h"
 
 namespace {
-static bool UrlMatchesPatterns(const UserScript::PatternList* patterns,
-                               const GURL& url) {
+
+bool UrlMatchesPatterns(const UserScript::PatternList* patterns,
+                        const GURL& url) {
   for (UserScript::PatternList::const_iterator pattern = patterns->begin();
        pattern != patterns->end(); ++pattern) {
     if (pattern->MatchesUrl(url))
@@ -19,19 +20,26 @@ static bool UrlMatchesPatterns(const UserScript::PatternList* patterns,
   return false;
 }
 
-static bool UrlMatchesGlobs(const std::vector<std::string>* globs,
-                            const GURL& url) {
+bool UrlMatchesGlobs(const std::vector<std::string>* globs,
+                     const GURL& url) {
   for (std::vector<std::string>::const_iterator glob = globs->begin();
        glob != globs->end(); ++glob) {
-    if (MatchPatternASCII(url.spec(), *glob))
+    if (MatchPattern(url.spec(), *glob))
       return true;
   }
 
   return false;
 }
-}
 
+}  // namespace
+
+// static
 const char UserScript::kFileExtension[] = ".user.js";
+
+// static
+const int UserScript::kValidUserScriptSchemes =
+    URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS |
+    URLPattern::SCHEME_FILE | URLPattern::SCHEME_FTP;
 
 bool UserScript::HasUserScriptFileExtension(const GURL& url) {
   return EndsWith(url.ExtractFileName(), kFileExtension, false);
@@ -41,6 +49,34 @@ bool UserScript::HasUserScriptFileExtension(const FilePath& path) {
   static FilePath extension(FilePath().AppendASCII(kFileExtension));
   return EndsWith(path.BaseName().value(), extension.value(), false);
 }
+
+
+UserScript::File::File(const FilePath& extension_root,
+                       const FilePath& relative_path,
+                       const GURL& url)
+    : extension_root_(extension_root),
+      relative_path_(relative_path),
+      url_(url) {
+}
+
+UserScript::File::File() {}
+
+UserScript::File::~File() {}
+
+UserScript::UserScript()
+    : run_location_(DOCUMENT_IDLE), emulate_greasemonkey_(false),
+      match_all_frames_(false), incognito_enabled_(false),
+      allow_file_access_(false) {
+}
+
+UserScript::~UserScript() {
+}
+
+void UserScript::add_url_pattern(const URLPattern& pattern) {
+  url_patterns_.push_back(pattern);
+}
+
+void UserScript::clear_url_patterns() { url_patterns_.clear(); }
 
 bool UserScript::MatchesUrl(const GURL& url) const {
   if (url_patterns_.size() > 0) {
@@ -81,6 +117,7 @@ void UserScript::Pickle(::Pickle* pickle) const {
   pickle->WriteBool(emulate_greasemonkey());
   pickle->WriteBool(match_all_frames());
   pickle->WriteBool(is_incognito_enabled());
+  pickle->WriteBool(allow_file_access());
 
   // Write globs.
   std::vector<std::string>::const_iterator glob;
@@ -97,6 +134,7 @@ void UserScript::Pickle(::Pickle* pickle) const {
   pickle->WriteSize(url_patterns_.size());
   for (PatternList::const_iterator pattern = url_patterns_.begin();
        pattern != url_patterns_.end(); ++pattern) {
+    pickle->WriteInt(pattern->valid_schemes());
     pickle->WriteString(pattern->GetAsString());
   }
 
@@ -126,6 +164,7 @@ void UserScript::Unpickle(const ::Pickle& pickle, void** iter) {
   CHECK(pickle.ReadBool(iter, &emulate_greasemonkey_));
   CHECK(pickle.ReadBool(iter, &match_all_frames_));
   CHECK(pickle.ReadBool(iter, &incognito_enabled_));
+  CHECK(pickle.ReadBool(iter, &allow_file_access_));
 
   // Read globs.
   size_t num_globs = 0;
@@ -151,8 +190,10 @@ void UserScript::Unpickle(const ::Pickle& pickle, void** iter) {
 
   url_patterns_.clear();
   for (size_t i = 0; i < num_patterns; ++i) {
+    int valid_schemes;
+    CHECK(pickle.ReadInt(iter, &valid_schemes));
     std::string pattern_str;
-    URLPattern pattern;
+    URLPattern pattern(valid_schemes);
     CHECK(pickle.ReadString(iter, &pattern_str));
     CHECK(pattern.Parse(pattern_str));
     url_patterns_.push_back(pattern);

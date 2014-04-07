@@ -9,12 +9,20 @@
 namespace npapi {
 
 // global function pointers (within this namespace) for the NPN functions.
-union NpVersion {
+struct NpVersion {
   struct {
-    uint8 major;
     uint8 minor;
+    uint8 major;
   } v;
-  uint16 version;
+
+  void set_version(uint16 version) {
+    v.minor = version & 0xFF;
+    v.major = version >> 8;
+  }
+
+  uint16 version() const {
+    return v.minor | (v.major << 8);
+  }
 };
 
 NpVersion g_version = {0};
@@ -64,16 +72,16 @@ NPN_PopPopupsEnabledStateProcPtr g_poppopupsenabledstate = NULL;
 NPN_EnumerateProcPtr g_enumerate = NULL;
 NPN_PluginThreadAsyncCallProcPtr g_pluginthreadasynccall = NULL;
 NPN_ConstructProcPtr g_construct = NULL;
-NPN_GetValueForURLProcPtr g_getvalueforurl = NULL;
-NPN_SetValueForURLProcPtr g_setvalueforurl = NULL;
-NPN_GetAuthenticationInfoProcPtr g_getauthenticationinfo = NULL;
+NPN_GetValueForURLPtr g_getvalueforurl = NULL;
+NPN_SetValueForURLPtr g_setvalueforurl = NULL;
+NPN_GetAuthenticationInfoPtr g_getauthenticationinfo = NULL;
 
 // Must be called prior to calling any of the browser functions below.
 void InitializeBrowserFunctions(NPNetscapeFuncs* functions) {
   CHECK(functions);
   DCHECK(g_geturl == NULL || g_geturl == functions->geturl);
 
-  g_version.version = functions->version;
+  g_version.set_version(functions->version);
 
   g_geturl = functions->geturl;
   g_posturl = functions->posturl;
@@ -129,7 +137,7 @@ void InitializeBrowserFunctions(NPNetscapeFuncs* functions) {
 }
 
 void UninitializeBrowserFunctions() {
-  g_version.version = 0;
+  g_version.set_version(0);
 
   // We skip doing this in the official build as it doesn't serve much purpose
 // during shutdown.  The reason for it being here in the other types of builds
@@ -461,7 +469,7 @@ NPError SetValueForURL(NPP instance, NPNURLVariable variable, const char* url,
                        const char* value, uint32 len)  {
   DCHECK(IsInitialized()) << __FUNCTION__;
   DCHECK(npapi::VersionMinor() >= NPVERS_HAS_URL_AND_AUTH_INFO);
-  if (g_setvalueforurl) {
+  if (!g_setvalueforurl) {
     NOTREACHED();
     return NPERR_INCOMPATIBLE_VERSION_ERROR;
   }

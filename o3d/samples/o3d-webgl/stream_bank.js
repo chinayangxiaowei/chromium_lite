@@ -33,17 +33,36 @@
 /**
  * The StreamBank a collection of streams that hold vertices.
  * @constructor
+ * @extends {o3d.VertexSource}
  */
 o3d.StreamBank = function() {
-  o3d.NamedObject.call(this);
-  this.vertexStreams = [];
+  o3d.VertexSource.call(this);
+  this.vertex_streams_ = [];
 };
-o3d.inherit('StreamBank', 'NamedObject');
+o3d.inherit('StreamBank', 'VertexSource');
 
 /**
  * Array of streams.
  */
-o3d.StreamBank.prototype.vertexStreams = [];
+o3d.StreamBank.prototype.vertex_streams_ = [];
+
+o3d.StreamBank.prototype.__defineGetter__('vertexStreams',
+    function() {
+      var result = [];
+      for (var i = 0; i < this.vertex_streams_.length; ++i) {
+        var stream_array = this.vertex_streams_[i];
+        if (stream_array && stream_array.length) {
+          for (var j = 0; j < stream_array.length; ++j) {
+            var stream = stream_array[j];
+            if (stream) {
+              result.push(stream.stream);
+            }
+          }
+        }
+      }
+      return result;
+    }
+);
 
 
 /**
@@ -58,11 +77,14 @@ o3d.StreamBank.prototype.vertexStreams = [];
  */
 o3d.StreamBank.prototype.setVertexStream =
     function(semantic, semantic_index, field, start_index) {
-  if (this.vertexStreams[semantic] == undefined) {
-    this.vertexStreams[semantic] = [];
+  if (this.vertex_streams_[semantic] == undefined) {
+    this.vertex_streams_[semantic] = [];
   }
-  this.vertexStreams[semantic][semantic_index] = new o3d.Stream(
-    semantic, semantic_index, field, start_index);
+  var stream = new o3d.Stream(semantic, semantic_index, field, start_index);
+  var stream_param = new o3d.ParamVertexBufferStream;
+  stream_param.stream = stream;
+  stream_param.owner_ = this;
+  this.vertex_streams_[semantic][semantic_index] = stream_param;
 };
 
 
@@ -70,16 +92,37 @@ o3d.StreamBank.prototype.setVertexStream =
  * Searches the vertex streams bound to the StreamBank for one with the given
  * stream semantic.  If a stream is not found then it returns null.
  * @param {o3d.Stream.Semantic} semantic The particular use of this stream.
- * @param {o3d.Stream.Semantic} semantic_index Which index of a particular
- *     semantic to use.
+ * @param {number} semantic_index Which index of a particular semantic to use.
  * @return {o3d.Stream}  The found stream or null if it does not exist.
  */
 o3d.StreamBank.prototype.getVertexStream =
     function(semantic, semantic_index) {
-  if (this.vertexStreams[semantic] == undefined) {
-    return;
+  if (this.vertex_streams_[semantic] == undefined) {
+    return null;
   }
-  return this.vertexStreams[semantic][semantic_index];
+  if (!this.vertex_streams_[semantic][semantic_index]) {
+    return null;
+  }
+  return this.vertex_streams_[semantic][semantic_index].stream;
+};
+
+
+/**
+ * Searches the vertex streams bound to the StreamBank for one with the given
+ * stream semantic.  If a stream is not found then it returns null.
+ * @param {o3d.Stream.Semantic} semantic The particular use of this stream.
+ * @param {number} semantic_index Which index of a particular semantic to use.
+ * @return {o3d.ParamVertexBufferStream}  The found stream param or null if it
+ *     does not exist.
+ * @override
+ * @protected
+ */
+o3d.StreamBank.prototype.getVertexStreamParam =
+    function(semantic, semantic_index) {
+  if (this.vertex_streams_[semantic] == undefined) {
+    return null;
+  }
+  return this.vertex_streams_[semantic][semantic_index];
 };
 
 
@@ -92,10 +135,10 @@ o3d.StreamBank.prototype.getVertexStream =
  */
 o3d.StreamBank.prototype.removeVertexStream =
     function(semantic, semantic_index) {
-  if (this.vertexStreams[semantic] == undefined) {
+  if (this.vertex_streams_[semantic] == undefined) {
     return false;
   }
-  this.vertexStreams[semantic][semantic_index] = null;
+  delete this.vertex_streams_[semantic][semantic_index];
   return true;
 };
 

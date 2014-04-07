@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include <windows.h>
 
-#include <iostream>
 #include <fstream>
 #include <map>
 #include <sddl.h>
@@ -16,13 +15,11 @@
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/win_util.h"
+#include "breakpad/src/client/windows/crash_generation/client_info.h"
 #include "breakpad/src/client/windows/crash_generation/crash_generation_server.h"
 #include "breakpad/src/client/windows/sender/crash_report_sender.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
-
-// TODO(cpu): Bug 1169078. There is a laundry list of things to do for this
-// application. They will be addressed as they are required.
 
 namespace {
 
@@ -201,7 +198,7 @@ bool CrashService::Initialize(const std::wstring& command_line) {
 
   // We can override the send reports quota with a command line switch.
   if (cmd_line.HasSwitch(kMaxReports))
-    max_reports = _wtoi(cmd_line.GetSwitchValue(kMaxReports).c_str());
+    max_reports = _wtoi(cmd_line.GetSwitchValueNative(kMaxReports).c_str());
 
   if (max_reports > 0) {
     // Create the http sender object.
@@ -253,7 +250,7 @@ bool CrashService::Initialize(const std::wstring& command_line) {
 
   reporter_tag_ = L"crash svc";
   if (cmd_line.HasSwitch(kReporterTag))
-    reporter_tag_ = cmd_line.GetSwitchValue(kReporterTag);
+    reporter_tag_ = cmd_line.GetSwitchValueNative(kReporterTag);
 
   // Log basic information.
   LOG(INFO) << "pipe name is " << pipe_name;
@@ -479,4 +476,3 @@ PSECURITY_DESCRIPTOR CrashService::GetSecurityDescriptorForLowIntegrity() {
 
   return NULL;
 }
-

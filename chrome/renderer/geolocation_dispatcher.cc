@@ -20,6 +20,10 @@ GeolocationDispatcher::GeolocationDispatcher(RenderView* render_view)
 }
 
 GeolocationDispatcher::~GeolocationDispatcher() {
+  for (IDMap<WebKit::WebGeolocationServiceBridge>::iterator it(&bridges_map_);
+       !it.IsAtEnd(); it.Advance()) {
+    it.GetCurrentValue()->onWebGeolocationServiceDestroyed();
+  }
   render_view_->Send(new ViewHostMsg_Geolocation_UnregisterDispatcher(
       render_view_->routing_id()));
 }
@@ -31,7 +35,6 @@ bool GeolocationDispatcher::OnMessageReceived(const IPC::Message& message) {
                         OnGeolocationPermissionSet)
     IPC_MESSAGE_HANDLER(ViewMsg_Geolocation_PositionUpdated,
                         OnGeolocationPositionUpdated)
-    IPC_MESSAGE_HANDLER(ViewMsg_Geolocation_Error, OnGeolocationError)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
@@ -90,24 +93,23 @@ void GeolocationDispatcher::OnGeolocationPermissionSet(int bridge_id,
 
 void GeolocationDispatcher::OnGeolocationPositionUpdated(
     const Geoposition& geoposition) {
+  DCHECK(geoposition.IsInitialized());
   for (IDMap<WebKit::WebGeolocationServiceBridge>::iterator it(&bridges_map_);
        !it.IsAtEnd(); it.Advance()) {
-    it.GetCurrentValue()->setLastPosition(
-        geoposition.latitude, geoposition.longitude,
-        geoposition.is_valid_altitude(), geoposition.altitude,
-        geoposition.accuracy,
-        geoposition.is_valid_altitude_accuracy(), geoposition.altitude_accuracy,
-        geoposition.is_valid_heading(), geoposition.heading,
-        geoposition.is_valid_speed(), geoposition.speed,
-        static_cast<int64>(geoposition.timestamp.ToDoubleT() * 1000));
-  }
-}
-
-void GeolocationDispatcher::OnGeolocationError(int code,
-                                               const std::string& message) {
-  for (IDMap<WebKit::WebGeolocationServiceBridge>::iterator it(&bridges_map_);
-       !it.IsAtEnd(); it.Advance()) {
-    it.GetCurrentValue()->setLastError(
-        code, WebKit::WebString::fromUTF8(message));
+    if (geoposition.IsValidFix()) {
+      it.GetCurrentValue()->setLastPosition(
+          geoposition.latitude, geoposition.longitude,
+          geoposition.is_valid_altitude(), geoposition.altitude,
+          geoposition.accuracy,
+          geoposition.is_valid_altitude_accuracy(),
+          geoposition.altitude_accuracy,
+          geoposition.is_valid_heading(), geoposition.heading,
+          geoposition.is_valid_speed(), geoposition.speed,
+          static_cast<int64>(geoposition.timestamp.ToDoubleT() * 1000));
+    } else {
+      it.GetCurrentValue()->setLastError(
+          geoposition.error_code,
+          WebKit::WebString::fromUTF8(geoposition.error_message));
+    }
   }
 }

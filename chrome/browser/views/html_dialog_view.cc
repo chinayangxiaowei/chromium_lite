@@ -4,21 +4,27 @@
 
 #include "chrome/browser/views/html_dialog_view.h"
 
-#include "base/keyboard_codes.h"
+#include "app/keyboard_codes.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/views/window.h"
+#include "chrome/common/native_web_keyboard_event.h"
 #include "views/widget/root_view.h"
 #include "views/widget/widget.h"
 #include "views/window/window.h"
 
+#if defined(OS_LINUX)
+#include "views/window/window_gtk.h"
+#endif
+
 namespace browser {
 
 // Declared in browser_dialogs.h so that others don't need to depend on our .h.
-void ShowHtmlDialogView(gfx::NativeWindow parent, Browser* browser,
+void ShowHtmlDialogView(gfx::NativeWindow parent, Profile* profile,
                         HtmlDialogUIDelegate* delegate) {
   HtmlDialogView* html_view =
-      new HtmlDialogView(browser->profile(), delegate);
-  views::Window::CreateChromeWindow(parent, gfx::Rect(), html_view);
+      new HtmlDialogView(profile, delegate);
+  browser::CreateViewsWindow(parent, gfx::Rect(), html_view);
   html_view->InitDialog();
   html_view->window()->Show();
 }
@@ -50,7 +56,7 @@ gfx::Size HtmlDialogView::GetPreferredSize() {
 
 bool HtmlDialogView::AcceleratorPressed(const views::Accelerator& accelerator) {
   // Pressing ESC closes the dialog.
-  DCHECK_EQ(base::VKEY_ESCAPE, accelerator.GetKeyCode());
+  DCHECK_EQ(app::VKEY_ESCAPE, accelerator.GetKeyCode());
   OnDialogClosed(std::string());
   return true;
 }
@@ -65,15 +71,13 @@ bool HtmlDialogView::CanResize() const {
 bool HtmlDialogView::IsModal() const {
   if (delegate_)
     return delegate_->IsDialogModal();
-  else
-    return false;
+  return false;
 }
 
 std::wstring HtmlDialogView::GetWindowTitle() const {
   if (delegate_)
     return delegate_->GetDialogTitle();
-  else
-    return std::wstring();
+  return std::wstring();
 }
 
 void HtmlDialogView::WindowClosing() {
@@ -92,6 +96,10 @@ views::View* HtmlDialogView::GetInitiallyFocusedView() {
   return this;
 }
 
+bool HtmlDialogView::ShouldShowWindowTitle() const {
+  return ShouldShowDialogTitle();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // HtmlDialogUIDelegate implementation:
 
@@ -106,8 +114,7 @@ std::wstring HtmlDialogView::GetDialogTitle() const {
 GURL HtmlDialogView::GetDialogContentURL() const {
   if (delegate_)
     return delegate_->GetDialogContentURL();
-  else
-    return GURL();
+  return GURL();
 }
 
 void HtmlDialogView::GetDOMMessageHandlers(
@@ -124,16 +131,35 @@ void HtmlDialogView::GetDialogSize(gfx::Size* size) const {
 std::string HtmlDialogView::GetDialogArgs() const {
   if (delegate_)
     return delegate_->GetDialogArgs();
-  else
-    return std::string();
+  return std::string();
 }
 
 void HtmlDialogView::OnDialogClosed(const std::string& json_retval) {
-  HtmlDialogUIDelegate* dialog_delegate = delegate_;
-  delegate_ = NULL;  // We will not communicate further with the delegate.
   HtmlDialogTabContentsDelegate::Detach();
-  dialog_delegate->OnDialogClosed(json_retval);
+  if (delegate_) {
+    HtmlDialogUIDelegate* dialog_delegate = delegate_;
+    delegate_ = NULL;  // We will not communicate further with the delegate.
+    dialog_delegate->OnDialogClosed(json_retval);
+  }
   window()->Close();
+}
+
+void HtmlDialogView::OnCloseContents(TabContents* source,
+                                     bool* out_close_dialog) {
+  if (delegate_)
+    delegate_->OnCloseContents(source, out_close_dialog);
+}
+
+bool HtmlDialogView::ShouldShowDialogTitle() const {
+  if (delegate_)
+    return delegate_->ShouldShowDialogTitle();
+  return true;
+}
+
+bool HtmlDialogView::HandleContextMenu(const ContextMenuParams& params) {
+  if (delegate_)
+    return delegate_->HandleContextMenu(params);
+  return HtmlDialogTabContentsDelegate::HandleContextMenu(params);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -159,7 +185,18 @@ void HtmlDialogView::HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {
   // This allows stuff like F10, etc to work correctly.
   DefWindowProc(event.os_event.hwnd, event.os_event.message,
                   event.os_event.wParam, event.os_event.lParam);
+#elif defined(OS_LINUX)
+  views::WindowGtk* window_gtk = static_cast<views::WindowGtk*>(window());
+  if (event.os_event && !event.skip_in_browser)
+    window_gtk->HandleKeyboardEvent(event.os_event);
 #endif
+}
+
+void HtmlDialogView::CloseContents(TabContents* source) {
+  bool close_dialog = false;
+  OnCloseContents(source, &close_dialog);
+  if (close_dialog)
+    OnDialogClosed(std::string());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -177,7 +214,7 @@ void HtmlDialogView::InitDialog() {
                                                   this);
 
   // Pressing the ESC key will close the dialog.
-  AddAccelerator(views::Accelerator(base::VKEY_ESCAPE, false, false, false));
+  AddAccelerator(views::Accelerator(app::VKEY_ESCAPE, false, false, false));
 
   DOMView::LoadURL(GetDialogContentURL());
 }

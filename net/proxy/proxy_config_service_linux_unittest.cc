@@ -13,6 +13,7 @@
 #include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/task.h"
 #include "base/thread.h"
 #include "base/waitable_event.h"
@@ -30,7 +31,7 @@ struct EnvVarValues {
   // The strange capitalization is so that the field matches the
   // environment variable name exactly.
   const char *DESKTOP_SESSION, *HOME,
-      *KDE_HOME, *KDE_SESSION_VERSION,
+      *KDEHOME, *KDE_SESSION_VERSION,
       *auto_proxy, *all_proxy,
       *http_proxy, *https_proxy, *ftp_proxy,
       *SOCKS_SERVER, *SOCKS_VERSION,
@@ -78,13 +79,13 @@ struct SettingsTable {
   map_type settings;
 };
 
-class MockEnvVarGetter : public base::EnvVarGetter {
+class MockEnvironment : public base::Environment {
  public:
-  MockEnvVarGetter() {
+  MockEnvironment() {
 #define ENTRY(x) table.settings[#x] = &values.x
     ENTRY(DESKTOP_SESSION);
     ENTRY(HOME);
-    ENTRY(KDE_HOME);
+    ENTRY(KDEHOME);
     ENTRY(KDE_SESSION_VERSION);
     ENTRY(auto_proxy);
     ENTRY(all_proxy);
@@ -104,7 +105,8 @@ class MockEnvVarGetter : public base::EnvVarGetter {
     values = zero_values;
   }
 
-  virtual bool GetEnv(const char* variable_name, std::string* result) {
+  // Begin base::Environment implementation.
+  virtual bool GetVar(const char* variable_name, std::string* result) {
     const char* env_value = table.Get(variable_name);
     if (env_value) {
       // Note that the variable may be defined but empty.
@@ -113,6 +115,17 @@ class MockEnvVarGetter : public base::EnvVarGetter {
     }
     return false;
   }
+
+  virtual bool SetVar(const char* variable_name, const std::string& new_value) {
+    ADD_FAILURE();
+    return false;
+  }
+
+  virtual bool UnSetVar(const char* variable_name) {
+    ADD_FAILURE();
+    return false;
+  }
+  // End base::Environment implementation.
 
   // Intentionally public, for convenience when setting up a test.
   EnvVarValues values;
@@ -213,6 +226,14 @@ class MockGConfSettingGetter
     return !result->empty();
   }
 
+  virtual bool BypassListIsReversed() {
+    return false;
+  }
+
+  virtual bool MatchHostsUsingSuffixMatching() {
+    return false;
+  }
+
   // Intentionally public, for convenience when setting up a test.
   GConfValues values;
 
@@ -226,7 +247,7 @@ class MockGConfSettingGetter
 }  // namespace
 }  // namespace net
 
-// This helper class runs ProxyConfigServiceLinux::GetProxyConfig() on
+// This helper class runs ProxyConfigServiceLinux::GetLatestProxyConfig() on
 // the IO thread and synchronously waits for the result.
 // Some code duplicated from proxy_script_fetcher_unittest.cc.
 class SynchConfigGetter {
@@ -269,12 +290,12 @@ class SynchConfigGetter {
         static_cast<MessageLoopForIO*>(file_loop));
   }
   // Synchronously gets the proxy config.
-  int SyncGetProxyConfig(net::ProxyConfig* config) {
+  bool SyncGetLatestProxyConfig(net::ProxyConfig* config) {
     io_thread_.message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
-        this, &SynchConfigGetter::GetConfigOnIOThread));
+        this, &SynchConfigGetter::GetLatestConfigOnIOThread));
     Wait();
     *config = proxy_config_;
-    return get_config_result_;
+    return get_latest_config_result_;
   }
 
  private:
@@ -283,10 +304,11 @@ class SynchConfigGetter {
     event_.Signal();
   }
 
-  // Calls GetProxyConfig, running on |io_thread_|] Signals |event_|
+  // Calls GetLatestProxyConfig, running on |io_thread_| Signals |event_|
   // on completion.
-  void GetConfigOnIOThread() {
-    get_config_result_ = config_service_->GetProxyConfig(&proxy_config_);
+  void GetLatestConfigOnIOThread() {
+    get_latest_config_result_ =
+        config_service_->GetLatestProxyConfig(&proxy_config_);
     event_.Signal();
   }
 
@@ -309,14 +331,10 @@ class SynchConfigGetter {
   // The config obtained by |io_thread_| and read back by the main
   // thread.
   net::ProxyConfig proxy_config_;
-  int get_config_result_;  // Return value from GetProxyConfig().
+  bool get_latest_config_result_;  // Return value from GetLatestProxyConfig().
 };
 
-template <>
-struct RunnableMethodTraits<SynchConfigGetter> {
-  void RetainCallee(SynchConfigGetter*) {}
-  void ReleaseCallee(SynchConfigGetter*) {}
-};
+DISABLE_RUNNABLE_METHOD_REFCOUNT(SynchConfigGetter);
 
 namespace net {
 
@@ -359,7 +377,7 @@ class ProxyConfigServiceLinuxTest : public PlatformTest {
 };
 
 // Builds an identifier for each test in an array.
-#define TEST_DESC(desc) StringPrintf("at line %d <%s>", __LINE__, desc)
+#define TEST_DESC(desc) base::StringPrintf("at line %d <%s>", __LINE__, desc)
 
 TEST_F(ProxyConfigServiceLinuxTest, BasicGConfTest) {
   std::vector<std::string> empty_ignores;
@@ -564,7 +582,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicGConfTest) {
       false,                                          // auto_detect
       GURL(),                                         // pac_url
       ProxyRulesExpectation::Single(
-          "socks4://socks.com:99",  // single proxy
+          "socks5://socks.com:99",  // single proxy
           "")                       // bypass rules
     },
 
@@ -588,16 +606,16 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicGConfTest) {
   };
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    SCOPED_TRACE(StringPrintf("Test[%" PRIuS "] %s", i,
-                              tests[i].description.c_str()));
-    MockEnvVarGetter* env_getter = new MockEnvVarGetter;
+    SCOPED_TRACE(base::StringPrintf("Test[%" PRIuS "] %s", i,
+                                    tests[i].description.c_str()));
+    MockEnvironment* env = new MockEnvironment;
     MockGConfSettingGetter* gconf_getter = new MockGConfSettingGetter;
     SynchConfigGetter sync_config_getter(
-        new ProxyConfigServiceLinux(env_getter, gconf_getter));
+        new ProxyConfigServiceLinux(env, gconf_getter));
     ProxyConfig config;
     gconf_getter->values = tests[i].values;
     sync_config_getter.SetupAndInitialFetch();
-    sync_config_getter.SyncGetProxyConfig(&config);
+    sync_config_getter.SyncGetLatestProxyConfig(&config);
 
     EXPECT_EQ(tests[i].auto_detect, config.auto_detect());
     EXPECT_EQ(tests[i].pac_url, config.pac_url());
@@ -624,7 +642,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         NULL,  // all_proxy
@@ -644,7 +662,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         "",    // auto_proxy
         NULL,  // all_proxy
@@ -664,7 +682,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         "http://wpad/wpad.dat",  // auto_proxy
         NULL,  // all_proxy
@@ -684,7 +702,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         "wpad.dat",  // auto_proxy
         NULL,  // all_proxy
@@ -704,7 +722,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         "www.google.com",  // all_proxy
@@ -726,7 +744,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         "www.google.com:99",  // all_proxy
@@ -748,7 +766,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         "http://www.google.com:99",  // all_proxy
@@ -770,7 +788,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         NULL,  // all_proxy
@@ -794,7 +812,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         "",  // all_proxy
@@ -807,21 +825,21 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       false,                                   // auto_detect
       GURL(),                                  // pac_url
       ProxyRulesExpectation::Single(
-          "socks4://socks.com:888",  // single proxy
+          "socks5://socks.com:888",  // single proxy
           ""),                       // bypass rules
     },
 
     {
-      TEST_DESC("socks5"),
+      TEST_DESC("socks4"),
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         "",  // all_proxy
         NULL, NULL, NULL,  // per-proto proxies
-        "socks.com:888", "5",  // SOCKS
+        "socks.com:888", "4",  // SOCKS
         NULL,  // no_proxy
       },
 
@@ -829,7 +847,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       false,                                   // auto_detect
       GURL(),                                  // pac_url
       ProxyRulesExpectation::Single(
-          "socks5://socks.com:888",  // single proxy
+          "socks4://socks.com:888",  // single proxy
           ""),                       // bypass rules
     },
 
@@ -838,7 +856,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         "",  // all_proxy
@@ -851,7 +869,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       false,                                   // auto_detect
       GURL(),                                  // pac_url
       ProxyRulesExpectation::Single(
-          "socks4://socks.com:1080",  // single proxy
+          "socks5://socks.com:1080",  // single proxy
           ""),                        // bypass rules
     },
 
@@ -860,7 +878,7 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       { // Input.
         NULL,  // DESKTOP_SESSION
         NULL,  // HOME
-        NULL,  // KDE_HOME
+        NULL,  // KDEHOME
         NULL,  // KDE_SESSION_VERSION
         NULL,  // auto_proxy
         "www.google.com",  // all_proxy
@@ -873,22 +891,21 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
       GURL(),                     // pac_url
       ProxyRulesExpectation::Single(
           "www.google.com:80",
-          // TODO(eroman): 127.0.0.1/8 is unsupported, so it was dropped
-          "*.google.com,*foo.com:99,1.2.3.4:22"),
+          "*.google.com,*foo.com:99,1.2.3.4:22,127.0.0.1/8"),
     },
   };
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    SCOPED_TRACE(StringPrintf("Test[%" PRIuS "] %s", i,
-                              tests[i].description.c_str()));
-    MockEnvVarGetter* env_getter = new MockEnvVarGetter;
+    SCOPED_TRACE(base::StringPrintf("Test[%" PRIuS "] %s", i,
+                                    tests[i].description.c_str()));
+    MockEnvironment* env = new MockEnvironment;
     MockGConfSettingGetter* gconf_getter = new MockGConfSettingGetter;
     SynchConfigGetter sync_config_getter(
-        new ProxyConfigServiceLinux(env_getter, gconf_getter));
+        new ProxyConfigServiceLinux(env, gconf_getter));
     ProxyConfig config;
-    env_getter->values = tests[i].values;
+    env->values = tests[i].values;
     sync_config_getter.SetupAndInitialFetch();
-    sync_config_getter.SyncGetProxyConfig(&config);
+    sync_config_getter.SyncGetLatestProxyConfig(&config);
 
     EXPECT_EQ(tests[i].auto_detect, config.auto_detect());
     EXPECT_EQ(tests[i].pac_url, config.pac_url());
@@ -897,24 +914,24 @@ TEST_F(ProxyConfigServiceLinuxTest, BasicEnvTest) {
 }
 
 TEST_F(ProxyConfigServiceLinuxTest, GconfNotification) {
-  MockEnvVarGetter* env_getter = new MockEnvVarGetter;
+  MockEnvironment* env = new MockEnvironment;
   MockGConfSettingGetter* gconf_getter = new MockGConfSettingGetter;
   ProxyConfigServiceLinux* service =
-      new ProxyConfigServiceLinux(env_getter, gconf_getter);
+      new ProxyConfigServiceLinux(env, gconf_getter);
   SynchConfigGetter sync_config_getter(service);
   ProxyConfig config;
 
   // Start with no proxy.
   gconf_getter->values.mode = "none";
   sync_config_getter.SetupAndInitialFetch();
-  sync_config_getter.SyncGetProxyConfig(&config);
+  sync_config_getter.SyncGetLatestProxyConfig(&config);
   EXPECT_FALSE(config.auto_detect());
 
   // Now set to auto-detect.
   gconf_getter->values.mode = "auto";
   // Simulate gconf notification callback.
   service->OnCheckProxyConfigSettings();
-  sync_config_getter.SyncGetProxyConfig(&config);
+  sync_config_getter.SyncGetLatestProxyConfig(&config);
   EXPECT_TRUE(config.auto_detect());
 }
 
@@ -933,18 +950,19 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
 
     // Input.
     std::string kioslaverc;
+    EnvVarValues env_values;
 
     // Expected outputs (fields of the ProxyConfig).
     bool auto_detect;
     GURL pac_url;
     ProxyRulesExpectation proxy_rules;
-    const char* proxy_bypass_list;  // newline separated
   } tests[] = {
     {
       TEST_DESC("No proxying"),
 
       // Input.
       "[Proxy Settings]\nProxyType=0\n",
+      {},                                      // env_values
 
       // Expected result.
       false,                      // auto_detect
@@ -957,6 +975,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
 
       // Input.
       "[Proxy Settings]\nProxyType=3\n",
+      {},                                      // env_values
 
       // Expected result.
       true,                       // auto_detect
@@ -970,6 +989,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
       // Input.
       "[Proxy Settings]\nProxyType=2\n"
           "Proxy Config Script=http://wpad/wpad.dat\n",
+      {},                                      // env_values
 
       // Expected result.
       false,                         // auto_detect
@@ -983,6 +1003,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
       // Input.
       "[Proxy Settings]\nProxyType=1\nhttpProxy=www.google.com\n"
           "httpsProxy=www.foo.com\nftpProxy=ftp.foo.com\n",
+      {},                                      // env_values
 
       // Expected result.
       false,                                   // auto_detect
@@ -1000,6 +1021,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
       // Input.
       "[Proxy Settings]\nProxyType=1\n"
           "httpProxy=www.google.com\n",
+      {},                                      // env_values
 
       // Expected result.
       false,                                   // auto_detect
@@ -1017,6 +1039,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
       // Input.
       "[Proxy Settings]\nProxyType=1\n"
           "httpProxy=www.google.com:88\n",
+      {},                                      // env_values
 
       // Expected result.
       false,                                   // auto_detect
@@ -1033,7 +1056,8 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
 
       // Input.
       "[Proxy Settings]\nProxyType=1\nhttpProxy=www.google.com\n"
-          "NoProxyFor=*.google.com\n",
+          "NoProxyFor=.google.com\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
@@ -1049,7 +1073,8 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
 
       // Input.
       "[Proxy Settings]\nProxyType=1\nhttpProxy=www.google.com\n"
-          "NoProxyFor=*.google.com,*.kde.org\n",
+          "NoProxyFor=.google.com,.kde.org\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
@@ -1061,19 +1086,37 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
     },
 
     {
-      TEST_DESC("Ignore bypass list with ReversedException"),
+      TEST_DESC("Correctly parse bypass list with ReversedException"),
 
       // Input.
       "[Proxy Settings]\nProxyType=1\nhttpProxy=www.google.com\n"
-          "NoProxyFor=*.google.com\nReversedException=true\n",
+          "NoProxyFor=.google.com\nReversedException=true\n",
+      {},                                      // env_values
+
+      false,                                   // auto_detect
+      GURL(),                                  // pac_url
+      ProxyRulesExpectation::PerSchemeWithBypassReversed(
+          "www.google.com:80",  // http
+          "",                   // https
+          "",                   // ftp
+          "*.google.com"),      // bypass rules
+    },
+
+    {
+      TEST_DESC("Treat all hostname patterns as wildcard patterns"),
+
+      // Input.
+      "[Proxy Settings]\nProxyType=1\nhttpProxy=www.google.com\n"
+          "NoProxyFor=google.com,kde.org,<local>\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
       ProxyRulesExpectation::PerScheme(
-          "www.google.com:80",  // http
-          "",                   // https
-          "",                   // ftp
-          ""),                  // bypass rules
+          "www.google.com:80",              // http
+          "",                               // https
+          "",                               // ftp
+          "*google.com,*kde.org,<local>"),  // bypass rules
     },
 
     {
@@ -1081,15 +1124,16 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
 
       // Input.
       "[Proxy Settings]\nProxyType=1\nhttpProxy=www.google.com\n"
-          "NoProxyFor=*.google.com\nReversedException=true  \n",
+          "NoProxyFor=.google.com\nReversedException=true  \n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
-      ProxyRulesExpectation::PerScheme(
+      ProxyRulesExpectation::PerSchemeWithBypassReversed(
           "www.google.com:80",  // http
           "",                   // https
           "",                   // ftp
-          ""),                  // bypass rules
+          "*.google.com"),      // bypass rules
     },
 
     {
@@ -1098,6 +1142,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
       // Input.
       "httpsProxy=www.foo.com\n[Proxy Settings]\nProxyType=1\n"
           "httpProxy=www.google.com\n[Other Section]\nftpProxy=ftp.foo.com\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
@@ -1113,6 +1158,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
 
       // Input.
       "[Proxy Settings]\r\nProxyType=1\r\nhttpProxy=www.google.com\r\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
@@ -1128,6 +1174,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
 
       // Input.
       "[Proxy Settings]\r\n\nProxyType=1\n\r\nhttpProxy=www.google.com\n\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
@@ -1143,6 +1190,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
 
       // Input.
       "[Proxy Settings]\nProxyType[$e]=1\nhttpProxy[$e]=www.google.com\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
@@ -1159,6 +1207,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
       // Input.
       "[Proxy Settings]\nProxyType=1\nhttpProxy=www.google.com\n"
           "httpsProxy$e]=www.foo.com\nftpProxy=ftp.foo.com\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL(),                                  // pac_url
@@ -1175,6 +1224,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
       // Input.
       "[Proxy Settings]\nProxyType [$e] =2\n"
           "  Proxy Config Script =  http:// foo\n",
+      {},                                      // env_values
 
       false,                                   // auto_detect
       GURL("http:// foo"),                     // pac_url
@@ -1187,6 +1237,7 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
       // Input.
       std::string("[Proxy Settings]\nProxyType=1\nftpProxy=ftp.foo.com\n") +
           long_line + "httpsProxy=www.foo.com\nhttpProxy=www.google.com\n",
+      {},                                          // env_values
 
       false,                                       // auto_detect
       GURL(),                                      // pac_url
@@ -1196,23 +1247,67 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEConfigParser) {
           "ftp.foo.com:80",     // ftp
           ""),                  // bypass rules
     },
+
+    {
+      TEST_DESC("Indirect Proxy - no env vars set"),
+
+      // Input.
+      "[Proxy Settings]\nProxyType=4\nhttpProxy=http_proxy\n"
+          "httpsProxy=https_proxy\nftpProxy=ftp_proxy\nNoProxyFor=no_proxy\n",
+      {},                                      // env_values
+
+      false,                                   // auto_detect
+      GURL(),                                  // pac_url
+      ProxyRulesExpectation::Empty(),
+    },
+
+    {
+      TEST_DESC("Indirect Proxy - with env vars set"),
+
+      // Input.
+      "[Proxy Settings]\nProxyType=4\nhttpProxy=http_proxy\n"
+          "httpsProxy=https_proxy\nftpProxy=ftp_proxy\nNoProxyFor=no_proxy\n",
+      {  // env_values
+        NULL,  // DESKTOP_SESSION
+        NULL,  // HOME
+        NULL,  // KDEHOME
+        NULL,  // KDE_SESSION_VERSION
+        NULL,  // auto_proxy
+        NULL,  // all_proxy
+        "www.normal.com",  // http_proxy
+        "www.secure.com",  // https_proxy
+        "ftp.foo.com",  // ftp_proxy
+        NULL, NULL,  // SOCKS
+        ".google.com, .kde.org",  // no_proxy
+      },
+
+      false,                                   // auto_detect
+      GURL(),                                  // pac_url
+      ProxyRulesExpectation::PerScheme(
+          "www.normal.com:80",           // http
+          "www.secure.com:80",           // https
+          "ftp.foo.com:80",              // ftp
+          "*.google.com,*.kde.org"),     // bypass rules
+    },
+
   };
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    SCOPED_TRACE(StringPrintf("Test[%" PRIuS "] %s", i,
-                              tests[i].description.c_str()));
-    MockEnvVarGetter* env_getter = new MockEnvVarGetter;
+    SCOPED_TRACE(base::StringPrintf("Test[%" PRIuS "] %s", i,
+                                    tests[i].description.c_str()));
+    MockEnvironment* env = new MockEnvironment;
+    env->values = tests[i].env_values;
     // Force the KDE getter to be used and tell it where the test is.
-    env_getter->values.DESKTOP_SESSION = "kde4";
-    env_getter->values.KDE_HOME = kde_home_.value().c_str();
+    env->values.DESKTOP_SESSION = "kde4";
+    env->values.KDEHOME = kde_home_.value().c_str();
     SynchConfigGetter sync_config_getter(
-        new ProxyConfigServiceLinux(env_getter));
+        new ProxyConfigServiceLinux(env));
     ProxyConfig config;
     // Overwrite the kioslaverc file.
     file_util::WriteFile(kioslaverc_, tests[i].kioslaverc.c_str(),
                          tests[i].kioslaverc.length());
     sync_config_getter.SetupAndInitialFetch();
-    sync_config_getter.SyncGetProxyConfig(&config);
+    sync_config_getter.SyncGetLatestProxyConfig(&config);
 
     EXPECT_EQ(tests[i].auto_detect, config.auto_detect());
     EXPECT_EQ(tests[i].pac_url, config.pac_url());
@@ -1236,59 +1331,77 @@ TEST_F(ProxyConfigServiceLinuxTest, KDEHomePicker) {
   CHECK(!file_util::DirectoryExists(kde4_home_));
 
   { SCOPED_TRACE("KDE4, no .kde4 directory, verify fallback");
-    MockEnvVarGetter* env_getter = new MockEnvVarGetter;
-    env_getter->values.DESKTOP_SESSION = "kde4";
-    env_getter->values.HOME = user_home_.value().c_str();
+    MockEnvironment* env = new MockEnvironment;
+    env->values.DESKTOP_SESSION = "kde4";
+    env->values.HOME = user_home_.value().c_str();
     SynchConfigGetter sync_config_getter(
-        new ProxyConfigServiceLinux(env_getter));
+        new ProxyConfigServiceLinux(env));
     ProxyConfig config;
     sync_config_getter.SetupAndInitialFetch();
-    sync_config_getter.SyncGetProxyConfig(&config);
+    sync_config_getter.SyncGetLatestProxyConfig(&config);
     EXPECT_TRUE(config.auto_detect());
     EXPECT_EQ(GURL(), config.pac_url());
   }
 
   // Now create .kde4 and put a kioslaverc in the config directory.
+  // Note that its timestamp will be at least as new as the .kde one.
   file_util::CreateDirectory(kde4_config_);
   file_util::WriteFile(kioslaverc4_, slaverc4.c_str(), slaverc4.length());
   CHECK(file_util::PathExists(kioslaverc4_));
 
   { SCOPED_TRACE("KDE4, .kde4 directory present, use it");
-    MockEnvVarGetter* env_getter = new MockEnvVarGetter;
-    env_getter->values.DESKTOP_SESSION = "kde4";
-    env_getter->values.HOME = user_home_.value().c_str();
+    MockEnvironment* env = new MockEnvironment;
+    env->values.DESKTOP_SESSION = "kde4";
+    env->values.HOME = user_home_.value().c_str();
     SynchConfigGetter sync_config_getter(
-        new ProxyConfigServiceLinux(env_getter));
+        new ProxyConfigServiceLinux(env));
     ProxyConfig config;
     sync_config_getter.SetupAndInitialFetch();
-    sync_config_getter.SyncGetProxyConfig(&config);
+    sync_config_getter.SyncGetLatestProxyConfig(&config);
     EXPECT_FALSE(config.auto_detect());
     EXPECT_EQ(slaverc4_pac_url, config.pac_url());
   }
 
   { SCOPED_TRACE("KDE3, .kde4 directory present, ignore it");
-    MockEnvVarGetter* env_getter = new MockEnvVarGetter;
-    env_getter->values.DESKTOP_SESSION = "kde";
-    env_getter->values.HOME = user_home_.value().c_str();
+    MockEnvironment* env = new MockEnvironment;
+    env->values.DESKTOP_SESSION = "kde";
+    env->values.HOME = user_home_.value().c_str();
     SynchConfigGetter sync_config_getter(
-        new ProxyConfigServiceLinux(env_getter));
+        new ProxyConfigServiceLinux(env));
     ProxyConfig config;
     sync_config_getter.SetupAndInitialFetch();
-    sync_config_getter.SyncGetProxyConfig(&config);
+    sync_config_getter.SyncGetLatestProxyConfig(&config);
     EXPECT_TRUE(config.auto_detect());
     EXPECT_EQ(GURL(), config.pac_url());
   }
 
-  { SCOPED_TRACE("KDE4, .kde4 directory present, KDE_HOME set to .kde");
-    MockEnvVarGetter* env_getter = new MockEnvVarGetter;
-    env_getter->values.DESKTOP_SESSION = "kde4";
-    env_getter->values.HOME = user_home_.value().c_str();
-    env_getter->values.KDE_HOME = kde_home_.value().c_str();
+  { SCOPED_TRACE("KDE4, .kde4 directory present, KDEHOME set to .kde");
+    MockEnvironment* env = new MockEnvironment;
+    env->values.DESKTOP_SESSION = "kde4";
+    env->values.HOME = user_home_.value().c_str();
+    env->values.KDEHOME = kde_home_.value().c_str();
     SynchConfigGetter sync_config_getter(
-        new ProxyConfigServiceLinux(env_getter));
+        new ProxyConfigServiceLinux(env));
     ProxyConfig config;
     sync_config_getter.SetupAndInitialFetch();
-    sync_config_getter.SyncGetProxyConfig(&config);
+    sync_config_getter.SyncGetLatestProxyConfig(&config);
+    EXPECT_TRUE(config.auto_detect());
+    EXPECT_EQ(GURL(), config.pac_url());
+  }
+
+  // Finally, make the .kde4 config directory older than the .kde directory
+  // and make sure we then use .kde instead of .kde4 since it's newer.
+  file_util::SetLastModifiedTime(kde4_config_, base::Time());
+
+  { SCOPED_TRACE("KDE4, very old .kde4 directory present, use .kde");
+    MockEnvironment* env = new MockEnvironment;
+    env->values.DESKTOP_SESSION = "kde4";
+    env->values.HOME = user_home_.value().c_str();
+    SynchConfigGetter sync_config_getter(
+        new ProxyConfigServiceLinux(env));
+    ProxyConfig config;
+    sync_config_getter.SetupAndInitialFetch();
+    sync_config_getter.SyncGetLatestProxyConfig(&config);
     EXPECT_TRUE(config.auto_detect());
     EXPECT_EQ(GURL(), config.pac_url());
   }

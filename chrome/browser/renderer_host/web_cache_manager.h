@@ -7,16 +7,16 @@
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_WEB_CACHE_MANAGER_H_
 #define CHROME_BROWSER_RENDERER_HOST_WEB_CACHE_MANAGER_H_
+#pragma once
 
 #include <map>
 #include <list>
 #include <set>
 
 #include "base/basictypes.h"
-#include "base/shared_memory.h"
+#include "base/gtest_prod_util.h"
 #include "base/task.h"
 #include "base/time.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCache.h"
 
 template<typename Type>
@@ -24,9 +24,8 @@ struct DefaultSingletonTraits;
 class PrefService;
 
 class WebCacheManager {
-  // Unit tests are our friends.
   friend class WebCacheManagerTest;
-  FRIEND_TEST(WebCacheManagerBrowserTest, DISABLED_CrashOnceOnly);
+  FRIEND_TEST_ALL_PREFIXES(WebCacheManagerBrowserTest, CrashOnceOnly);
 
  public:
   static void RegisterPrefs(PrefService* prefs);
@@ -64,6 +63,9 @@ class WebCacheManager {
 
   // Sets the global size limit, forcing a recalculation of cache allocations.
   void SetGlobalSizeLimit(size_t bytes);
+
+  // Clears all in-memory caches.
+  void ClearCache();
 
   // Gets the default global size limit.  This interrogates system metrics to
   // tune the default size to the current system.
@@ -122,7 +124,7 @@ class WebCacheManager {
     // Allow each renderer to keep its current set of cached resources.
     KEEP_CURRENT,
 
-    // Allow each renderer to keep cache resources it believs are currently
+    // Allow each renderer to keep cache resources it believes are currently
     // being used, with some extra allocation to store new objects.
     KEEP_LIVE_WITH_HEADROOM,
 
@@ -168,6 +170,9 @@ class WebCacheManager {
   // Enact an allocation strategy by informing the renderers of their
   // allocations according to |strategy|.
   void EnactStrategy(const AllocationStrategy& strategy);
+
+  // Inform all |renderers| to clear their cache.
+  void ClearRendederCache(std::set<int> renderers);
 
   // Check to see if any active renderers have fallen inactive.
   void FindInactiveRenderers();

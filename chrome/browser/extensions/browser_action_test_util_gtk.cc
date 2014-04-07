@@ -15,13 +15,15 @@
 namespace {
 
 GtkWidget* GetButton(Browser* browser, int index) {
-  GtkWidget* button = NULL;
   GtkWidget* toolbar =
       ViewIDUtil::GetWidget(GTK_WIDGET(browser->window()->GetNativeHandle()),
                             VIEW_ID_BROWSER_ACTION_TOOLBAR);
+  GtkWidget* button = NULL;
   if (toolbar) {
     GList* children = gtk_container_get_children(GTK_CONTAINER(toolbar));
-    button = static_cast<GtkWidget*>(g_list_nth(children, index)->data);
+    GtkWidget* alignment =
+        static_cast<GtkWidget*>(g_list_nth(children, index)->data);
+    button = gtk_bin_get_child(GTK_BIN(alignment));
     g_list_free(children);
   }
   return button;
@@ -81,10 +83,10 @@ bool BrowserActionTestUtil::HidePopup() {
 // static
 gfx::Size BrowserActionTestUtil::GetMinPopupSize() {
   // On Linux we actually just limit the size of the extension view.
-  return gfx::Size(ExtensionViewGtk::kMinWidth, ExtensionViewGtk::kMinHeight);
+  return gfx::Size(ExtensionPopupGtk::kMinWidth, ExtensionPopupGtk::kMinHeight);
 }
 
 // static
 gfx::Size BrowserActionTestUtil::GetMaxPopupSize() {
-  return gfx::Size(ExtensionViewGtk::kMaxWidth, ExtensionViewGtk::kMaxHeight);
+  return gfx::Size(ExtensionPopupGtk::kMaxWidth, ExtensionPopupGtk::kMaxHeight);
 }

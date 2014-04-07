@@ -46,6 +46,7 @@
 #include <string>
 
 #include "base/scoped_ptr.h"
+#include "net/base/cert_database.h"
 
 class FreePRArenaPool {
  public:
@@ -93,6 +94,8 @@ std::string ProcessKeyUsageExtension(SECItem* extension_data);
 std::string ProcessExtKeyUsage(SECItem* extension_data);
 std::string ProcessExtensionData(SECOidTag oid_tag, SECItem* extension_data);
 std::string ProcessSubjectPublicKeyInfo(CERTSubjectPublicKeyInfo* spki);
+
+net::CertType GetCertType(CERTCertificate *cert);
 
 }  // namespace mozilla_security_manager
 

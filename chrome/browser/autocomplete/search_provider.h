@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -14,16 +14,19 @@
 
 #ifndef CHROME_BROWSER_AUTOCOMPLETE_SEARCH_PROVIDER_H_
 #define CHROME_BROWSER_AUTOCOMPLETE_SEARCH_PROVIDER_H_
+#pragma once
 
 #include <map>
 #include <string>
 #include <vector>
 
+#include "base/scoped_ptr.h"
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/history/history_types.h"
-#include "chrome/browser/net/url_fetcher.h"
 #include "chrome/browser/search_engines/template_url.h"
+#include "chrome/browser/search_engines/template_url_id.h"
+#include "chrome/common/net/url_fetcher.h"
 
 class Profile;
 class Value;
@@ -41,13 +44,7 @@ class Value;
 class SearchProvider : public AutocompleteProvider,
                        public URLFetcher::Delegate {
  public:
-  SearchProvider(ACProviderListener* listener, Profile* profile)
-      : AutocompleteProvider(listener, profile, "Search"),
-        have_history_results_(false),
-        history_request_pending_(false),
-        suggest_results_pending_(0),
-        have_suggest_results_(false) {
-  }
+  SearchProvider(ACProviderListener* listener, Profile* profile);
 
 #if defined(UNIT_TEST)
   static void set_query_suggest_immediately(bool value) {
@@ -75,7 +72,7 @@ class SearchProvider : public AutocompleteProvider,
   static const int kKeywordProviderURLFetcherID;
 
  private:
-  ~SearchProvider() {}
+  ~SearchProvider();
 
   // Manages the providers (TemplateURLs) used by SearchProvider. Two providers
   // may be used:
@@ -183,7 +180,7 @@ class SearchProvider : public AutocompleteProvider,
 
   // Schedules a history query requesting past searches against the engine
   // whose id is |search_id| and whose text starts with |text|.
-  void ScheduleHistoryQuery(TemplateURL::IDType search_id,
+  void ScheduleHistoryQuery(TemplateURLID search_id,
                             const std::wstring& text);
 
   // Called back by the history system to return searches that begin with the
@@ -281,7 +278,7 @@ class SearchProvider : public AutocompleteProvider,
   // corresponds to the id of the search engine and is used in the callback to
   // determine whether the request corresponds to the keyword of default
   // provider.
-  CancelableRequestConsumerTSimple<TemplateURL::IDType>
+  CancelableRequestConsumerTSimple<TemplateURLID>
       history_request_consumer_;
 
   // Searches in the user's history that begin with the input text.
@@ -321,7 +318,7 @@ class SearchProvider : public AutocompleteProvider,
   // Whether suggest_results_ is valid.
   bool have_suggest_results_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(SearchProvider);
+  DISALLOW_COPY_AND_ASSIGN(SearchProvider);
 };
 
 #endif  // CHROME_BROWSER_AUTOCOMPLETE_SEARCH_PROVIDER_H_

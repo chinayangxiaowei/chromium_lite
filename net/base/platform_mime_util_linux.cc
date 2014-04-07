@@ -38,8 +38,38 @@ bool PlatformMimeUtil::GetPlatformMimeTypeFromExtension(
   return true;
 }
 
+struct MimeToExt {
+  const char* mime_type;
+  const char* ext;
+};
+
+const struct MimeToExt mime_type_ext_map[] = {
+  {"application/pdf", "pdf"},
+  {"application/x-tar", "tar"},
+  {"audio/mpeg", "mp3"},
+  {"image/gif", "gif"},
+  {"image/jpeg", "jpg"},
+  {"image/png", "png"},
+  {"text/html", "html"},
+  {"video/mp4", "mp4"},
+  {"video/mpeg", "mpg"},
+  {"text/plain", "txt"},
+  {"text/x-sh", "sh"},
+};
+
 bool PlatformMimeUtil::GetPreferredExtensionForMimeType(
     const std::string& mime_type, FilePath::StringType* ext) const {
+
+  for (size_t x = 0;
+       x < (sizeof(mime_type_ext_map) / sizeof(MimeToExt));
+       x++) {
+    if (mime_type_ext_map[x].mime_type == mime_type) {
+      *ext = mime_type_ext_map[x].ext;
+      return true;
+    }
+  }
+
+  // TODO(dhg): Fix this the right way by implementing whats said below.
   // Unlike GetPlatformMimeTypeFromExtension, this method doesn't have a
   // default list that it uses, but for now we are also returning false since
   // this doesn't really matter as much under Linux.

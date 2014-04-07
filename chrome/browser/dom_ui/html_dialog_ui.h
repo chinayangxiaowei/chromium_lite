@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_DOM_UI_HTML_DIALOG_UI_H_
 #define CHROME_BROWSER_DOM_UI_HTML_DIALOG_UI_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -15,6 +16,8 @@
 namespace gfx {
 class Size;
 }
+
+struct ContextMenuParams;
 
 // Implement this class to receive notifications.
 class HtmlDialogUIDelegate {
@@ -44,8 +47,22 @@ class HtmlDialogUIDelegate {
   // A callback to notify the delegate that the dialog closed.
   virtual void OnDialogClosed(const std::string& json_retval) = 0;
 
+  // A callback to notify the delegate that the contents have gone
+  // away. Only relevant if your dialog hosts code that calls
+  // windows.close() and you've allowed that.  If the output parameter
+  // is set to true, then the dialog is closed.  The default is false.
+  virtual void OnCloseContents(TabContents* source, bool* out_close_dialog) = 0;
+
+  // A callback to allow the delegate to dictate that the window should not
+  // have a title bar.  This is useful when presenting branded interfaces.
+  virtual bool ShouldShowDialogTitle() const = 0;
+
+  // A callback to allow the delegate to inhibit context menu or show
+  // customized menu.
+  virtual bool HandleContextMenu(const ContextMenuParams& params);
+
  protected:
-  ~HtmlDialogUIDelegate() {}
+  virtual ~HtmlDialogUIDelegate() {}
 };
 
 // Displays file URL contents inside a modal HTML dialog.
@@ -84,9 +101,20 @@ class HtmlDialogUI : public DOMUI {
   virtual void RenderViewCreated(RenderViewHost* render_view_host);
 
   // JS message handler.
-  void OnDialogClosed(const Value* content);
+  void OnDialogClosed(const ListValue* args);
 
   DISALLOW_COPY_AND_ASSIGN(HtmlDialogUI);
+};
+
+// Displays external URL contents inside a modal HTML dialog.
+//
+// Intended to be the place to collect the settings and lockdowns
+// necessary for running external UI conponents securely (e.g., the
+// cloud print dialog).
+class ExternalHtmlDialogUI : public HtmlDialogUI {
+ public:
+  explicit ExternalHtmlDialogUI(TabContents* tab_contents);
+  virtual ~ExternalHtmlDialogUI();
 };
 
 #endif  // CHROME_BROWSER_DOM_UI_HTML_DIALOG_UI_H_

@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_SINGLE_SPLIT_VIEW_H_
 #define VIEWS_CONTROLS_SINGLE_SPLIT_VIEW_H_
+#pragma once
 
 #include "views/view.h"
 
@@ -25,7 +26,7 @@ class SingleSplitView : public views::View {
 
   virtual void Layout();
 
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
   // SingleSplitView's preferred size is the sum of the preferred widths
   // and the max of the heights.
@@ -82,9 +83,6 @@ class SingleSplitView : public views::View {
   int divider_offset_;
 
   bool resize_leading_on_bounds_change_;
-
-  // The accessible name of this view.
-  std::wstring accessible_name_;
 
   DISALLOW_COPY_AND_ASSIGN(SingleSplitView);
 };

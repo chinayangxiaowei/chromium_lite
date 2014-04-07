@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,19 @@
 #ifndef GPU_COMMAND_BUFFER_COMMON_TYPES_H_
 #define GPU_COMMAND_BUFFER_COMMON_TYPES_H_
 
-#include <build/build_config.h>
-#if !defined(COMPILER_MSVC)
+#if !defined(_MSC_VER)
 #include <stdint.h>
 #endif
 #include <string>
 
-#ifndef __native_client__
-#include "base/basictypes.h"
-#else
-
 typedef signed char         schar;
 typedef signed char         int8;
-typedef short               int16;
 // TODO(mbelshe) Remove these type guards.  These are
 //               temporary to avoid conflicts with npapi.h.
+#ifndef _INT16
+#define _INT16
+typedef short               int16;
+#endif
 #ifndef _INT32
 #define _INT32
 typedef int                 int32;
@@ -42,9 +40,12 @@ typedef long long           int64;
 // use assertions for this.
 
 typedef unsigned char      uint8;
-typedef unsigned short     uint16;
 // TODO(mbelshe) Remove these type guards.  These are
 //               temporary to avoid conflicts with npapi.h.
+#ifndef _UINT16
+#define _UINT16
+typedef unsigned short     uint16;
+#endif
 #ifndef _UINT32
 #define _UINT32
 typedef unsigned int       uint32;
@@ -62,9 +63,6 @@ typedef unsigned long long uint64;
 #define DISALLOW_COPY_AND_ASSIGN(TypeName) \
   TypeName(const TypeName&);               \
   void operator=(const TypeName&)
-
-// An older, deprecated, politically incorrect name for the above.
-#define DISALLOW_EVIL_CONSTRUCTORS(TypeName) DISALLOW_COPY_AND_ASSIGN(TypeName)
 
 // A macro to disallow all the implicit constructors, namely the
 // default constructor, copy constructor and operator= functions.
@@ -119,12 +117,12 @@ char (&ArraySizeHelper(const T (&array)[N]))[N];
 // containing the name of the variable.
 
 template <bool>
-struct CompileAssert {
+struct GpuCompileAssert {
 };
 
 #undef COMPILE_ASSERT
 #define COMPILE_ASSERT(expr, msg) \
-  typedef CompileAssert<(bool(expr))> msg[bool(expr) ? 1 : -1]
+  typedef GpuCompileAssert<(bool(expr))> msg[bool(expr) ? 1 : -1]
 
 // Implementation details of COMPILE_ASSERT:
 //
@@ -167,11 +165,8 @@ struct CompileAssert {
 //   This is to avoid running into a bug in MS VC 7.1, which
 //   causes ((0.0) ? 1 : -1) to incorrectly evaluate to 1.
 
-
-#endif
-
 namespace gpu {
-#if defined(COMPILER_MSVC)
+#if defined(_MSC_VER)
 typedef short Int16;
 typedef unsigned short Uint16;
 typedef int Int32;

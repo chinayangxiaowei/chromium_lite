@@ -1,14 +1,18 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TEST_LIVE_SYNC_PROFILE_SYNC_SERVICE_TEST_HARNESS_H_
 #define CHROME_TEST_LIVE_SYNC_PROFILE_SYNC_SERVICE_TEST_HARNESS_H_
+#pragma once
 
 #include <string>
+#include <vector>
 
 #include "base/time.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+
+using browser_sync::sessions::SyncSessionSnapshot;
 
 class Profile;
 
@@ -20,12 +24,17 @@ class Profile;
 class ProfileSyncServiceTestHarness : public ProfileSyncServiceObserver {
  public:
   ProfileSyncServiceTestHarness(Profile* p, const std::string& username,
-                                const std::string& password);
+                                const std::string& password, int id);
 
   // Creates a ProfileSyncService for the profile passed at construction and
-  // enables sync.  Returns true only after sync has been fully initialized and
-  // authenticated, and we are ready to process changes.
+  // enables sync for all available datatypes. Returns true only after sync has
+  // been fully initialized and authenticated, and we are ready to process
+  // changes.
   bool SetupSync();
+
+  // Same as the above method, but enables sync only for the datatypes contained
+  // in |synced_datatypes|.
+  bool SetupSync(const syncable::ModelTypeSet& synced_datatypes);
 
   // ProfileSyncServiceObserver implementation.
   virtual void OnStateChanged();
@@ -43,23 +52,82 @@ class ProfileSyncServiceTestHarness : public ProfileSyncServiceObserver {
   // the |partner| should be the passive responder who responds to the actions
   // of |this|.  This method relies upon the synchronization of callbacks
   // from the message queue. Returns true if two sync cycles have completed.
+  // Note: Use this method when exactly one client makes local change(s), and
+  // exactly one client is waiting to receive those changes.
   bool AwaitMutualSyncCycleCompletion(ProfileSyncServiceTestHarness* partner);
 
+  // Blocks the caller until |this| completes its ongoing sync cycle and every
+  // other client in |partners| has a timestamp that is greater than or equal to
+  // the timestamp of |this|. Note: Use this method when exactly one client
+  // makes local change(s), and more than one client is waiting to receive those
+  // changes.
+  bool AwaitGroupSyncCycleCompletion(
+      std::vector<ProfileSyncServiceTestHarness*>& partners);
+
+  // Blocks the caller until every client in |clients| completes its ongoing
+  // sync cycle and all the clients' timestamps match.  Note: Use this method
+  // when more than one client makes local change(s), and more than one client
+  // is waiting to receive those changes.
+  static bool AwaitQuiescence(
+      std::vector<ProfileSyncServiceTestHarness*>& clients);
+
+  // If a SetPassphrase call has been issued with a valid passphrase, this
+  // will wait until the Cryptographer broadcasts SYNC_PASSPHRASE_ACCEPTED.
+  bool AwaitPassphraseAccepted();
+
+  // Returns the ProfileSyncService member of the the sync client.
   ProfileSyncService* service() { return service_; }
+
+  // Returns the status of the ProfileSyncService member of the the sync client.
+  ProfileSyncService::Status GetStatus();
 
   // See ProfileSyncService::ShouldPushChanges().
   bool ServiceIsPushingChanges() { return service_->ShouldPushChanges(); }
+
+  // Enables sync for a particular sync datatype.
+  void EnableSyncForDatatype(syncable::ModelType datatype);
+
+  // Disables sync for a particular sync datatype.
+  void DisableSyncForDatatype(syncable::ModelType datatype);
+
+  // Enables sync for all sync datatypes.
+  void EnableSyncForAllDatatypes();
+
+  // Disables sync for all sync datatypes.
+  void DisableSyncForAllDatatypes();
+
+  // Returns a snapshot of the current sync session.
+  const SyncSessionSnapshot* GetLastSessionSnapshot() const;
 
  private:
   friend class StateChangeTimeoutEvent;
 
   enum WaitState {
-    WAITING_FOR_INITIAL_CALLBACK = 0,
-    WAITING_FOR_READY_TO_PROCESS_CHANGES,
+    // The sync client awaits the OnBackendInitialized() callback.
+    WAITING_FOR_ON_BACKEND_INITIALIZED = 0,
+
+    // The sync client is waiting for the first sync cycle to complete.
+    WAITING_FOR_INITIAL_SYNC,
+
+    // The sync client is waiting for an ongoing sync cycle to complete.
     WAITING_FOR_SYNC_TO_FINISH,
+
+    // The sync client anticipates incoming updates leading to a new sync cycle.
     WAITING_FOR_UPDATES,
-    WAITING_FOR_NOTHING,
-    NUMBER_OF_STATES
+
+    // The sync client cannot reach the server.
+    SERVER_UNREACHABLE,
+
+    // The sync client is fully synced and there are no pending updates.
+    FULLY_SYNCED,
+
+    // Waiting for a set passphrase to be accepted by the cryptographer.
+    WAITING_FOR_PASSPHRASE_ACCEPTED,
+
+    // Syncing is disabled for the client.
+    SYNC_DISABLED,
+
+    NUMBER_OF_STATES,
   };
 
   // Called from the observer when the current wait state has been completed.
@@ -71,19 +139,23 @@ class ProfileSyncServiceTestHarness : public ProfileSyncServiceObserver {
   bool RunStateChangeMachine();
 
   // Returns true if a status change took place, false on timeout.
-  virtual bool AwaitStatusChangeWithTimeout(int timeout_seconds,
+  virtual bool AwaitStatusChangeWithTimeout(int timeout_milliseconds,
                                             const std::string& reason);
 
-  // Returns true if the service initialized correctly.
-  bool WaitForServiceInit();
+  // Returns true if the sync client has no unsynced items.
+  bool IsSynced();
+
+  // Logs message with relevant info about client's sync state (if available).
+  void LogClientInfo(std::string message);
 
   WaitState wait_state_;
 
   Profile* profile_;
   ProfileSyncService* service_;
 
-  // State tracking.  Used for debugging and tracking of state.
-  ProfileSyncService::Status last_status_;
+  // Updates |last_timestamp_| with the timestamp of the current sync session.
+  // Returns the new value of |last_timestamp_|.
+  int64 GetUpdatedTimestamp();
 
   // This value tracks the max sync timestamp (e.g. synced-to revision) inside
   // the sync engine.  It gets updated when a sync cycle ends and the session
@@ -98,6 +170,9 @@ class ProfileSyncServiceTestHarness : public ProfileSyncServiceObserver {
   // Credentials used for GAIA authentication.
   std::string username_;
   std::string password_;
+
+  // Client ID, used for logging purposes.
+  int id_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileSyncServiceTestHarness);
 };

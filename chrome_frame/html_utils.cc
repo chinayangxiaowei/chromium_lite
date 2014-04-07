@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -9,7 +9,10 @@
 
 #include "base/string_util.h"
 #include "base/string_tokenizer.h"
+#include "base/stringprintf.h"
 #include "chrome_frame/utils.h"
+#include "net/base/net_util.h"
+#include "webkit/glue/user_agent.h"
 
 const wchar_t kQuotes[] = L"\"'";
 const char kXFrameOptionsHeader[] = "X-Frame-Options";
@@ -288,22 +291,23 @@ bool HTMLScanner::NextTag(StringRange* html_string, StringRange* tag) {
 namespace http_utils {
 
 const char kChromeFrameUserAgent[] = "chromeframe";
+static char g_cf_user_agent[100] = {0};
+static char g_chrome_user_agent[255] = {0};
 
 const char* GetChromeFrameUserAgent() {
-  static char cf_user_agent[100] = {0};
-  if (!cf_user_agent[0]) {
+  if (!g_cf_user_agent[0]) {
     _pAtlModule->m_csStaticDataInitAndTypeInfo.Lock();
-    if (!cf_user_agent[0]) {
+    if (!g_cf_user_agent[0]) {
       uint32 high_version = 0, low_version = 0;
       GetModuleVersion(reinterpret_cast<HMODULE>(&__ImageBase), &high_version,
                        &low_version);
-      wsprintfA(cf_user_agent, "%s/%i.%i.%i.%i", kChromeFrameUserAgent,
+      wsprintfA(g_cf_user_agent, "%s/%i.%i.%i.%i", kChromeFrameUserAgent,
                 HIWORD(high_version), LOWORD(high_version),
                 HIWORD(low_version), LOWORD(low_version));
     }
     _pAtlModule->m_csStaticDataInitAndTypeInfo.Unlock();
   }
-  return cf_user_agent;
+  return g_cf_user_agent;
 }
 
 std::string AddChromeFrameToUserAgentValue(const std::string& value) {
@@ -331,9 +335,24 @@ std::string GetDefaultUserAgentHeaderWithCFTag() {
   return "User-Agent: " + AddChromeFrameToUserAgentValue(ua);
 }
 
+const char* GetChromeUserAgent() {
+  if (!g_chrome_user_agent[0]) {
+    _pAtlModule->m_csStaticDataInitAndTypeInfo.Lock();
+    if (!g_chrome_user_agent[0]) {
+      std::string ua;
+      webkit_glue::BuildUserAgent(false, &ua);
+      DCHECK(ua.length() < arraysize(g_chrome_user_agent));
+      lstrcpynA(g_chrome_user_agent, ua.c_str(),
+                arraysize(g_chrome_user_agent) - 1);
+    }
+    _pAtlModule->m_csStaticDataInitAndTypeInfo.Unlock();
+  }
+  return g_chrome_user_agent;
+}
+
 std::string GetDefaultUserAgent() {
   std::string ret;
-  DWORD size = MAX_PATH;  // NOLINT
+  DWORD size = MAX_PATH;
   HRESULT hr = E_OUTOFMEMORY;
   for (int retries = 1; hr == E_OUTOFMEMORY && retries <= 10; ++retries) {
     hr = ::ObtainUserAgentString(0, WriteInto(&ret, size + 1), &size);
@@ -341,37 +360,41 @@ std::string GetDefaultUserAgent() {
       size = MAX_PATH * retries;
     } else if (SUCCEEDED(hr)) {
       // Truncate the extra allocation.
-      DCHECK(size > 0);  // NOLINT
-      ret.resize(size - sizeof(char));  // NOLINT
+      DCHECK_GT(size, 0U);
+      ret.resize(size - 1);
     }
   }
 
   if (FAILED(hr)) {
-    NOTREACHED() << StringPrintf("ObtainUserAgentString==0x%08X", hr);
-    return "";
-  } else {
-    DCHECK(ret.length() == lstrlenA(ret.c_str()));
+    NOTREACHED() << base::StringPrintf("ObtainUserAgentString==0x%08X", hr);
+    return std::string();
   }
 
   return ret;
 }
 
 bool HasFrameBustingHeader(const std::string& http_headers) {
-  net::HttpUtil::HeadersIterator it(
-      http_headers.begin(), http_headers.end(), "\r\n");
+  // NOTE: We cannot use net::GetSpecificHeader() here since when there are
+  // multiple instances of a header that returns the first value seen, and we
+  // need to look at all instances.
+  net::HttpUtil::HeadersIterator it(http_headers.begin(), http_headers.end(),
+                                    "\r\n");
   while (it.GetNext()) {
-    if (lstrcmpiA(it.name().c_str(), kXFrameOptionsHeader) == 0) {
-      std::string allow_all(kXFrameOptionsValueAllowAll);
-      if (it.values_end() - it.values_begin() != allow_all.length() ||
-          !std::equal(it.values_begin(), it.values_end(),
-              allow_all.begin(),
-              CaseInsensitiveCompareASCII<const char>())) {
-        return true;
-      }
-    }
+    if (!lstrcmpiA(it.name().c_str(), kXFrameOptionsHeader) &&
+        lstrcmpiA(it.values().c_str(), kXFrameOptionsValueAllowAll))
+      return true;
   }
-
   return false;
+}
+
+std::string GetHttpHeaderFromHeaderList(const std::string& header,
+                                        const std::string& headers) {
+  net::HttpUtil::HeadersIterator it(headers.begin(), headers.end(), "\r\n");
+  while (it.GetNext()) {
+    if (!lstrcmpiA(it.name().c_str(), header.c_str()))
+      return std::string(it.values_begin(), it.values_end());
+  }
+  return std::string();
 }
 
 }  // namespace http_utils

@@ -4,6 +4,7 @@
 
 #ifndef BASE_MAC_UTIL_H_
 #define BASE_MAC_UTIL_H_
+#pragma once
 
 #include <Carbon/Carbon.h>
 #include <string>
@@ -16,6 +17,7 @@ class FilePath;
 @class NSWindow;
 #else
 class NSBundle;
+class NSImage;
 class NSWindow;
 #endif
 
@@ -118,7 +120,8 @@ void ActivateProcess(pid_t);
 
 // Pulls a snapshot of the entire browser into png_representation.
 void GrabWindowSnapshot(NSWindow* window,
-                        std::vector<unsigned char>* png_representation);
+                        std::vector<unsigned char>* png_representation,
+                        int* width, int* height);
 
 // Takes a path to an (executable) binary and tries to provide the path to an
 // application bundle containing it. It takes the outermost bundle that it can
@@ -138,6 +141,37 @@ CFTypeRef GetValueFromDictionary(CFDictionaryRef dict,
 
 // Sets the process name as displayed in Activity Monitor to process_name.
 void SetProcessName(CFStringRef process_name);
+
+// Converts a NSImage to a CGImageRef.  Normally, the system frameworks can do
+// this fine, especially on 10.6.  On 10.5, however, CGImage cannot handle
+// converting a PDF-backed NSImage into a CGImageRef.  This function will
+// rasterize the PDF into a bitmap CGImage.  The caller is responsible for
+// releasing the return value.
+CGImageRef CopyNSImageToCGImage(NSImage* image);
+
+// Checks if the current application is set as a Login Item, so it will launch
+// on Login. If a non-NULL pointer to is_hidden is passed, the Login Item also
+// is queried for the 'hide on launch' flag.
+bool CheckLoginItemStatus(bool* is_hidden);
+
+// Adds current application to the set of Login Items with specified "hide"
+// flag. This has the same effect as adding/removing the application in
+// SystemPreferences->Accounts->LoginItems or marking Application in the Dock
+// as "Options->Open on Login".
+// Does nothing if the application is already set up as Login Item with
+// specified hide flag.
+void AddToLoginItems(bool hide_on_startup);
+
+// Removes the current application from the list Of Login Items.
+void RemoveFromLoginItems();
+
+// Returns true if the current process was automatically launched as a
+// 'Login Item' with 'hide on startup' flag. Used to suppress opening windows.
+bool WasLaunchedAsHiddenLoginItem();
+
+// Retain/release calls for memory management in C++.
+void NSObjectRetain(void* obj);
+void NSObjectRelease(void* obj);
 
 }  // namespace mac_util
 

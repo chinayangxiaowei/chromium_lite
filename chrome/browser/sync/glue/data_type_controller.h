@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_DATA_TYPE_CONTROLLER_H__
 #define CHROME_BROWSER_SYNC_GLUE_DATA_TYPE_CONTROLLER_H__
+#pragma once
 
 #include <map>
 
@@ -19,7 +20,7 @@ namespace browser_sync {
 // need to run model associator or change processor on other threads.
 class DataTypeController
     : public base::RefCountedThreadSafe<DataTypeController,
-                                        ChromeThread::DeleteOnUIThread>,
+                                        BrowserThread::DeleteOnUIThread>,
       public UnrecoverableErrorHandler {
  public:
   enum State {
@@ -45,6 +46,8 @@ class DataTypeController
     ASSOCIATION_FAILED,   // An error occurred during model association.
     ABORTED,              // Start was aborted by calling Stop().
     UNRECOVERABLE_ERROR,  // An unrecoverable error occured.
+    NEEDS_CRYPTO,         // The data type cannot be started yet because it
+                          // depends on the cryptographer.
     MAX_START_RESULT
   };
 

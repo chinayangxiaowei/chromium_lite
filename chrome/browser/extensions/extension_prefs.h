@@ -1,18 +1,18 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_PREFS_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_PREFS_H_
+#pragma once
 
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/linked_ptr.h"
-#include "base/task.h"
 #include "base/time.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/extensions/extension.h"
 #include "googleurl/src/gurl.h"
 
@@ -21,9 +21,25 @@
 // from there.
 class ExtensionPrefs {
  public:
+  // Key name for a preference that keeps track of per-extension settings. This
+  // is a dictionary object read from the Preferences file, keyed off of
+  // extension ids.
+  static const char kExtensionsPref[];
+
   typedef std::vector<linked_ptr<ExtensionInfo> > ExtensionsInfo;
 
+  // This enum is used for the launch type the user wants to use for an
+  // application.
+  // Do not remove items or re-order this enum as it is used in preferences
+  // and histograms.
+  enum LaunchType {
+    LAUNCH_PINNED,
+    LAUNCH_REGULAR,
+    LAUNCH_FULLSCREEN
+  };
+
   explicit ExtensionPrefs(PrefService* prefs, const FilePath& root_dir_);
+  ~ExtensionPrefs();
 
   // Returns a copy of the Extensions prefs.
   // TODO(erikkay) Remove this so that external consumers don't need to be
@@ -47,7 +63,9 @@ class ExtensionPrefs {
   void SetToolbarOrder(const std::vector<std::string>& extension_ids);
 
   // Called when an extension is installed, so that prefs get created.
-  void OnExtensionInstalled(Extension* extension);
+  void OnExtensionInstalled(Extension* extension,
+                            Extension::State initial_state,
+                            bool initial_incognito_enabled);
 
   // Called when an extension is uninstalled, so that prefs get cleaned up.
   void OnExtensionUninstalled(const std::string& extension_id,
@@ -88,6 +106,10 @@ class ExtensionPrefs {
   // Based on extension id, checks prefs to see if it is blacklisted.
   bool IsExtensionBlacklisted(const std::string& id);
 
+  // Is the extension with |extension_id| allowed by policy (checking both
+  // whitelist and blacklist).
+  bool IsExtensionAllowedByPolicy(const std::string& extension_id);
+
   // Returns the last value set via SetLastPingDay. If there isn't such a
   // pref, the returned Time will return true for is_null().
   base::Time LastPingDay(const std::string& extension_id) const;
@@ -105,6 +127,14 @@ class ExtensionPrefs {
   bool IsIncognitoEnabled(const std::string& extension_id);
   void SetIsIncognitoEnabled(const std::string& extension_id, bool enabled);
 
+  // Returns true if the user has chosen to allow this extension to inject
+  // scripts into pages with file URLs.
+  bool AllowFileAccess(const std::string& extension_id);
+  void SetAllowFileAccess(const std::string& extension_id, bool allow);
+
+  ExtensionPrefs::LaunchType GetLaunchType(const std::string& extension_id);
+  void SetLaunchType(const std::string& extension_id, LaunchType launch_type);
+
   // Saves ExtensionInfo for each installed extension with the path to the
   // version directory and the location. Blacklisted extensions won't be saved
   // and neither will external extensions the user has explicitly uninstalled.
@@ -115,13 +145,54 @@ class ExtensionPrefs {
   // extension is not present, NULL is returned.
   ExtensionInfo* GetInstalledExtensionInfo(const std::string& extension_id);
 
+  // We've downloaded an updated .crx file for the extension, but are waiting
+  // for idle time to install it.
+  void SetIdleInstallInfo(const std::string& extension_id,
+                          const FilePath& crx_path,
+                          const std::string& version,
+                          const base::Time& fetch_time);
+
+  // Removes any idle install information we have for the given |extension_id|.
+  // Returns true if there was info to remove; false otherwise.
+  bool RemoveIdleInstallInfo(const std::string& extension_id);
+
+  // If we have idle install information for |extension_id|, this puts it into
+  // the out parameters and returns true. Otherwise returns false.
+  bool GetIdleInstallInfo(const std::string& extension_id,
+                          FilePath* crx_path,
+                          std::string* version,
+                          base::Time* fetch_time);
+
+  // Returns the extension id's that have idle install information.
+  std::set<std::string> GetIdleInstallInfoIds();
+
+  // We allow the web store to set a string containing login information when a
+  // purchase is made, so that when a user logs into sync with a different
+  // account we can recognize the situation. The Get function returns true if
+  // there was previously stored data (placing it in |result|), or false
+  // otherwise. The Set will overwrite any previous login.
+  bool GetWebStoreLogin(std::string* result);
+  void SetWebStoreLogin(const std::string& login);
+
+  // Get the application launch index for an extension with |extension_id|. This
+  // determines the order of which the applications appear on the New Tab Page.
+  // A value of 0 generally indicates top left. If the extension has no launch
+  // index a -1 value is returned.
+  int GetAppLaunchIndex(const std::string& extension_id);
+
+  // Sets a specific launch index for an extension with |extension_id|.
+  void SetAppLaunchIndex(const std::string& extension_id, int index);
+
+  // Gets the next available application launch index. This is 1 higher than the
+  // highest current application launch index found.
+  int GetNextAppLaunchIndex();
+
   static void RegisterUserPrefs(PrefService* prefs);
 
   // The underlying PrefService.
   PrefService* pref_service() const { return prefs_; }
 
  private:
-
   // Converts absolute paths in the pref to paths relative to the
   // install_directory_.
   void MakePathsRelative();
@@ -132,7 +203,7 @@ class ExtensionPrefs {
 
   // Sets the pref |key| for extension |id| to |value|.
   void UpdateExtensionPref(const std::string& id,
-                           const std::wstring& key,
+                           const std::string& key,
                            Value* value);
 
   // Deletes the pref dictionary for extension |id|.
@@ -140,17 +211,35 @@ class ExtensionPrefs {
 
   // Reads a boolean pref from |ext| with key |pref_key|.
   // Return false if the value is false or kPrefBlacklist does not exist.
-  bool ReadBooleanFromPref(DictionaryValue* ext, const std::wstring& pref_key);
+  bool ReadBooleanFromPref(DictionaryValue* ext, const std::string& pref_key);
 
   // Reads a boolean pref |pref_key| from extension with id |extension_id|.
   bool ReadExtensionPrefBoolean(const std::string& extension_id,
-                                const std::wstring& pref_key);
+                                const std::string& pref_key);
+
+  // Reads an integer pref from |ext| with key |pref_key|.
+  // Return false if the value does not exist.
+  bool ReadIntegerFromPref(DictionaryValue* ext, const std::string& pref_key,
+                           int* out_value);
+
+  // Reads an integer pref |pref_key| from extension with id |extension_id|.
+  bool ReadExtensionPrefInteger(const std::string& extension_id,
+                                const std::string& pref_key,
+                                int* out_value);
 
   // Ensures and returns a mutable dictionary for extension |id|'s prefs.
   DictionaryValue* GetOrCreateExtensionPref(const std::string& id);
 
   // Same as above, but returns NULL if it doesn't exist.
   DictionaryValue* GetExtensionPref(const std::string& id) const;
+
+  // Serializes the data and schedules a persistent save via the |PrefService|.
+  // Additionally fires a PREF_CHANGED notification with the top-level
+  // |kExtensionsPref| path set.
+  // TODO(andybons): Switch this to EXTENSION_PREF_CHANGED to be more granular.
+  // TODO(andybons): Use a ScopedPrefUpdate to update observers on changes to
+  // the mutable extension dictionary.
+  void SavePrefsAndNotify();
 
   // Checks if kPrefBlacklist is set to true in the DictionaryValue.
   // Return false if the value is false or kPrefBlacklist does not exist.

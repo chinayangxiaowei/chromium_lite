@@ -8,6 +8,7 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/native_web_keyboard_event.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "chrome/common/renderer_preferences.h"
 #include "chrome/renderer/extensions/event_bindings.h"
 #include "chrome/renderer/extensions/extension_process_bindings.h"
@@ -24,7 +25,13 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebView.h"
 #include "webkit/glue/webkit_glue.h"
 
+#if defined(OS_LINUX)
+#include "app/event_synthesis_gtk.h"
+#endif
+
 using WebKit::WebFrame;
+using WebKit::WebInputEvent;
+using WebKit::WebMouseEvent;
 using WebKit::WebScriptController;
 using WebKit::WebScriptSource;
 using WebKit::WebString;
@@ -76,7 +83,7 @@ void RenderViewTest::SetUp() {
 
   // Setting flags and really doing anything with WebKit is fairly fragile and
   // hacky, but this is the world we live in...
-  webkit_glue::SetJavaScriptFlags(L" --expose-gc");
+  webkit_glue::SetJavaScriptFlags(" --expose-gc");
   WebKit::initialize(&webkitclient_);
   WebScriptController::registerExtension(BaseJsV8Extension::Get());
   WebScriptController::registerExtension(JsonSchemaJsV8Extension::Get());
@@ -91,20 +98,25 @@ void RenderViewTest::SetUp() {
   ExtensionFunctionDispatcher::GetAllFunctionNames(&names);
   ExtensionProcessBindings::SetFunctionNames(names);
 
-  std::vector<std::string> permissions(
-      Extension::kPermissionNames,
-      Extension::kPermissionNames + Extension::kNumPermissions);
-  ExtensionProcessBindings::SetAPIPermissions("", permissions);
+  std::set<std::string> all_permissions;
+  for (size_t i = 0; i < Extension::kNumPermissions; ++i)
+    all_permissions.insert(Extension::kPermissions[i].name);
+  ExtensionProcessBindings::SetAPIPermissions("", all_permissions);
 
   mock_process_.reset(new MockRenderProcess);
 
   render_thread_.set_routing_id(kRouteId);
 
   // This needs to pass the mock render thread to the view.
-  view_ = RenderView::Create(&render_thread_, 0, kOpenerId,
-                             RendererPreferences(), WebPreferences(),
-                             new SharedRenderViewCounter(0), kRouteId,
-                             kInvalidSessionStorageNamespaceId);
+  view_ = RenderView::Create(&render_thread_,
+                             0,
+                             kOpenerId,
+                             RendererPreferences(),
+                             WebPreferences(),
+                             new SharedRenderViewCounter(0),
+                             kRouteId,
+                             kInvalidSessionStorageNamespaceId,
+                             string16());
 
   // Attach a pseudo keyboard device to this object.
   mock_keyboard_.reset(new MockKeyboard());
@@ -174,6 +186,39 @@ int RenderViewTest::SendKeyEvent(MockKeyboard::Layout layout,
   SendNativeKeyEvent(keyup_event);
 
   return length;
+#elif defined(OS_LINUX)
+  // We ignore |layout|, which means we are only testing the layout of the
+  // current locale. TODO(estade): fix this to respect |layout|.
+  std::vector<GdkEvent*> events;
+  app::SynthesizeKeyPressEvents(
+      NULL, static_cast<app::KeyboardCode>(key_code),
+      modifiers & (MockKeyboard::LEFT_CONTROL | MockKeyboard::RIGHT_CONTROL),
+      modifiers & (MockKeyboard::LEFT_SHIFT | MockKeyboard::RIGHT_SHIFT),
+      modifiers & (MockKeyboard::LEFT_ALT | MockKeyboard::RIGHT_ALT),
+      &events);
+
+  guint32 unicode_key = 0;
+  for (size_t i = 0; i < events.size(); ++i) {
+    // Only send the up/down events for key press itself (skip the up/down
+    // events for the modifier keys).
+    if ((i + 1) == (events.size() / 2) || i == (events.size() / 2)) {
+      unicode_key = gdk_keyval_to_unicode(events[i]->key.keyval);
+      NativeWebKeyboardEvent webkit_event(&events[i]->key);
+      SendNativeKeyEvent(webkit_event);
+
+      // Need to add a char event after the key down.
+      if (webkit_event.type == WebKit::WebInputEvent::RawKeyDown) {
+        NativeWebKeyboardEvent char_event = webkit_event;
+        char_event.type = WebKit::WebInputEvent::Char;
+        char_event.skip_in_browser = true;
+        SendNativeKeyEvent(char_event);
+      }
+    }
+    gdk_event_free(events[i]);
+  }
+
+  *output = std::wstring(1, unicode_key);
+  return 1;
 #else
   NOTIMPLEMENTED();
   return L'\0';
@@ -186,4 +231,100 @@ void RenderViewTest::SendNativeKeyEvent(
   input_message->WriteData(reinterpret_cast<const char*>(&key_event),
                            sizeof(WebKit::WebKeyboardEvent));
   view_->OnHandleInputEvent(*input_message);
+}
+
+void RenderViewTest::VerifyPageCount(int count) {
+#if defined(OS_WIN) || defined(OS_MACOSX)
+  const IPC::Message* page_cnt_msg =
+      render_thread_.sink().GetUniqueMessageMatching(
+          ViewHostMsg_DidGetPrintedPagesCount::ID);
+  ASSERT_TRUE(page_cnt_msg);
+  ViewHostMsg_DidGetPrintedPagesCount::Param post_page_count_param;
+  ViewHostMsg_DidGetPrintedPagesCount::Read(page_cnt_msg,
+                                            &post_page_count_param);
+  EXPECT_EQ(count, post_page_count_param.b);
+#elif defined(OS_LINUX)
+  // The DidGetPrintedPagesCount message isn't sent on Linux. Right now we
+  // always print all pages, and there are checks to that effect built into
+  // the print code.
+#endif
+}
+
+void RenderViewTest::VerifyPagesPrinted() {
+#if defined(OS_WIN) || defined(OS_MACOSX)
+  const IPC::Message* did_print_msg =
+      render_thread_.sink().GetUniqueMessageMatching(
+          ViewHostMsg_DidPrintPage::ID);
+  ASSERT_TRUE(did_print_msg);
+  ViewHostMsg_DidPrintPage::Param post_did_print_page_param;
+  ViewHostMsg_DidPrintPage::Read(did_print_msg, &post_did_print_page_param);
+  EXPECT_EQ(0, post_did_print_page_param.a.page_number);
+#elif defined(OS_LINUX)
+  const IPC::Message* did_print_msg =
+      render_thread_.sink().GetUniqueMessageMatching(
+          ViewHostMsg_TempFileForPrintingWritten::ID);
+  ASSERT_TRUE(did_print_msg);
+#endif
+}
+
+const char* const kGetCoordinatesScript =
+    "(function() {"
+    "  function GetCoordinates(elem) {"
+    "    if (!elem)"
+    "      return [ 0, 0];"
+    "    var coordinates = [ elem.offsetLeft, elem.offsetTop];"
+    "    var parent_coordinates = GetCoordinates(elem.offsetParent);"
+    "    coordinates[0] += parent_coordinates[0];"
+    "    coordinates[1] += parent_coordinates[1];"
+    "    return coordinates;"
+    "  };"
+    "  var elem = document.getElementById('$1');"
+    "  if (!elem)"
+    "    return null;"
+    "  var bounds = GetCoordinates(elem);"
+    "  bounds[2] = elem.offsetWidth;"
+    "  bounds[3] = elem.offsetHeight;"
+    "  return bounds;"
+    "})();";
+gfx::Rect RenderViewTest::GetElementBounds(const std::string& element_id) {
+  std::vector<std::string> params;
+  params.push_back(element_id);
+  std::string script =
+      ReplaceStringPlaceholders(kGetCoordinatesScript, params, NULL);
+
+  v8::HandleScope handle_scope;
+  v8::Handle<v8::Value>  value = GetMainFrame()->executeScriptAndReturnValue(
+      WebScriptSource(WebString::fromUTF8(script)));
+  if (value.IsEmpty() || !value->IsArray())
+    return gfx::Rect();
+
+  v8::Handle<v8::Array> array = value.As<v8::Array>();
+  if (array->Length() != 4)
+    return gfx::Rect();
+  std::vector<int> coords;
+  for (int i = 0; i < 4; ++i) {
+    v8::Handle<v8::Number> index = v8::Number::New(i);
+    v8::Local<v8::Value> value = array->Get(index);
+    if (value.IsEmpty() || !value->IsInt32())
+      return gfx::Rect();
+    coords.push_back(value->Int32Value());
+  }
+  return gfx::Rect(coords[0], coords[1], coords[2], coords[3]);
+}
+
+bool RenderViewTest::SimulateElementClick(const std::string& element_id) {
+  gfx::Rect bounds = GetElementBounds(element_id);
+  if (bounds.IsEmpty())
+    return false;
+  WebMouseEvent mouse_event;
+  mouse_event.type = WebInputEvent::MouseDown;
+  mouse_event.button = WebMouseEvent::ButtonLeft;
+  mouse_event.x = bounds.CenterPoint().x();
+  mouse_event.y = bounds.CenterPoint().y();
+  mouse_event.clickCount = 1;
+  ViewMsg_HandleInputEvent input_event(0);
+  input_event.WriteData(reinterpret_cast<const char*>(&mouse_event),
+                        sizeof(WebMouseEvent));
+  view_->OnHandleInputEvent(input_event);
+  return true;
 }

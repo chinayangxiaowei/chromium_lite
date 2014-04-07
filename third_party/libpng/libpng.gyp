@@ -5,10 +5,10 @@
 {
   'variables': {
     'conditions': [
-      [ 'OS=="linux"', {
+      [ 'OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
         # Link to system .so since we already use it due to GTK.
         'use_system_libpng%': 1,
-      }, {  # OS!="linux"
+      }, {  # OS!="linux" and OS!="freebsd" and OS!="openbsd"
         'use_system_libpng%': 0,
       }],
     ],
@@ -18,7 +18,7 @@
       'targets': [
         {
           'target_name': 'libpng',
-          'type': '<(library)',
+          'type': '<(component)',
           'dependencies': [
             '../zlib/zlib.gyp:zlib',
           ],
@@ -63,6 +63,17 @@
           ],
           'conditions': [
             ['OS!="win"', {'product_name': 'png'}],
+            ['OS=="win" and component=="shared_library"', {
+              'defines': [
+                'PNG_BUILD_DLL',
+                'PNG_NO_MODULEDEF',
+              ],
+              'direct_dependent_settings': {
+                'defines': [
+                  'PNG_USE_DLL',
+                ],
+              },          
+            }],
           ],
         },
       ]

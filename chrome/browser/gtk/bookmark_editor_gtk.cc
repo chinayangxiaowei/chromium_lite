@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/gtk/bookmark_tree_model.h"
@@ -41,12 +42,11 @@ void BookmarkEditor::Show(gfx::NativeWindow parent_hwnd,
                           Profile* profile,
                           const BookmarkNode* parent,
                           const EditDetails& details,
-                          Configuration configuration,
-                          Handler* handler) {
+                          Configuration configuration) {
   DCHECK(profile);
   BookmarkEditorGtk* editor =
       new BookmarkEditorGtk(parent_hwnd, profile, parent, details,
-                            configuration, handler);
+                            configuration);
   editor->Show();
 }
 
@@ -55,15 +55,13 @@ BookmarkEditorGtk::BookmarkEditorGtk(
     Profile* profile,
     const BookmarkNode* parent,
     const EditDetails& details,
-    BookmarkEditor::Configuration configuration,
-    BookmarkEditor::Handler* handler)
+    BookmarkEditor::Configuration configuration)
     : profile_(profile),
       dialog_(NULL),
       parent_(parent),
       details_(details),
       running_menu_for_root_(false),
-      show_tree_(configuration == SHOW_TREE),
-      handler_(handler) {
+      show_tree_(configuration == SHOW_TREE) {
   DCHECK(profile);
   Init(window);
 }
@@ -134,10 +132,9 @@ void BookmarkEditorGtk::Init(GtkWindow* parent_window) {
   name_entry_ = gtk_entry_new();
   std::string title;
   if (details_.type == EditDetails::EXISTING_NODE) {
-    title = WideToUTF8(details_.existing_node->GetTitle());
+    title = UTF16ToUTF8(details_.existing_node->GetTitle());
   } else if (details_.type == EditDetails::NEW_FOLDER) {
-    title = WideToUTF8(
-        l10n_util::GetString(IDS_BOOMARK_EDITOR_NEW_FOLDER_NAME));
+    title = l10n_util::GetStringUTF8(IDS_BOOMARK_EDITOR_NEW_FOLDER_NAME);
   }
   gtk_entry_set_text(GTK_ENTRY(name_entry_), title.c_str());
   g_signal_connect(name_entry_, "changed",
@@ -227,7 +224,7 @@ void BookmarkEditorGtk::Show() {
   // Manually call our OnEntryChanged handler to set the initial state.
   OnEntryChanged(NULL);
 
-  gtk_widget_show_all(dialog_);
+  gtk_util::ShowDialog(dialog_);
 }
 
 void BookmarkEditorGtk::Close() {
@@ -281,13 +278,12 @@ void BookmarkEditorGtk::Reset() {
 GURL BookmarkEditorGtk::GetInputURL() const {
   if (!url_entry_)
     return GURL();  // Happens when we're editing a folder.
-
-  return GURL(URLFixerUpper::FixupURL(
-      gtk_entry_get_text(GTK_ENTRY(url_entry_)), ""));
+  return URLFixerUpper::FixupURL(gtk_entry_get_text(GTK_ENTRY(url_entry_)),
+                                 std::string());
 }
 
-std::wstring BookmarkEditorGtk::GetInputTitle() const {
-  return UTF8ToWide(gtk_entry_get_text(GTK_ENTRY(name_entry_)));
+string16 BookmarkEditorGtk::GetInputTitle() const {
+  return UTF8ToUTF16(gtk_entry_get_text(GTK_ENTRY(name_entry_)));
 }
 
 void BookmarkEditorGtk::ApplyEdits() {
@@ -312,11 +308,11 @@ void BookmarkEditorGtk::ApplyEdits(GtkTreeIter* selected_parent) {
   bb_model_->RemoveObserver(this);
 
   GURL new_url(GetInputURL());
-  std::wstring new_title(GetInputTitle());
+  string16 new_title(GetInputTitle());
 
   if (!show_tree_ || !selected_parent) {
     bookmark_utils::ApplyEditsWithNoGroupChange(
-        bb_model_, parent_, details_, new_title, new_url, handler_.get());
+        bb_model_, parent_, details_, new_title, new_url);
     return;
   }
 
@@ -332,7 +328,7 @@ void BookmarkEditorGtk::ApplyEdits(GtkTreeIter* selected_parent) {
   }
 
   bookmark_utils::ApplyEditsWithPossibleGroupChange(
-      bb_model_, new_parent, details_, new_title, new_url, handler_.get());
+      bb_model_, new_parent, details_, new_title, new_url);
 }
 
 void BookmarkEditorGtk::AddNewGroup(GtkTreeIter* parent, GtkTreeIter* child) {

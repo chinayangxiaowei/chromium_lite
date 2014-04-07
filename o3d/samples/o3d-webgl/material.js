@@ -36,7 +36,7 @@
  * The parameters needed on a Material will vary depending its Effect.
  * Note that a material MUST have its drawList set in order for objects using it
  * to render.
- * 
+ *
  * @param {!o3d.State} opt_state The State used by this material.
  * @param {!o3d.Effect} opt_effect The Effect used by this material.
  * @param {!o3d.DrawList} opt_draw_list The the DrawList used by this material.
@@ -44,34 +44,27 @@
  */
 o3d.Material = function(opt_state, opt_effect, opt_draw_list) {
   o3d.ParamObject.call(this);
-  this.state = opt_state;
-  this.effect = opt_effect;
-  this.drawList = opt_draw_list;
+  /**
+   * The State for this material.
+   * @type {o3d.State}
+   */
+  this.state = opt_state || null;
+
+  /**
+   * The Effect for this material.
+   * @type {o3d.Effect}
+   */
+  this.effect = opt_effect || null;
+
+  /**
+   * The DrawList this material will render on.
+   * @type {o3d.DrawList}
+   */
+  this.drawList = opt_draw_list || null;
 };
 o3d.inherit('Material', 'ParamObject');
 
-
-/**
- * The Effect for this material.
- * @type {o3d.Effect}
- */
-o3d.Material.prototype.effect = null;
-
-
-
-/**
- * The State for this material.
- * @type {o3d.State}
- */
-o3d.Material.prototype.state = null;
-
-
-
-/**
- * The DrawList this material will render on.
- * @type {o3d.DrawList}
- */
-o3d.Material.prototype.drawList = null;
-
-
+o3d.ParamObject.setUpO3DParam_(o3d.Material, 'effect', 'ParamEffect');
+o3d.ParamObject.setUpO3DParam_(o3d.Material, 'state', 'ParamState');
+o3d.ParamObject.setUpO3DParam_(o3d.Material, 'drawList', 'ParamDrawList');
 

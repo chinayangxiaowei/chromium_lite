@@ -1,9 +1,12 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VIEWS_CONTROLS_BUTTON_TEXT_BUTTON_H_
 #define VIEWS_CONTROLS_BUTTON_TEXT_BUTTON_H_
+#pragma once
+
+#include <string>
 
 #include "gfx/font.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -71,6 +74,22 @@ class TextButtonBorder : public Border {
 ////////////////////////////////////////////////////////////////////////////////
 class TextButton : public CustomButton {
  public:
+  // The menu button's class name.
+  static const char kViewClassName[];
+
+  // Enumeration of how the prefix ('&') character is processed. The default
+  // is |PREFIX_NONE|.
+  enum PrefixType {
+    // No special processing is done.
+    PREFIX_NONE,
+
+    // The character following the prefix character is not rendered specially.
+    PREFIX_HIDE,
+
+    // The character following the prefix character is underlined.
+    PREFIX_SHOW
+  };
+
   TextButton(ButtonListener* listener, const std::wstring& text);
   virtual ~TextButton();
 
@@ -88,11 +107,18 @@ class TextButton : public CustomButton {
 
   void set_alignment(TextAlignment alignment) { alignment_ = alignment; }
 
+  void set_prefix_type(PrefixType type) { prefix_type_ = type; }
+
+  void set_icon_text_spacing(int icon_text_spacing) {
+    icon_text_spacing_ = icon_text_spacing;
+  }
+
   // Sets the icon.
   void SetIcon(const SkBitmap& icon);
-  SkBitmap icon() const { return icon_; }
   void SetHoverIcon(const SkBitmap& icon);
-  SkBitmap icon_hover() const { return icon_hover_; }
+  void SetPushedIcon(const SkBitmap& icon);
+
+  bool HasIcon() const { return !icon_.empty(); }
 
   // Meanings are reversed for right-to-left layouts.
   enum IconPlacement {
@@ -112,11 +138,18 @@ class TextButton : public CustomButton {
 
   void set_max_width(int max_width) { max_width_ = max_width; }
   void SetFont(const gfx::Font& font);
+  // Return the font used by this button.
+  gfx::Font font() const { return font_; }
+
   void SetEnabledColor(SkColor color);
   void SetDisabledColor(SkColor color);
   void SetHighlightColor(SkColor color);
   void SetHoverColor(SkColor color);
+  void SetTextHaloColor(SkColor color);
   void SetNormalHasBorder(bool normal_has_border);
+  // Sets whether or not to show the hot and pushed states for the button icon
+  // (if present) in addition to the normal state.  Defaults to true.
+  void SetShowMultipleIconStates(bool show_multiple_icon_states);
 
   // Paint the button into the specified canvas. If |for_drag| is true, the
   // function paints a drag image representation into the canvas.
@@ -133,8 +166,12 @@ class TextButton : public CustomButton {
   static const SkColor kDisabledColor;
   static const SkColor kHoverColor;
 
+  // Returns views/TextButton.
+  virtual std::string GetClassName() const;
+
  protected:
-  virtual bool OnMousePressed(const MouseEvent& e);
+  SkBitmap icon() const { return icon_; }
+
   virtual void Paint(gfx::Canvas* canvas);
 
   // Called when enabled or disabled state changes, or the colors for those
@@ -142,6 +179,10 @@ class TextButton : public CustomButton {
   virtual void UpdateColor();
 
  private:
+  // Updates text_size_ and max_text_size_ from the current text/font. This is
+  // invoked when the font or text changes.
+  void UpdateTextSize();
+
   // The text string that is displayed in the button.
   std::wstring text_;
 
@@ -170,6 +211,10 @@ class TextButton : public CustomButton {
   SkColor color_highlight_;
   SkColor color_hover_;
 
+  // An optional halo around text.
+  SkColor text_halo_color_;
+  bool has_text_halo_;
+
   // An icon displayed with the text.
   SkBitmap icon_;
 
@@ -177,12 +222,24 @@ class TextButton : public CustomButton {
   SkBitmap icon_hover_;
   bool has_hover_icon_;
 
+  // An optional different version of the icon for pushed state.
+  SkBitmap icon_pushed_;
+  bool has_pushed_icon_;
+
   // The width of the button will never be larger than this value. A value <= 0
   // indicates the width is not constrained.
   int max_width_;
 
   // This is true if normal state has a border frame; default is false.
   bool normal_has_border_;
+
+  // Whether or not to show the hot and pushed icon states.
+  bool show_multiple_icon_states_;
+
+  PrefixType prefix_type_;
+
+  // Space between icon and text.
+  int icon_text_spacing_;
 
   DISALLOW_COPY_AND_ASSIGN(TextButton);
 };

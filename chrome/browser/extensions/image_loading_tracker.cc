@@ -6,12 +6,15 @@
 
 #include "base/file_util.h"
 #include "chrome/browser/chrome_thread.h"
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "webkit/glue/image_decoder.h"
+
+ImageLoadingTracker::Observer::~Observer() {}
 
 ////////////////////////////////////////////////////////////////////////////////
 // ImageLoadingTracker::ImageLoader
@@ -23,8 +26,8 @@ class ImageLoadingTracker::ImageLoader
  public:
   explicit ImageLoader(ImageLoadingTracker* tracker)
       : tracker_(tracker) {
-    CHECK(ChromeThread::GetCurrentThreadIdentifier(&callback_thread_id_));
-    DCHECK(!ChromeThread::CurrentlyOn(ChromeThread::FILE));
+    CHECK(BrowserThread::GetCurrentThreadIdentifier(&callback_thread_id_));
+    DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::FILE));
   }
 
   // Lets this class know that the tracker is no longer interested in the
@@ -37,9 +40,9 @@ class ImageLoadingTracker::ImageLoader
   void LoadImage(const ExtensionResource& resource,
                  const gfx::Size& max_size,
                  int id) {
-    DCHECK(!ChromeThread::CurrentlyOn(ChromeThread::FILE));
-    ChromeThread::PostTask(
-        ChromeThread::FILE, FROM_HERE,
+    DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::FILE));
+    BrowserThread::PostTask(
+        BrowserThread::FILE, FROM_HERE,
         NewRunnableMethod(this, &ImageLoader::LoadOnFileThread, resource,
                           max_size, id));
   }
@@ -47,13 +50,13 @@ class ImageLoadingTracker::ImageLoader
   void LoadOnFileThread(ExtensionResource resource,
                         const gfx::Size& max_size,
                         int id) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
     // Read the file from disk.
     std::string file_contents;
     FilePath path = resource.GetFilePath();
     if (path.empty() || !file_util::ReadFileToString(path, &file_contents)) {
-      ReportBack(NULL, resource, id);
+      ReportBack(NULL, resource, gfx::Size(), id);
       return;
     }
 
@@ -64,9 +67,11 @@ class ImageLoadingTracker::ImageLoader
     scoped_ptr<SkBitmap> decoded(new SkBitmap());
     *decoded = decoder.Decode(data, file_contents.length());
     if (decoded->empty()) {
-      ReportBack(NULL, resource, id);
+      ReportBack(NULL, resource, gfx::Size(), id);
       return;  // Unable to decode.
     }
+
+    gfx::Size original_size(decoded->width(), decoded->height());
 
     if (decoded->width() > max_size.width() ||
         decoded->height() > max_size.height()) {
@@ -76,25 +81,25 @@ class ImageLoadingTracker::ImageLoader
           max_size.width(), max_size.height());
     }
 
-    ReportBack(decoded.release(), resource, id);
+    ReportBack(decoded.release(), resource, original_size, id);
   }
 
   void ReportBack(SkBitmap* image, const ExtensionResource& resource,
-                  int id) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+                  const gfx::Size& original_size, int id) {
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
-    ChromeThread::PostTask(
+    BrowserThread::PostTask(
         callback_thread_id_, FROM_HERE,
         NewRunnableMethod(this, &ImageLoader::ReportOnUIThread,
-                          image, resource, id));
+                          image, resource, original_size, id));
   }
 
   void ReportOnUIThread(SkBitmap* image, ExtensionResource resource,
-                        int id) {
-    DCHECK(!ChromeThread::CurrentlyOn(ChromeThread::FILE));
+                        const gfx::Size& original_size, int id) {
+    DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
     if (tracker_)
-      tracker_->OnImageLoaded(image, resource, id);
+      tracker_->OnImageLoaded(image, resource, original_size, id);
 
     delete image;
   }
@@ -105,7 +110,7 @@ class ImageLoadingTracker::ImageLoader
   ImageLoadingTracker* tracker_;
 
   // The thread that we need to call back on to report that we are done.
-  ChromeThread::ID callback_thread_id_;
+  BrowserThread::ID callback_thread_id_;
 
   DISALLOW_COPY_AND_ASSIGN(ImageLoader);
 };
@@ -137,16 +142,16 @@ void ImageLoadingTracker::LoadImage(Extension* extension,
   // back.
   int id = next_id_++;
   if (resource.relative_path().empty()) {
-    OnImageLoaded(NULL, resource, id);
+    OnImageLoaded(NULL, resource, max_size, id);
     return;
   }
 
   DCHECK(extension->path() == resource.extension_root());
 
   // See if the extension has the image already.
-  if (extension->HasCachedImage(resource)) {
-    SkBitmap image = extension->GetCachedImage(resource);
-    OnImageLoaded(&image, resource, id);
+  if (extension->HasCachedImage(resource, max_size)) {
+    SkBitmap image = extension->GetCachedImage(resource, max_size);
+    OnImageLoaded(&image, resource, max_size, id);
     return;
   }
 
@@ -164,10 +169,12 @@ void ImageLoadingTracker::LoadImage(Extension* extension,
 void ImageLoadingTracker::OnImageLoaded(
     SkBitmap* image,
     const ExtensionResource& resource,
+    const gfx::Size& original_size,
     int id) {
   LoadMap::iterator i = load_map_.find(id);
   if (i != load_map_.end()) {
-    i->second->SetCachedImage(resource, image ? *image : SkBitmap());
+    i->second->SetCachedImage(resource, image ? *image : SkBitmap(),
+                              original_size);
     load_map_.erase(i);
   }
 

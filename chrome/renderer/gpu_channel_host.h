@@ -4,10 +4,14 @@
 
 #ifndef CHROME_RENDERER_GPU_CHANNEL_HOST_H_
 #define CHROME_RENDERER_GPU_CHANNEL_HOST_H_
+#pragma once
 
 #include <string>
+#include <vector>
 
 #include "base/hash_tables.h"
+#include "base/scoped_ptr.h"
+#include "chrome/common/gpu_info.h"
 #include "chrome/common/message_router.h"
 #include "gfx/native_widget_types.h"
 #include "gfx/size.h"
@@ -16,6 +20,7 @@
 #include "ipc/ipc_sync_channel.h"
 
 class CommandBufferProxy;
+class GpuVideoServiceHost;
 
 // Encapsulates an IPC channel between the renderer and one plugin process.
 // On the plugin side there's a corresponding GpuChannel.
@@ -42,8 +47,9 @@ class GpuChannelHost : public IPC::Channel::Listener,
 
   State state() const { return state_; }
 
-  // Returns whether the channel to the GPU process is ready.
-  bool ready() const { return channel_.get() != NULL; }
+  // The GPU stats reported by the GPU process.
+  void set_gpu_info(const GPUInfo& gpu_info);
+  const GPUInfo& gpu_info() const;
 
   // IPC::Channel::Listener implementation:
   virtual void OnMessageReceived(const IPC::Message& msg);
@@ -54,19 +60,27 @@ class GpuChannelHost : public IPC::Channel::Listener,
   virtual bool Send(IPC::Message* msg);
 
   // Create and connect to a command buffer in the GPU process.
-  CommandBufferProxy* CreateViewCommandBuffer(gfx::NativeViewId view);
+  CommandBufferProxy* CreateViewCommandBuffer(gfx::NativeViewId view,
+                                              int render_view_id);
 
   // Create and connect to a command buffer in the GPU process.
-  CommandBufferProxy* CreateOffscreenCommandBuffer(CommandBufferProxy* parent,
-                                                   const gfx::Size& size,
-                                                   uint32 parent_texture_id);
-
+  CommandBufferProxy* CreateOffscreenCommandBuffer(
+      CommandBufferProxy* parent,
+      const gfx::Size& size,
+      const std::vector<int32>& attribs,
+      uint32 parent_texture_id);
 
   // Destroy a command buffer created by this channel.
   void DestroyCommandBuffer(CommandBufferProxy* command_buffer);
 
+  GpuVideoServiceHost* gpu_video_service_host() {
+    return gpu_video_service_host_.get();
+  }
+
  private:
   State state_;
+
+  GPUInfo gpu_info_;
 
   scoped_ptr<IPC::SyncChannel> channel_;
 
@@ -78,6 +92,10 @@ class GpuChannelHost : public IPC::Channel::Listener,
   // inform about OnChannelError
   typedef base::hash_map<int, IPC::Channel::Listener*> ProxyMap;
   ProxyMap proxies_;
+
+  // This is a MessageFilter to intercept IPC messages and distribute them
+  // to the corresponding GpuVideoDecoderHost.
+  scoped_refptr<GpuVideoServiceHost> gpu_video_service_host_;
 
   DISALLOW_COPY_AND_ASSIGN(GpuChannelHost);
 };

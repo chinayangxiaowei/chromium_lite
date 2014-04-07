@@ -4,48 +4,51 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_NETWORK_SCREEN_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_NETWORK_SCREEN_H_
+#pragma once
 
-#include <string>
-
+#include "base/scoped_ptr.h"
+#include "base/string16.h"
 #include "base/task.h"
+#include "base/timer.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
+#include "chrome/browser/chromeos/login/keyboard_switch_menu.h"
+#include "chrome/browser/chromeos/login/language_switch_menu.h"
+#include "chrome/browser/chromeos/login/message_bubble.h"
 #include "chrome/browser/chromeos/login/network_screen_delegate.h"
-#include "chrome/browser/chromeos/login/language_switch_model.h"
 #include "chrome/browser/chromeos/login/view_screen.h"
 #include "chrome/browser/chromeos/network_list.h"
+#include "chrome/browser/chromeos/options/network_config_view.h"
 
 class WizardScreenDelegate;
 
 namespace chromeos {
 
+class HelpAppLauncher;
 class NetworkSelectionView;
 
 class NetworkScreen : public ViewScreen<NetworkSelectionView>,
+                      public MessageBubbleDelegate,
                       public NetworkScreenDelegate {
  public:
-  NetworkScreen(WizardScreenDelegate* delegate, bool is_out_of_box);
+  explicit NetworkScreen(WizardScreenDelegate* delegate);
   virtual ~NetworkScreen();
 
   // NetworkScreenDelegate implementation:
-  virtual LanguageSwitchModel* language_switch_model() {
-    return &language_switch_model_;
+  virtual void ClearErrors();
+  virtual bool is_error_shown() { return bubble_ != NULL; }
+  virtual LanguageSwitchMenu* language_switch_menu() {
+    return &language_switch_menu_;
   }
-
-  // ComboboxModel implementation:
-  virtual int GetItemCount();
-  virtual std::wstring GetItemAt(int index);
-
-  // views::Combobox::Listener implementation:
-  virtual void ItemChanged(views::Combobox* sender,
-                           int prev_index,
-                           int new_index);
+  virtual KeyboardSwitchMenu* keyboard_switch_menu() {
+    return &keyboard_switch_menu_;
+  }
+  virtual gfx::Size size() const { return GetScreenSize(); }
 
   // views::ButtonListener implementation:
   virtual void ButtonPressed(views::Button* sender, const views::Event& event);
 
-  // NetworkLibrary::Observer implementation:
-  virtual void NetworkChanged(NetworkLibrary* network_lib);
-  virtual void NetworkTraffic(NetworkLibrary* cros, int traffic_type);
+  // NetworkLibrary::NetworkManagerObserver implementation:
+  virtual void OnNetworkManagerChanged(NetworkLibrary* network_lib);
 
  protected:
   // Subscribes NetworkScreen to the network change notification,
@@ -53,12 +56,18 @@ class NetworkScreen : public ViewScreen<NetworkSelectionView>,
   void Refresh();
 
  private:
+  FRIEND_TEST(NetworkScreenTest, Timeout);
+
   // ViewScreen implementation:
   virtual void CreateView();
   virtual NetworkSelectionView* AllocateView();
 
-  // Connects to network if needed and updates screen state.
-  void ConnectToNetwork(NetworkList::NetworkType type, const string16& id);
+  // Overridden from views::InfoBubbleDelegate.
+  virtual void InfoBubbleClosing(InfoBubble* info_bubble,
+                                 bool closed_by_escape) { bubble_ = NULL; }
+  virtual bool CloseOnEscape() { return true; }
+  virtual bool FadeInOnShow() { return false; }
+  virtual void OnHelpLinkActivated();
 
   // Subscribes to network change notifications.
   void SubscribeNetworkNotification();
@@ -66,37 +75,43 @@ class NetworkScreen : public ViewScreen<NetworkSelectionView>,
   // Unsubscribes from network change notifications.
   void UnsubscribeNetworkNotification();
 
-  // Returns currently selected network in the combobox.
-  NetworkList::NetworkItem* GetSelectedNetwork();
-
-  // True if networks are the same.
-  bool IsSameNetwork(const NetworkList::NetworkItem* network1,
-                     const NetworkList::NetworkItem* network2);
-
   // Notifies wizard on successful connection.
   void NotifyOnConnection();
 
-  // Notifies wizard when offline mode is selected.
-  void NotifyOnOffline();
+  // Called by |connection_timer_| when connection to the network timed out.
+  void OnConnectionTimeout();
 
-  // Opens password dialog for the encrypted networks.
-  void OpenPasswordDialog(WifiNetwork network);
+  // Update UI based on current network status.
+  void UpdateStatus(NetworkLibrary* network);
 
-  // Selects network by type and id.
-  void SelectNetwork(NetworkList::NetworkType type,
-                     const string16& id);
+  // Stops waiting for network to connect.
+  void StopWaitingForConnection(const string16& network_id);
+
+  // Starts waiting for network connection. Shows spinner.
+  void WaitForConnection(const string16& network_id);
 
   // True if subscribed to network change notification.
   bool is_network_subscribed_;
 
-  // Networks model, contains current state of available networks.
-  NetworkList networks_;
+  // ID of the the network that we are waiting for.
+  string16 network_id_;
 
-  // True if full OOBE flow should be shown.
-  bool is_out_of_box_;
+  // True if user pressed continue button so we should proceed with OOBE
+  // as soon as we are connected.
+  bool continue_pressed_;
 
-  ScopedRunnableMethodFactory<NetworkScreen> task_factory_;
-  LanguageSwitchModel language_switch_model_;
+  // Timer for connection timeout.
+  base::OneShotTimer<NetworkScreen> connection_timer_;
+
+  LanguageSwitchMenu language_switch_menu_;
+  KeyboardSwitchMenu keyboard_switch_menu_;
+
+  // Pointer to shown message bubble. We don't need to delete it because
+  // it will be deleted on bubble closing.
+  MessageBubble* bubble_;
+
+  // Help application used for help dialogs.
+  scoped_ptr<HelpAppLauncher> help_app_;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkScreen);
 };

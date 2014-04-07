@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VIEWS_CONTROLS_BUTTON_MENU_BUTTON_H_
 #define VIEWS_CONTROLS_BUTTON_MENU_BUTTON_H_
+#pragma once
 
 #include <string>
 
@@ -30,17 +31,12 @@ class MenuButton : public TextButton {
   // The menu button's class name.
   static const char kViewClassName[];
 
-  //
-  // Create a Button
+  // Create a Button.
   MenuButton(ButtonListener* listener,
              const std::wstring& text,
              ViewMenuDelegate* menu_delegate,
              bool show_menu_marker);
   virtual ~MenuButton();
-
-  void set_menu_delegate(ViewMenuDelegate* delegate) {
-    menu_delegate_ = delegate;
-  }
 
   void set_menu_marker(const SkBitmap* menu_marker) {
     menu_marker_ = menu_marker;
@@ -54,23 +50,36 @@ class MenuButton : public TextButton {
   virtual void Paint(gfx::Canvas* canvas, bool for_drag);
 
   // These methods are overriden to implement a simple push button
-  // behavior
+  // behavior.
   virtual bool OnMousePressed(const MouseEvent& e);
   virtual void OnMouseReleased(const MouseEvent& e, bool canceled);
-  virtual bool OnKeyReleased(const KeyEvent& e);
   virtual void OnMouseExited(const MouseEvent& event);
+  virtual bool OnKeyPressed(const KeyEvent& e);
+  virtual bool OnKeyReleased(const KeyEvent& e);
 
   // Accessibility accessors, overridden from View.
-  virtual bool GetAccessibleDefaultAction(std::wstring* action);
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual bool GetAccessibleState(AccessibilityTypes::State* state);
+  virtual std::wstring GetAccessibleDefaultAction();
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual AccessibilityTypes::State GetAccessibleState();
 
   // Returns views/MenuButton.
   virtual std::string GetClassName() const;
 
+  // Accessors for menu_offset_.
+  const gfx::Point& menu_offset() const {
+    return menu_offset_;
+  }
+
+  void set_menu_offset(int x, int y) {
+    menu_offset_.SetPoint(x, y);
+  }
+
  protected:
   // True if the menu is currently visible.
   bool menu_visible_;
+
+  // Offset of the associated menu position.
+  gfx::Point menu_offset_;
 
  private:
   friend class TextButtonBackground;
@@ -96,6 +105,10 @@ class MenuButton : public TextButton {
   // The down arrow used to differentiate the menu button from normal
   // text buttons.
   const SkBitmap* menu_marker_;
+
+  // If non-null the destuctor sets this to true. This is set while the menu is
+  // showing and used to detect if the menu was deleted while running.
+  bool* destroyed_flag_;
 
   DISALLOW_COPY_AND_ASSIGN(MenuButton);
 };

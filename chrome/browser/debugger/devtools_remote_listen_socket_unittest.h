@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_DEBUGGER_DEVTOOLS_REMOTE_LISTEN_SOCKET_UNITTEST_H_
 #define CHROME_BROWSER_DEBUGGER_DEVTOOLS_REMOTE_LISTEN_SOCKET_UNITTEST_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -22,7 +23,7 @@
 #include "base/thread.h"
 #include "base/basictypes.h"
 #include "base/message_loop.h"
-#include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/thread.h"
 #include "chrome/browser/debugger/devtools_remote.h"
@@ -78,7 +79,6 @@ class ListenSocketTestAction {
 // This had to be split out into a separate class because I couldn't
 // make a the testing::Test class refcounted.
 class DevToolsRemoteListenSocketTester :
-    public ListenSocket::ListenSocketDelegate,
     public DevToolsRemoteListener {
  public:
   DevToolsRemoteListenSocketTester()
@@ -99,7 +99,8 @@ class DevToolsRemoteListenSocketTester :
 
   // DevToolsRemoteMessageHandler interface
   virtual void HandleMessage(const DevToolsRemoteMessage& message);
-  virtual void OnConnectionLost() {}
+  virtual void OnAcceptConnection(ListenSocket* connection);
+  virtual void OnConnectionLost();
 
   // read all pending data from the test socket
   int ClearTestSocket();
@@ -107,9 +108,6 @@ class DevToolsRemoteListenSocketTester :
   void Shutdown();
   void Listen();
   void SendFromTester();
-  virtual void DidAccept(ListenSocket *server, ListenSocket *connection);
-  virtual void DidRead(ListenSocket *connection, const std::string& data);
-  virtual void DidClose(ListenSocket *sock);
   virtual bool Send(SOCKET sock, const std::string& str);
   // verify the send/read from client to server
   void TestClientSend();

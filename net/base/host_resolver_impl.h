@@ -1,14 +1,16 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_BASE_HOST_RESOLVER_IMPL_H_
 #define NET_BASE_HOST_RESOLVER_IMPL_H_
+#pragma once
 
-#include <string>
 #include <vector>
 
+#include "base/non_thread_safe.h"
 #include "base/scoped_ptr.h"
+#include "net/base/capturing_net_log.h"
 #include "net/base/host_cache.h"
 #include "net/base/host_resolver.h"
 #include "net/base/host_resolver_proc.h"
@@ -48,6 +50,7 @@ namespace net {
 // Requests are ordered in the queue based on their priority.
 
 class HostResolverImpl : public HostResolver,
+                         public NonThreadSafe,
                          public NetworkChangeNotifier::Observer {
  public:
   // The index into |job_pools_| for the various job pools. Pools with a higher
@@ -70,27 +73,33 @@ class HostResolverImpl : public HostResolver,
   // thread-safe since it is run from multiple worker threads. If
   // |resolver_proc| is NULL then the default host resolver procedure is
   // used (which is SystemHostResolverProc except if overridden).
-  // |notifier| must outlive HostResolverImpl.  It can optionally be NULL, in
-  // which case HostResolverImpl will not respond to network changes.
   // |max_jobs| specifies the maximum number of threads that the host resolver
   // will use. Use SetPoolConstraints() to specify finer-grain settings.
+  //
+  // |net_log| must remain valid for the life of the HostResolverImpl.
   HostResolverImpl(HostResolverProc* resolver_proc,
                    HostCache* cache,
-                   NetworkChangeNotifier* notifier,
-                   size_t max_jobs);
+                   size_t max_jobs,
+                   NetLog* net_log);
+
+  // If any completion callbacks are pending when the resolver is destroyed,
+  // the host resolutions are cancelled, and the completion callbacks will not
+  // be called.
+  virtual ~HostResolverImpl();
 
   // HostResolver methods:
   virtual int Resolve(const RequestInfo& info,
                       AddressList* addresses,
                       CompletionCallback* callback,
                       RequestHandle* out_req,
-                      const BoundNetLog& net_log);
+                      const BoundNetLog& source_net_log);
   virtual void CancelRequest(RequestHandle req);
   virtual void AddObserver(HostResolver::Observer* observer);
   virtual void RemoveObserver(HostResolver::Observer* observer);
 
   // Set address family, and disable IPv6 probe support.
   virtual void SetDefaultAddressFamily(AddressFamily address_family);
+  virtual AddressFamily GetDefaultAddressFamily() const;
 
   // Continuously observe whether IPv6 is supported, and set the allowable
   // address family to IPv4 iff IPv6 is not supported.
@@ -99,21 +108,10 @@ class HostResolverImpl : public HostResolver,
   virtual HostResolverImpl* GetAsHostResolverImpl() { return this; }
 
   // TODO(eroman): hack for http://crbug.com/15513
-  void Shutdown();
+  virtual void Shutdown();
 
   // Returns the cache this resolver uses, or NULL if caching is disabled.
   HostCache* cache() { return cache_.get(); }
-
-  // Clears the request trace log.
-  void ClearRequestsTrace();
-
-  // Starts/ends capturing requests to a trace log.
-  void EnableRequestsTracing(bool enable);
-
-  bool IsRequestsTracingEnabled() const;
-
-  // Gets a copy of the requests trace log.
-  bool GetRequestsTrace(CapturingNetLog::EntryList* entries);
 
   // Applies a set of constraints for requests that belong to the specified
   // pool. NOTE: Don't call this after requests have been already been started.
@@ -135,16 +133,10 @@ class HostResolverImpl : public HostResolver,
   class JobPool;
   class IPv6ProbeJob;
   class Request;
-  class RequestsTrace;
   typedef std::vector<Request*> RequestsList;
   typedef HostCache::Key Key;
   typedef std::map<Key, scoped_refptr<Job> > JobMap;
   typedef std::vector<HostResolver::Observer*> ObserversList;
-
-  // If any completion callbacks are pending when the resolver is destroyed,
-  // the host resolutions are cancelled, and the completion callbacks will not
-  // be called.
-  virtual ~HostResolverImpl();
 
   // Returns the HostResolverProc to use for this instance.
   HostResolverProc* effective_resolver_proc() const {
@@ -161,22 +153,35 @@ class HostResolverImpl : public HostResolver,
   // Removes |job| from the outstanding jobs list.
   void RemoveOutstandingJob(Job* job);
 
-  // Callback for when |job| has completed with |error| and |addrlist|.
-  void OnJobComplete(Job* job, int error, const AddressList& addrlist);
+  // Callback for when |job| has completed with |net_error| and |addrlist|.
+  void OnJobComplete(Job* job, int net_error, int os_error,
+                     const AddressList& addrlist);
+
+  // Aborts |job|.  Same as OnJobComplete() except does not remove |job|
+  // from |jobs_| and does not cache the result (ERR_ABORTED).
+  void AbortJob(Job* job);
+
+  // Used by both OnJobComplete() and AbortJob();
+  void OnJobCompleteInternal(Job* job, int net_error, int os_error,
+                             const AddressList& addrlist);
 
   // Called when a request has just been started.
-  void OnStartRequest(const BoundNetLog& net_log,
+  void OnStartRequest(const BoundNetLog& source_net_log,
+                      const BoundNetLog& request_net_log,
                       int request_id,
                       const RequestInfo& info);
 
   // Called when a request has just completed (before its callback is run).
-  void OnFinishRequest(const BoundNetLog& net_log,
+  void OnFinishRequest(const BoundNetLog& source_net_log,
+                       const BoundNetLog& request_net_log,
                        int request_id,
                        const RequestInfo& info,
-                       int error);
+                       int net_error,
+                       int os_error);
 
   // Called when a request has been cancelled.
-  void OnCancelRequest(const BoundNetLog& net_log,
+  void OnCancelRequest(const BoundNetLog& source_net_log,
+                       const BoundNetLog& request_net_log,
                        int request_id,
                        const RequestInfo& info);
 
@@ -214,6 +219,12 @@ class HostResolverImpl : public HostResolver,
 
   // Adds a pending request |req| to |pool|.
   int EnqueueRequest(JobPool* pool, Request* req);
+
+  // Cancels all jobs.
+  void CancelAllJobs();
+
+  // Aborts all in progress jobs (but might start new ones).
+  void AbortAllInProgressJobs();
 
   // Cache of host resolution results.
   scoped_ptr<HostCache> cache_;
@@ -253,10 +264,6 @@ class HostResolverImpl : public HostResolver,
   // TODO(eroman): hack for http://crbug.com/15513
   bool shutdown_;
 
-  NetworkChangeNotifier* const network_change_notifier_;
-
-  scoped_refptr<RequestsTrace> requests_trace_;
-
   // Indicate if probing is done after each network change event to set address
   // family.
   // When false, explicit setting of address family is used.
@@ -264,6 +271,11 @@ class HostResolverImpl : public HostResolver,
 
   // The last un-cancelled IPv6ProbeJob (if any).
   scoped_refptr<IPv6ProbeJob> ipv6_probe_job_;
+
+  // Any resolver flags that should be added to a request by default.
+  HostResolverFlags additional_resolver_flags_;
+
+  NetLog* net_log_;
 
   DISALLOW_COPY_AND_ASSIGN(HostResolverImpl);
 };

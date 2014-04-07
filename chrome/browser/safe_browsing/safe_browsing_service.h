@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -7,6 +7,7 @@
 
 #ifndef CHROME_BROWSER_SAFE_BROWSING_SAFE_BROWSING_SERVICE_H_
 #define CHROME_BROWSER_SAFE_BROWSING_SAFE_BROWSING_SERVICE_H_
+#pragma once
 
 #include <deque>
 #include <set>
@@ -16,14 +17,13 @@
 #include "base/hash_tables.h"
 #include "base/lock.h"
 #include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
 #include "base/time.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
 #include "googleurl/src/gurl.h"
 #include "webkit/glue/resource_type.h"
 
-class BloomFilter;
 class PrefService;
-class SafeBrowsingBlockingPage;
 class SafeBrowsingDatabase;
 class SafeBrowsingProtocolManager;
 class URLRequestContextGetter;
@@ -60,6 +60,7 @@ class SafeBrowsingService
   // interacting with the blocking page.
   struct UnsafeResource {
     GURL url;
+    GURL original_url;
     ResourceType::Type resource_type;
     UrlCheckResult threat_type;
     Client* client;
@@ -101,7 +102,12 @@ class SafeBrowsingService
   void CancelCheck(Client* client);
 
   // Called on the IO thread to display an interstitial page.
+  // |url| is the url of the resource that matches a safe browsing list.
+  // If the request contained a chain of redirects, |url| is the last url
+  // in the chain, and |original_url| is the first one (the root of the
+  // chain). Otherwise, |original_url| = |url|.
   void DisplayBlockingPage(const GURL& url,
+                           const GURL& original_url,
                            ResourceType::Type resource_type,
                            UrlCheckResult result,
                            Client* client,
@@ -122,6 +128,8 @@ class SafeBrowsingService
   // Update management.  Called on the IO thread.
   void UpdateStarted();
   void UpdateFinished(bool update_succeeded);
+  // Whether there is an update in progress. Called on the IO thread.
+  bool IsUpdateInProgress() const;
 
   // The blocking page on the UI thread has completed.
   void OnBlockingPageDone(const std::vector<UnsafeResource>& resources,
@@ -178,6 +186,7 @@ class SafeBrowsingService
   };
 
   friend class base::RefCountedThreadSafe<SafeBrowsingService>;
+  friend class SafeBrowsingServiceTest;
 
   ~SafeBrowsingService();
 
@@ -260,11 +269,13 @@ class SafeBrowsingService
   // Invoked on the UI thread to show the blocking page.
   void DoDisplayBlockingPage(const UnsafeResource& resource);
 
-  // Report any pages that contain malware sub-resources to the SafeBrowsing
+  // Report any pages that contain malware or phishing to the SafeBrowsing
   // service.
-  void ReportMalware(const GURL& malware_url,
-                     const GURL& page_url,
-                     const GURL& referrer_url);
+  void ReportSafeBrowsingHit(const GURL& malicious_url,
+                             const GURL& page_url,
+                             const GURL& referrer_url,
+                             bool is_subresource,
+                             UrlCheckResult threat_type);
 
   CurrentChecks checks_;
 
@@ -296,6 +307,10 @@ class SafeBrowsingService
 
   // Indicates if we're currently in an update cycle.
   bool update_in_progress_;
+
+  // When true, newly fetched chunks may not in the database yet since the
+  // database is still updating.
+  bool database_update_in_progress_;
 
   // Indicates if we're in the midst of trying to close the database.  If this
   // is true, nothing on the IO thread should access the database.

@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include <dirent.h>
-#include <linux/tcp.h>  // For TCP_NODELAY
+#include <netinet/tcp.h>  // For TCP_NODELAY
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -23,6 +23,8 @@
 #include "net/spdy/spdy_frame_builder.h"
 #include "net/spdy/spdy_framer.h"
 #include "net/spdy/spdy_protocol.h"
+#include "net/tools/dump_cache/url_to_filename_encoder.h"
+#include "net/tools/dump_cache/url_utilities.h"
 #include "net/tools/flip_server/balsa_enums.h"
 #include "net/tools/flip_server/balsa_frame.h"
 #include "net/tools/flip_server/balsa_headers.h"
@@ -34,8 +36,6 @@
 #include "net/tools/flip_server/ring_buffer.h"
 #include "net/tools/flip_server/simple_buffer.h"
 #include "net/tools/flip_server/split.h"
-#include "net/tools/flip_server/url_to_filename_encoder.h"
-#include "net/tools/flip_server/url_utilities.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -203,9 +203,9 @@ string EncodeURL(string uri, string host, string method) {
   if (uri[0] == '/') {
     // uri is not fully qualified.
     filename = net::UrlToFilenameEncoder::Encode(
-        "http://" + host + uri, method + "_/");
+        "http://" + host + uri, method + "_/", false);
   } else {
-    filename = net::UrlToFilenameEncoder::Encode(uri, method + "_/");
+    filename = net::UrlToFilenameEncoder::Encode(uri, method + "_/", false);
   }
   return filename;
 }
@@ -567,7 +567,7 @@ class MemoryCache {
       return;
 
     string referrer_host_path =
-      net::UrlToFilenameEncoder::Encode(referrer, "GET_/");
+      net::UrlToFilenameEncoder::Encode(referrer, "GET_/", false);
 
     FileData* fd1 = GetFileData(string("GET_") + file_url);
     if (!fd1) {
@@ -2290,4 +2290,3 @@ int main(int argc, char**argv) {
   }
   return 0;
 }
-

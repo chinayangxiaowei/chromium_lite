@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_MENU_MENU_SCROLL_VIEW_CONTAINER_H_
 #define VIEWS_CONTROLS_MENU_MENU_SCROLL_VIEW_CONTAINER_H_
+#pragma once
 
 #include "views/view.h"
 
@@ -23,12 +24,13 @@ class MenuScrollViewContainer : public View {
   View* scroll_up_button() const { return scroll_up_button_; }
 
   // View overrides.
-  virtual void Paint(gfx::Canvas* canvas);
+  virtual void PaintBackground(gfx::Canvas* canvas);
   virtual void Layout();
   virtual void DidChangeBounds(const gfx::Rect& previous,
                                const gfx::Rect& current);
   virtual gfx::Size GetPreferredSize();
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual AccessibilityTypes::State GetAccessibleState();
 
  private:
   class MenuScrollView;

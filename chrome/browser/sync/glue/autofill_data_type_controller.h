@@ -4,6 +4,9 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_AUTOFILL_DATA_TYPE_CONTROLLER_H__
 #define CHROME_BROWSER_SYNC_GLUE_AUTOFILL_DATA_TYPE_CONTROLLER_H__
+#pragma once
+
+#include <string>
 
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
@@ -55,12 +58,13 @@ class AutofillDataTypeController : public DataTypeController,
   }
 
   virtual State state() {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     return state_;
   }
 
   // UnrecoverableHandler implementation
-  virtual void OnUnrecoverableError();
+  virtual void OnUnrecoverableError(const tracked_objects::Location& from_here,
+                                    const std::string& message);
 
   // NotificationObserver implementation.
   virtual void Observe(NotificationType type,
@@ -76,14 +80,15 @@ class AutofillDataTypeController : public DataTypeController,
   void StartDoneImpl(StartResult result, State state);
   void StopImpl();
   void StartFailed(StartResult result);
-  void OnUnrecoverableErrorImpl();
+  void OnUnrecoverableErrorImpl(const tracked_objects::Location& from_here,
+                                const std::string& message);
 
   // Second-half of "Start" implementation, called once personal data has
   // loaded.
   void ContinueStartAfterPersonalDataLoaded();
 
   void set_state(State state) {
-    DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     state_ = state;
   }
 

@@ -7,6 +7,7 @@
 
 #ifndef NET_DISK_CACHE_ADDR_H_
 #define NET_DISK_CACHE_ADDR_H_
+#pragma once
 
 #include "net/disk_cache/disk_format.h"
 
@@ -23,7 +24,7 @@ enum FileType {
 const int kMaxBlockSize = 4096 * 4;
 const int kMaxBlockFile = 255;
 const int kMaxNumBlocks = 4;
-const int kFirstAdditionlBlockFile = 4;
+const int kFirstAdditionalBlockFile = 4;
 
 // Defines a storage address for a cache record
 //

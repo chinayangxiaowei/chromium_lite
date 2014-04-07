@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VIEWS_EXAMPLES_TABBED_PANE_EXAMPLE_H_
 #define VIEWS_EXAMPLES_TABBED_PANE_EXAMPLE_H_
+#pragma once
 
 #include "base/string_util.h"
 #include "views/controls/button/text_button.h"
@@ -109,4 +110,3 @@ class TabbedPaneExample : public ExampleBase,
 }  // namespace examples
 
 #endif  // VIEWS_EXAMPLES_TABBED_PANE_EXAMPLE_H_
-

@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GFX_NATIVE_WIDGET_TYPES_H_
 #define GFX_NATIVE_WIDGET_TYPES_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "build/build_config.h"
@@ -14,9 +15,8 @@
 //     same type as a NativeWindow on some platforms.
 //   NativeViewId: Often, in our cross process model, we need to pass around a
 //     reference to a "window". This reference will, say, be echoed back from a
-//     renderer to the browser when it wishes to query it's size. On Windows, a
-//     HWND can be used for this. On other platforms, we may wish to pass
-//     around X window ids, or maybe abstract identifiers.
+//     renderer to the browser when it wishes to query its size. On Windows we
+//     use an HWND for this.
 //
 //     As a rule of thumb - if you're in the renderer, you should be dealing
 //     with NativeViewIds. This should remind you that you shouldn't be doing
@@ -29,34 +29,46 @@
 //   NativeEditView: a handle to a native edit-box. The Mac folks wanted this
 //     specific typedef.
 //
+//   NativeImage: The platform-specific image type used for drawing UI elements
+//     in the browser.
+//
 // The name 'View' here meshes with OS X where the UI elements are called
 // 'views' and with our Chrome UI code where the elements are also called
 // 'views'.
 
 #if defined(OS_WIN)
 #include <windows.h>
+typedef struct HFONT__* HFONT;
 #elif defined(OS_MACOSX)
 struct CGContext;
 #ifdef __OBJC__
+@class NSFont;
+@class NSImage;
 @class NSView;
 @class NSWindow;
 @class NSTextField;
 #else
+class NSFont;
+class NSImage;
 class NSView;
 class NSWindow;
 class NSTextField;
 #endif  // __OBJC__
-#elif defined(USE_X11)
+#elif defined(TOOLKIT_USES_GTK)
+typedef struct _PangoFontDescription PangoFontDescription;
 typedef struct _GdkCursor GdkCursor;
+typedef struct _GdkPixbuf GdkPixbuf;
 typedef struct _GdkRegion GdkRegion;
 typedef struct _GtkWidget GtkWidget;
 typedef struct _GtkWindow GtkWindow;
 typedef struct _cairo cairo_t;
 #endif
+class SkBitmap;
 
 namespace gfx {
 
 #if defined(OS_WIN)
+typedef HFONT NativeFont;
 typedef HWND NativeView;
 typedef HWND NativeWindow;
 typedef HWND NativeEditView;
@@ -65,6 +77,7 @@ typedef HCURSOR NativeCursor;
 typedef HMENU NativeMenu;
 typedef HRGN NativeRegion;
 #elif defined(OS_MACOSX)
+typedef NSFont* NativeFont;
 typedef NSView* NativeView;
 typedef NSWindow* NativeWindow;
 typedef NSTextField* NativeEditView;
@@ -72,6 +85,7 @@ typedef CGContext* NativeDrawingContext;
 typedef void* NativeCursor;
 typedef void* NativeMenu;
 #elif defined(USE_X11)
+typedef PangoFontDescription* NativeFont;
 typedef GtkWidget* NativeView;
 typedef GtkWindow* NativeWindow;
 typedef GtkWidget* NativeEditView;
@@ -81,6 +95,14 @@ typedef GtkWidget* NativeMenu;
 typedef GdkRegion* NativeRegion;
 #endif
 
+#if defined(OS_MACOSX)
+typedef NSImage* NativeImage;
+#elif defined(USE_X11) && !defined(TOOLKIT_VIEWS)
+typedef GdkPixbuf* NativeImage;
+#else
+typedef const SkBitmap* NativeImage;
+#endif
+
 // Note: for test_shell we're packing a pointer into the NativeViewId. So, if
 // you make it a type which is smaller than a pointer, you have to fix
 // test_shell.
@@ -88,35 +110,32 @@ typedef GdkRegion* NativeRegion;
 // See comment at the top of the file for usage.
 typedef intptr_t NativeViewId;
 
-// Convert a NativeViewId to a NativeView.
-// On Windows, these are both HWNDS so it's just a cast.
-// On Mac, for now, we pass the NSView pointer into the renderer
-// On Linux we use an opaque id
 #if defined(OS_WIN)
+// Convert a NativeViewId to a NativeView.
+//
+// On Windows, we pass an HWND into the renderer. As stated above, the renderer
+// should not be performing operations on the view.
 static inline NativeView NativeViewFromId(NativeViewId id) {
   return reinterpret_cast<NativeView>(id);
 }
-#elif defined(OS_MACOSX)
+#define NativeViewFromIdInBrowser(x) NativeViewFromId(x)
+#elif defined(OS_MACOSX) || defined(USE_X11)
+// On Mac and Linux, a NativeView is a pointer to an object, and is useless
+// outside the process in which it was created. NativeViewFromId should only be
+// used inside the appropriate platform ifdef outside of the browser.
+// (NativeViewFromIdInBrowser can be used everywhere in the browser.) If your
+// cross-platform design involves a call to NativeViewFromId from outside the
+// browser it will never work on Mac or Linux and is fundamentally broken.
 
-// A recent CL removed the need for Mac to actually convert
-// NativeViewId to NativeView.  Until other platforms make changes,
-// the platform-independent code cannot be removed.  The following is
-// to discourage new platform-independent uses.
+// Please do not call this from outside the browser. It won't work; the name
+// should give you a subtle hint.
+static inline NativeView NativeViewFromIdInBrowser(NativeViewId id) {
+  return reinterpret_cast<NativeView>(id);
+}
+#endif  // defined(OS_MACOSX) || defined(USE_X11)
 
-#define NativeViewFromId(x) NATIVE_VIEW_FROM_ID_NOT_AVAILABLE_ON_MAC
-
-#elif defined(USE_X11)
-// A NativeView on Linux is a GtkWidget*. However, we can't go directly from an
-// X window ID to a GtkWidget. Thus, functions which handle NativeViewIds from
-// the renderer have to use Xlib. This is fine since these functions are
-// generally performed on the BACKGROUND_X thread which can't use GTK anyway.
-
-#define NativeViewFromId(x) NATIVE_VIEW_FROM_ID_NOT_AVAILIBLE_ON_X11
-
-#endif  // defined(USE_X11)
-
-// Convert a NativeView to a NativeViewId. See the comments above
-// NativeViewFromId.
+// Convert a NativeView to a NativeViewId.  See the comments at the top of
+// this file.
 #if defined(OS_WIN) || defined(OS_MACOSX)
 static inline NativeViewId IdFromNativeView(NativeView view) {
   return reinterpret_cast<NativeViewId>(view);

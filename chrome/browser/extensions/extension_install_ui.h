@@ -4,24 +4,21 @@
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_INSTALL_UI_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_INSTALL_UI_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
-#include "base/file_path.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
 #include "base/string16.h"
 #include "chrome/browser/extensions/image_loading_tracker.h"
+#include "chrome/common/extensions/url_pattern.h"
 #include "gfx/native_widget_types.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 class Extension;
-class ExtensionsService;
 class MessageLoop;
 class Profile;
 class InfoBarDelegate;
-class SandboxedExtensionUnpacker;
 class TabContents;
 
 // Displays all the UI around extension installation and uninstallation.
@@ -30,7 +27,6 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
   enum PromptType {
     INSTALL_PROMPT = 0,
     UNINSTALL_PROMPT,
-    ENABLE_INCOGNITO_PROMPT,
     NUM_PROMPT_TYPES
   };
 
@@ -43,16 +39,19 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
    public:
     // We call this method after ConfirmInstall()/ConfirmUninstall() to signal
     // that the installation/uninstallation should continue.
-    virtual void InstallUIProceed(bool create_app_shortcut) = 0;
+    virtual void InstallUIProceed() = 0;
 
     // We call this method after ConfirmInstall()/ConfirmUninstall() to signal
     // that the installation/uninstallation should stop.
     virtual void InstallUIAbort() = 0;
+
+   protected:
+    virtual ~Delegate() {}
   };
 
   explicit ExtensionInstallUI(Profile* profile);
 
-  virtual ~ExtensionInstallUI() {}
+  virtual ~ExtensionInstallUI();
 
   // This is called by the installer to verify whether the installation should
   // proceed. This is declared virtual for testing.
@@ -68,22 +67,11 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
   // on |delegate|.
   virtual void ConfirmUninstall(Delegate* delegate, Extension* extension);
 
-  // This is called by the extensions management page to verify whether the
-  // uninstallation should proceed. This is declared virtual for testing.
-  //
-  // We *MUST* eventually call either Proceed() or Abort()
-  // on |delegate|.
-  virtual void ConfirmEnableIncognito(Delegate* delegate, Extension* extension);
-
   // Installation was successful. This is declared virtual for testing.
   virtual void OnInstallSuccess(Extension* extension);
 
   // Installation failed. This is declared virtual for testing.
   virtual void OnInstallFailure(const std::string& error);
-
-  // The install was rejected because the same extension/version is already
-  // installed. This is declared virtual for testing.
-  virtual void OnOverinstallAttempted(Extension* extension);
 
   // ImageLoadingTracker::Observer overrides.
   virtual void OnImageLoaded(
@@ -121,7 +109,7 @@ class ExtensionInstallUI : public ImageLoadingTracker::Observer {
   // NOTE: The implementations of this function is platform-specific.
   static void ShowExtensionInstallUIPromptImpl(
       Profile* profile, Delegate* delegate, Extension* extension,
-      SkBitmap* icon, const string16& warning, PromptType type);
+      SkBitmap* icon, PromptType type);
 
   // Implements the showing of the new install dialog. The implementations of
   // this function are platform-specific.

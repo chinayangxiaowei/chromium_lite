@@ -4,26 +4,50 @@
 
 #include "chrome/browser/dom_ui/dom_ui_factory.h"
 
-#include "chrome/browser/chrome_thread.h"
-#include "chrome/browser/dom_ui/app_launcher_ui.h"
+#include "base/command_line.h"
+#include "chrome/browser/about_flags.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/dom_ui/bookmarks_ui.h"
+#include "chrome/browser/dom_ui/bug_report_ui.h"
+#include "chrome/browser/dom_ui/constrained_html_ui.h"
 #include "chrome/browser/dom_ui/downloads_ui.h"
 #include "chrome/browser/dom_ui/devtools_ui.h"
-#include "chrome/browser/dom_ui/filebrowse_ui.h"
 #include "chrome/browser/dom_ui/history_ui.h"
+#include "chrome/browser/dom_ui/history2_ui.h"
 #include "chrome/browser/dom_ui/html_dialog_ui.h"
-#include "chrome/browser/dom_ui/mediaplayer_ui.h"
+#if defined(TOUCH_UI)
+#include "chrome/browser/dom_ui/keyboard_ui.h"
+#endif
+#include "chrome/browser/dom_ui/flags_ui.h"
 #include "chrome/browser/dom_ui/net_internals_ui.h"
 #include "chrome/browser/dom_ui/new_tab_ui.h"
 #include "chrome/browser/dom_ui/plugins_ui.h"
-#include "chrome/browser/dom_ui/print_ui.h"
+#include "chrome/browser/dom_ui/print_preview_ui.h"
+#include "chrome/browser/dom_ui/remoting_ui.h"
+#include "chrome/browser/dom_ui/options/options_ui.h"
+#include "chrome/browser/dom_ui/slideshow_ui.h"
 #include "chrome/browser/extensions/extension_dom_ui.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/extensions/extensions_ui.h"
+#include "chrome/browser/printing/print_dialog_cloud.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/url_constants.h"
 #include "googleurl/src/gurl.h"
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/dom_ui/imageburner_ui.h"
+#include "chrome/browser/chromeos/dom_ui/menu_ui.h"
+#include "chrome/browser/chromeos/dom_ui/mobile_setup_ui.h"
+#include "chrome/browser/chromeos/dom_ui/register_page_ui.h"
+#include "chrome/browser/chromeos/dom_ui/system_info_ui.h"
+#include "chrome/browser/chromeos/dom_ui/wrench_menu_ui.h"
+#include "chrome/browser/chromeos/dom_ui/network_menu_ui.h"
+#include "chrome/browser/dom_ui/filebrowse_ui.h"
+#include "chrome/browser/dom_ui/mediaplayer_ui.h"
+#endif
 
 const DOMUITypeID DOMUIFactory::kNoDOMUI = NULL;
 
@@ -41,14 +65,13 @@ DOMUI* NewDOMUI(TabContents* contents, const GURL& url) {
 // Special case for extensions.
 template<>
 DOMUI* NewDOMUI<ExtensionDOMUI>(TabContents* contents, const GURL& url) {
-  // Don't use a DOMUI for non-existent extensions or for incognito tabs. The
-  // latter restriction is because we require extensions to run within a single
-  // process.
+  // Don't use a DOMUI for incognito tabs because we require extensions to run
+  // within a single process.
   ExtensionsService* service = contents->profile()->GetExtensionsService();
-  bool valid_extension =
-      (service && service->GetExtensionById(url.host(), false));
-  if (valid_extension && !contents->profile()->IsOffTheRecord())
-    return new ExtensionDOMUI(contents);
+  if (service &&
+      service->ExtensionBindingsAllowed(url)) {
+    return new ExtensionDOMUI(contents, url);
+  }
   return NULL;
 }
 
@@ -56,19 +79,24 @@ DOMUI* NewDOMUI<ExtensionDOMUI>(TabContents* contents, const GURL& url) {
 // tab, based on its URL. Returns NULL if the URL doesn't have DOMUI associated
 // with it. Even if the factory function is valid, it may yield a NULL DOMUI
 // when invoked for a particular tab - see NewDOMUI<ExtensionDOMUI>.
-static DOMUIFactoryFunction GetDOMUIFactoryFunction(const GURL& url) {
+static DOMUIFactoryFunction GetDOMUIFactoryFunction(Profile* profile,
+    const GURL& url) {
   // Currently, any gears: URL means an HTML dialog.
   if (url.SchemeIs(chrome::kGearsScheme))
     return &NewDOMUI<HtmlDialogUI>;
 
-  if (url.SchemeIs(chrome::kExtensionScheme))
+  if (url.host() == chrome::kChromeUIDialogHost)
+    return &NewDOMUI<ConstrainedHtmlUI>;
+
+  ExtensionsService* service = profile->GetExtensionsService();
+  if (service && service->ExtensionBindingsAllowed(url))
     return &NewDOMUI<ExtensionDOMUI>;
 
-// TODO(mhm) Make sure this ifdef is removed once print is complete.
-#if !defined(GOOGLE_CHROME_BUILD)
-  if (url.SchemeIs(chrome::kPrintScheme))
-    return &NewDOMUI<PrintUI>;
-#endif
+  // All platform builds of Chrome will need to have a cloud printing
+  // dialog as backup.  It's just that on Chrome OS, it's the only
+  // print dialog.
+  if (url.host() == chrome::kCloudPrintResourcesHost)
+    return &NewDOMUI<ExternalHtmlDialogUI>;
 
   // This will get called a lot to check all URLs, so do a quick check of other
   // schemes (gears was handled above) to filter out most URLs.
@@ -76,7 +104,8 @@ static DOMUIFactoryFunction GetDOMUIFactoryFunction(const GURL& url) {
       !url.SchemeIs(chrome::kChromeUIScheme))
     return NULL;
 
-  if (url.host() == chrome::kSyncResourcesHost)
+  if (url.host() == chrome::kChromeUISyncResourcesHost ||
+      url.host() == chrome::kChromeUIRemotingResourcesHost)
     return &NewDOMUI<HtmlDialogUI>;
 
   // Special case the new tab page. In older versions of Chrome, the new tab
@@ -89,10 +118,10 @@ static DOMUIFactoryFunction GetDOMUIFactoryFunction(const GURL& url) {
 
   // We must compare hosts only since some of the DOM UIs append extra stuff
   // after the host name.
-  if (url.host() == chrome::kChromeUIAppsHost)
-    return &NewDOMUI<AppLauncherUI>;
   if (url.host() == chrome::kChromeUIBookmarksHost)
     return &NewDOMUI<BookmarksUI>;
+  if (url.host() == chrome::kChromeUIBugReportHost)
+    return &NewDOMUI<BugReportUI>;
   if (url.host() == chrome::kChromeUIDevToolsHost)
     return &NewDOMUI<DevToolsUI>;
   if (url.host() == chrome::kChromeUIDownloadsHost)
@@ -101,25 +130,73 @@ static DOMUIFactoryFunction GetDOMUIFactoryFunction(const GURL& url) {
     return &NewDOMUI<ExtensionsUI>;
   if (url.host() == chrome::kChromeUIHistoryHost)
     return &NewDOMUI<HistoryUI>;
+  if (url.host() == chrome::kChromeUIHistory2Host)
+    return &NewDOMUI<HistoryUI2>;
+  if (url.host() == chrome::kChromeUIFlagsHost)
+    return &NewDOMUI<FlagsUI>;
+#if defined(TOUCH_UI)
+  if (url.host() == chrome::kChromeUIKeyboardHost)
+    return &NewDOMUI<KeyboardUI>;
+#endif
   if (url.host() == chrome::kChromeUINetInternalsHost)
     return &NewDOMUI<NetInternalsUI>;
   if (url.host() == chrome::kChromeUIPluginsHost)
     return &NewDOMUI<PluginsUI>;
+#if defined(ENABLE_REMOTING)
+  if (url.host() == chrome::kChromeUIRemotingHost) {
+    if (CommandLine::ForCurrentProcess()->HasSwitch(
+        switches::kEnableRemoting)) {
+      return &NewDOMUI<RemotingUI>;
+    }
+  }
+#endif
 
 #if defined(OS_CHROMEOS)
   if (url.host() == chrome::kChromeUIFileBrowseHost)
     return &NewDOMUI<FileBrowseUI>;
-
+  if (url.host() == chrome::kChromeUIImageBurnerHost)
+    return &NewDOMUI<ImageBurnUI>;
   if (url.host() == chrome::kChromeUIMediaplayerHost)
     return &NewDOMUI<MediaplayerUI>;
+  if (url.host() == chrome::kChromeUIMobileSetupHost)
+    return &NewDOMUI<MobileSetupUI>;
+  if (url.host() == chrome::kChromeUIPrintHost)
+    return &NewDOMUI<PrintPreviewUI>;
+  if (url.host() == chrome::kChromeUIRegisterPageHost)
+    return &NewDOMUI<RegisterPageUI>;
+  if (url.host() == chrome::kChromeUISettingsHost)
+    return &NewDOMUI<OptionsUI>;
+  if (url.host() == chrome::kChromeUISlideshowHost)
+    return &NewDOMUI<SlideshowUI>;
+  if (url.host() == chrome::kChromeUISystemInfoHost)
+    return &NewDOMUI<SystemInfoUI>;
+  if (url.host() == chrome::kChromeUIMenu)
+    return &NewDOMUI<chromeos::MenuUI>;
+  if (url.host() == chrome::kChromeUIWrenchMenu)
+    return &NewDOMUI<chromeos::WrenchMenuUI>;
+  if (url.host() == chrome::kChromeUINetworkMenu)
+    return &NewDOMUI<chromeos::NetworkMenuUI>;
+#else
+  if (url.host() == chrome::kChromeUISettingsHost) {
+    if (CommandLine::ForCurrentProcess()->HasSwitch(
+        switches::kEnableTabbedOptions)) {
+      return &NewDOMUI<OptionsUI>;
+    }
+  }
+  if (url.host() == chrome::kChromeUIPrintHost) {
+    if (CommandLine::ForCurrentProcess()->HasSwitch(
+        switches::kEnablePrintPreview)) {
+      return &NewDOMUI<PrintPreviewUI>;
+    }
+  }
 #endif
 
   return NULL;
 }
 
 // static
-DOMUITypeID DOMUIFactory::GetDOMUIType(const GURL& url) {
-  DOMUIFactoryFunction function = GetDOMUIFactoryFunction(url);
+DOMUITypeID DOMUIFactory::GetDOMUIType(Profile* profile, const GURL& url) {
+  DOMUIFactoryFunction function = GetDOMUIFactoryFunction(profile, url);
   return function ? reinterpret_cast<DOMUITypeID>(function) : kNoDOMUI;
 }
 
@@ -127,35 +204,59 @@ DOMUITypeID DOMUIFactory::GetDOMUIType(const GURL& url) {
 bool DOMUIFactory::HasDOMUIScheme(const GURL& url) {
   return url.SchemeIs(chrome::kChromeInternalScheme) ||
          url.SchemeIs(chrome::kChromeUIScheme) ||
-         url.SchemeIs(chrome::kExtensionScheme) ||
-         url.SchemeIs(chrome::kPrintScheme);
+         url.SchemeIs(chrome::kExtensionScheme);
 }
 
 // static
-bool DOMUIFactory::UseDOMUIForURL(const GURL& url) {
-  return GetDOMUIFactoryFunction(url) != NULL;
+bool DOMUIFactory::UseDOMUIForURL(Profile* profile, const GURL& url) {
+  return GetDOMUIFactoryFunction(profile, url) != NULL;
 }
 
 // static
 DOMUI* DOMUIFactory::CreateDOMUIForURL(TabContents* tab_contents,
                                        const GURL& url) {
-  DOMUIFactoryFunction function = GetDOMUIFactoryFunction(url);
+  DOMUIFactoryFunction function = GetDOMUIFactoryFunction(
+      tab_contents->profile(), url);
   if (!function)
     return NULL;
   return (*function)(tab_contents, url);
 }
 
 // static
+void DOMUIFactory::GetFaviconForURL(Profile* profile,
+                                    FaviconService::GetFaviconRequest* request,
+                                    const GURL& page_url) {
+  // All extensions but the bookmark manager get their favicon from the icons
+  // part of the manifest.
+  if (page_url.SchemeIs(chrome::kExtensionScheme) &&
+      page_url.host() != extension_misc::kBookmarkManagerId) {
+    ExtensionDOMUI::GetFaviconForURL(profile, request, page_url);
+  } else {
+    scoped_refptr<RefCountedMemory> icon_data =
+        DOMUIFactory::GetFaviconResourceBytes(profile, page_url);
+    bool know_icon = icon_data.get() != NULL && icon_data->size() > 0;
+    request->ForwardResultAsync(
+        FaviconService::FaviconDataCallback::TupleType(request->handle(),
+            know_icon, icon_data, false, GURL()));
+  }
+}
+
+// static
 RefCountedMemory* DOMUIFactory::GetFaviconResourceBytes(Profile* profile,
                                                         const GURL& page_url) {
-  if (page_url.SchemeIs(chrome::kExtensionScheme))
-    return ExtensionDOMUI::GetFaviconResourceBytes(profile, page_url);
+  // The bookmark manager is a chrome extension, so we have to check for it
+  // before we check for extension scheme.
+  if (page_url.host() == extension_misc::kBookmarkManagerId)
+    return BookmarksUI::GetFaviconResourceBytes();
+
+  // The extension scheme is handled in GetFaviconForURL.
+  if (page_url.SchemeIs(chrome::kExtensionScheme)) {
+    NOTREACHED();
+    return NULL;
+  }
 
   if (!HasDOMUIScheme(page_url))
     return NULL;
-
-  if (page_url.host() == chrome::kChromeUIBookmarksHost)
-    return BookmarksUI::GetFaviconResourceBytes();
 
   if (page_url.host() == chrome::kChromeUIDownloadsHost)
     return DownloadsUI::GetFaviconResourceBytes();
@@ -166,8 +267,22 @@ RefCountedMemory* DOMUIFactory::GetFaviconResourceBytes(Profile* profile,
   if (page_url.host() == chrome::kChromeUIHistoryHost)
     return HistoryUI::GetFaviconResourceBytes();
 
+  if (page_url.host() == chrome::kChromeUIHistory2Host)
+    return HistoryUI2::GetFaviconResourceBytes();
+
+  if (page_url.host() == chrome::kChromeUIFlagsHost)
+    return FlagsUI::GetFaviconResourceBytes();
+
+  if (page_url.host() == chrome::kChromeUISettingsHost)
+    return OptionsUI::GetFaviconResourceBytes();
+
   if (page_url.host() == chrome::kChromeUIPluginsHost)
     return PluginsUI::GetFaviconResourceBytes();
+
+#if defined(ENABLE_REMOTING)
+  if (page_url.host() == chrome::kChromeUIRemotingHost)
+    return RemotingUI::GetFaviconResourceBytes();
+#endif
 
   return NULL;
 }

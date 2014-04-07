@@ -9,7 +9,7 @@
 #include "base/stl_util-inl.h"
 #include "base/values.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/first_run.h"
+#include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/importer/firefox2_importer.h"
 #include "chrome/browser/importer/firefox3_importer.h"
 #include "chrome/browser/importer/firefox_importer_utils.h"
@@ -19,7 +19,6 @@
 #include "grit/generated_resources.h"
 
 #if defined(OS_WIN)
-#include "app/win_util.h"
 #include "chrome/browser/importer/ie_importer.h"
 #include "chrome/browser/password_manager/ie7_password.h"
 #endif
@@ -36,9 +35,9 @@ ImporterList::~ImporterList() {
 }
 
 void ImporterList::DetectSourceProfiles() {
+// The first run import will automatically take settings from the first
+// profile detected, which should be the user's current default.
 #if defined(OS_WIN)
-  // The order in which detect is called determines the order
-  // in which the options appear in the dropdown combo-box
   if (ShellIntegration::IsFirefoxDefaultBrowser()) {
     DetectFirefoxProfiles();
     DetectIEProfiles();
@@ -48,10 +47,15 @@ void ImporterList::DetectSourceProfiles() {
   }
   // TODO(brg) : Current UI requires win_util.
   DetectGoogleToolbarProfiles();
+#elif defined(OS_MACOSX)
+  if (ShellIntegration::IsFirefoxDefaultBrowser()) {
+    DetectFirefoxProfiles();
+    DetectSafariProfiles();
+  } else {
+    DetectSafariProfiles();
+    DetectFirefoxProfiles();
+  }
 #else
-#if defined(OS_MACOSX)
-  DetectSafariProfiles();
-#endif
   DetectFirefoxProfiles();
 #endif
 }
@@ -73,6 +77,9 @@ Importer* ImporterList::CreateImporterByType(importer::ProfileType type) {
     case importer::SAFARI:
       return new SafariImporter(mac_util::GetUserLibraryPath());
 #endif  // OS_MACOSX
+    case importer::NO_PROFILE_TYPE:
+      NOTREACHED();
+      return NULL;
   }
   NOTREACHED();
   return NULL;
@@ -119,51 +126,9 @@ void ImporterList::DetectIEProfiles() {
 #endif
 
 void ImporterList::DetectFirefoxProfiles() {
-  DictionaryValue root;
-  FilePath ini_file = GetProfilesINI();
-  ParseProfileINI(ini_file, &root);
-
-  FilePath source_path;
-  for (int i = 0; ; ++i) {
-    std::string current_profile = "Profile" + IntToString(i);
-    if (!root.HasKeyASCII(current_profile)) {
-      // Profiles are continuously numbered. So we exit when we can't
-      // find the i-th one.
-      break;
-    }
-    std::string is_relative;
-    string16 path16;
-    FilePath profile_path;
-    if (root.GetStringASCII(current_profile + ".IsRelative", &is_relative) &&
-        root.GetString(current_profile + ".Path", &path16)) {
-#if defined(OS_WIN)
-      ReplaceSubstringsAfterOffset(
-          &path16, 0, ASCIIToUTF16("/"), ASCIIToUTF16("\\"));
-#endif
-      FilePath path = FilePath::FromWStringHack(UTF16ToWide(path16));
-
-      // IsRelative=1 means the folder path would be relative to the
-      // path of profiles.ini. IsRelative=0 refers to a custom profile
-      // location.
-      if (is_relative == "1") {
-        profile_path = ini_file.DirName().Append(path);
-      } else {
-        profile_path = path;
-      }
-
-      // We only import the default profile when multiple profiles exist,
-      // since the other profiles are used mostly by developers for testing.
-      // Otherwise, Profile0 will be imported.
-      std::string is_default;
-      if ((root.GetStringASCII(current_profile + ".Default", &is_default) &&
-           is_default == "1") || i == 0) {
-        source_path = profile_path;
-        // We break out of the loop when we have found the default profile.
-        if (is_default == "1")
-          break;
-      }
-    }
-  }
+  FilePath profile_path = GetFirefoxProfilePath();
+  if (profile_path.empty())
+    return;
 
   // Detects which version of Firefox is installed.
   importer::ProfileType firefox_type;
@@ -172,32 +137,31 @@ void ImporterList::DetectFirefoxProfiles() {
 #if defined(OS_WIN)
   version = GetCurrentFirefoxMajorVersionFromRegistry();
 #endif
-  if (version != 2 && version != 3)
-    GetFirefoxVersionAndPathFromProfile(source_path, &version, &app_path);
+  if (version < 2)
+    GetFirefoxVersionAndPathFromProfile(profile_path, &version, &app_path);
 
   if (version == 2) {
     firefox_type = importer::FIREFOX2;
-  } else if (version == 3) {
+  } else if (version >= 3) {
     firefox_type = importer::FIREFOX3;
   } else {
     // Ignores other versions of firefox.
     return;
   }
 
-  if (!source_path.empty()) {
-    importer::ProfileInfo* firefox = new importer::ProfileInfo();
-    firefox->description = l10n_util::GetString(IDS_IMPORT_FROM_FIREFOX);
-    firefox->browser_type = firefox_type;
-    firefox->source_path = source_path.ToWStringHack();
+  importer::ProfileInfo* firefox = new importer::ProfileInfo();
+  firefox->description = l10n_util::GetString(IDS_IMPORT_FROM_FIREFOX);
+  firefox->browser_type = firefox_type;
+  firefox->source_path = profile_path;
 #if defined(OS_WIN)
-    firefox->app_path = GetFirefoxInstallPathFromRegistry();
+  firefox->app_path = FilePath::FromWStringHack(
+      GetFirefoxInstallPathFromRegistry());
 #endif
-    if (firefox->app_path.empty())
-      firefox->app_path = app_path.ToWStringHack();
-    firefox->services_supported = importer::HISTORY | importer::FAVORITES |
-        importer::COOKIES | importer::PASSWORDS | importer::SEARCH_ENGINES;
-    source_profiles_.push_back(firefox);
-  }
+  if (firefox->app_path.empty())
+    firefox->app_path = app_path;
+  firefox->services_supported = importer::HISTORY | importer::FAVORITES |
+      importer::PASSWORDS | importer::SEARCH_ENGINES;
+  source_profiles_.push_back(firefox);
 }
 
 void ImporterList::DetectGoogleToolbarProfiles() {

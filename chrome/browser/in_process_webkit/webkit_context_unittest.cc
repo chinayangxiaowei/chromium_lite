@@ -5,6 +5,7 @@
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/in_process_webkit/dom_storage_context.h"
 #include "chrome/browser/in_process_webkit/webkit_context.h"
+#include "chrome/test/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class MockDOMStorageContext : public DOMStorageContext {
@@ -15,8 +16,8 @@ class MockDOMStorageContext : public DOMStorageContext {
   }
 
   virtual void PurgeMemory() {
-    EXPECT_FALSE(ChromeThread::CurrentlyOn(ChromeThread::UI));
-    EXPECT_TRUE(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
+    EXPECT_FALSE(BrowserThread::CurrentlyOn(BrowserThread::UI));
+    EXPECT_TRUE(BrowserThread::CurrentlyOn(BrowserThread::WEBKIT));
     ++purge_count_;
   }
 
@@ -27,24 +28,26 @@ class MockDOMStorageContext : public DOMStorageContext {
 };
 
 TEST(WebKitContextTest, Basic) {
-  FilePath file_path;
-  scoped_refptr<WebKitContext> context1(new WebKitContext(file_path, true));
-  EXPECT_TRUE(file_path == context1->data_path());
-  EXPECT_TRUE(context1->is_incognito());
+  TestingProfile profile;
 
-  scoped_refptr<WebKitContext> context2(new WebKitContext(file_path, false));
-  EXPECT_TRUE(file_path == context2->data_path());
-  EXPECT_FALSE(context2->is_incognito());
+  scoped_refptr<WebKitContext> context1(new WebKitContext(&profile));
+  EXPECT_TRUE(profile.GetPath() == context1->data_path());
+  EXPECT_TRUE(profile.IsOffTheRecord() == context1->is_incognito());
+
+  scoped_refptr<WebKitContext> context2(new WebKitContext(&profile));
+  EXPECT_TRUE(context1->data_path() == context2->data_path());
+  EXPECT_TRUE(context1->is_incognito() == context2->is_incognito());
 }
 
 TEST(WebKitContextTest, PurgeMemory) {
   // Start up a WebKit thread for the WebKitContext to call the
   // DOMStorageContext on.
-  ChromeThread webkit_thread(ChromeThread::WEBKIT);
+  BrowserThread webkit_thread(BrowserThread::WEBKIT);
   webkit_thread.Start();
 
   // Create the contexts.
-  scoped_refptr<WebKitContext> context(new WebKitContext(FilePath(), false));
+  TestingProfile profile;
+  scoped_refptr<WebKitContext> context(new WebKitContext(&profile));
   MockDOMStorageContext* mock_context =
       new MockDOMStorageContext(context.get());
   context->set_dom_storage_context(mock_context);  // Takes ownership.

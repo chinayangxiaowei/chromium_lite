@@ -1,20 +1,24 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/child_process_launcher.h"
 
+#include <utility>  // For std::pair.
+
 #include "base/command_line.h"
+#include "base/lock.h"
 #include "base/logging.h"
 #include "base/scoped_ptr.h"
 #include "base/thread.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/common/chrome_descriptors.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/process_watcher.h"
 #include "chrome/common/result_codes.h"
 
 #if defined(OS_WIN)
+#include "base/file_path.h"
 #include "chrome/common/sandbox_policy.h"
 #elif defined(OS_LINUX)
 #include "base/singleton.h"
@@ -57,16 +61,16 @@ class ChildProcessLauncher::Context
       Client* client) {
     client_ = client;
 
-    CHECK(ChromeThread::GetCurrentThreadIdentifier(&client_thread_id_));
+    CHECK(BrowserThread::GetCurrentThreadIdentifier(&client_thread_id_));
 
-    ChromeThread::PostTask(
-        ChromeThread::PROCESS_LAUNCHER, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::PROCESS_LAUNCHER, FROM_HERE,
         NewRunnableMethod(
             this,
             &Context::LaunchInternal,
 #if defined(OS_WIN)
             exposed_dir,
-#elif defined(POSIX)
+#elif defined(OS_POSIX)
             use_zygote,
             environ,
             ipcfd,
@@ -77,7 +81,7 @@ class ChildProcessLauncher::Context
   void ResetClient() {
     // No need for locking as this function gets called on the same thread that
     // client_ would be used.
-    CHECK(ChromeThread::CurrentlyOn(client_thread_id_));
+    CHECK(BrowserThread::CurrentlyOn(client_thread_id_));
     client_ = NULL;
   }
 
@@ -158,27 +162,36 @@ class ChildProcessLauncher::Context
       }
 #endif  // defined(OS_LINUX)
 
-      // Actually launch the app.
-      bool launched;
+      bool launched = false;
 #if defined(OS_MACOSX)
-      task_t child_task;
-      launched = base::LaunchAppAndGetTask(
-          cmd_line->argv(), env, fds_to_map, false, &child_task, &handle);
-      if (launched && child_task != MACH_PORT_NULL) {
-          MachBroker::instance()->RegisterPid(
-              handle,
-              MachBroker::MachInfo().SetTask(child_task));
-      }
-#else
-      launched = base::LaunchApp(cmd_line->argv(), env, fds_to_map,
-                                 /* wait= */false, &handle);
+      // It is possible for the child process to die immediately after
+      // launching.  To prevent leaking MachBroker map entries in this case,
+      // lock around all of LaunchApp().  If the child dies, the death
+      // notification will be processed by the MachBroker after the call to
+      // AddPlaceholderForPid(), enabling proper cleanup.
+      {  // begin scope for AutoLock
+        MachBroker* broker = MachBroker::instance();
+        AutoLock lock(broker->GetLock());
+
+        // This call to |PrepareForFork()| will start the MachBroker listener
+        // thread, if it is not already running.  Therefore the browser process
+        // will be listening for Mach IPC before LaunchApp() is called.
+        broker->PrepareForFork();
+#endif
+        // Actually launch the app.
+        launched = base::LaunchApp(cmd_line->argv(), env, fds_to_map,
+                                   /* wait= */false, &handle);
+#if defined(OS_MACOSX)
+        if (launched)
+          broker->AddPlaceholderForPid(handle);
+      }  // end scope for AutoLock
 #endif
       if (!launched)
         handle = base::kNullProcessHandle;
     }
 #endif  // else defined(OS_POSIX)
 
-    ChromeThread::PostTask(
+    BrowserThread::PostTask(
         client_thread_id_, FROM_HERE,
         NewRunnableMethod(
             this,
@@ -212,8 +225,8 @@ class ChildProcessLauncher::Context
 
     // On Posix, EnsureProcessTerminated can lead to 2 seconds of sleep!  So
     // don't this on the UI/IO threads.
-    ChromeThread::PostTask(
-        ChromeThread::PROCESS_LAUNCHER, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::PROCESS_LAUNCHER, FROM_HERE,
         NewRunnableFunction(
             &ChildProcessLauncher::Context::TerminateInternal,
 #if defined(OS_LINUX)
@@ -249,7 +262,7 @@ class ChildProcessLauncher::Context
   }
 
   Client* client_;
-  ChromeThread::ID client_thread_id_;
+  BrowserThread::ID client_thread_id_;
   base::Process process_;
   bool starting_;
 

@@ -4,11 +4,12 @@
 
 #include "chrome/browser/geolocation/access_token_store.h"
 
+#include "base/string_piece.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_thread.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/pref_names.h"
 #include "googleurl/src/gurl.h"
 
@@ -35,7 +36,7 @@ ChromePrefsAccessTokenStore::ChromePrefsAccessTokenStore() {
 
 void ChromePrefsAccessTokenStore::LoadDictionaryStoreInUIThread(
       scoped_refptr<CancelableRequest<LoadAccessTokensCallbackType> > request) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   if (request->canceled())
     return;
   const DictionaryValue* token_dictionary =
@@ -47,11 +48,11 @@ void ChromePrefsAccessTokenStore::LoadDictionaryStoreInUIThread(
   if (token_dictionary != NULL) {
     for (DictionaryValue::key_iterator it = token_dictionary->begin_keys();
         it != token_dictionary->end_keys(); ++it) {
-      GURL url(WideToUTF8(*it));
+      GURL url(*it);
       if (!url.is_valid())
         continue;
-      token_dictionary->GetStringAsUTF16WithoutPathExpansion(
-          *it, &access_token_set[url]);
+      token_dictionary->GetStringWithoutPathExpansion(*it,
+                                                      &access_token_set[url]);
     }
   }
   request->ForwardResultAsync(MakeTuple(access_token_set));
@@ -59,24 +60,23 @@ void ChromePrefsAccessTokenStore::LoadDictionaryStoreInUIThread(
 
 void ChromePrefsAccessTokenStore::DoLoadAccessTokens(
     scoped_refptr<CancelableRequest<LoadAccessTokensCallbackType> > request) {
-  ChromeThread::PostTask(ChromeThread::UI, FROM_HERE, NewRunnableMethod(
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE, NewRunnableMethod(
       this, &ChromePrefsAccessTokenStore::LoadDictionaryStoreInUIThread,
       request));
 }
 
 void SetAccessTokenOnUIThread(const GURL& server_url, const string16& token) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DictionaryValue* access_token_dictionary =
       g_browser_process->local_state()->GetMutableDictionary(
           prefs::kGeolocationAccessToken);
   access_token_dictionary->SetWithoutPathExpansion(
-      UTF8ToWide(server_url.spec()),
-      Value::CreateStringValueFromUTF16(token));
+      server_url.spec(), Value::CreateStringValue(token));
 }
 
 void ChromePrefsAccessTokenStore::SaveAccessToken(
       const GURL& server_url, const string16& access_token) {
-  ChromeThread::PostTask(ChromeThread::UI, FROM_HERE, NewRunnableFunction(
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE, NewRunnableFunction(
       &SetAccessTokenOnUIThread, server_url, access_token));
 }
 }  // namespace

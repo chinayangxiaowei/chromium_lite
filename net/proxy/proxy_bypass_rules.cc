@@ -4,7 +4,7 @@
 
 #include "net/proxy/proxy_bypass_rules.h"
 
-#include "base/logging.h"
+#include "base/string_number_conversions.h"
 #include "base/string_tokenizer.h"
 #include "base/string_util.h"
 #include "net/base/net_util.h"
@@ -32,8 +32,7 @@ class HostnamePatternRule : public ProxyBypassRules::Rule {
 
     // Note it is necessary to lower-case the host, since GURL uses capital
     // letters for percent-escaped characters.
-    return MatchPatternASCII(StringToLowerASCII(url.host()),
-                             hostname_pattern_);
+    return MatchPattern(StringToLowerASCII(url.host()), hostname_pattern_);
   }
 
   virtual std::string ToString() const {
@@ -66,6 +65,50 @@ class BypassLocalRule : public ProxyBypassRules::Rule {
   }
 };
 
+// Rule for matching a URL that is an IP address, if that IP address falls
+// within a certain numeric range. For example, you could use this rule to
+// match all the IPs in the CIDR block 10.10.3.4/24.
+class BypassIPBlockRule : public ProxyBypassRules::Rule {
+ public:
+  // |ip_prefix| + |prefix_length| define the IP block to match.
+  BypassIPBlockRule(const std::string& description,
+                    const std::string& optional_scheme,
+                    const IPAddressNumber& ip_prefix,
+                    size_t prefix_length_in_bits)
+      : description_(description),
+        optional_scheme_(optional_scheme),
+        ip_prefix_(ip_prefix),
+        prefix_length_in_bits_(prefix_length_in_bits) {
+  }
+
+  virtual bool Matches(const GURL& url) const {
+    if (!url.HostIsIPAddress())
+      return false;
+
+    if (!optional_scheme_.empty() && url.scheme() != optional_scheme_)
+      return false;  // Didn't match scheme expectation.
+
+    // Parse the input IP literal to a number.
+    IPAddressNumber ip_number;
+    if (!ParseIPLiteralToNumber(url.HostNoBrackets(), &ip_number))
+      return false;
+
+    // Test if it has the expected prefix.
+    return IPNumberMatchesPrefix(ip_number, ip_prefix_,
+                                 prefix_length_in_bits_);
+  }
+
+  virtual std::string ToString() const {
+    return description_;
+  }
+
+ private:
+  const std::string description_;
+  const std::string optional_scheme_;
+  const IPAddressNumber ip_prefix_;
+  const size_t prefix_length_in_bits_;
+};
+
 // Returns true if the given string represents an IP address.
 bool IsIPAddress(const std::string& domain) {
   // From GURL::HostIsIPAddress()
@@ -79,7 +122,19 @@ bool IsIPAddress(const std::string& domain) {
 
 }  // namespace
 
+ProxyBypassRules::ProxyBypassRules() {
+}
+
+ProxyBypassRules::ProxyBypassRules(const ProxyBypassRules& rhs)
+    : rules_(rhs.rules_) {
+}
+
 ProxyBypassRules::~ProxyBypassRules() {
+}
+
+ProxyBypassRules& ProxyBypassRules::operator=(const ProxyBypassRules& rhs) {
+  rules_ = rhs.rules_;
+  return *this;
 }
 
 bool ProxyBypassRules::Matches(const GURL& url) const {
@@ -130,6 +185,11 @@ bool ProxyBypassRules::AddRuleFromString(const std::string& raw) {
   return AddRuleFromStringInternalWithLogging(raw, false);
 }
 
+bool ProxyBypassRules::AddRuleFromStringUsingSuffixMatching(
+    const std::string& raw) {
+  return AddRuleFromStringInternalWithLogging(raw, true);
+}
+
 void ProxyBypassRules::Clear() {
   rules_.clear();
 }
@@ -175,9 +235,16 @@ bool ProxyBypassRules::AddRuleFromStringInternal(
   // If there is a forward slash in the input, it is probably a CIDR style
   // mask.
   if (raw.find('/') != std::string::npos) {
-    // TODO(eroman): support CIDR-style proxy bypass entries
-    // (http://crbug.com/9835)
-    return false;
+    IPAddressNumber ip_prefix;
+    size_t prefix_length_in_bits;
+
+    if (!ParseCIDRBlock(raw, &ip_prefix, &prefix_length_in_bits))
+      return false;
+
+    rules_.push_back(
+        new BypassIPBlockRule(raw, scheme, ip_prefix, prefix_length_in_bits));
+
+    return true;
   }
 
   // Check if we have an <ip-address>[:port] input. We need to treat this
@@ -197,7 +264,7 @@ bool ProxyBypassRules::AddRuleFromStringInternal(
   host = raw;
   port = -1;
   if (pos_colon != std::string::npos) {
-    if (!StringToInt(raw.substr(pos_colon + 1), &port) ||
+    if (!base::StringToInt(raw.substr(pos_colon + 1), &port) ||
         (port < 0 || port > 0xFFFF)) {
       return false;  // Port was invalid.
     }

@@ -377,7 +377,7 @@ bool ContainsPolicy(const CERT_POLICIES_INFO* policies_info,
 // Helper function to parse a principal from a WinInet description of that
 // principal.
 void ParsePrincipal(const std::string& description,
-                    X509Certificate::Principal* principal) {
+                    CertPrincipal* principal) {
   // The description of the principal is a string with each LDAP value on
   // a separate line.
   const std::string kDelimiters("\r\n");
@@ -434,6 +434,54 @@ void ParsePrincipal(const std::string& description,
   }
 }
 
+void AddCertsFromStore(HCERTSTORE store,
+                       X509Certificate::OSCertHandles* results) {
+  PCCERT_CONTEXT cert = NULL;
+
+  while ((cert = CertEnumCertificatesInStore(store, cert)) != NULL) {
+    PCCERT_CONTEXT to_add = NULL;
+    if (CertAddCertificateContextToStore(
+        NULL,  // The cert won't be persisted in any cert store. This breaks
+               // any association the context currently has to |store|, which
+               // allows us, the caller, to safely close |store| without
+               // releasing the cert handles.
+        cert,
+        CERT_STORE_ADD_USE_EXISTING,
+        &to_add) && to_add != NULL) {
+      // When processing stores generated from PKCS#7/PKCS#12 files, it
+      // appears that the order returned is the inverse of the order that it
+      // appeared in the file.
+      // TODO(rsleevi): Ensure this order is consistent across all Win
+      // versions
+      results->insert(results->begin(), to_add);
+    }
+  }
+}
+
+X509Certificate::OSCertHandles ParsePKCS7(const char* data, size_t length) {
+  X509Certificate::OSCertHandles results;
+  CERT_BLOB data_blob;
+  data_blob.cbData = length;
+  data_blob.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(data));
+
+  HCERTSTORE out_store = NULL;
+
+  DWORD expected_types = CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED |
+                         CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED |
+                         CERT_QUERY_CONTENT_FLAG_PKCS7_UNSIGNED;
+
+  if (!CryptQueryObject(CERT_QUERY_OBJECT_BLOB, &data_blob, expected_types,
+                        CERT_QUERY_FORMAT_FLAG_BINARY, 0, NULL, NULL, NULL,
+                        &out_store, NULL, NULL) || out_store == NULL) {
+    return results;
+  }
+
+  AddCertsFromStore(out_store, &results);
+  CertCloseStore(out_store, CERT_CLOSE_STORE_CHECK_FLAG);
+
+  return results;
+}
+
 }  // namespace
 
 void X509Certificate::Initialize() {
@@ -482,8 +530,11 @@ X509Certificate* X509Certificate::CreateFromPickle(const Pickle& pickle,
       NULL, reinterpret_cast<const void **>(&cert_handle)))
     return NULL;
 
-  return CreateFromHandle(cert_handle, SOURCE_LONE_CERT_IMPORT,
-                          OSCertHandles());
+  X509Certificate* cert = CreateFromHandle(cert_handle,
+                                           SOURCE_LONE_CERT_IMPORT,
+                                           OSCertHandles());
+  FreeOSCertHandle(cert_handle);
+  return cert;
 }
 
 void X509Certificate::Persist(Pickle* pickle) {
@@ -536,8 +587,10 @@ int X509Certificate::Verify(const std::string& hostname,
   CERT_CHAIN_PARA chain_para;
   memset(&chain_para, 0, sizeof(chain_para));
   chain_para.cbSize = sizeof(chain_para);
-  // TODO(wtc): Do we still need to request szOID_SERVER_GATED_CRYPTO or
-  // szOID_SGC_NETSCAPE today?
+  // ExtendedKeyUsage.
+  // We still need to request szOID_SERVER_GATED_CRYPTO and szOID_SGC_NETSCAPE
+  // today because some certificate chains need them.  IE also requests these
+  // two usages.
   static const LPSTR usage[] = {
     szOID_PKIX_KP_SERVER_AUTH,
     szOID_SERVER_GATED_CRYPTO,
@@ -558,6 +611,9 @@ int X509Certificate::Verify(const std::string& hostname,
     flags &= ~VERIFY_EV_CERT;
   }
   PCCERT_CHAIN_CONTEXT chain_context;
+  // IE passes a non-NULL pTime argument that specifies the current system
+  // time.  IE passes CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT as the
+  // chain_flags argument.
   if (!CertGetCertificateChain(
            NULL,  // default chain engine, HCCE_CURRENT_USER
            cert_handle_,
@@ -714,7 +770,7 @@ bool X509Certificate::VerifyEV() const {
 
   // Look up the EV policy OID of the root CA.
   PCCERT_CONTEXT root_cert = element[num_elements - 1]->pCertContext;
-  Fingerprint fingerprint = CalculateFingerprint(root_cert);
+  SHA1Fingerprint fingerprint = CalculateFingerprint(root_cert);
   const char* ev_policy_oid = NULL;
   if (!metadata->GetPolicyOID(fingerprint, &ev_policy_oid))
     return false;
@@ -728,6 +784,16 @@ bool X509Certificate::VerifyEV() const {
     return false;
 
   return ContainsPolicy(policies_info.get(), ev_policy_oid);
+}
+
+// static
+bool X509Certificate::IsSameOSCert(X509Certificate::OSCertHandle a,
+                                   X509Certificate::OSCertHandle b) {
+  DCHECK(a && b);
+  if (a == b)
+    return true;
+  return a->cbCertEncoded == b->cbCertEncoded &&
+      memcmp(a->pbCertEncoded, b->pbCertEncoded, a->cbCertEncoded) == 0;
 }
 
 // static
@@ -745,6 +811,27 @@ X509Certificate::OSCertHandle X509Certificate::CreateOSCertHandleFromBytes(
   return cert_handle;
 }
 
+X509Certificate::OSCertHandles X509Certificate::CreateOSCertHandlesFromBytes(
+    const char* data, int length, Format format) {
+  OSCertHandles results;
+  switch (format) {
+    case FORMAT_SINGLE_CERTIFICATE: {
+      OSCertHandle handle = CreateOSCertHandleFromBytes(data, length);
+      if (handle != NULL)
+        results.push_back(handle);
+      break;
+    }
+    case FORMAT_PKCS7:
+      results = ParsePKCS7(data, length);
+      break;
+    default:
+      NOTREACHED() << "Certificate format " << format << " unimplemented";
+      break;
+  }
+
+  return results;
+}
+
 
 // static
 X509Certificate::OSCertHandle X509Certificate::DupOSCertHandle(
@@ -758,13 +845,13 @@ void X509Certificate::FreeOSCertHandle(OSCertHandle cert_handle) {
 }
 
 // static
-X509Certificate::Fingerprint X509Certificate::CalculateFingerprint(
+SHA1Fingerprint X509Certificate::CalculateFingerprint(
     OSCertHandle cert) {
   DCHECK(NULL != cert->pbCertEncoded);
   DCHECK(0 != cert->cbCertEncoded);
 
   BOOL rv;
-  Fingerprint sha1;
+  SHA1Fingerprint sha1;
   DWORD sha1_size = sizeof(sha1.data);
   rv = CryptHashCertificate(NULL, CALG_SHA1, 0, cert->pbCertEncoded,
                             cert->cbCertEncoded, sha1.data, &sha1_size);

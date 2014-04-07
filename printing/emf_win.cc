@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "printing/emf_win.h"
 
+#include "base/file_path.h"
 #include "base/histogram.h"
 #include "base/logging.h"
 #include "base/scoped_ptr.h"
@@ -13,6 +14,24 @@
 #include "gfx/gdi_util.h"
 #include "gfx/rect.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+
+namespace {
+const int kCustomGdiCommentSignature = 0xdeadbabe;
+struct PageBreakRecord {
+  int signature;
+  enum PageBreakType {
+    START_PAGE,
+    END_PAGE,
+  } type;
+  explicit PageBreakRecord(PageBreakType type_in)
+      : signature(kCustomGdiCommentSignature), type(type_in) {
+  }
+  bool IsValid() const {
+    return (signature == kCustomGdiCommentSignature) &&
+           (type >= START_PAGE) && (type <= END_PAGE);
+  }
+};
+}
 
 namespace printing {
 
@@ -35,6 +54,14 @@ Emf::~Emf() {
   DCHECK(!emf_ && !hdc_);
 }
 
+bool Emf::Init(const void* src_buffer, uint32 src_buffer_size) {
+  DCHECK(!emf_ && !hdc_);
+  emf_ = SetEnhMetaFileBits(src_buffer_size,
+                            reinterpret_cast<const BYTE*>(src_buffer));
+  DCHECK(emf_);
+  return emf_ != NULL;
+}
+
 bool Emf::CreateDc(HDC sibling, const RECT* rect) {
   DCHECK(!emf_ && !hdc_);
   hdc_ = CreateEnhMetaFile(sibling, NULL, rect, NULL);
@@ -42,12 +69,22 @@ bool Emf::CreateDc(HDC sibling, const RECT* rect) {
   return hdc_ != NULL;
 }
 
-bool Emf::CreateFromData(const void* buffer, uint32 size) {
+bool Emf::CreateFileBackedDc(HDC sibling, const RECT* rect,
+                             const FilePath& path) {
   DCHECK(!emf_ && !hdc_);
-  emf_ = SetEnhMetaFileBits(size, reinterpret_cast<const BYTE*>(buffer));
+  DCHECK(!path.empty());
+  hdc_ = CreateEnhMetaFile(sibling, path.value().c_str(), rect, NULL);
+  DCHECK(hdc_);
+  return hdc_ != NULL;
+}
+
+bool Emf::CreateFromFile(const FilePath& metafile_path) {
+  DCHECK(!emf_ && !hdc_);
+  emf_ = GetEnhMetaFile(metafile_path.value().c_str());
   DCHECK(emf_);
   return emf_ != NULL;
 }
+
 
 bool Emf::CloseDc() {
   DCHECK(!emf_ && hdc_);
@@ -174,9 +211,6 @@ int CALLBACK Emf::SafePlaybackProc(HDC hdc,
   return 1;
 }
 
-Emf::Record::Record() {
-}
-
 Emf::Record::Record(const EnumerationContext* context,
                     const ENHMETARECORD* record)
     : record_(record),
@@ -232,6 +266,8 @@ bool Emf::Record::SafePlayback(const XFORM* base_matrix) const {
   // device.
   // TODO(sanjeevr): We should also add JPEG/PNG support for SetSIBitsToDevice
   //
+  // We also process any custom EMR_GDICOMMENT records which are our
+  // placeholders for StartPage and EndPage.
   // Note: I should probably care about view ports and clipping, eventually.
   bool res;
   switch (record()->iType) {
@@ -343,6 +379,27 @@ bool Emf::Record::SafePlayback(const XFORM* base_matrix) const {
       // Ignore it.
       res = true;
       break;
+    case EMR_GDICOMMENT: {
+      const EMRGDICOMMENT* comment_record =
+          reinterpret_cast<const EMRGDICOMMENT*>(record());
+      if (comment_record->cbData == sizeof(PageBreakRecord)) {
+        const PageBreakRecord* page_break_record =
+            reinterpret_cast<const PageBreakRecord*>(comment_record->Data);
+        if (page_break_record && page_break_record->IsValid()) {
+          if (page_break_record->type == PageBreakRecord::START_PAGE) {
+            res = !!::StartPage(context_->hdc);
+          } else if (page_break_record->type == PageBreakRecord::END_PAGE) {
+            res = !!::EndPage(context_->hdc);
+          } else {
+            res = false;
+            NOTREACHED();
+          }
+        } else {
+          res = Play();
+        }
+      }
+      break;
+    }
     default: {
       res = Play();
       break;
@@ -350,6 +407,25 @@ bool Emf::Record::SafePlayback(const XFORM* base_matrix) const {
   }
   return res;
 }
+
+bool Emf::StartPage() {
+  DCHECK(hdc_);
+  if (!hdc_)
+    return false;
+  PageBreakRecord record(PageBreakRecord::START_PAGE);
+  return !!GdiComment(hdc_, sizeof(record),
+                      reinterpret_cast<const BYTE *>(&record));
+}
+
+bool Emf::EndPage() {
+  DCHECK(hdc_);
+  if (!hdc_)
+    return false;
+  PageBreakRecord record(PageBreakRecord::END_PAGE);
+  return !!GdiComment(hdc_, sizeof(record),
+                      reinterpret_cast<const BYTE *>(&record));
+}
+
 
 Emf::Enumerator::Enumerator(const Emf& emf, HDC context, const RECT* rect) {
   context_.handle_table = NULL;

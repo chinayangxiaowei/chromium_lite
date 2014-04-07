@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_BOOKMARKS_BOOKMARK_PASTEBOARD_HELPER_MAC_H_
 #define CHROME_BROWSER_BOOKMARKS_BOOKMARK_PASTEBOARD_HELPER_MAC_H_
+#pragma once
 
 #include "base/file_path.h"
 #include "chrome/browser/bookmarks/bookmark_drag_data.h"
@@ -47,5 +48,12 @@ void StartDrag(Profile* profile, const std::vector<const BookmarkNode*>& nodes,
                gfx::NativeView view);
 
 }
+
+#ifdef __OBJC__
+@class NSString;
+// Pasteboard type for dictionary containing bookmark structure consisting
+// of individual bookmark nodes and/or bookmark folders.
+extern "C" NSString* const kBookmarkDictionaryListPboardType;
+#endif  // __OBJC__
 
 #endif  // CHROME_BROWSER_BOOKMARKS_BOOKMARK_PASTEBOARD_HELPER_MAC_H_

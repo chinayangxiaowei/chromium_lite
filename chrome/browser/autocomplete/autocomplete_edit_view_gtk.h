@@ -1,12 +1,14 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_EDIT_VIEW_GTK_H_
 #define CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_EDIT_VIEW_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
+#include <algorithm>
 #include <string>
 
 #include "app/gtk_signal.h"
@@ -14,10 +16,10 @@
 #include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "chrome/browser/autocomplete/autocomplete_edit_view.h"
+#include "chrome/browser/gtk/owned_widget_gtk.h"
 #include "chrome/browser/toolbar_model.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
-#include "chrome/common/owned_widget_gtk.h"
 #include "chrome/common/page_transition_types.h"
 #include "gfx/rect.h"
 #include "webkit/glue/window_open_disposition.h"
@@ -25,9 +27,16 @@
 class AutocompleteEditController;
 class AutocompleteEditModel;
 class AutocompletePopupView;
-class BubblePositioner;
 class Profile;
 class TabContents;
+
+namespace gfx{
+class Font;
+}
+
+namespace views {
+class View;
+}
 
 #if !defined(TOOLKIT_VIEWS)
 class GtkThemeProvider;
@@ -43,6 +52,9 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
     CharRange() : cp_min(0), cp_max(0) { }
     CharRange(int n, int x) : cp_min(n), cp_max(x) { }
 
+    // Returns the start of the selection.
+    int selection_min() const { return std::min(cp_min, cp_max); }
+
     // Work in integers to match the gint GTK APIs.
     int cp_min;  // For a selection: Represents the start.
     int cp_max;  // For a selection: Represents the end (insert position).
@@ -53,17 +65,27 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
                           Profile* profile,
                           CommandUpdater* command_updater,
                           bool popup_window_mode,
-                          const BubblePositioner* bubble_positioner);
+#if defined(TOOLKIT_VIEWS)
+                          const views::View* location_bar);
+#else
+                          GtkWidget* location_bar);
+#endif
   ~AutocompleteEditViewGtk();
 
   // Initialize, create the underlying widgets, etc.
   void Init();
 
-  GtkWidget* widget() { return alignment_.get(); }
-
-  // Returns the width, in pixels, needed to display the current text. The
-  // returned value includes margins and borders.
+  // Returns the width in pixels needed to display the current text. The
+  // returned value includes margins.
   int TextWidth();
+
+  // Returns the width in pixels needed to display the text from one character
+  // before the caret to the end of the string. See comments in
+  // LocationBarView::Layout as to why this uses -1.
+  int WidthOfTextAfterCursor();
+
+  // Returns the font.
+  gfx::Font GetFont();
 
   // Implement the AutocompleteEditView interface.
   virtual AutocompleteEditModel* model() { return model_.get(); }
@@ -82,9 +104,10 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
 
   virtual std::wstring GetText() const;
 
-  virtual void SetUserText(const std::wstring& text) {
-    SetUserText(text, text, true);
-  }
+  virtual bool IsEditingOrEmpty() const;
+  virtual int GetIcon() const;
+
+  virtual void SetUserText(const std::wstring& text);
   virtual void SetUserText(const std::wstring& text,
                            const std::wstring& display_text,
                            bool update_popup);
@@ -95,6 +118,8 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
   virtual void SetForcedQuery();
 
   virtual bool IsSelectAll();
+  virtual void GetSelectionBounds(std::wstring::size_type* start,
+                                  std::wstring::size_type* end);
   virtual void SelectAll(bool reversed);
   virtual void RevertAll();
 
@@ -127,12 +152,19 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
     enable_tab_to_search_ = enable;
   }
 
+  GtkWidget* text_view() {
+    return text_view_;
+  }
+
  private:
   CHROMEG_CALLBACK_0(AutocompleteEditViewGtk, void, HandleBeginUserAction,
                      GtkTextBuffer*);
   CHROMEG_CALLBACK_0(AutocompleteEditViewGtk, void, HandleEndUserAction,
                      GtkTextBuffer*);
   CHROMEG_CALLBACK_2(AutocompleteEditViewGtk, void, HandleMarkSet,
+                     GtkTextBuffer*, GtkTextIter*, GtkTextMark*);
+  // As above, but called after the default handler.
+  CHROMEG_CALLBACK_2(AutocompleteEditViewGtk, void, HandleMarkSetAfter,
                      GtkTextBuffer*, GtkTextIter*, GtkTextMark*);
   CHROMEG_CALLBACK_3(AutocompleteEditViewGtk, void, HandleInsertText,
                      GtkTextBuffer*, GtkTextIter*, const gchar*, gint);
@@ -165,12 +197,31 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
                        GdkDragContext*, gint, gint, GtkSelectionData*,
                        guint, guint);
   CHROMEGTK_CALLBACK_0(AutocompleteEditViewGtk, void, HandleBackSpace);
-  CHROMEGTK_CALLBACK_0(AutocompleteEditViewGtk, void, HandleCopyOrCutClipboard);
+  CHROMEGTK_CALLBACK_0(AutocompleteEditViewGtk, void, HandleCopyClipboard);
+  CHROMEGTK_CALLBACK_0(AutocompleteEditViewGtk, void, HandleCutClipboard);
   CHROMEGTK_CALLBACK_0(AutocompleteEditViewGtk, void, HandlePasteClipboard);
   CHROMEGTK_CALLBACK_1(AutocompleteEditViewGtk, gboolean, HandleExposeEvent,
                        GdkEventExpose*);
   CHROMEGTK_CALLBACK_1(AutocompleteEditViewGtk, void,
                        HandleWidgetDirectionChanged, GtkTextDirection);
+  CHROMEGTK_CALLBACK_2(AutocompleteEditViewGtk, void,
+                       HandleDeleteFromCursor, GtkDeleteType, gint);
+
+  // Callback for the PRIMARY selection clipboard.
+  static void ClipboardGetSelectionThunk(GtkClipboard* clipboard,
+                                         GtkSelectionData* selection_data,
+                                         guint info,
+                                         gpointer object);
+  void ClipboardGetSelection(GtkClipboard* clipboard,
+                             GtkSelectionData* selection_data,
+                             guint info);
+
+  void HandleCopyOrCutClipboard(bool copy);
+
+  // Take control of the PRIMARY selection clipboard with |text|. Use
+  // |text_buffer_| as the owner, so that this doesn't remove the selection on
+  // it. This makes use of the above callbacks.
+  void OwnPrimarySelection(const std::string& text);
 
   // Gets the GTK_TEXT_WINDOW_WIDGET coordinates for |text_view_| that bound the
   // given iters.
@@ -209,7 +260,8 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
   // Internally invoked whenever the text changes in some way.
   void TextChanged();
 
-  // Save |selected_text| as the PRIMARY X selection.
+  // Save |selected_text| as the PRIMARY X selection. Unlike
+  // OwnPrimarySelection(), this won't set an owner or use callbacks.
   void SavePrimarySelection(const std::string& selected_text);
 
   // Update the field with |text| and set the selection.
@@ -228,6 +280,12 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
   // character that has a strong direction.
   PangoDirection GetContentDirection();
 
+  // Returns the selected text.
+  std::string GetSelectedText() const;
+
+  // If the selected text parses as a URL OwnPrimarySelection is invoked.
+  void UpdatePrimarySelectionIfValidURL();
+
   // The widget we expose, used for vertically centering the real text edit,
   // since the height will change based on the font / font size, etc.
   OwnedWidgetGtk alignment_;
@@ -239,7 +297,7 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
   GtkTextBuffer* text_buffer_;
   GtkTextTag* faded_text_tag_;
   GtkTextTag* secure_scheme_tag_;
-  GtkTextTag* insecure_scheme_tag_;
+  GtkTextTag* security_error_scheme_tag_;
   GtkTextTag* normal_text_tag_;
 
   scoped_ptr<AutocompleteEditModel> model_;
@@ -255,7 +313,7 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
   // different presentation (smaller font size). This is used for popups.
   bool popup_window_mode_;
 
-  ToolbarModel::SecurityLevel scheme_security_level_;
+  ToolbarModel::SecurityLevel security_level_;
 
   // Selection at the point where the user started using the
   // arrows to move around in the popup.
@@ -265,15 +323,21 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
   std::wstring text_before_change_;
   CharRange sel_before_change_;
 
-  // The most-recently-selected text from the entry.  This is updated on-the-fly
-  // as the user selects text.  It is used in cases where we need to make the
-  // PRIMARY selection persist even after the user has unhighlighted the text in
-  // the view (e.g. when they highlight some text and then click to unhighlight
-  // it, we pass this string to SavePrimarySelection()).
+  // The most-recently-selected text from the entry that was copied to the
+  // clipboard.  This is updated on-the-fly as the user selects text. This may
+  // differ from the actual selected text, such as when 'http://' is prefixed to
+  // the text.  It is used in cases where we need to make the PRIMARY selection
+  // persist even after the user has unhighlighted the text in the view
+  // (e.g. when they highlight some text and then click to unhighlight it, we
+  // pass this string to SavePrimarySelection()).
   std::string selected_text_;
 
-  // ID of the signal handler for "mark-set" on |text_buffer_|.
+  // When we own the X clipboard, this is the text for it.
+  std::string primary_selection_text_;
+
+  // IDs of the signal handlers for "mark-set" on |text_buffer_|.
   gulong mark_set_handler_id_;
+  gulong mark_set_handler_id2_;
 
 #if defined(OS_CHROMEOS)
   // The following variables are used to implement select-all-on-mouse-up, which
@@ -340,6 +404,10 @@ class AutocompleteEditViewGtk : public AutocompleteEditView,
   // default and will only be set to false if the location bar view is not able
   // to show the tab to search hint.
   bool enable_tab_to_search_;
+
+  // Indicates if the selected text is suggested text or not. If the selection
+  // is not suggested text, that means the user manually made the selection.
+  bool selection_suggested_;
 
   DISALLOW_COPY_AND_ASSIGN(AutocompleteEditViewGtk);
 };

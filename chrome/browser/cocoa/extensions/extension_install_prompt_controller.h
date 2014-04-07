@@ -4,13 +4,14 @@
 
 #ifndef CHROME_BROWSER_COCOA_EXTENSION_INSTALL_PROMPT_H_
 #define CHROME_BROWSER_COCOA_EXTENSION_INSTALL_PROMPT_H_
+#pragma once
 
-#include <string>
 #include <vector>
 
 #import <Cocoa/Cocoa.h>
 
 #include "base/scoped_nsobject.h"
+#include "base/string16.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -38,13 +39,13 @@ class Profile;
   SkBitmap icon_;
 }
 
-@property (readonly) NSImageView* iconView;
-@property (readonly) NSTextField* titleField;
-@property (readonly) NSTextField* subtitleField;
-@property (readonly) NSTextField* warningsField;
-@property (readonly) NSBox* warningsBox;
-@property (readonly) NSButton* cancelButton;
-@property (readonly) NSButton* okButton;
+@property (nonatomic, readonly) NSImageView* iconView;
+@property (nonatomic, readonly) NSTextField* titleField;
+@property (nonatomic, readonly) NSTextField* subtitleField;
+@property (nonatomic, readonly) NSTextField* warningsField;
+@property (nonatomic, readonly) NSBox* warningsBox;
+@property (nonatomic, readonly) NSButton* cancelButton;
+@property (nonatomic, readonly) NSButton* okButton;
 
 - (id)initWithParentWindow:(NSWindow*)window
                    profile:(Profile*)profile

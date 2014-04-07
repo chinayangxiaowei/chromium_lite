@@ -9,8 +9,8 @@
 
 #include "base/logging.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
-
 #include "chrome_frame/bind_context_info.h"
 #include "chrome_frame/exception_barrier.h"
 #include "chrome_frame/urlmon_moniker.h"
@@ -75,8 +75,10 @@ STDMETHODIMP CacheStream::Read(void* pv, ULONG cb, ULONG* read) {
   if (!pv || !read)
     return E_INVALIDARG;
 
-  if (!cache_.get())
-    return E_FAIL;
+  if (!cache_.get()) {
+    *read = 0;
+    return S_FALSE;
+  }
 
   // Default to E_PENDING to signal that this is a partial data.
   HRESULT hr = eof_ ? S_FALSE : E_PENDING;
@@ -169,18 +171,18 @@ void SniffData::DetermineRendererType(bool last_chance) {
   if (is_undetermined()) {
     if (last_chance)
       renderer_type_ = OTHER;
-    if (IsOptInUrl(url_.c_str())) {
+    if (IsChrome(RendererTypeForUrl(url_.c_str()))) {
       renderer_type_ = CHROME;
     } else {
       if (is_cache_valid() && cache_) {
         HGLOBAL memory = NULL;
         GetHGlobalFromStream(cache_, &memory);
-        char* buffer = reinterpret_cast<char*>(GlobalLock(memory));
+        const char* buffer = reinterpret_cast<const char*>(GlobalLock(memory));
 
         std::wstring html_contents;
         // TODO(joshia): detect and handle different content encodings
         if (buffer && size_) {
-          UTF8ToWide(buffer, size_, &html_contents);
+          UTF8ToWide(buffer, std::min(size_, kMaxSniffSize), &html_contents);
           GlobalUnlock(memory);
         }
 
@@ -195,8 +197,8 @@ void SniffData::DetermineRendererType(bool last_chance) {
       }
     }
     DLOG(INFO) << __FUNCTION__ << "Url: " << url_ <<
-      StringPrintf("Renderer type: %s",
-                    renderer_type_ == CHROME ? "CHROME" : "OTHER");
+        base::StringPrintf("Renderer type: %s",
+                           renderer_type_ == CHROME ? "CHROME" : "OTHER");
   }
 }
 
@@ -211,7 +213,7 @@ BSCBStorageBind::~BSCBStorageBind() {
 }
 
 HRESULT BSCBStorageBind::Initialize(IMoniker* moniker, IBindCtx* bind_ctx) {
-  DLOG(INFO) << __FUNCTION__ << me() << StringPrintf(" tid=%i",
+  DLOG(INFO) << __FUNCTION__ << me() << base::StringPrintf(" tid=%i",
       PlatformThread::CurrentId());
 
   std::wstring url = GetActualUrlFromMoniker(moniker, bind_ctx,
@@ -236,8 +238,9 @@ HRESULT BSCBStorageBind::Initialize(IMoniker* moniker, IBindCtx* bind_ctx) {
 
 STDMETHODIMP BSCBStorageBind::OnProgress(ULONG progress, ULONG progress_max,
                                     ULONG status_code, LPCWSTR status_text) {
-  DLOG(INFO) << __FUNCTION__ << me() << StringPrintf(" status=%i tid=%i %ls",
-      status_code, PlatformThread::CurrentId(), status_text);
+  DLOG(INFO) << __FUNCTION__ << me() << base::StringPrintf(
+      " status=%i tid=%i %ls", status_code, PlatformThread::CurrentId(),
+      status_text);
   // Report all crashes in the exception handler if we wrap the callback.
   // Note that this avoids having the VEH report a crash if an SEH earlier in
   // the chain handles the exception.
@@ -270,16 +273,16 @@ STDMETHODIMP BSCBStorageBind::OnProgress(ULONG progress, ULONG progress_max,
 STDMETHODIMP BSCBStorageBind::OnDataAvailable(DWORD flags, DWORD size,
                                               FORMATETC* format_etc,
                                               STGMEDIUM* stgmed) {
-  DLOG(INFO) << __FUNCTION__ << StringPrintf(" tid=%i",
+  DLOG(INFO) << __FUNCTION__ << base::StringPrintf(" tid=%i",
       PlatformThread::CurrentId());
   // Report all crashes in the exception handler if we wrap the callback.
   // Note that this avoids having the VEH report a crash if an SEH earlier in
   // the chain handles the exception.
   ExceptionBarrier barrier;
   // Do not touch anything other than text/html.
-  const CLIPFORMAT text_html = RegisterClipboardFormat(CFSTR_MIME_HTML);
   bool is_interesting = (format_etc && stgmed && stgmed->pstm &&
-      (stgmed->tymed == TYMED_ISTREAM) && (text_html == format_etc->cfFormat));
+      stgmed->tymed == TYMED_ISTREAM &&
+      IsTextHtmlClipFormat(format_etc->cfFormat));
 
   if (!is_interesting) {
     // Play back report progress so far.
@@ -313,7 +316,7 @@ STDMETHODIMP BSCBStorageBind::OnDataAvailable(DWORD flags, DWORD size,
 }
 
 STDMETHODIMP BSCBStorageBind::OnStopBinding(HRESULT hresult, LPCWSTR error) {
-  DLOG(INFO) << __FUNCTION__ << StringPrintf(" tid=%i",
+  DLOG(INFO) << __FUNCTION__ << base::StringPrintf(" tid=%i",
       PlatformThread::CurrentId());
   // Report all crashes in the exception handler if we wrap the callback.
   // Note that this avoids having the VEH report a crash if an SEH earlier in
@@ -426,3 +429,4 @@ bool BSCBStorageBind::ShouldCacheProgress(unsigned long status_code) const {
 
   return false;
 }
+

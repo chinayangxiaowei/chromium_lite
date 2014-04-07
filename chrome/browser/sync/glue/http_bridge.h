@@ -4,14 +4,15 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_HTTP_BRIDGE_H_
 #define CHROME_BROWSER_SYNC_GLUE_HTTP_BRIDGE_H_
+#pragma once
 
 #include <string>
 
 #include "base/ref_counted.h"
 #include "base/waitable_event.h"
-#include "chrome/browser/net/url_fetcher.h"
-#include "chrome/browser/net/url_request_context_getter.h"
 #include "chrome/browser/sync/engine/syncapi.h"
+#include "chrome/common/net/url_fetcher.h"
+#include "chrome/common/net/url_request_context_getter.h"
 #include "googleurl/src/gurl.h"
 #include "net/url_request/url_request_context.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
@@ -64,6 +65,7 @@ class HttpBridge : public base::RefCountedThreadSafe<HttpBridge>,
     }
 
    private:
+    // The destructor MUST be called on the IO thread.
     ~RequestContext();
 
     std::string user_agent_;
@@ -83,6 +85,7 @@ class HttpBridge : public base::RefCountedThreadSafe<HttpBridge>,
 
     // URLRequestContextGetter implementation.
     virtual URLRequestContext* GetURLRequestContext();
+    virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy();
 
    private:
     ~RequestContextGetter() {}
@@ -206,3 +209,4 @@ class HttpBridgeFactory
 }  //  namespace browser_sync
 
 #endif  // CHROME_BROWSER_SYNC_GLUE_HTTP_BRIDGE_H_
+

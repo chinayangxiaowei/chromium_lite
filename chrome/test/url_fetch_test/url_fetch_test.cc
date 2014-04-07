@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/ui/ui_test.h"
@@ -27,8 +28,8 @@ class UrlFetchTest : public UITest {
   };
 
   void SetUp() {
-    const CommandLine *cmdLine = CommandLine::ForCurrentProcess();
-    if (cmdLine->HasSwitch("reference_build")) {
+    const CommandLine* cmd_line = CommandLine::ForCurrentProcess();
+    if (cmd_line->HasSwitch("reference_build")) {
       FilePath dir;
       PathService::Get(chrome::DIR_TEST_TOOLS, &dir);
       dir = dir.AppendASCII("reference_build");
@@ -44,39 +45,39 @@ class UrlFetchTest : public UITest {
     UITest::SetUp();
   }
 
-  void RunTest(const GURL& url, const char *waitCookieName,
-               const char *waitCookieValue, const wchar_t *varToFetch,
-               UrlFetchTestResult *result) {
+  void RunTest(const GURL& url, const char* wait_cookie_name,
+               const char* wait_cookie_value, const char* var_to_fetch,
+               UrlFetchTestResult* result) {
     scoped_refptr<TabProxy> tab(GetActiveTab());
     ASSERT_EQ(AUTOMATION_MSG_NAVIGATION_SUCCESS, tab->NavigateToURL(url));
 
-    if (waitCookieName) {
-      if (waitCookieValue) {
-        bool completed = WaitUntilCookieValue(tab.get(), url, waitCookieName,
+    if (wait_cookie_name) {
+      if (wait_cookie_value) {
+        bool completed = WaitUntilCookieValue(tab.get(), url, wait_cookie_name,
                                               UITest::test_timeout_ms(),
-                                              waitCookieValue);
+                                              wait_cookie_value);
         ASSERT_TRUE(completed);
       } else {
         result->cookie_value = WaitUntilCookieNonEmpty(
-            tab.get(), url, waitCookieName, UITest::test_timeout_ms());
+            tab.get(), url, wait_cookie_name, UITest::test_timeout_ms());
         ASSERT_TRUE(result->cookie_value.length());
       }
     }
-    if (varToFetch) {
-      std::wstring script = StringPrintf(
-          L"window.domAutomationController.send(%ls);", varToFetch);
+    if (var_to_fetch) {
+      std::string script = StringPrintf(
+          "window.domAutomationController.send(%s);", var_to_fetch);
 
       std::wstring value;
-      bool success = tab->ExecuteAndExtractString(L"", script, &value);
+      bool success = tab->ExecuteAndExtractString(L"", ASCIIToWide(script),
+                                                  &value);
       ASSERT_TRUE(success);
       result->javascript_variable = WideToUTF8(value);
     }
   }
 };
 
-bool writeValueToFile(std::string value, std::wstring filePath) {
-  int retval = file_util::WriteFile(
-      FilePath::FromWStringHack(filePath), value.c_str(), value.length());
+bool WriteValueToFile(std::string value, const FilePath& path) {
+  int retval = file_util::WriteFile(path, value.c_str(), value.length());
   return retval == static_cast<int>(value.length());
 }
 
@@ -108,37 +109,37 @@ bool writeValueToFile(std::string value, std::wstring filePath) {
 // --reference_build
 //   Use the reference build of chrome for the test.
 TEST_F(UrlFetchTest, UrlFetch) {
-  const CommandLine *cmdLine = CommandLine::ForCurrentProcess();
+  const CommandLine* cmd_line = CommandLine::ForCurrentProcess();
 
-  if (!cmdLine->HasSwitch("url")) {
+  if (!cmd_line->HasSwitch("url"))
     return;
-  }
 
-  std::string cookieName =
-      cmdLine->GetSwitchValueASCII("wait_cookie_name");
-  std::string cookieValue =
-      cmdLine->GetSwitchValueASCII("wait_cookie_value");
+  std::string cookie_name =
+      cmd_line->GetSwitchValueASCII("wait_cookie_name");
+  std::string cookie_value =
+      cmd_line->GetSwitchValueASCII("wait_cookie_value");
 
-  std::wstring jsvar = cmdLine->GetSwitchValue("jsvar");
+  std::string jsvar = cmd_line->GetSwitchValueASCII("jsvar");
 
   UrlFetchTestResult result;
-  RunTest(GURL(WideToASCII(cmdLine->GetSwitchValue("url"))),
-          cookieName.length() > 0 ? cookieName.c_str() : NULL,
-          cookieValue.length() > 0 ? cookieValue.c_str() : NULL,
+  RunTest(GURL(cmd_line->GetSwitchValueASCII("url")),
+          cookie_name.length() > 0 ? cookie_name.c_str() : NULL,
+          cookie_value.length() > 0 ? cookie_value.c_str() : NULL,
           jsvar.length() > 0 ? jsvar.c_str() : NULL,
           &result);
 
   // Write out the cookie if requested
-  std::wstring cookieOutputPath =
-      cmdLine->GetSwitchValue("wait_cookie_output");
-  if (cookieOutputPath.length() > 0) {
-    ASSERT_TRUE(writeValueToFile(result.cookie_value, cookieOutputPath));
+  FilePath cookie_output_path =
+      cmd_line->GetSwitchValuePath("wait_cookie_output");
+  if (cookie_output_path.value().size() > 0) {
+    ASSERT_TRUE(WriteValueToFile(result.cookie_value, cookie_output_path));
   }
 
   // Write out the JS Variable if requested
-  std::wstring jsvarOutputPath = cmdLine->GetSwitchValue("jsvar_output");
-  if (jsvarOutputPath.length() > 0) {
-    ASSERT_TRUE(writeValueToFile(result.javascript_variable, jsvarOutputPath));
+  FilePath jsvar_output_path = cmd_line->GetSwitchValuePath("jsvar_output");
+  if (jsvar_output_path.value().size() > 0) {
+    ASSERT_TRUE(WriteValueToFile(result.javascript_variable,
+                                 jsvar_output_path));
   }
 }
 

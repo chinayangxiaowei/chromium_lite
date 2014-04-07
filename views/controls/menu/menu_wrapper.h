@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_MENU_MENU_WRAPPER_H_
 #define VIEWS_CONTROLS_MENU_MENU_WRAPPER_H_
+#pragma once
 
 #include "gfx/native_widget_types.h"
 
@@ -62,6 +63,9 @@ class MenuWrapper {
 
   // Remove a menu listener.
   virtual void RemoveMenuListener(MenuListener* listener) = 0;
+
+  // Sets the minimum width of the menu.
+  virtual void SetMinimumWidth(int width) = 0;
 
   // Creates the appropriate instance of this wrapper for the current platform.
   static MenuWrapper* CreateWrapper(Menu2* menu);

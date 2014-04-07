@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,15 @@
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
+#include "base/string_split.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/profile.h"
-#include "chrome/browser/net/url_request_context_getter.h"
-#include "chrome/browser/pref_member.h"
 #include "chrome/browser/spellcheck_host_observer.h"
 #include "chrome/browser/spellchecker_platform_engine.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/net/url_request_context_getter.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/spellcheck_common.h"
@@ -31,11 +32,13 @@ FilePath GetFirstChoiceFilePath(const std::string& language) {
   return SpellCheckCommon::GetVersionedFileName(language, dict_dir);
 }
 
+#if defined(OS_WIN)
 FilePath GetFallbackFilePath(const FilePath& first_choice) {
   FilePath dict_dir;
   PathService::Get(chrome::DIR_USER_DATA, &dict_dir);
   return dict_dir.Append(first_choice.BaseName());
 }
+#endif
 
 }  // namespace
 
@@ -50,7 +53,7 @@ SpellCheckHost::SpellCheckHost(SpellCheckHostObserver* observer,
       use_platform_spellchecker_(false),
       request_context_getter_(request_context_getter) {
   DCHECK(observer_);
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   FilePath personal_file_directory;
   PathService::Get(chrome::DIR_USER_DATA, &personal_file_directory);
@@ -76,12 +79,12 @@ void SpellCheckHost::Initialize() {
     return;
   }
 
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(this, &SpellCheckHost::InitializeDictionaryLocation));
 }
 
 void SpellCheckHost::UnsetObserver() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   observer_ = NULL;
   request_context_getter_ = NULL;
@@ -89,10 +92,10 @@ void SpellCheckHost::UnsetObserver() {
 }
 
 void SpellCheckHost::AddWord(const std::string& word) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   custom_words_.push_back(word);
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(this,
           &SpellCheckHost::WriteWordToCustomDictionary, word));
   NotificationService::current()->Notify(
@@ -110,8 +113,7 @@ int SpellCheckHost::GetSpellCheckLanguages(
                              NULL);
   dictionary_language_pref.Init(prefs::kSpellCheckDictionary,
                                 profile->GetPrefs(), NULL);
-  std::string dictionary_language =
-      WideToASCII(dictionary_language_pref.GetValue());
+  std::string dictionary_language = dictionary_language_pref.GetValue();
 
   // The current dictionary language should be there.
   languages->push_back(dictionary_language);
@@ -120,12 +122,11 @@ int SpellCheckHost::GetSpellCheckLanguages(
   // from this list to the existing list of spell check languages.
   std::vector<std::string> accept_languages;
 
-  if (SpellCheckerPlatform::SpellCheckerAvailable()) {
+  if (SpellCheckerPlatform::SpellCheckerAvailable())
     SpellCheckerPlatform::GetAvailableLanguages(&accept_languages);
-  } else {
-    SplitString(WideToASCII(accept_languages_pref.GetValue()), ',',
-                &accept_languages);
-  }
+  else
+    SplitString(accept_languages_pref.GetValue(), ',', &accept_languages);
+
   for (std::vector<std::string>::const_iterator i = accept_languages.begin();
        i != accept_languages.end(); ++i) {
     std::string language =
@@ -145,7 +146,7 @@ int SpellCheckHost::GetSpellCheckLanguages(
 }
 
 void SpellCheckHost::InitializeDictionaryLocation() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
 #if defined(OS_WIN)
   // Check if the dictionary exists in the fallback location. If so, use it
@@ -161,21 +162,22 @@ void SpellCheckHost::InitializeDictionaryLocation() {
 }
 
 void SpellCheckHost::InitializeInternal() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   if (!observer_)
     return;
 
-  file_ = base::CreatePlatformFile(bdict_file_path_,
+  file_ = base::CreatePlatformFile(
+      bdict_file_path_,
       base::PLATFORM_FILE_READ | base::PLATFORM_FILE_OPEN,
-      NULL);
+      NULL, NULL);
 
   // File didn't exist. Download it.
   if (file_ == base::kInvalidPlatformFileValue && !tried_to_download_ &&
       request_context_getter_) {
     // We download from the ui thread because we need to know that
     // |request_context_getter_| is still valid before initiating the download.
-    ChromeThread::PostTask(ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(this, &SpellCheckHost::DownloadDictionary));
     return;
   }
@@ -192,27 +194,27 @@ void SpellCheckHost::InitializeInternal() {
       custom_words_.push_back(list_of_words[i]);
   }
 
-  ChromeThread::PostTask(ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this,
           &SpellCheckHost::InformObserverOfInitialization));
 }
 
 void SpellCheckHost::InitializeOnFileThread() {
-  DCHECK(!ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(this, &SpellCheckHost::Initialize));
 }
 
 void SpellCheckHost::InformObserverOfInitialization() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   if (observer_)
     observer_->SpellCheckHostInitialized();
 }
 
 void SpellCheckHost::DownloadDictionary() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   if (!request_context_getter_) {
     InitializeOnFileThread();
@@ -222,8 +224,9 @@ void SpellCheckHost::DownloadDictionary() {
   // Determine URL of file to download.
   static const char kDownloadServerUrl[] =
       "http://cache.pack.google.com/edgedl/chrome/dict/";
-  GURL url = GURL(std::string(kDownloadServerUrl) + WideToUTF8(
-      l10n_util::ToLower(bdict_file_path_.BaseName().ToWStringHack())));
+  GURL url = GURL(std::string(kDownloadServerUrl) +
+      StringToLowerASCII(WideToUTF8(
+          bdict_file_path_.BaseName().ToWStringHack())));
   fetcher_.reset(new URLFetcher(url, URLFetcher::GET, this));
   fetcher_->set_request_context(request_context_getter_);
   tried_to_download_ = true;
@@ -232,7 +235,7 @@ void SpellCheckHost::DownloadDictionary() {
 }
 
 void SpellCheckHost::WriteWordToCustomDictionary(const std::string& word) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   // Stored in UTF-8.
   std::string word_to_add(word + "\n");
@@ -249,7 +252,7 @@ void SpellCheckHost::OnURLFetchComplete(const URLFetcher* source,
                                         const ResponseCookies& cookies,
                                         const std::string& data) {
   DCHECK(source);
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   fetcher_.reset();
 
   if ((response_code / 100) != 2) {
@@ -270,12 +273,12 @@ void SpellCheckHost::OnURLFetchComplete(const URLFetcher* source,
   }
 
   data_ = data;
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE,
+  BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(this, &SpellCheckHost::SaveDictionaryData));
 }
 
 void SpellCheckHost::SaveDictionaryData() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   size_t bytes_written =
       file_util::WriteFile(bdict_file_path_, data_.data(), data_.length());
@@ -296,7 +299,7 @@ void SpellCheckHost::SaveDictionaryData() {
       file_util::Delete(bdict_file_path_, false);
       // To avoid trying to load a partially saved dictionary, shortcut the
       // Initialize() call.
-      ChromeThread::PostTask(ChromeThread::UI, FROM_HERE,
+      BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
           NewRunnableMethod(this,
               &SpellCheckHost::InformObserverOfInitialization));
       return;

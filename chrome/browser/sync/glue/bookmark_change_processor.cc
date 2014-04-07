@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 #include <stack>
 #include <vector>
 
+#include "base/string16.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/favicon_service.h"
@@ -24,13 +26,13 @@ BookmarkChangeProcessor::BookmarkChangeProcessor(
     : ChangeProcessor(error_handler),
       bookmark_model_(NULL),
       model_associator_(model_associator) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(model_associator);
   DCHECK(error_handler);
 }
 
 void BookmarkChangeProcessor::StartImpl(Profile* profile) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!bookmark_model_);
   bookmark_model_ = profile->GetBookmarkModel();
   DCHECK(bookmark_model_->IsLoaded());
@@ -38,7 +40,7 @@ void BookmarkChangeProcessor::StartImpl(Profile* profile) {
 }
 
 void BookmarkChangeProcessor::StopImpl() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(bookmark_model_);
   bookmark_model_->RemoveObserver(this);
   bookmark_model_ = NULL;
@@ -49,8 +51,9 @@ void BookmarkChangeProcessor::UpdateSyncNodeProperties(
     const BookmarkNode* src, BookmarkModel* model, sync_api::WriteNode* dst) {
   // Set the properties of the item.
   dst->SetIsFolder(src->is_folder());
-  dst->SetTitle(src->GetTitle());
-  dst->SetURL(src->GetURL());
+  dst->SetTitle(UTF16ToWideHack(src->GetTitle()));
+  if (!src->is_folder())
+    dst->SetURL(src->GetURL());
   SetSyncNodeFavicon(src, model, dst);
 }
 
@@ -77,7 +80,7 @@ void BookmarkChangeProcessor::RemoveOneSyncNode(
     sync_api::WriteTransaction* trans, const BookmarkNode* node) {
   sync_api::WriteNode sync_node(trans);
   if (!model_associator_->InitSyncNodeFromChromeId(node->id(), &sync_node)) {
-    error_handler()->OnUnrecoverableError();
+    error_handler()->OnUnrecoverableError(FROM_HERE, std::string());
     return;
   }
   // This node should have no children.
@@ -158,8 +161,8 @@ int64 BookmarkChangeProcessor::CreateSyncNode(const BookmarkNode* parent,
   // Actually create the node with the appropriate initial position.
   if (!PlaceSyncNode(CREATE, parent, index, trans, &sync_child, associator,
                      error_handler)) {
-    LOG(WARNING) << "Sync node creation failed; recovery unlikely";
-    error_handler->OnUnrecoverableError();
+    error_handler->OnUnrecoverableError(FROM_HERE,
+        "Sync node creation failed; recovery unlikely");
     return sync_api::kInvalidId;
   }
 
@@ -196,7 +199,7 @@ void BookmarkChangeProcessor::BookmarkNodeChanged(BookmarkModel* model,
   // Lookup the sync node that's associated with |node|.
   sync_api::WriteNode sync_node(&trans);
   if (!model_associator_->InitSyncNodeFromChromeId(node->id(), &sync_node)) {
-    error_handler()->OnUnrecoverableError();
+    error_handler()->OnUnrecoverableError(FROM_HERE, std::string());
     return;
   }
 
@@ -230,13 +233,13 @@ void BookmarkChangeProcessor::BookmarkNodeMoved(BookmarkModel* model,
   // Lookup the sync node that's associated with |child|.
   sync_api::WriteNode sync_node(&trans);
   if (!model_associator_->InitSyncNodeFromChromeId(child->id(), &sync_node)) {
-    error_handler()->OnUnrecoverableError();
+    error_handler()->OnUnrecoverableError(FROM_HERE, std::string());
     return;
   }
 
   if (!PlaceSyncNode(MOVE, new_parent, new_index, &trans, &sync_node,
                      model_associator_, error_handler())) {
-    error_handler()->OnUnrecoverableError();
+    error_handler()->OnUnrecoverableError(FROM_HERE, std::string());
     return;
   }
 }
@@ -259,7 +262,7 @@ void BookmarkChangeProcessor::BookmarkNodeChildrenReordered(
     sync_api::WriteNode sync_child(&trans);
     if (!model_associator_->InitSyncNodeFromChromeId(node->GetChild(i)->id(),
                                                      &sync_child)) {
-      error_handler()->OnUnrecoverableError();
+      error_handler()->OnUnrecoverableError(FROM_HERE, std::string());
       return;
     }
     DCHECK_EQ(sync_child.GetParentId(),
@@ -267,7 +270,7 @@ void BookmarkChangeProcessor::BookmarkNodeChildrenReordered(
 
     if (!PlaceSyncNode(MOVE, node, i, &trans, &sync_child,
                        model_associator_, error_handler())) {
-      error_handler()->OnUnrecoverableError();
+      error_handler()->OnUnrecoverableError(FROM_HERE, std::string());
       return;
     }
   }
@@ -281,7 +284,7 @@ bool BookmarkChangeProcessor::PlaceSyncNode(MoveOrCreate operation,
   sync_api::ReadNode sync_parent(trans);
   if (!associator->InitSyncNodeFromChromeId(parent->id(), &sync_parent)) {
     LOG(WARNING) << "Parent lookup failed";
-    error_handler->OnUnrecoverableError();
+    error_handler->OnUnrecoverableError(FROM_HERE, std::string());
     return false;
   }
 
@@ -348,7 +351,7 @@ void BookmarkChangeProcessor::ApplyChangesFromSyncModel(
     int change_count) {
   if (!running())
     return;
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   // A note about ordering.  Sync backend is responsible for ordering the change
   // records in the following order:
   //
@@ -394,7 +397,7 @@ void BookmarkChangeProcessor::ApplyChangesFromSyncModel(
         if (!foster_parent) {
           foster_parent = model->AddGroup(model->other_node(),
                                           model->other_node()->GetChildCount(),
-                                          std::wstring());
+                                          string16());
         }
         for (int i = dst->GetChildCount() - 1; i >= 0; --i) {
           model->Move(dst->GetChild(i), foster_parent,
@@ -412,8 +415,8 @@ void BookmarkChangeProcessor::ApplyChangesFromSyncModel(
 
       sync_api::ReadNode src(trans);
       if (!src.InitByIdLookup(changes[i].id)) {
-        LOG(ERROR) << "ApplyModelChanges was passed a bad ID";
-        error_handler()->OnUnrecoverableError();
+        error_handler()->OnUnrecoverableError(FROM_HERE,
+            "ApplyModelChanges was passed a bad ID");
         return;
       }
 
@@ -462,7 +465,7 @@ const BookmarkNode* BookmarkChangeProcessor::CreateOrUpdateBookmarkNode(
 
     if (!src->GetIsFolder())
       model->SetURL(dst, src->GetURL());
-    model->SetTitle(dst, src->GetTitle());
+    model->SetTitle(dst, WideToUTF16Hack(src->GetTitle()));
 
     SetBookmarkFavicon(src, dst, model->profile());
   }
@@ -483,10 +486,12 @@ const BookmarkNode* BookmarkChangeProcessor::CreateBookmarkNode(
 
   const BookmarkNode* node;
   if (sync_node->GetIsFolder()) {
-    node = model->AddGroup(parent, index, sync_node->GetTitle());
+    node = model->AddGroup(parent, index,
+                           WideToUTF16Hack(sync_node->GetTitle()));
   } else {
     node = model->AddURL(parent, index,
-                         sync_node->GetTitle(), sync_node->GetURL());
+                         WideToUTF16Hack(sync_node->GetTitle()),
+                         sync_node->GetURL());
     SetBookmarkFavicon(sync_node, node, model->profile());
   }
   return node;
@@ -515,7 +520,7 @@ bool BookmarkChangeProcessor::SetBookmarkFavicon(
   FaviconService* favicon_service =
       profile->GetFaviconService(Profile::EXPLICIT_ACCESS);
 
-  history->AddPage(bookmark_node->GetURL());
+  history->AddPage(bookmark_node->GetURL(), history::SOURCE_SYNCED);
   favicon_service->SetFavicon(bookmark_node->GetURL(),
                               fake_icon_url,
                               icon_bytes_vector);

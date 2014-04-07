@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_EXTENSIONS_BROWSER_ACTIONS_CONTROLLER_H_
 #define CHROME_BROWSER_COCOA_EXTENSIONS_BROWSER_ACTIONS_CONTROLLER_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -21,11 +22,8 @@ class ExtensionsServiceObserverBridge;
 class PrefService;
 class Profile;
 
-// The padding between browser action buttons.
-extern const CGFloat kBrowserActionButtonPadding;
-
 // Sent when the visibility of the Browser Actions changes.
-extern const NSString* kBrowserActionVisibilityChangedNotification;
+extern NSString* const kBrowserActionVisibilityChangedNotification;
 
 // Handles state and provides an interface for controlling the Browser Actions
 // container within the Toolbar.
@@ -55,7 +53,7 @@ extern const NSString* kBrowserActionVisibilityChangedNotification;
   scoped_nsobject<NSMutableArray> hiddenButtons_;
 
   // The currently running chevron animation (fade in/out).
-  scoped_nsobject<NSAnimation> chevronAnimation_;
+  scoped_nsobject<NSViewAnimation> chevronAnimation_;
 
   // The chevron button used when Browser Actions are hidden.
   scoped_nsobject<MenuButton> chevronMenuButton_;

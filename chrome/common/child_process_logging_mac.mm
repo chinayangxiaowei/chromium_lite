@@ -6,7 +6,10 @@
 
 #import <Foundation/Foundation.h>
 
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/common/gpu_info.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "googleurl/src/gurl.h"
 
@@ -16,9 +19,19 @@ const int kMaxNumCrashURLChunks = 8;
 const int kMaxNumURLChunkValueLength = 255;
 const char *kUrlChunkFormatStr = "url-chunk-%d";
 const char *kGuidParamName = "guid";
+const char *kGPUVendorIdParamName = "vendid";
+const char *kGPUDeviceIdParamName = "devid";
+const char *kGPUDriverVersionParamName = "driver";
+const char *kGPUPixelShaderVersionParamName = "psver";
+const char *kGPUVertexShaderVersionParamName = "vsver";
+const char *kNumberOfViews = "num-views";
 
 static SetCrashKeyValueFuncPtr g_set_key_func;
 static ClearCrashKeyValueFuncPtr g_clear_key_func;
+
+// Account for the terminating null character.
+static const size_t kClientIdSize = 32 + 1;
+static char g_client_id[kClientIdSize];
 
 void SetCrashKeyFunctions(SetCrashKeyValueFuncPtr set_key_func,
                           ClearCrashKeyValueFuncPtr clear_key_func) {
@@ -85,6 +98,7 @@ void SetClientId(const std::string& client_id) {
   std::string str(client_id);
   ReplaceSubstringsAfterOffset(&str, 0, "-", "");
 
+  base::strlcpy(g_client_id, str.c_str(), kClientIdSize);
   if (g_set_key_func)
     SetClientIdImpl(str, g_set_key_func);
 
@@ -92,8 +106,56 @@ void SetClientId(const std::string& client_id) {
   GoogleUpdateSettings::SetMetricsId(wstr);
 }
 
+std::string GetClientId() {
+  return std::string(g_client_id);
+}
+
 void SetActiveExtensions(const std::set<std::string>& extension_ids) {
   // TODO(port)
+}
+
+void SetGpuKeyValue(const char* param_name, const std::string& value_str,
+                    SetCrashKeyValueFuncPtr set_key_func) {
+  NSString *key = [NSString stringWithUTF8String:param_name];
+  NSString *value = [NSString stringWithUTF8String:value_str.c_str()];
+  set_key_func(key, value);
+}
+
+void SetGpuInfoImpl(const GPUInfo& gpu_info,
+                    SetCrashKeyValueFuncPtr set_key_func) {
+  SetGpuKeyValue(kGPUVendorIdParamName,
+                 base::UintToString(gpu_info.vendor_id()),
+                 set_key_func);
+  SetGpuKeyValue(kGPUDeviceIdParamName,
+                 base::UintToString(gpu_info.device_id()),
+                 set_key_func);
+  SetGpuKeyValue(kGPUDriverVersionParamName,
+                 WideToUTF8(gpu_info.driver_version()),
+                 set_key_func);
+  SetGpuKeyValue(kGPUPixelShaderVersionParamName,
+                 base::UintToString(gpu_info.pixel_shader_version()),
+                 set_key_func);
+  SetGpuKeyValue(kGPUVertexShaderVersionParamName,
+                 base::UintToString(gpu_info.vertex_shader_version()),
+                 set_key_func);
+}
+
+void SetGpuInfo(const GPUInfo& gpu_info) {
+  if (g_set_key_func)
+    SetGpuInfoImpl(gpu_info, g_set_key_func);
+}
+
+
+void SetNumberOfViewsImpl(int number_of_views,
+                          SetCrashKeyValueFuncPtr set_key_func) {
+  NSString *key = [NSString stringWithUTF8String:kNumberOfViews];
+  NSString *value = [NSString stringWithFormat:@"%d", number_of_views];
+  set_key_func(key, value);
+}
+
+void SetNumberOfViews(int number_of_views) {
+  if (g_set_key_func)
+    SetNumberOfViewsImpl(number_of_views, g_set_key_func);
 }
 
 }  // namespace child_process_logging

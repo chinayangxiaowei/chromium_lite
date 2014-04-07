@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_GTK_ROUNDED_WINDOW_H_
 #define CHROME_BROWSER_GTK_ROUNDED_WINDOW_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
@@ -15,6 +16,7 @@ enum RoundedBorders {
   ROUNDED_BOTTOM_LEFT = 1 << 0,
   ROUNDED_TOP_LEFT = 1 << 1,
   ROUNDED_TOP_RIGHT = 1 << 2,
+  ROUNDED_TOP = (1 << 1) | (1 << 2),
   ROUNDED_BOTTOM_RIGHT = 1 << 3,
   ROUNDED_ALL = 0xF
 };
@@ -41,6 +43,9 @@ void ActAsRoundedWindow(
 
 // Undoes most of the actions of ActAsRoundedWindow().
 void StopActingAsRoundedWindow(GtkWidget* widget);
+
+// Returns true if the window is rounded.
+bool IsActingAsRoundedWindow(GtkWidget* widget);
 
 // Sets edge and border properties on a widget that has already been configured
 // with ActAsRoundedWindow().

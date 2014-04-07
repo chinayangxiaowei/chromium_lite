@@ -11,6 +11,7 @@
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "gfx/rect.h"
 
 // The minimum space between the FindInPage window and the search result.
 static const int kMinFindWndDistanceFromSelection = 5;
@@ -47,7 +48,9 @@ void FindBarController::EndFindSession(SelectionAction action) {
     // for now, so that we can abort the scoping effort and clear all the
     // tickmarks and highlighting.
     tab_contents_->StopFinding(action);
-    find_bar_->ClearResults(tab_contents_->find_result());
+
+    if (action != kKeepSelection)
+      find_bar_->ClearResults(tab_contents_->find_result());
 
     // When we get dismissed we restore the focus to where it belongs.
     find_bar_->RestoreSavedFocus();

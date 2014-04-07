@@ -4,17 +4,20 @@
 
 #import "chrome/browser/cocoa/about_window_controller.h"
 
+#include "app/l10n_util.h"
 #include "app/l10n_util_mac.h"
 #include "app/resource_bundle.h"
 #include "base/logging.h"
 #include "base/mac_util.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/browser_list.h"
+#include "chrome/browser/browser_window.h"
+#include "chrome/browser/platform_util.h"
 #import "chrome/browser/cocoa/background_tile_view.h"
 #import "chrome/browser/cocoa/keystone_glue.h"
 #include "chrome/browser/cocoa/restart_browser.h"
-#include "chrome/common/platform_util.h"
 #include "chrome/common/url_constants.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -131,10 +134,10 @@ static BOOL recentShownUserActionFailedStatus = NO;
 
   NSString* versionModifier = @"";
   NSString* svnRevision = @"";
-  string16 modifier = platform_util::GetVersionStringModifier();
-  if (modifier.length())
+  std::string modifier = platform_util::GetVersionStringModifier();
+  if (!modifier.empty())
     versionModifier = [NSString stringWithFormat:@" %@",
-                                            base::SysUTF16ToNSString(modifier)];
+                                base::SysUTF8ToNSString(modifier)];
 
 #if !defined(GOOGLE_CHROME_BUILD)
   svnRevision = [NSString stringWithFormat:@" (%@)",
@@ -277,29 +280,13 @@ static BOOL recentShownUserActionFailedStatus = NO;
 
 - (void)setAllowsUpdate:(bool)update allowsPromotion:(bool)promotion {
   bool oldUpdate = ![updateBlock_ isHidden];
-  bool oldPromotion = ![promotionBlock_ isHidden];
+  bool oldPromotion = ![promoteButton_ isHidden];
 
   if (promotion == oldPromotion && update == oldUpdate) {
     return;
   }
 
   NSRect updateFrame = [updateBlock_ frame];
-  NSRect promotionFrame = [promotionBlock_ frame];
-
-  // This routine assumes no space between the update and promotion blocks.
-  DCHECK_EQ(NSMinY(updateFrame), NSMaxY(promotionFrame));
-
-  bool promotionOnly = !update && promotion;
-  bool oldPromotionOnly = !oldUpdate && oldPromotion;
-  if (promotionOnly != oldPromotionOnly) {
-    // The window is transitioning from having a promotion block and no update
-    // block to any other state, or the other way around.  Move the promotion
-    // frame up so that its top edge is in the same position as the update
-    // frame's top edge, or move it back down to its original location.
-    promotionFrame.origin.y += (promotionOnly ? 1.0 : -1.0) *
-                               NSHeight(updateFrame);
-  }
-
   CGFloat delta = 0.0;
 
   if (update != oldUpdate) {
@@ -308,28 +295,10 @@ static BOOL recentShownUserActionFailedStatus = NO;
   }
 
   if (promotion != oldPromotion) {
-    [promotionBlock_ setHidden:!promotion];
-    delta += (promotion ? 1.0 : -1.0) * NSHeight(promotionFrame);
+    [promoteButton_ setHidden:!promotion];
   }
 
   NSRect legalFrame = [legalBlock_ frame];
-
-  bool updateOrPromotion = update || promotion;
-  bool oldUpdateOrPromotion = oldUpdate || oldPromotion;
-  if (updateOrPromotion != oldUpdateOrPromotion) {
-    // The window is transitioning from having an update or promotion block or
-    // both to not having either, or the other way around.  Adjust delta to
-    // account for the space between the legal block and the update or
-    // promotion block.  When the update and promotion blocks are not visible,
-    // this extra spacing is not used.
-    delta += (updateOrPromotion ? 1.0 : -1.0) *
-             (NSMinY(legalFrame) - NSMaxY(updateFrame));
-  }
-
-  // The promotion frame may have changed even if delta is 0, so always reset
-  // its frame.
-  promotionFrame.origin.y += delta;
-  [promotionBlock_ setFrame:promotionFrame];
 
   if (delta) {
     updateFrame.origin.y += delta;
@@ -486,7 +455,7 @@ static BOOL recentShownUserActionFailedStatus = NO;
       // just to get the throbber to stop spinning if it's running.
       imageID = IDR_UPDATE_FAIL;
       message = l10n_util::GetNSStringFWithFixup(IDS_UPGRADE_ERROR,
-                                                 IntToString16(status));
+                                                 base::IntToString16(status));
 
       break;
 
@@ -584,14 +553,14 @@ static BOOL recentShownUserActionFailedStatus = NO;
       // just to get the throbber to stop spinning if it's running.
       imageID = IDR_UPDATE_FAIL;
       message = l10n_util::GetNSStringFWithFixup(IDS_UPGRADE_ERROR,
-                                                 IntToString16(status));
+                                                 base::IntToString16(status));
 
       break;
 
     case kAutoupdateRegisterFailed:
       imageID = IDR_UPDATE_FAIL;
       message = l10n_util::GetNSStringFWithFixup(IDS_UPGRADE_ERROR,
-                                                 IntToString16(status));
+                                                 base::IntToString16(status));
       enablePromoteButton = false;
 
       break;
@@ -599,7 +568,7 @@ static BOOL recentShownUserActionFailedStatus = NO;
     case kAutoupdateCheckFailed:
       imageID = IDR_UPDATE_FAIL;
       message = l10n_util::GetNSStringFWithFixup(IDS_UPGRADE_ERROR,
-                                                 IntToString16(status));
+                                                 base::IntToString16(status));
 
       break;
 
@@ -608,7 +577,7 @@ static BOOL recentShownUserActionFailedStatus = NO;
 
       imageID = IDR_UPDATE_FAIL;
       message = l10n_util::GetNSStringFWithFixup(IDS_UPGRADE_ERROR,
-                                                 IntToString16(status));
+                                                 base::IntToString16(status));
 
       // Allow another chance.
       enableUpdateButton = true;
@@ -620,7 +589,7 @@ static BOOL recentShownUserActionFailedStatus = NO;
 
       imageID = IDR_UPDATE_FAIL;
       message = l10n_util::GetNSStringFWithFixup(IDS_UPGRADE_ERROR,
-                                                 IntToString16(status));
+                                                 base::IntToString16(status));
 
       break;
 
@@ -652,10 +621,9 @@ static BOOL recentShownUserActionFailedStatus = NO;
   // We always create a new window, so there's no need to try to re-use
   // an existing one just to pass in the NEW_WINDOW disposition.
   Browser* browser = Browser::Create(profile_);
-  if (browser) {
-    browser->OpenURL(GURL([link UTF8String]), GURL(), NEW_WINDOW,
-                     PageTransition::LINK);
-  }
+  browser->OpenURL(GURL([link UTF8String]), GURL(), NEW_FOREGROUND_TAB,
+                   PageTransition::LINK);
+  browser->window()->Show();
   return YES;
 }
 
@@ -760,15 +728,14 @@ static BOOL recentShownUserActionFailedStatus = NO;
 
   // The url within terms should point here:
   NSString* kTOS = [NSString stringWithUTF8String:chrome::kAboutTermsURL];
-  // Following Window. There is one marker in the string for where the terms
+  // Following Windows. There is one marker in the string for where the terms
   // link goes, but the text of the link comes from a second string resources.
   std::vector<size_t> url_offsets;
-  std::wstring w_about_terms = l10n_util::GetStringF(IDS_ABOUT_TERMS_OF_SERVICE,
-                                                     std::wstring(),
-                                                     std::wstring(),
-                                                     &url_offsets);
+  NSString* about_terms = l10n_util::GetNSStringF(IDS_ABOUT_TERMS_OF_SERVICE,
+                                                  string16(),
+                                                  string16(),
+                                                  &url_offsets);
   DCHECK_EQ(url_offsets.size(), 1U);
-  NSString* about_terms = base::SysWideToNSString(w_about_terms);
   NSString* terms_link_text =
       l10n_util::GetNSStringWithFixup(IDS_TERMS_OF_SERVICE);
 

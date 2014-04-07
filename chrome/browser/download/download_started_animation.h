@@ -4,6 +4,9 @@
 
 #ifndef CHROME_BROWSER_DOWNLOAD_DOWNLOAD_STARTED_ANIMATION_H_
 #define CHROME_BROWSER_DOWNLOAD_DOWNLOAD_STARTED_ANIMATION_H_
+#pragma once
+
+#include "base/basictypes.h"
 
 class TabContents;
 
@@ -13,6 +16,8 @@ class DownloadStartedAnimation {
 
  private:
   DownloadStartedAnimation() { }
+
+  DISALLOW_COPY_AND_ASSIGN(DownloadStartedAnimation);
 };
 
 #endif  // CHROME_BROWSER_DOWNLOAD_DOWNLOAD_STARTED_ANIMATION_H_

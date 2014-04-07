@@ -5,76 +5,60 @@
 #include "chrome/browser/chromeos/login/network_screen.h"
 
 #include "app/l10n_util.h"
-#include "base/utf_string_conversions.h"
+#include "app/resource_bundle.h"
 #include "base/logging.h"
+#include "base/string16.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
+#include "chrome/browser/chromeos/login/help_app_launcher.h"
 #include "chrome/browser/chromeos/login/network_selection_view.h"
 #include "chrome/browser/chromeos/login/screen_observer.h"
-#include "chrome/browser/chromeos/options/network_config_view.h"
+#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
+#include "grit/theme_resources.h"
+#include "views/controls/menu/menu_2.h"
 #include "views/widget/widget.h"
 #include "views/window/window.h"
+
+
+namespace {
+
+// Time in seconds for connection timeout.
+const int kConnectionTimeoutSec = 15;
+
+// Considering 10px shadow from each side & welcome title height at 30px.
+const int kWelcomeScreenWidth = 580;
+const int kWelcomeScreenHeight = 335;
+
+}  // namespace
 
 namespace chromeos {
 
 ///////////////////////////////////////////////////////////////////////////////
 // NetworkScreen, public:
 
-NetworkScreen::NetworkScreen(WizardScreenDelegate* delegate, bool is_out_of_box)
-    : ViewScreen<NetworkSelectionView>(delegate),
+NetworkScreen::NetworkScreen(WizardScreenDelegate* delegate)
+    : ViewScreen<NetworkSelectionView>(delegate,
+                                       kWelcomeScreenWidth,
+                                       kWelcomeScreenHeight),
       is_network_subscribed_(false),
-      is_out_of_box_(is_out_of_box),
-      ALLOW_THIS_IN_INITIALIZER_LIST(task_factory_(this)),
-      language_switch_model_(delegate->GetObserver(this),
-                             ScreenObserver::LANGUAGE_CHANGED_ON_NETWORK) {
+      continue_pressed_(false),
+      bubble_(NULL) {
+  language_switch_menu_.set_menu_alignment(views::Menu2::ALIGN_TOPLEFT);
 }
 
 NetworkScreen::~NetworkScreen() {
+  connection_timer_.Stop();
   UnsubscribeNetworkNotification();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// ComboboxModel implementation:
+// NetworkScreen, NetworkScreenDelegate implementation:
 
-int NetworkScreen::GetItemCount() {
-  // Item with index = 0 is either "no networks are available" or
-  // "no selection".
-  return static_cast<int>(networks_.GetNetworkCount()) + 1;
-}
-
-std::wstring NetworkScreen::GetItemAt(int index) {
-  if (index == 0) {
-    return networks_.IsEmpty() ?
-        l10n_util::GetString(IDS_STATUSBAR_NO_NETWORKS_MESSAGE) :
-        l10n_util::GetString(IDS_NETWORK_SELECTION_NONE);
-  }
-  NetworkList::NetworkItem* network =
-      networks_.GetNetworkAt(index - 1);
-  return network ? UTF16ToWide(network->label) : std::wstring();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// views::Combobox::Listener implementation:
-
-void NetworkScreen::ItemChanged(views::Combobox* sender,
-                                int prev_index,
-                                int new_index) {
-  if (new_index == prev_index || new_index < 0 || prev_index < 0)
-    return;
-
-  // First item is a text, not a network.
-  if (new_index == 0) {
-    view()->SetSelectedNetworkItem(prev_index);
-    return;
-  }
-
-  if (networks_.IsEmpty())
-    return;
-
-  const NetworkList::NetworkItem* network =
-      networks_.GetNetworkAt(new_index - 1);
-  MessageLoop::current()->PostTask(FROM_HERE, task_factory_.NewRunnableMethod(
-      &NetworkScreen::ConnectToNetwork, network->network_type, network->label));
+void NetworkScreen::ClearErrors() {
+  // bubble_ will be set to NULL in callback.
+  if (bubble_)
+    bubble_->Close();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -82,49 +66,28 @@ void NetworkScreen::ItemChanged(views::Combobox* sender,
 
 void NetworkScreen::ButtonPressed(views::Button* sender,
                                   const views::Event& event) {
-  MessageLoop::current()->PostTask(FROM_HERE,
-      task_factory_.NewRunnableMethod(&NetworkScreen::NotifyOnOffline));
+  ClearErrors();
+  NetworkLibrary* network = CrosLibrary::Get()->GetNetworkLibrary();
+  if (network && network->Connected()) {
+    NotifyOnConnection();
+  } else {
+    continue_pressed_ = true;
+    WaitForConnection(network_id_);
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// NetworkLibrary::Observer implementation:
+// NetworkLibrary::NetworkManagerObserver implementation:
 
-void NetworkScreen::NetworkChanged(NetworkLibrary* network_lib) {
-  // Save network selection in case it would be available after refresh.
-  NetworkList::NetworkType network_type = NetworkList::NETWORK_EMPTY;
-  string16 network_id;
-  const NetworkList::NetworkItem* selected_network = GetSelectedNetwork();
-  if (selected_network) {
-    network_type = selected_network->network_type;
-    network_id = selected_network->label;
-  }
-  networks_.NetworkChanged(network_lib);
-  // TODO(nkostylev): Check for connection error.
-  // For initial out of box experience make sure that network was selected.
-  if (networks_.ConnectedNetwork() &&
-      (selected_network || !is_out_of_box_)) {
-    MessageLoop::current()->PostTask(FROM_HERE,
-        task_factory_.NewRunnableMethod(&NetworkScreen::NotifyOnConnection));
-    return;
-  }
-  const NetworkList::NetworkItem* network = networks_.ConnectingNetwork();
-  if (network &&
-      (selected_network || !is_out_of_box_)) {
-    view()->ShowConnectingStatus(true, network->label);
-  }
-  view()->NetworkModelChanged();
-  SelectNetwork(network_type, network_id);
-}
-
-void NetworkScreen::NetworkTraffic(NetworkLibrary* cros,
-                                   int traffic_type) {
+void NetworkScreen::OnNetworkManagerChanged(NetworkLibrary* network_lib) {
+  UpdateStatus(network_lib);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // NetworkScreen, ViewScreen implementation:
 
 void NetworkScreen::CreateView() {
-  language_switch_model_.InitLanguageMenu();
+  language_switch_menu_.InitLanguageMenu();
   ViewScreen<NetworkSelectionView>::CreateView();
 }
 
@@ -132,93 +95,120 @@ NetworkSelectionView* NetworkScreen::AllocateView() {
   return new NetworkSelectionView(this);
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// NetworkScreen, views::InfoBubbleDelegate implementation:
+
+void NetworkScreen::OnHelpLinkActivated() {
+  if (!help_app_.get())
+    help_app_.reset(new HelpAppLauncher(view()->GetNativeWindow()));
+  help_app_->ShowHelpTopic(HelpAppLauncher::HELP_CONNECTIVITY);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // NetworkScreen, public:
 
 void NetworkScreen::Refresh() {
-  SubscribeNetworkNotification();
-  NetworkChanged(chromeos::CrosLibrary::Get()->GetNetworkLibrary());
+  if (CrosLibrary::Get()->EnsureLoaded()) {
+    SubscribeNetworkNotification();
+    OnNetworkManagerChanged(chromeos::CrosLibrary::Get()->GetNetworkLibrary());
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // NetworkScreen, private:
 
-void NetworkScreen::ConnectToNetwork(NetworkList::NetworkType type,
-                                     const string16& id) {
-  const NetworkList::NetworkItem* network =
-      networks_.GetNetworkById(type, id);
-  if (network && !IsSameNetwork(network, networks_.ConnectedNetwork())) {
-    if (NetworkList::NETWORK_WIFI == network->network_type) {
-      if (network->wifi_network.encrypted) {
-        OpenPasswordDialog(network->wifi_network);
-        return;
-      } else {
-        chromeos::CrosLibrary::Get()->GetNetworkLibrary()->
-            ConnectToWifiNetwork(network->wifi_network, string16());
-      }
-    } else if (NetworkList::NETWORK_CELLULAR == network->network_type) {
-      chromeos::CrosLibrary::Get()->GetNetworkLibrary()->
-          ConnectToCellularNetwork(network->cellular_network);
-    }
-  }
-  // Check if there's already connected network and update screen state.
-  MessageLoop::current()->PostTask(FROM_HERE, task_factory_.NewRunnableMethod(
-      &NetworkScreen::NetworkChanged,
-      chromeos::CrosLibrary::Get()->GetNetworkLibrary()));
-}
-
 void NetworkScreen::SubscribeNetworkNotification() {
   if (!is_network_subscribed_) {
     is_network_subscribed_ = true;
-    chromeos::CrosLibrary::Get()->GetNetworkLibrary()->AddObserver(this);
+    chromeos::CrosLibrary::Get()->GetNetworkLibrary()
+        ->AddNetworkManagerObserver(this);
   }
 }
 
 void NetworkScreen::UnsubscribeNetworkNotification() {
   if (is_network_subscribed_) {
     is_network_subscribed_ = false;
-    chromeos::CrosLibrary::Get()->GetNetworkLibrary()->RemoveObserver(this);
+    chromeos::CrosLibrary::Get()->GetNetworkLibrary()
+        ->RemoveNetworkManagerObserver(this);
   }
-}
-
-NetworkList::NetworkItem* NetworkScreen::GetSelectedNetwork() {
-  return networks_.GetNetworkAt(view()->GetSelectedNetworkItem() - 1);
-}
-
-bool NetworkScreen::IsSameNetwork(const NetworkList::NetworkItem* network1,
-                                  const NetworkList::NetworkItem* network2) {
-  return (network1 && network2 &&
-          network1->network_type == network2->network_type &&
-          network1->label == network2->label);
 }
 
 void NetworkScreen::NotifyOnConnection() {
+  // TODO(nkostylev): Check network connectivity.
   UnsubscribeNetworkNotification();
+  connection_timer_.Stop();
   delegate()->GetObserver(this)->OnExit(ScreenObserver::NETWORK_CONNECTED);
 }
 
-void NetworkScreen::NotifyOnOffline() {
-  UnsubscribeNetworkNotification();
-  delegate()->GetObserver(this)->OnExit(ScreenObserver::NETWORK_OFFLINE);
+void NetworkScreen::OnConnectionTimeout() {
+  StopWaitingForConnection(network_id_);
+  // Show error bubble.
+  ClearErrors();
+  views::View* network_control = view()->GetNetworkControlView();
+  bubble_ = MessageBubble::Show(
+      network_control->GetWidget(),
+      network_control->GetScreenBounds(),
+      BubbleBorder::LEFT_TOP,
+      ResourceBundle::GetSharedInstance().GetBitmapNamed(IDR_WARNING),
+      l10n_util::GetStringF(IDS_NETWORK_SELECTION_ERROR,
+                            l10n_util::GetString(IDS_PRODUCT_OS_NAME),
+                            UTF16ToWide(network_id_)),
+      l10n_util::GetString(IDS_NETWORK_SELECTION_ERROR_HELP),
+      this);
+  network_control->RequestFocus();
 }
 
-void NetworkScreen::OpenPasswordDialog(WifiNetwork network) {
-  NetworkConfigView* dialog = new NetworkConfigView(network, true);
-  views::Window* window = views::Window::CreateChromeWindow(
-      view()->GetNativeWindow(), gfx::Rect(), dialog);
-  window->SetIsAlwaysOnTop(true);
-  window->Show();
-  dialog->SetLoginTextfieldFocus();
-}
+void NetworkScreen::UpdateStatus(NetworkLibrary* network) {
+  if (!view() || !network)
+    return;
 
-void NetworkScreen::SelectNetwork(NetworkList::NetworkType type,
-                                  const string16& id) {
-  int index = networks_.GetNetworkIndexById(type, id);
-  if (index >= 0) {
-    view()->SetSelectedNetworkItem(index + 1);
+  if (network->ethernet_connected()) {
+    StopWaitingForConnection(
+        l10n_util::GetStringUTF16(IDS_STATUSBAR_NETWORK_DEVICE_ETHERNET));
+  } else if (network->wifi_connected()) {
+    StopWaitingForConnection(ASCIIToUTF16(network->wifi_network()->name()));
+  } else if (network->cellular_connected()) {
+    StopWaitingForConnection(ASCIIToUTF16(network->cellular_network()->name()));
+  } else if (network->ethernet_connecting()) {
+    WaitForConnection(
+        l10n_util::GetStringUTF16(IDS_STATUSBAR_NETWORK_DEVICE_ETHERNET));
+  } else if (network->wifi_connecting()) {
+    WaitForConnection(ASCIIToUTF16(network->wifi_network()->name()));
+  } else if (network->cellular_connecting()) {
+    WaitForConnection(ASCIIToUTF16(network->cellular_network()->name()));
   } else {
-    view()->SetSelectedNetworkItem(0);
+    StopWaitingForConnection(network_id_);
   }
+}
+
+void NetworkScreen::StopWaitingForConnection(const string16& network_id) {
+  NetworkLibrary* network = CrosLibrary::Get()->GetNetworkLibrary();
+  bool is_connected = network && network->Connected();
+  if (is_connected && continue_pressed_) {
+    NotifyOnConnection();
+    return;
+  }
+
+  continue_pressed_ = false;
+  connection_timer_.Stop();
+
+  network_id_ = network_id;
+  view()->ShowConnectingStatus(false, network_id_);
+  view()->EnableContinue(is_connected);
+}
+
+void NetworkScreen::WaitForConnection(const string16& network_id) {
+  if (network_id_ != network_id || !connection_timer_.IsRunning()) {
+    connection_timer_.Stop();
+    connection_timer_.Start(base::TimeDelta::FromSeconds(kConnectionTimeoutSec),
+                            this,
+                            &NetworkScreen::OnConnectionTimeout);
+  }
+
+  network_id_ = network_id;
+  view()->ShowConnectingStatus(continue_pressed_, network_id_);
+
+  view()->EnableContinue(false);
 }
 
 }  // namespace chromeos

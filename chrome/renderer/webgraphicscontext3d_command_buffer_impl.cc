@@ -7,27 +7,25 @@
 #include "chrome/renderer/webgraphicscontext3d_command_buffer_impl.h"
 
 #include <GLES2/gl2.h>
+#ifndef GL_GLEXT_PROTOTYPES
+#define GL_GLEXT_PROTOTYPES 1
+#endif
+#include <GLES2/gl2ext.h>
 
 #include <algorithm>
 
+#include "base/string_tokenizer.h"
+#include "base/command_line.h"
 #include "base/logging.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/renderer/gpu_channel_host.h"
 #include "chrome/renderer/render_thread.h"
-
-// TODO(kbr): OpenGL may return multiple errors from sequential calls
-// to glGetError.
-static void checkGLError() {
-  GLenum error = glGetError();
-  if (error) {
-    DLOG(ERROR) << "GL Error " << error;
-  }
-}
+#include "chrome/renderer/render_view.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebView.h"
 
 WebGraphicsContext3DCommandBufferImpl::WebGraphicsContext3DCommandBufferImpl()
     : context_(NULL),
-      texture_(0),
-      fbo_(0),
-      depth_buffer_(0),
+      web_view_(NULL),
       cached_width_(0),
       cached_height_(0),
       bound_fbo_(0) {
@@ -35,23 +33,118 @@ WebGraphicsContext3DCommandBufferImpl::WebGraphicsContext3DCommandBufferImpl()
 
 WebGraphicsContext3DCommandBufferImpl::
     ~WebGraphicsContext3DCommandBufferImpl() {
+#if defined(OS_MACOSX)
+  if (web_view_) {
+    DCHECK(plugin_handle_ != gfx::kNullPluginWindow);
+    RenderView* renderview = RenderView::FromWebView(web_view_);
+    // The RenderView might already have been freed, but in its
+    // destructor it destroys all fake plugin window handles it
+    // allocated.
+    if (renderview) {
+      renderview->DestroyFakePluginWindowHandle(plugin_handle_);
+    }
+    plugin_handle_ = gfx::kNullPluginWindow;
+  }
+#endif
   if (context_) {
     ggl::DestroyContext(context_);
   }
 }
 
 bool WebGraphicsContext3DCommandBufferImpl::initialize(
-    WebGraphicsContext3D::Attributes attributes) {
+    WebGraphicsContext3D::Attributes attributes,
+    WebKit::WebView* web_view,
+    bool render_directly_to_web_view) {
   RenderThread* render_thread = RenderThread::current();
   if (!render_thread)
     return false;
   GpuChannelHost* host = render_thread->EstablishGpuChannelSync();
   if (!host)
     return false;
-  DCHECK(host->ready());
-  context_ = ggl::CreateOffscreenContext(host, NULL, gfx::Size(1, 1));
+  DCHECK(host->state() == GpuChannelHost::CONNECTED);
+
+  // Convert WebGL context creation attributes into GGL/EGL size requests.
+  const int alpha_size = attributes.alpha ? 8 : 0;
+  const int depth_size = attributes.depth ? 24 : 0;
+  const int stencil_size = attributes.stencil ? 8 : 0;
+  const int samples = attributes.antialias ? 4 : 0;
+  const int sample_buffers = attributes.antialias ? 1 : 0;
+  const int32 attribs[] = {
+    ggl::GGL_ALPHA_SIZE, alpha_size,
+    ggl::GGL_DEPTH_SIZE, depth_size,
+    ggl::GGL_STENCIL_SIZE, stencil_size,
+    ggl::GGL_SAMPLES, samples,
+    ggl::GGL_SAMPLE_BUFFERS, sample_buffers,
+    ggl::GGL_NONE,
+  };
+
+  if (render_directly_to_web_view) {
+    RenderView* renderview = RenderView::FromWebView(web_view);
+    if (!renderview)
+      return false;
+    gfx::NativeViewId view_id;
+#if !defined(OS_MACOSX)
+    view_id = renderview->host_window();
+#else
+    plugin_handle_ = renderview->AllocateFakePluginWindowHandle(
+        /*opaque=*/true, /*root=*/true);
+    view_id = static_cast<gfx::NativeViewId>(plugin_handle_);
+#endif
+    web_view_ = web_view;
+    context_ = ggl::CreateViewContext(
+        host,
+        view_id,
+        renderview->routing_id(),
+        attribs);
+  } else {
+    bool compositing_enabled = CommandLine::ForCurrentProcess()->HasSwitch(
+        switches::kEnableAcceleratedCompositing);
+    ggl::Context* parent_context = NULL;
+    // If GPU compositing is enabled we need to create a GL context that shares
+    // resources with the compositor's context.
+    if (compositing_enabled) {
+      // Asking for the WebGraphicsContext3D on the WebView will force one to
+      // be created if it doesn't already exist. When the compositor is created
+      // for the view it will use the same context.
+      WebKit::WebGraphicsContext3D* view_context =
+          web_view->graphicsContext3D();
+      if (view_context) {
+        WebGraphicsContext3DCommandBufferImpl* context_impl =
+            static_cast<WebGraphicsContext3DCommandBufferImpl*>(view_context);
+        parent_context = context_impl->context_;
+      }
+    }
+    context_ = ggl::CreateOffscreenContext(host,
+                                           parent_context,
+                                           gfx::Size(1, 1),
+                                           attribs);
+    web_view_ = NULL;
+  }
   if (!context_)
     return false;
+  // TODO(gman): Remove this.
+  const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+  if (command_line.HasSwitch(switches::kDisableGLSLTranslator)) {
+    DisableShaderTranslation(context_);
+  }
+
+  // Set attributes_ from created offscreen context.
+  {
+    attributes_ = attributes;
+    GLint alpha_bits = 0;
+    getIntegerv(GL_ALPHA_BITS, &alpha_bits);
+    attributes_.alpha = alpha_bits > 0;
+    GLint depth_bits = 0;
+    getIntegerv(GL_DEPTH_BITS, &depth_bits);
+    attributes_.depth = depth_bits > 0;
+    GLint stencil_bits = 0;
+    getIntegerv(GL_STENCIL_BITS, &stencil_bits);
+    attributes_.stencil = stencil_bits > 0;
+    GLint samples = 0;
+    getIntegerv(GL_SAMPLES, &samples);
+    attributes_.antialias = samples > 0;
+  }
+
   return true;
 }
 
@@ -87,17 +180,32 @@ int WebGraphicsContext3DCommandBufferImpl::sizeInBytes(int type) {
   return 0;
 }
 
-static int createTextureObject(GLenum target) {
-  GLuint texture = 0;
-  glGenTextures(1, &texture);
-  checkGLError();
-  glBindTexture(target, texture);
-  checkGLError();
-  glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  checkGLError();
-  glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  checkGLError();
-  return texture;
+bool WebGraphicsContext3DCommandBufferImpl::isGLES2Compliant() {
+  return true;
+}
+
+bool WebGraphicsContext3DCommandBufferImpl::isGLES2ParameterStrict() {
+  return false;
+}
+
+bool WebGraphicsContext3DCommandBufferImpl::isGLES2NPOTStrict() {
+  return false;
+}
+
+bool WebGraphicsContext3DCommandBufferImpl::
+    isErrorGeneratedOnOutOfBoundsAccesses() {
+  return false;
+}
+
+unsigned int WebGraphicsContext3DCommandBufferImpl::getPlatformTextureId() {
+  DCHECK(context_);
+  return ggl::GetParentTextureId(context_);
+}
+
+void WebGraphicsContext3DCommandBufferImpl::prepareTexture() {
+  // Copies the contents of the off-screen render target into the texture
+  // used by the compositor.
+  ggl::SwapBuffers(context_);
 }
 
 void WebGraphicsContext3DCommandBufferImpl::reshape(int width, int height) {
@@ -105,70 +213,31 @@ void WebGraphicsContext3DCommandBufferImpl::reshape(int width, int height) {
   cached_height_ = height;
   makeContextCurrent();
 
-  checkGLError();
-
-  GLenum target = GL_TEXTURE_2D;
-
-  // TODO(kbr): switch this code to use the default back buffer of
-  // GGL / the GLES2 command buffer code.
-
-  // TODO(kbr): determine whether we need to hack in
-  // GL_TEXTURE_RECTANGLE_ARB support for Mac OS X -- or resize the
-  // framebuffer objects to the next largest power of two.
-
-  if (!texture_) {
-    // Generate the texture object
-    texture_ = createTextureObject(target);
-    // Generate the framebuffer object
-    glGenFramebuffers(1, &fbo_);
-    checkGLError();
-    // Generate the depth buffer
-    glGenRenderbuffers(1, &depth_buffer_);
-    checkGLError();
-  }
-
-  // Reallocate the color and depth buffers
-  glBindTexture(target, texture_);
-  checkGLError();
-  glTexImage2D(target, 0, GL_RGBA, width, height, 0,
-               GL_RGBA, GL_UNSIGNED_BYTE, 0);
-  checkGLError();
-  glBindTexture(target, 0);
-  checkGLError();
-
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-  checkGLError();
-  bound_fbo_ = fbo_;
-  glBindRenderbuffer(GL_RENDERBUFFER, depth_buffer_);
-  checkGLError();
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16,
-                        width, height);
-  checkGLError();
-  glBindRenderbuffer(GL_RENDERBUFFER, 0);
-  checkGLError();
-
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                         target, texture_, 0);
-  checkGLError();
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                            GL_RENDERBUFFER, depth_buffer_);
-  checkGLError();
-  GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-  checkGLError();
-  if (status != GL_FRAMEBUFFER_COMPLETE) {
-    DLOG(ERROR) << "WebGraphicsContext3DCommandBufferImpl: "
-                << "framebuffer was incomplete";
-
-    // TODO(kbr): cleanup.
-    NOTIMPLEMENTED();
+  if (web_view_) {
+#if defined(OS_MACOSX)
+    ggl::ResizeOnscreenContext(context_, gfx::Size(width, height));
+#endif
+  } else {
+    ggl::ResizeOffscreenContext(context_, gfx::Size(width, height));
+    // Force a SwapBuffers to get the framebuffer to resize.
+    ggl::SwapBuffers(context_);
   }
 
 #ifdef FLIP_FRAMEBUFFER_VERTICALLY
   scanline_.reset(new uint8[width * 4]);
 #endif  // FLIP_FRAMEBUFFER_VERTICALLY
+}
 
-  glClear(GL_COLOR_BUFFER_BIT);
-  checkGLError();
+unsigned WebGraphicsContext3DCommandBufferImpl::createCompositorTexture(
+    unsigned width, unsigned height) {
+  makeContextCurrent();
+  return ggl::CreateParentTexture(context_, gfx::Size(width, height));
+}
+
+void WebGraphicsContext3DCommandBufferImpl::deleteCompositorTexture(
+    unsigned parent_texture) {
+  makeContextCurrent();
+  ggl::DeleteParentTexture(context_, parent_texture);
 }
 
 #ifdef FLIP_FRAMEBUFFER_VERTICALLY
@@ -211,9 +280,10 @@ bool WebGraphicsContext3DCommandBufferImpl::readBackFramebuffer(
   // vertical flip is only a temporary solution anyway until Chrome
   // is fully GPU composited, it wasn't worth the complexity.
 
-  bool mustRestoreFBO = (bound_fbo_ != fbo_);
-  if (mustRestoreFBO)
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+  bool mustRestoreFBO = (bound_fbo_ != 0);
+  if (mustRestoreFBO) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
   glReadPixels(0, 0, cached_width_, cached_height_,
                GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
@@ -242,6 +312,71 @@ void WebGraphicsContext3DCommandBufferImpl::synthesizeGLError(
       synthetic_errors_.end()) {
     synthetic_errors_.push_back(error);
   }
+}
+
+static bool supports_extension(const char *ext_name) {
+  const char* extensions = (const char *) glGetString(GL_EXTENSIONS);
+  CStringTokenizer t(extensions, extensions + strlen(extensions), " ");
+  while (t.GetNext()) {
+    if (t.token() == ext_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool WebGraphicsContext3DCommandBufferImpl::supportsBGRA() {
+  static bool is_supported =
+    supports_extension("GL_EXT_texture_format_BGRA8888") &&
+    supports_extension("GL_EXT_read_format_bgra");
+  return is_supported;
+}
+
+bool WebGraphicsContext3DCommandBufferImpl::supportsMapSubCHROMIUM() {
+  static bool is_supported = supports_extension("GL_CHROMIUM_map_sub");
+  return is_supported;
+}
+
+void* WebGraphicsContext3DCommandBufferImpl::mapBufferSubDataCHROMIUM(
+    unsigned target,
+    int offset,
+    int size,
+    unsigned access) {
+  return glMapBufferSubData(target, offset, size, access);
+}
+
+void WebGraphicsContext3DCommandBufferImpl::unmapBufferSubDataCHROMIUM(
+    const void* mem) {
+  return glUnmapBufferSubData(mem);
+}
+
+void* WebGraphicsContext3DCommandBufferImpl::mapTexSubImage2DCHROMIUM(
+    unsigned target,
+    int level,
+    int xoffset,
+    int yoffset,
+    int width,
+    int height,
+    unsigned format,
+    unsigned type,
+    unsigned access) {
+  return glMapTexSubImage2D(
+      target, level, xoffset, yoffset, width, height, format, type, access);
+}
+
+void WebGraphicsContext3DCommandBufferImpl::unmapTexSubImage2DCHROMIUM(
+    const void* mem) {
+  glUnmapTexSubImage2D(mem);
+}
+
+bool WebGraphicsContext3DCommandBufferImpl::
+    supportsCopyTextureToParentTextureCHROMIUM() {
+  return true;
+}
+
+void WebGraphicsContext3DCommandBufferImpl::copyTextureToParentTextureCHROMIUM(
+    unsigned texture, unsigned parentTexture) {
+  copyTextureToCompositor(texture, parentTexture);
 }
 
 // Helper macros to reduce the amount of code.
@@ -369,8 +504,6 @@ void WebGraphicsContext3DCommandBufferImpl::bindFramebuffer(
     unsigned long target,
     WebGLId framebuffer) {
   makeContextCurrent();
-  if (!framebuffer)
-    framebuffer = fbo_;
   glBindFramebuffer(target, framebuffer);
   bound_fbo_ = framebuffer;
 }
@@ -467,6 +600,7 @@ DELEGATE_TO_GL_1(generateMipmap, GenerateMipmap, unsigned long)
 
 bool WebGraphicsContext3DCommandBufferImpl::getActiveAttrib(
     WebGLId program, unsigned long index, ActiveInfo& info) {
+  makeContextCurrent();
   if (!program) {
     synthesizeGLError(GL_INVALID_VALUE);
     return false;
@@ -496,6 +630,7 @@ bool WebGraphicsContext3DCommandBufferImpl::getActiveAttrib(
 
 bool WebGraphicsContext3DCommandBufferImpl::getActiveUniform(
     WebGLId program, unsigned long index, ActiveInfo& info) {
+  makeContextCurrent();
   GLint max_name_length = -1;
   glGetProgramiv(program, GL_ACTIVE_UNIFORM_MAX_LENGTH, &max_name_length);
   if (max_name_length < 0)
@@ -518,6 +653,9 @@ bool WebGraphicsContext3DCommandBufferImpl::getActiveUniform(
   info.size = size;
   return true;
 }
+
+DELEGATE_TO_GL_4(getAttachedShaders, GetAttachedShaders,
+                 WebGLId, int, int*, unsigned int*)
 
 DELEGATE_TO_GL_2R(getAttribLocation, GetAttribLocation,
                   WebGLId, const char*, int)
@@ -557,7 +695,7 @@ DELEGATE_TO_GL_3(getProgramiv, GetProgramiv, WebGLId, unsigned long, int*)
 WebKit::WebString WebGraphicsContext3DCommandBufferImpl::getProgramInfoLog(
     WebGLId program) {
   makeContextCurrent();
-  GLint logLength;
+  GLint logLength = 0;
   glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
   if (!logLength)
     return WebKit::WebString();
@@ -580,7 +718,7 @@ DELEGATE_TO_GL_3(getShaderiv, GetShaderiv, WebGLId, unsigned long, int*)
 WebKit::WebString WebGraphicsContext3DCommandBufferImpl::getShaderInfoLog(
     WebGLId shader) {
   makeContextCurrent();
-  GLint logLength;
+  GLint logLength = 0;
   glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
   if (!logLength)
     return WebKit::WebString();
@@ -598,7 +736,7 @@ WebKit::WebString WebGraphicsContext3DCommandBufferImpl::getShaderInfoLog(
 WebKit::WebString WebGraphicsContext3DCommandBufferImpl::getShaderSource(
     WebGLId shader) {
   makeContextCurrent();
-  GLint logLength;
+  GLint logLength = 0;
   glGetShaderiv(shader, GL_SHADER_SOURCE_LENGTH, &logLength);
   if (!logLength)
     return WebKit::WebString();
@@ -874,5 +1012,11 @@ void WebGraphicsContext3DCommandBufferImpl::deleteTexture(unsigned texture) {
   glDeleteTextures(1, &texture);
 }
 
-#endif  // defined(ENABLE_GPU)
+void WebGraphicsContext3DCommandBufferImpl::copyTextureToCompositor(
+    unsigned texture, unsigned parentTexture) {
+  makeContextCurrent();
+  glCopyTextureToParentTexture(texture, parentTexture);
+  glFlush();
+}
 
+#endif  // defined(ENABLE_GPU)

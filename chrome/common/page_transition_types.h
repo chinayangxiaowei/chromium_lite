@@ -4,9 +4,9 @@
 
 #ifndef CHROME_COMMON_PAGE_TRANSITION_TYPES_H__
 #define CHROME_COMMON_PAGE_TRANSITION_TYPES_H__
+#pragma once
 
 #include "base/basictypes.h"
-#include "base/logging.h"
 
 // This class is for scoping only.
 class PageTransition {
@@ -102,6 +102,9 @@ class PageTransition {
     // Any of the core values above can be augmented by one or more qualifiers.
     // These qualifiers further define the transition.
 
+    // User used the Forward or Back button to navigate among browsing history.
+    FORWARD_BACK = 0x01000000,
+
     // The beginning of a navigation chain.
     CHAIN_START = 0x10000000,
 
@@ -131,15 +134,7 @@ class PageTransition {
     return (t <= LAST_CORE);
   }
 
-  static Type FromInt(int32 type) {
-    if (!ValidType(type)) {
-      NOTREACHED() << "Invalid transition type " << type;
-
-      // Return a safe default so we don't have corrupt data in release mode.
-      return LINK;
-    }
-    return static_cast<Type>(type);
-  }
+  static Type FromInt(int32 type);
 
   // Returns true if the given transition is a top-level frame transition, or
   // false if the transition was for a subframe.
@@ -165,6 +160,9 @@ class PageTransition {
 
   // Return a string version of the core type values.
   static const char* CoreTransitionString(Type type);
+
+  // Return a string version of the qualifier type values.
+  static const char* QualifierString(Type type);
 };
 
 #endif  // CHROME_COMMON_PAGE_TRANSITION_TYPES_H__

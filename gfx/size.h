@@ -4,6 +4,7 @@
 
 #ifndef GFX_SIZE_H_
 #define GFX_SIZE_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -74,8 +75,8 @@ class Size {
   int height_;
 };
 
-}  // namespace gfx
-
 std::ostream& operator<<(std::ostream& out, const gfx::Size& s);
+
+}  // namespace gfx
 
 #endif  // GFX_SIZE_H_

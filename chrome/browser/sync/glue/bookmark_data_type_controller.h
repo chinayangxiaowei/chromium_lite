@@ -4,6 +4,9 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_BOOKMARK_DATA_TYPE_CONTROLLER_H__
 #define CHROME_BROWSER_SYNC_GLUE_BOOKMARK_DATA_TYPE_CONTROLLER_H__
+#pragma once
+
+#include <string>
 
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
@@ -60,7 +63,8 @@ class BookmarkDataTypeController : public DataTypeController,
   }
 
   // UnrecoverableErrorHandler interface.
-  virtual void OnUnrecoverableError();
+  virtual void OnUnrecoverableError(const tracked_objects::Location& from_here,
+                                    const std::string& message);
 
   // NotificationObserver interface.
   virtual void Observe(NotificationType type,

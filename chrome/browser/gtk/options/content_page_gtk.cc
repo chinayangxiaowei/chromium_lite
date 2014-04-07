@@ -8,8 +8,8 @@
 
 #include "app/gtk_util.h"
 #include "app/l10n_util.h"
-#include "app/resource_bundle.h"
 #include "base/command_line.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_window.h"
@@ -18,11 +18,10 @@
 #include "chrome/browser/gtk/gtk_theme_provider.h"
 #include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/gtk/import_dialog_gtk.h"
-#include "chrome/browser/gtk/options/customize_sync_window_gtk.h"
 #include "chrome/browser/gtk/options/options_layout_gtk.h"
 #include "chrome/browser/gtk/options/passwords_exceptions_window_gtk.h"
 #include "chrome/browser/importer/importer_data_types.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_service.h"
@@ -34,6 +33,10 @@
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/options/options_window_view.h"
+#endif  // defined(OS_CHROMEOS)
+
 namespace {
 
 // Background color for the status label when it's showing an error.
@@ -41,12 +44,12 @@ static const GdkColor kSyncLabelErrorBgColor = GDK_COLOR_RGB(0xff, 0x9a, 0x9a);
 
 // Helper for WrapLabelAtAllocationHack.
 void OnLabelAllocate(GtkWidget* label, GtkAllocation* allocation) {
-  gtk_widget_set_size_request(label, allocation->width, -1);
+  gtk_util::SetLabelWidth(label, allocation->width);
 
   // Disconnect ourselves.  Repeatedly resizing based on allocation causes
   // the dialog to become unshrinkable.
-  g_signal_handlers_disconnect_by_func(label, (void*)OnLabelAllocate,
-                                       NULL);
+  g_signal_handlers_disconnect_by_func(
+      label, reinterpret_cast<gpointer>(OnLabelAllocate), NULL);
 }
 
 // Set the label to use a request size equal to its initial allocation
@@ -69,56 +72,55 @@ ContentPageGtk::ContentPageGtk(Profile* profile)
     : OptionsPageBase(profile),
       sync_status_label_background_(NULL),
       sync_status_label_(NULL),
+#if !defined(OS_CHROMEOS)
       sync_action_link_background_(NULL),
       sync_action_link_(NULL),
+#endif
       sync_start_stop_button_(NULL),
       sync_customize_button_(NULL),
+      privacy_dashboard_link_(NULL),
       initializing_(true),
-      sync_service_(NULL) {
+      sync_service_(NULL),
+      managed_prefs_banner_(profile->GetPrefs(), OPTIONS_PAGE_CONTENT) {
   if (profile->GetProfileSyncService()) {
     sync_service_ = profile->GetProfileSyncService();
     sync_service_->AddObserver(this);
   }
 
   // Prepare the group options layout.
-  OptionsLayoutBuilderGtk options_builder;
+  scoped_ptr<OptionsLayoutBuilderGtk>
+    options_builder(OptionsLayoutBuilderGtk::CreateOptionallyCompactLayout());
+  options_builder->AddWidget(managed_prefs_banner_.banner_widget(), false);
   if (sync_service_) {
-    options_builder.AddOptionGroup(
+    options_builder->AddOptionGroup(
         l10n_util::GetStringUTF8(IDS_SYNC_OPTIONS_GROUP_NAME),
         InitSyncGroup(), false);
     UpdateSyncControls();
   }
 
-  options_builder.AddOptionGroup(
-      l10n_util::GetStringUTF8(IDS_OPTIONS_PASSWORDS_GROUP_NAME),
-      InitPasswordSavingGroup(), false);
-  options_builder.AddOptionGroup(
-      l10n_util::GetStringUTF8(IDS_AUTOFILL_SETTING_WINDOWS_GROUP_NAME),
-      InitFormAutoFillGroup(), false);
-  options_builder.AddOptionGroup(
-      l10n_util::GetStringUTF8(IDS_OPTIONS_BROWSING_DATA_GROUP_NAME),
-      InitBrowsingDataGroup(), false);
-  options_builder.AddOptionGroup(
-      l10n_util::GetStringUTF8(IDS_APPEARANCE_GROUP_NAME),
-      InitThemesGroup(), false);
-  page_ = options_builder.get_page_widget();
-
   // Add preferences observers.
   ask_to_save_passwords_.Init(prefs::kPasswordManagerEnabled,
                               profile->GetPrefs(), this);
-
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kEnableAutoFill)) {
-    enable_form_autofill_.Init(prefs::kAutoFillEnabled,
-                               profile->GetPrefs(), this);
-  } else {
-    enable_form_autofill_.Init(prefs::kFormAutofillEnabled,
-                               profile->GetPrefs(), this);
-  }
-
+  form_autofill_enabled_.Init(prefs::kAutoFillEnabled,
+                              profile->GetPrefs(), this);
   if (browser_defaults::kCanToggleSystemTitleBar) {
     use_custom_chrome_frame_.Init(prefs::kUseCustomChromeFrame,
                                   profile->GetPrefs(), this);
   }
+
+  options_builder->AddOptionGroup(
+      l10n_util::GetStringUTF8(IDS_OPTIONS_PASSWORDS_GROUP_NAME),
+      InitPasswordSavingGroup(), false);
+  options_builder->AddOptionGroup(
+      l10n_util::GetStringUTF8(IDS_AUTOFILL_SETTING_WINDOWS_GROUP_NAME),
+      InitFormAutoFillGroup(), false);
+  options_builder->AddOptionGroup(
+      l10n_util::GetStringUTF8(IDS_OPTIONS_BROWSING_DATA_GROUP_NAME),
+      InitBrowsingDataGroup(), false);
+  options_builder->AddOptionGroup(
+      l10n_util::GetStringUTF8(IDS_APPEARANCE_GROUP_NAME),
+      InitThemesGroup(), false);
+  page_ = options_builder->get_page_widget();
 
   // Load initial values.
   NotifyPrefChanged(NULL);
@@ -126,15 +128,11 @@ ContentPageGtk::ContentPageGtk(Profile* profile)
   registrar_.Add(this, NotificationType::BROWSER_THEME_CHANGED,
                  NotificationService::AllSources());
   ObserveThemeChanged();
-
-  personal_data_ = profile->GetPersonalDataManager();
 }
 
 ContentPageGtk::~ContentPageGtk() {
   if (sync_service_)
     sync_service_->RemoveObserver(this);
-  if (personal_data_)
-    personal_data_->RemoveObserver(this);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -154,7 +152,7 @@ void ContentPageGtk::OnStateChanged() {
 // If |pref_name| is NULL, set the state of all the widgets. (This is used
 // in ContentPageGtk() above to initialize the dialog.) Otherwise, reset the
 // state of the widget for the given preference name, as it has changed.
-void ContentPageGtk::NotifyPrefChanged(const std::wstring* pref_name) {
+void ContentPageGtk::NotifyPrefChanged(const std::string* pref_name) {
   initializing_ = true;
   if (!pref_name || *pref_name == prefs::kPasswordManagerEnabled) {
     if (ask_to_save_passwords_.GetValue()) {
@@ -164,21 +162,19 @@ void ContentPageGtk::NotifyPrefChanged(const std::wstring* pref_name) {
       gtk_toggle_button_set_active(
           GTK_TOGGLE_BUTTON(passwords_neversave_radio_), TRUE);
     }
+    bool isPasswordManagerEnabled = !ask_to_save_passwords_.IsManaged();
+    gtk_widget_set_sensitive(passwords_asktosave_radio_,
+                             isPasswordManagerEnabled);
+    gtk_widget_set_sensitive(passwords_neversave_radio_,
+                             isPasswordManagerEnabled);
+    gtk_widget_set_sensitive(show_passwords_button_,
+                             isPasswordManagerEnabled ||
+                             ask_to_save_passwords_.GetValue());
   }
-  if (!pref_name ||
-      *pref_name == prefs::kAutoFillEnabled ||
-      *pref_name == prefs::kFormAutofillEnabled) {
-    if (enable_form_autofill_.GetValue()) {
-      gtk_toggle_button_set_active(
-          GTK_TOGGLE_BUTTON(form_autofill_enable_radio_), TRUE);
-      if (autofill_button_)
-        gtk_widget_set_sensitive(autofill_button_, TRUE);
-    } else {
-      gtk_toggle_button_set_active(
-          GTK_TOGGLE_BUTTON(form_autofill_disable_radio_), TRUE);
-      if (autofill_button_)
-        gtk_widget_set_sensitive(autofill_button_, FALSE);
-    }
+  if (!pref_name || *pref_name == prefs::kAutoFillEnabled) {
+    bool disabled_by_policy = form_autofill_enabled_.IsManaged() &&
+        !form_autofill_enabled_.GetValue();
+    gtk_widget_set_sensitive(autofill_button_, !disabled_by_policy);
   }
   if (browser_defaults::kCanToggleSystemTitleBar &&
       (!pref_name || *pref_name == prefs::kUseCustomChromeFrame)) {
@@ -217,15 +213,6 @@ void ContentPageGtk::ObserveThemeChanged() {
   gtk_widget_set_sensitive(themes_reset_button_, !is_classic_theme);
 }
 
-void ContentPageGtk::OnPersonalDataLoaded() {
-  DCHECK(personal_data_);
-  // We might have been alerted that the PersonalDataManager has loaded, so
-  // remove ourselves as observer.
-  personal_data_->RemoveObserver(this);
-
-  ShowAutoFillDialog(NULL, personal_data_, profile());
-}
-
 GtkWidget* ContentPageGtk::InitPasswordSavingGroup() {
   GtkWidget* vbox = gtk_vbox_new(FALSE, gtk_util::kControlSpacing);
 
@@ -250,11 +237,11 @@ GtkWidget* ContentPageGtk::InitPasswordSavingGroup() {
   // depend on the spacing above.
   GtkWidget* button_hbox = gtk_hbox_new(FALSE, gtk_util::kLabelSpacing);
   gtk_container_add(GTK_CONTAINER(vbox), button_hbox);
-  GtkWidget* show_passwords_button = gtk_button_new_with_label(
+  show_passwords_button_ = gtk_button_new_with_label(
       l10n_util::GetStringUTF8(IDS_OPTIONS_PASSWORDS_SHOWPASSWORDS).c_str());
-  g_signal_connect(show_passwords_button, "clicked",
+  g_signal_connect(show_passwords_button_, "clicked",
                    G_CALLBACK(OnShowPasswordsButtonClickedThunk), this);
-  gtk_box_pack_start(GTK_BOX(button_hbox), show_passwords_button, FALSE,
+  gtk_box_pack_start(GTK_BOX(button_hbox), show_passwords_button_, FALSE,
                      FALSE, 0);
 
   return vbox;
@@ -263,38 +250,16 @@ GtkWidget* ContentPageGtk::InitPasswordSavingGroup() {
 GtkWidget* ContentPageGtk::InitFormAutoFillGroup() {
   GtkWidget* vbox = gtk_vbox_new(FALSE, gtk_util::kControlSpacing);
 
-  // Enable radio button.
-  form_autofill_enable_radio_ = gtk_radio_button_new_with_label(NULL,
-      l10n_util::GetStringUTF8(IDS_OPTIONS_AUTOFILL_ENABLE).c_str());
-  g_signal_connect(G_OBJECT(form_autofill_enable_radio_), "toggled",
-                   G_CALLBACK(OnAutoFillRadioToggledThunk), this);
-  gtk_box_pack_start(GTK_BOX(vbox), form_autofill_enable_radio_, FALSE,
-                     FALSE, 0);
-
-  // Disable radio button.
-  form_autofill_disable_radio_ = gtk_radio_button_new_with_label_from_widget(
-      GTK_RADIO_BUTTON(form_autofill_enable_radio_),
-      l10n_util::GetStringUTF8(IDS_OPTIONS_AUTOFILL_DISABLE).c_str());
-  g_signal_connect(G_OBJECT(form_autofill_disable_radio_), "toggled",
-                   G_CALLBACK(OnAutoFillRadioToggledThunk), this);
-  gtk_box_pack_start(GTK_BOX(vbox), form_autofill_disable_radio_, FALSE,
-                     FALSE, 0);
-
   GtkWidget* button_hbox = gtk_hbox_new(FALSE, gtk_util::kControlSpacing);
   gtk_container_add(GTK_CONTAINER(vbox), button_hbox);
 
   // AutoFill button.
-  autofill_button_ = NULL;
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kEnableAutoFill)) {
-    autofill_button_ = gtk_button_new_with_label(
-        l10n_util::GetStringUTF8(IDS_OPTIONS_AUTOFILL_SETTINGS).c_str());
-    if (!profile()->GetPrefs()->GetBoolean(prefs::kAutoFillEnabled))
-      gtk_widget_set_sensitive(autofill_button_, FALSE);
+  autofill_button_ = gtk_button_new_with_label(
+      l10n_util::GetStringUTF8(IDS_AUTOFILL_OPTIONS).c_str());
 
-    g_signal_connect(G_OBJECT(autofill_button_), "clicked",
-                     G_CALLBACK(OnAutoFillButtonClickedThunk), this);
-    gtk_box_pack_start(GTK_BOX(button_hbox), autofill_button_, FALSE, FALSE, 0);
-  }
+  g_signal_connect(G_OBJECT(autofill_button_), "clicked",
+                   G_CALLBACK(OnAutoFillButtonClickedThunk), this);
+  gtk_box_pack_start(GTK_BOX(button_hbox), autofill_button_, FALSE, FALSE, 0);
 
   return vbox;
 }
@@ -372,13 +337,13 @@ GtkWidget* ContentPageGtk::InitSyncGroup() {
   sync_status_label_ = gtk_label_new("");
   WrapLabelAtAllocationHack(sync_status_label_);
 
-  gtk_label_set_line_wrap(GTK_LABEL(sync_status_label_), TRUE);
-  gtk_misc_set_alignment(GTK_MISC(sync_status_label_), 0, 0);
+  gtk_misc_set_alignment(GTK_MISC(sync_status_label_), 0, 0.5);
   gtk_box_pack_start(GTK_BOX(vbox), sync_status_label_background_, FALSE,
                      FALSE, 0);
   gtk_container_add(GTK_CONTAINER(sync_status_label_background_),
                     sync_status_label_);
 
+#if !defined(OS_CHROMEOS)
   // Sync action link.
   GtkWidget* link_hbox = gtk_hbox_new(FALSE, gtk_util::kLabelSpacing);
   sync_action_link_background_ = gtk_event_box_new();
@@ -391,6 +356,7 @@ GtkWidget* ContentPageGtk::InitSyncGroup() {
   gtk_container_add(GTK_CONTAINER(sync_action_link_background_),
                     sync_action_link_);
   gtk_widget_hide(sync_action_link_background_);
+#endif
 
   // Add the sync button into its own horizontal box so it does not
   // depend on the spacing above.
@@ -407,6 +373,23 @@ GtkWidget* ContentPageGtk::InitSyncGroup() {
   gtk_box_pack_start(GTK_BOX(button_hbox), sync_customize_button_, FALSE,
                      FALSE, 0);
 
+  // Add the privacy dashboard link.
+  GtkWidget* dashboard_link_hbox =
+      gtk_hbox_new(FALSE, gtk_util::kLabelSpacing);
+  GtkWidget* dashboard_link_background = gtk_event_box_new();
+  std::string dashboard_link_label =
+      l10n_util::GetStringUTF8(IDS_SYNC_PRIVACY_DASHBOARD_LINK_LABEL);
+  privacy_dashboard_link_ =
+      gtk_chrome_link_button_new(dashboard_link_label.c_str());
+  g_signal_connect(privacy_dashboard_link_, "clicked",
+                   G_CALLBACK(OnPrivacyDashboardLinkClickedThunk), this);
+  gtk_box_pack_start(GTK_BOX(vbox), dashboard_link_hbox, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(dashboard_link_hbox),
+                     dashboard_link_background, FALSE, FALSE, 0);
+  gtk_container_add(GTK_CONTAINER(dashboard_link_background),
+                    privacy_dashboard_link_);
+
+
   return vbox;
 }
 
@@ -415,29 +398,56 @@ void ContentPageGtk::UpdateSyncControls() {
   string16 status_label;
   string16 link_label;
   std::string customize_button_label;
-  std::string button_label;
+  bool managed = sync_service_->IsManaged();
   bool sync_setup_completed = sync_service_->HasSyncSetupCompleted();
   bool status_has_error = sync_ui_util::GetStatusLabels(sync_service_,
       &status_label, &link_label) == sync_ui_util::SYNC_ERROR;
   customize_button_label =
     l10n_util::GetStringUTF8(IDS_SYNC_CUSTOMIZE_BUTTON_LABEL);
+
+  std::string start_stop_button_label;
+  bool is_start_stop_button_visible = false;
+  bool is_start_stop_button_sensitive = false;
   if (sync_setup_completed) {
-    button_label = l10n_util::GetStringUTF8(IDS_SYNC_STOP_SYNCING_BUTTON_LABEL);
+    start_stop_button_label =
+        l10n_util::GetStringUTF8(IDS_SYNC_STOP_SYNCING_BUTTON_LABEL);
+#if defined(OS_CHROMEOS)
+    is_start_stop_button_visible = false;
+#else
+    is_start_stop_button_visible = true;
+#endif
+    is_start_stop_button_sensitive = !managed;
   } else if (sync_service_->SetupInProgress()) {
-    button_label = l10n_util::GetStringUTF8(IDS_SYNC_NTP_SETUP_IN_PROGRESS);
+    start_stop_button_label =
+        l10n_util::GetStringUTF8(IDS_SYNC_NTP_SETUP_IN_PROGRESS);
+    is_start_stop_button_visible = true;
+    is_start_stop_button_sensitive = false;
   } else {
-    button_label = l10n_util::GetStringUTF8(IDS_SYNC_START_SYNC_BUTTON_LABEL);
+    start_stop_button_label =
+        l10n_util::GetStringUTF8(IDS_SYNC_START_SYNC_BUTTON_LABEL);
+    is_start_stop_button_visible = true;
+    is_start_stop_button_sensitive = !managed;
   }
+  gtk_widget_set_no_show_all(sync_start_stop_button_,
+                             !is_start_stop_button_visible);
+  if (is_start_stop_button_visible)
+    gtk_widget_show(sync_start_stop_button_);
+  else
+    gtk_widget_hide(sync_start_stop_button_);
+  gtk_widget_set_sensitive(sync_start_stop_button_,
+                           is_start_stop_button_sensitive);
+  gtk_button_set_label(GTK_BUTTON(sync_start_stop_button_),
+                       start_stop_button_label.c_str());
 
   gtk_label_set_label(GTK_LABEL(sync_status_label_),
                       UTF16ToUTF8(status_label).c_str());
-  gtk_widget_set_sensitive(sync_start_stop_button_,
-                           !sync_service_->WizardIsVisible());
-  gtk_button_set_label(GTK_BUTTON(sync_start_stop_button_),
-                       button_label.c_str());
-  gtk_widget_set_child_visible(sync_customize_button_, sync_setup_completed);
+
+  gtk_widget_set_child_visible(sync_customize_button_,
+      sync_setup_completed && !status_has_error);
   gtk_button_set_label(GTK_BUTTON(sync_customize_button_),
                        customize_button_label.c_str());
+  gtk_widget_set_sensitive(sync_customize_button_, !managed);
+#if !defined(OS_CHROMEOS)
   gtk_chrome_link_button_set_label(GTK_CHROME_LINK_BUTTON(sync_action_link_),
                                    UTF16ToUTF8(link_label).c_str());
   if (link_label.empty()) {
@@ -447,25 +457,25 @@ void ContentPageGtk::UpdateSyncControls() {
     gtk_widget_set_no_show_all(sync_action_link_background_, FALSE);
     gtk_widget_show(sync_action_link_background_);
   }
+  gtk_widget_set_sensitive(sync_action_link_, !managed);
+#endif
   if (status_has_error) {
     gtk_widget_modify_bg(sync_status_label_background_, GTK_STATE_NORMAL,
                          &kSyncLabelErrorBgColor);
+#if !defined(OS_CHROMEOS)
     gtk_widget_modify_bg(sync_action_link_background_, GTK_STATE_NORMAL,
                          &kSyncLabelErrorBgColor);
+#endif
   } else {
     gtk_widget_modify_bg(sync_status_label_background_, GTK_STATE_NORMAL, NULL);
+#if !defined(OS_CHROMEOS)
     gtk_widget_modify_bg(sync_action_link_background_, GTK_STATE_NORMAL, NULL);
+#endif
   }
 }
 
 void ContentPageGtk::OnAutoFillButtonClicked(GtkWidget* widget) {
-  DCHECK(personal_data_);
-  // If the personal data manager has not loaded the data yet, set ourselves as
-  // its observer so that we can listen for the OnPersonalDataLoaded signal.
-  if (!personal_data_->IsDataLoaded())
-    personal_data_->SetObserver(this);
-  else
-    OnPersonalDataLoaded();
+  ShowAutoFillDialog(NULL, profile()->GetPersonalDataManager(), profile());
 }
 
 void ContentPageGtk::OnImportButtonClicked(GtkWidget* widget) {
@@ -489,6 +499,12 @@ void ContentPageGtk::OnResetDefaultThemeButtonClicked(GtkWidget* widget) {
 void ContentPageGtk::OnGetThemesButtonClicked(GtkWidget* widget) {
   UserMetricsRecordAction(UserMetricsAction("Options_ThemesGallery"),
                           profile()->GetPrefs());
+#if defined(OS_CHROMEOS)
+  // Close options dialog for ChromeOS becuase it is always stacked on top
+  // of browser window and blocks user's view.
+  chromeos::CloseOptionsWindow();
+#endif  // defined(OS_CHROMEOS)
+
   BrowserList::GetLastActive()->OpenThemeGalleryTabAndActivate();
 }
 
@@ -543,34 +559,8 @@ void ContentPageGtk::OnPasswordRadioToggled(GtkWidget* widget) {
   ask_to_save_passwords_.SetValue(enabled);
 }
 
-void ContentPageGtk::OnAutoFillRadioToggled(GtkWidget* widget) {
-  if (initializing_)
-    return;
-
-  // We get two signals when selecting a radio button, one for the old radio
-  // being toggled off and one for the new one being toggled on. Ignore the
-  // signal for the toggling off the old button.
-  if (!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)))
-    return;
-
-  bool enabled = gtk_toggle_button_get_active(
-      GTK_TOGGLE_BUTTON(form_autofill_enable_radio_));
-  if (enabled) {
-    UserMetricsRecordAction(UserMetricsAction("Options_FormAutofill_Enable"),
-                            profile()->GetPrefs());
-    if (autofill_button_)
-      gtk_widget_set_sensitive(autofill_button_, TRUE);
-  } else {
-    UserMetricsRecordAction(UserMetricsAction("Options_FormAutofill_Disable"),
-                            profile()->GetPrefs());
-    if (autofill_button_)
-      gtk_widget_set_sensitive(autofill_button_, FALSE);
-  }
-  enable_form_autofill_.SetValue(enabled);
-}
-
 void ContentPageGtk::OnSyncStartStopButtonClicked(GtkWidget* widget) {
-  DCHECK(sync_service_);
+  DCHECK(sync_service_ && !sync_service_->IsManaged());
 
   if (sync_service_->HasSyncSetupCompleted()) {
     GtkWidget* dialog = gtk_message_dialog_new(
@@ -598,23 +588,24 @@ void ContentPageGtk::OnSyncStartStopButtonClicked(GtkWidget* widget) {
     g_signal_connect(dialog, "response",
                      G_CALLBACK(OnStopSyncDialogResponseThunk), this);
 
-    gtk_widget_show_all(dialog);
+    gtk_util::ShowDialog(dialog);
     return;
   } else {
-    sync_service_->EnableForUser();
+    sync_service_->ShowLoginDialog(NULL);
     ProfileSyncService::SyncEvent(ProfileSyncService::START_FROM_OPTIONS);
   }
 }
 
 void ContentPageGtk::OnSyncCustomizeButtonClicked(GtkWidget* widget) {
   // sync_customize_button_ should be invisible if sync is not yet set up.
-  DCHECK(sync_service_->HasSyncSetupCompleted());
-  ShowCustomizeSyncWindow(profile());
+  DCHECK(sync_service_ && !sync_service_->IsManaged() &&
+         sync_service_->HasSyncSetupCompleted());
+  sync_service_->ShowConfigure(NULL);
 }
 
 void ContentPageGtk::OnSyncActionLinkClicked(GtkWidget* widget) {
-  DCHECK(sync_service_);
-  sync_service_->ShowLoginDialog();
+  DCHECK(sync_service_ && !sync_service_->IsManaged());
+  sync_service_->ShowConfigure(NULL);
 }
 
 void ContentPageGtk::OnStopSyncDialogResponse(GtkWidget* widget, int response) {
@@ -623,4 +614,8 @@ void ContentPageGtk::OnStopSyncDialogResponse(GtkWidget* widget, int response) {
     ProfileSyncService::SyncEvent(ProfileSyncService::STOP_FROM_OPTIONS);
   }
   gtk_widget_destroy(widget);
+}
+
+void ContentPageGtk::OnPrivacyDashboardLinkClicked(GtkWidget* widget) {
+  BrowserList::GetLastActive()->OpenPrivacyDashboardTabAndActivate();
 }

@@ -7,6 +7,7 @@
 
 #ifndef CHROME_COMMON_NOTIFICATION_DETAILS_H__
 #define CHROME_COMMON_NOTIFICATION_DETAILS_H__
+#pragma once
 
 #include "base/basictypes.h"
 
@@ -15,9 +16,9 @@
 // NotificationService::NoDetails().
 class NotificationDetails {
  public:
-  NotificationDetails() : ptr_(NULL) {}
-  NotificationDetails(const NotificationDetails& other) : ptr_(other.ptr_) {}
-  ~NotificationDetails() {}
+  NotificationDetails();
+  NotificationDetails(const NotificationDetails& other);
+  ~NotificationDetails();
 
   // NotificationDetails can be used as the index for a map; this method
   // returns the pointer to the current details as an identifier, for use as a
@@ -33,7 +34,7 @@ class NotificationDetails {
   }
 
  protected:
-  explicit NotificationDetails(const void* ptr) : ptr_(ptr) {}
+  explicit NotificationDetails(const void* ptr);
 
   // Declaring this const allows Details<T> to be used with both T = Foo and
   // T = const Foo.

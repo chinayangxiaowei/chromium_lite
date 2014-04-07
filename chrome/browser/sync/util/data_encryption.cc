@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -13,13 +13,16 @@
 #include <string>
 #include <vector>
 
+#include "base/logging.h"
+
 using std::string;
 using std::vector;
 
 vector<uint8> EncryptData(const string& data) {
-  DATA_BLOB unencrypted_data, encrypted_data;
+  DATA_BLOB unencrypted_data = { 0 };
   unencrypted_data.pbData = (BYTE*)(data.data());
   unencrypted_data.cbData = data.size();
+  DATA_BLOB encrypted_data = { 0 };
 
   if (!CryptProtectData(&unencrypted_data, L"", NULL, NULL, NULL, 0,
                         &encrypted_data))

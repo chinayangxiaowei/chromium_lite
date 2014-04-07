@@ -1,23 +1,25 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/possible_url_model.h"
 
-#include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "app/table_model_observer.h"
+#include "app/text_elider.h"
 #include "base/callback.h"
 #include "base/i18n/rtl.h"
+#include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/favicon_service.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/pref_names.h"
 #include "gfx/codec/png_codec.h"
 #include "grit/app_resources.h"
 #include "grit/generated_resources.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 using base::Time;
 using base::TimeDelta;
@@ -32,6 +34,20 @@ const int kPossibleURLTimeScope = 30;
 
 }  // anonymous namespace
 
+// Contains the data needed to show a result.
+struct PossibleURLModel::Result {
+  Result() : index(0) {}
+
+  GURL url;
+  // Index of this Result in results_. This is used as the key into
+  // fav_icon_map_ to lookup the favicon for the url, as well as the index
+  // into results_ when the favicon is received.
+  size_t index;
+  gfx::SortedDisplayURL display_url;
+  std::wstring title;
+};
+
+
 PossibleURLModel::PossibleURLModel()
     : profile_(NULL),
       observer_(NULL) {
@@ -39,6 +55,9 @@ PossibleURLModel::PossibleURLModel()
     ResourceBundle& rb = ResourceBundle::GetSharedInstance();
     default_fav_icon = rb.GetBitmapNamed(IDR_DEFAULT_FAVICON);
   }
+}
+
+PossibleURLModel::~PossibleURLModel() {
 }
 
 void PossibleURLModel::Reload(Profile *profile) {
@@ -53,7 +72,7 @@ void PossibleURLModel::Reload(Profile *profile) {
         options.end_time - TimeDelta::FromDays(kPossibleURLTimeScope);
     options.max_count = 50;
 
-    hs->QueryHistory(std::wstring(), options, &consumer_,
+    hs->QueryHistory(string16(), options, &consumer_,
         NewCallback(this, &PossibleURLModel::OnHistoryQueryComplete));
   }
 }
@@ -61,15 +80,15 @@ void PossibleURLModel::Reload(Profile *profile) {
 void PossibleURLModel::OnHistoryQueryComplete(HistoryService::Handle h,
                                               history::QueryResults* result) {
   results_.resize(result->size());
-  std::wstring languages = profile_
-      ? profile_->GetPrefs()->GetString(prefs::kAcceptLanguages)
-      : std::wstring();
+  std::wstring languages = profile_ ?
+      UTF8ToWide(profile_->GetPrefs()->GetString(prefs::kAcceptLanguages)) :
+      std::wstring();
   for (size_t i = 0; i < result->size(); ++i) {
     results_[i].url = (*result)[i].url();
     results_[i].index = i;
     results_[i].display_url =
         gfx::SortedDisplayURL((*result)[i].url(), languages);
-    results_[i].title = (*result)[i].title();
+    results_[i].title = UTF16ToWide((*result)[i].title());
   }
 
   // The old version of this code would filter out all but the most recent
@@ -84,6 +103,10 @@ void PossibleURLModel::OnHistoryQueryComplete(HistoryService::Handle h,
   fav_icon_map_.clear();
   if (observer_)
     observer_->OnModelChanged();
+}
+
+int PossibleURLModel::RowCount() {
+  return static_cast<int>(results_.size());
 }
 
 const GURL& PossibleURLModel::GetURL(int row) {
@@ -121,13 +144,8 @@ std::wstring PossibleURLModel::GetText(int row, int col_id) {
 
   // TODO(brettw): this should probably pass the GURL up so the URL elider
   // can be used at a higher level when we know the width.
-  const string16& url = results_[row].display_url.display_url();
-  if (!base::i18n::IsRTL())
-    return UTF16ToWideHack(url);
-  // Force URL to be LTR.
-  std::wstring localized_url = UTF16ToWideHack(url);
-  base::i18n::WrapStringWithLTRFormatting(&localized_url);
-  return localized_url;
+  string16 url = results_[row].display_url.display_url();
+  return UTF16ToWide(base::i18n::GetDisplayStringInLTRDirectionality(url));
 }
 
 SkBitmap PossibleURLModel::GetIcon(int row) {
@@ -187,4 +205,8 @@ void PossibleURLModel::OnFavIconAvailable(
         observer_->OnItemsChanged(static_cast<int>(index), 1);
     }
   }
+}
+
+void PossibleURLModel::SetObserver(TableModelObserver* observer) {
+  observer_ = observer;
 }

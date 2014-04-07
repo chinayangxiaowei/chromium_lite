@@ -1,20 +1,16 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_PROXY_PROXY_RESOLVER_V8_H_
 #define NET_PROXY_PROXY_RESOLVER_V8_H_
-
-#include <string>
+#pragma once
 
 #include "base/scoped_ptr.h"
 #include "net/proxy/proxy_resolver.h"
 
-class MessageLoop;
-
 namespace net {
 
-class HostResolver;
 class ProxyResolverJSBindings;
 
 // Implementation of ProxyResolver that uses V8 to evaluate PAC scripts.
@@ -52,6 +48,10 @@ class ProxyResolverV8 : public ProxyResolver {
                              const BoundNetLog& net_log);
   virtual void CancelRequest(RequestHandle request);
   virtual void PurgeMemory();
+  virtual void Shutdown();
+  virtual int SetPacScript(
+      const scoped_refptr<ProxyResolverScriptData>& script_data,
+      CompletionCallback* /*callback*/);
 
   ProxyResolverJSBindings* js_bindings() const { return js_bindings_.get(); }
 
@@ -60,11 +60,6 @@ class ProxyResolverV8 : public ProxyResolver {
   // script. It corresponds with the data from the last call to
   // SetPacScript().
   class Context;
-
-  // ProxyResolver implementation:
-  virtual int SetPacScript(const GURL& /*pac_url*/,
-                           const std::string& bytes_utf8,
-                           CompletionCallback* /*callback*/);
   scoped_ptr<Context> context_;
 
   scoped_ptr<ProxyResolverJSBindings> js_bindings_;

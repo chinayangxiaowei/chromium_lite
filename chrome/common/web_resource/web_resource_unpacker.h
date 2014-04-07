@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,11 @@
 
 #ifndef CHROME_COMMON_WEB_RESOURCE_WEB_RESOURCE_UNPACKER_H_
 #define CHROME_COMMON_WEB_RESOURCE_WEB_RESOURCE_UNPACKER_H_
+#pragma once
 
 #include <string>
 
-#include "base/file_path.h"
+#include "base/basictypes.h"
 #include "base/scoped_ptr.h"
 
 class DictionaryValue;
@@ -24,8 +25,8 @@ class WebResourceUnpacker {
   static const char* kInvalidDataTypeError;
   static const char* kUnexpectedJSONFormatError;
 
-  explicit WebResourceUnpacker(const std::string &resource_data)
-    : resource_data_(resource_data) {}
+  explicit WebResourceUnpacker(const std::string &resource_data);
+  ~WebResourceUnpacker();
 
   // This does the actual parsing.  In case of an error, error_message_
   // is set to an appropriate value.
@@ -53,5 +54,3 @@ class WebResourceUnpacker {
 };
 
 #endif  // CHROME_COMMON_WEB_RESOURCE_WEB_RESOURCE_UNPACKER_H_
-
-

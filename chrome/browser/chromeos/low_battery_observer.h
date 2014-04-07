@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_LOW_BATTERY_OBSERVER_H_
 #define CHROME_BROWSER_CHROMEOS_LOW_BATTERY_OBSERVER_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "base/time.h"
@@ -25,7 +26,7 @@ class LowBatteryObserver : public PowerLibrary::Observer {
  private:
   virtual void PowerChanged(PowerLibrary* object);
 
-  void Show(base::TimeDelta remaining);
+  void Show(base::TimeDelta remaining, bool urgent);
   void Hide();
 
   SystemNotification notification_;

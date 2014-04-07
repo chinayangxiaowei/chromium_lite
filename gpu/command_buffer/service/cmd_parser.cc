@@ -6,6 +6,8 @@
 
 #include "gpu/command_buffer/service/cmd_parser.h"
 
+#include "base/logging.h"
+
 namespace gpu {
 
 CommandParser::CommandParser(void *shm_address,
@@ -58,7 +60,11 @@ error::Error CommandParser::ProcessCommand() {
   if (result != error::kNoError) {
     ReportError(header.command, result);
   }
-  get_ = (get + header.size) % entry_count_;
+
+  // If get was not set somewhere else advance it.
+  if (get == get_) {
+    get_ = (get + header.size) % entry_count_;
+  }
   return result;
 }
 

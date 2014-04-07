@@ -4,13 +4,14 @@ include_rules = [
   "+chrome/installer",
   "+chrome/personalization",
   "+chrome/plugin",  # For Mac plugin interpose library.
+  "+chrome/profile_import",
   "+chrome/tools/profiles",  # For history unit tests.
   "+chrome/views",
+  "+cros",
   "+grit",  # For generated headers
   "+sandbox/src",
   "+skia/include",
   "+webkit/database",
-  "+webkit/default_plugin",
   "+webkit/glue",  # Defines some types that are marshalled over IPC.
   "+xib_localizers", # For generated mac localization helpers
 
@@ -21,6 +22,7 @@ include_rules = [
   "+media/audio", # Chrome's lightweight audio library.
   "+media/base",
   "+third_party/expat",
+  "+third_party/gpsd",
   "+third_party/sqlite",
   "+third_party/libevent", # For the remote V8 debugging server
   "+third_party/cld",

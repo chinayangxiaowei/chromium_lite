@@ -4,12 +4,16 @@
 
 #import "chrome/browser/cocoa/content_exceptions_window_controller.h"
 
+#include "app/l10n_util.h"
 #include "app/l10n_util_mac.h"
 #include "app/table_model_observer.h"
+#include "base/command_line.h"
 #import "base/mac_util.h"
 #import "base/scoped_nsobject.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/content_exceptions_table_model.h"
+#include "chrome/browser/content_setting_combo_model.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/common/notification_service.h"
 #include "grit/generated_resources.h"
@@ -17,15 +21,14 @@
 
 @interface ContentExceptionsWindowController (Private)
 - (id)initWithType:(ContentSettingsType)settingsType
-       settingsMap:(HostContentSettingsMap*)settingsMap;
+       settingsMap:(HostContentSettingsMap*)settingsMap
+    otrSettingsMap:(HostContentSettingsMap*)otrSettingsMap;
 - (void)updateRow:(NSInteger)row
-        withEntry:(const HostContentSettingsMap::PatternSettingPair&)entry;
+        withEntry:(const HostContentSettingsMap::PatternSettingPair&)entry
+           forOtr:(BOOL)isOtr;
 - (void)adjustEditingButtons;
 - (void)modelDidChange;
-- (size_t)menuItemCount;
 - (NSString*)titleForIndex:(size_t)index;
-- (ContentSetting)settingForIndex:(size_t)index;
-- (size_t)indexForSetting:(ContentSetting)setting;
 @end
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -121,15 +124,6 @@ NSString* GetWindowTitle(ContentSettingsType settingsType) {
 
 const CGFloat kButtonBarHeight = 35.0;
 
-// The settings shown in the combobox if showAsk_ is false;
-const ContentSetting kNoAskSettings[] = { CONTENT_SETTING_ALLOW,
-                                          CONTENT_SETTING_BLOCK };
-
-// The settings shown in the combobox if showAsk_ is true;
-const ContentSetting kAskSettings[] = { CONTENT_SETTING_ALLOW,
-                                        CONTENT_SETTING_ASK,
-                                        CONTENT_SETTING_BLOCK };
-
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -140,27 +134,33 @@ static ContentExceptionsWindowController*
 
 @implementation ContentExceptionsWindowController
 
-+ (id)showForType:(ContentSettingsType)settingsType
-      settingsMap:(HostContentSettingsMap*)settingsMap {
++ (id)controllerForType:(ContentSettingsType)settingsType
+            settingsMap:(HostContentSettingsMap*)settingsMap
+         otrSettingsMap:(HostContentSettingsMap*)otrSettingsMap {
   if (!g_exceptionWindows[settingsType]) {
     g_exceptionWindows[settingsType] =
-        [[ContentExceptionsWindowController alloc] initWithType:settingsType
-                                                    settingsMap:settingsMap];
+        [[ContentExceptionsWindowController alloc]
+            initWithType:settingsType
+             settingsMap:settingsMap
+          otrSettingsMap:otrSettingsMap];
   }
-  [g_exceptionWindows[settingsType] showWindow:nil];
   return g_exceptionWindows[settingsType];
 }
 
 - (id)initWithType:(ContentSettingsType)settingsType
-       settingsMap:(HostContentSettingsMap*)settingsMap {
+       settingsMap:(HostContentSettingsMap*)settingsMap
+    otrSettingsMap:(HostContentSettingsMap*)otrSettingsMap {
   NSString* nibpath =
       [mac_util::MainAppBundle() pathForResource:@"ContentExceptionsWindow"
                                           ofType:@"nib"];
   if ((self = [super initWithWindowNibPath:nibpath owner:self])) {
     settingsType_ = settingsType;
     settingsMap_ = settingsMap;
-    model_.reset(new ContentExceptionsTableModel(settingsMap_, settingsType_));
-    showAsk_ = settingsType_ == CONTENT_SETTINGS_TYPE_COOKIES;
+    otrSettingsMap_ = otrSettingsMap;
+    model_.reset(new ContentExceptionsTableModel(
+        settingsMap_, otrSettingsMap_, settingsType_));
+    popup_model_.reset(new ContentSettingComboModel(settingsType_));
+    otrAllowed_ = otrSettingsMap != NULL;
     tableObserver_.reset(new UpdatingContentSettingsObserver(self));
     updatesEnabled_ = YES;
 
@@ -179,21 +179,20 @@ static ContentExceptionsWindowController*
 
   [[self window] setTitle:GetWindowTitle(settingsType_)];
 
-  // Make sure the button fits its label, but keep it the same height as the
-  // other two buttons.
-  [GTMUILocalizerAndLayoutTweaker sizeToFitView:removeAllButton_];
-  NSSize size = [removeAllButton_ frame].size;
-  size.height = NSHeight([addButton_ frame]);
-  [removeAllButton_ setFrameSize:size];
+  CGFloat minWidth = [[addButton_ superview] bounds].size.width +
+                     [[doneButton_ superview] bounds].size.width;
+  [self setMinWidth:minWidth];
 
   [self adjustEditingButtons];
 
   // Initialize menu for the data cell in the "action" column.
   scoped_nsobject<NSMenu> menu([[NSMenu alloc] initWithTitle:@"exceptionMenu"]);
-  for (size_t i = 0; i < [self menuItemCount]; ++i) {
-    scoped_nsobject<NSMenuItem> allowItem([[NSMenuItem alloc]
-        initWithTitle:[self titleForIndex:i] action:NULL keyEquivalent:@""]);
-    [allowItem.get() setTag:[self settingForIndex:i]];
+  for (int i = 0; i < popup_model_->GetItemCount(); ++i) {
+    NSString* title =
+        l10n_util::FixUpWindowsStyleLabel(popup_model_->GetItemAt(i));
+    scoped_nsobject<NSMenuItem> allowItem(
+        [[NSMenuItem alloc] initWithTitle:title action:NULL keyEquivalent:@""]);
+    [allowItem.get() setTag:popup_model_->SettingForIndex(i)];
     [menu.get() addItem:allowItem.get()];
   }
   NSCell* menuCell =
@@ -204,11 +203,20 @@ static ContentExceptionsWindowController*
       [[tableView_ tableColumnWithIdentifier:@"pattern"] dataCell];
   [patternCell setFormatter:[[[PatternFormatter alloc] init] autorelease]];
 
-  // Give the button bar on the bottom of the window the "iTunes/iChat" look.
-  [[self window] setAutorecalculatesContentBorderThickness:NO
-                                                   forEdge:NSMinYEdge];
-  [[self window] setContentBorderThickness:kButtonBarHeight
-                                   forEdge:NSMinYEdge];
+  if (!otrAllowed_) {
+    [tableView_
+        removeTableColumn:[tableView_ tableColumnWithIdentifier:@"otr"]];
+  }
+}
+
+- (void)setMinWidth:(CGFloat)minWidth {
+  NSWindow* window = [self window];
+  [window setMinSize:NSMakeSize(minWidth, [window minSize].height)];
+  if ([window frame].size.width < minWidth) {
+    NSRect frame = [window frame];
+    frame.size.width = minWidth;
+    [window setFrame:frame display:NO];
+  }
 }
 
 - (void)windowWillClose:(NSNotification*)notification {
@@ -235,7 +243,7 @@ static ContentExceptionsWindowController*
       [self removeException:self];
     }
   } else {
-    [self close];
+    [self closeSheet:self];
   }
 }
 
@@ -262,6 +270,21 @@ static ContentExceptionsWindowController*
     }
   }
   [super keyDown:event];
+}
+
+- (void)attachSheetTo:(NSWindow*)window {
+  [NSApp beginSheet:[self window]
+     modalForWindow:window
+      modalDelegate:self
+     didEndSelector:@selector(sheetDidEnd:returnCode:contextInfo:)
+        contextInfo:nil];
+}
+
+- (void)sheetDidEnd:(NSWindow*)sheet
+         returnCode:(NSInteger)returnCode
+        contextInfo:(void*)context {
+  [sheet close];
+  [sheet orderOut:self];
 }
 
 - (IBAction)addException:(id)sender {
@@ -310,6 +333,10 @@ static ContentExceptionsWindowController*
   [self modelDidChange];
 }
 
+- (IBAction)closeSheet:(id)sender {
+  [NSApp endSheet:[self window]];
+}
+
 // Table View Data Source -----------------------------------------------------
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView*)table {
@@ -320,17 +347,24 @@ static ContentExceptionsWindowController*
     objectValueForTableColumn:(NSTableColumn*)tableColumn
                           row:(NSInteger)row {
   const HostContentSettingsMap::PatternSettingPair* entry;
-  if (newException_.get() && row >= model_->RowCount())
+  int isOtr;
+  if (newException_.get() && row >= model_->RowCount()) {
     entry = newException_.get();
-  else
+    isOtr = 0;
+  } else {
     entry = &model_->entry_at(row);
+    isOtr = model_->entry_is_off_the_record(row) ? 1 : 0;
+  }
 
   NSObject* result = nil;
   NSString* identifier = [tableColumn identifier];
   if ([identifier isEqualToString:@"pattern"]) {
     result = base::SysUTF8ToNSString(entry->first.AsString());
   } else if ([identifier isEqualToString:@"action"]) {
-    result = [NSNumber numberWithInt:[self indexForSetting:entry->second]];
+    result =
+        [NSNumber numberWithInt:popup_model_->IndexForSetting(entry->second)];
+  } else if ([identifier isEqualToString:@"otr"]) {
+    result = [NSNumber numberWithInt:isOtr];
   } else {
     NOTREACHED();
   }
@@ -339,19 +373,20 @@ static ContentExceptionsWindowController*
 
 // Updates exception at |row| to contain the data in |entry|.
 - (void)updateRow:(NSInteger)row
-        withEntry:(const HostContentSettingsMap::PatternSettingPair&)entry {
+        withEntry:(const HostContentSettingsMap::PatternSettingPair&)entry
+           forOtr:(BOOL)isOtr {
   // TODO(thakis): This apparently moves an edited row to the back of the list.
   // It's what windows and linux do, but it's kinda sucky. Fix.
   // http://crbug.com/36904
   updatesEnabled_ = NO;
   if (row < model_->RowCount())
     model_->RemoveException(row);
-  model_->AddException(entry.first, entry.second);
+  model_->AddException(entry.first, entry.second, isOtr);
   updatesEnabled_ = YES;
   [self modelDidChange];
 
   // For now, at least re-select the edited element.
-  int newIndex = model_->IndexOfExceptionByPattern(entry.first);
+  int newIndex = model_->IndexOfExceptionByPattern(entry.first, isOtr);
   DCHECK(newIndex != -1);
   [tableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:newIndex]
           byExtendingSelection:NO];
@@ -376,6 +411,9 @@ static ContentExceptionsWindowController*
   HostContentSettingsMap::PatternSettingPair originalEntry =
       isNewRow ? *newException_ : model_->entry_at(row);
   HostContentSettingsMap::PatternSettingPair entry = originalEntry;
+  bool isOtr =
+      isNewRow ? 0 : model_->entry_is_off_the_record(row);
+  bool wasOtr = isOtr;
 
   // Modify it.
   NSString* identifier = [tableColumn identifier];
@@ -385,7 +423,10 @@ static ContentExceptionsWindowController*
   }
   if ([identifier isEqualToString:@"action"]) {
     int index = [object intValue];
-    entry.second = [self settingForIndex:index];
+    entry.second = popup_model_->SettingForIndex(index);
+  }
+  if ([identifier isEqualToString:@"otr"]) {
+    isOtr = [object intValue] != 0;
   }
 
   // Commit modification, if any.
@@ -396,7 +437,7 @@ static ContentExceptionsWindowController*
       [self adjustEditingButtons];
       return;  // Commit new rows only when the pattern has been set.
     }
-    int newIndex = model_->IndexOfExceptionByPattern(entry.first);
+    int newIndex = model_->IndexOfExceptionByPattern(entry.first, false);
     if (newIndex != -1) {
       // The new pattern was already in the table. Focus existing row instead of
       // overwriting it with a new one.
@@ -407,8 +448,8 @@ static ContentExceptionsWindowController*
       return;
     }
   }
-  if (entry != originalEntry || isNewRow)
-    [self updateRow:row withEntry:entry];
+  if (entry != originalEntry || wasOtr != isOtr || isNewRow)
+    [self updateRow:row withEntry:entry forOtr:isOtr];
 }
 
 
@@ -439,41 +480,11 @@ static ContentExceptionsWindowController*
     return;
 
   // The model caches its data, meaning we need to recreate it on every change.
-  model_.reset(new ContentExceptionsTableModel(settingsMap_, settingsType_));
+  model_.reset(new ContentExceptionsTableModel(
+      settingsMap_, otrSettingsMap_, settingsType_));
 
   [tableView_ reloadData];
   [self adjustEditingButtons];
-}
-
-- (size_t)menuItemCount {
-  return showAsk_ ? arraysize(kAskSettings) : arraysize(kNoAskSettings);
-}
-
-- (NSString*)titleForIndex:(size_t)index {
-  switch ([self settingForIndex:index]) {
-    case CONTENT_SETTING_ALLOW:
-      return l10n_util::GetNSStringWithFixup(IDS_EXCEPTIONS_ALLOW_BUTTON);
-    case CONTENT_SETTING_BLOCK:
-      return l10n_util::GetNSStringWithFixup(IDS_EXCEPTIONS_BLOCK_BUTTON);
-    case CONTENT_SETTING_ASK:
-      return l10n_util::GetNSStringWithFixup(IDS_EXCEPTIONS_ASK_BUTTON);
-    default:
-      NOTREACHED();
-  }
-  return @"";
-}
-
-- (ContentSetting)settingForIndex:(size_t)index {
-  return showAsk_ ? kAskSettings[index] : kNoAskSettings[index];
-}
-
-- (size_t)indexForSetting:(ContentSetting)setting {
-  for (size_t i = 0; i < [self menuItemCount]; ++i) {
-    if ([self settingForIndex:i] == setting)
-      return i;
-  }
-  NOTREACHED();
-  return 0;
 }
 
 @end

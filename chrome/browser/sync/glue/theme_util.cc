@@ -8,14 +8,13 @@
 
 #include "base/logging.h"
 #include "base/scoped_ptr.h"
-#include "base/version.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/extensions/extension_updater.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #if defined(TOOLKIT_USES_GTK)
 #include "chrome/browser/gtk/gtk_theme_provider.h"
 #endif
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/sync/protocol/theme_specifics.pb.h"
 #include "chrome/common/extensions/extension.h"
@@ -91,7 +90,7 @@ void SetCurrentThemeFromThemeSpecifics(
     CHECK(extensions_service);
     Extension* extension = extensions_service->GetExtensionById(id, true);
     if (extension) {
-      if (!extension->IsTheme()) {
+      if (!extension->is_theme()) {
         LOG(INFO) << "Extension " << id << " is not a theme; aborting";
         return;
       }
@@ -111,7 +110,7 @@ void SetCurrentThemeFromThemeSpecifics(
       {
         const Extension* current_theme = profile->GetTheme();
         if (current_theme) {
-          DCHECK(current_theme->IsTheme());
+          DCHECK(current_theme->is_theme());
           previous_theme_id = current_theme->id();
         }
       }
@@ -127,15 +126,17 @@ void SetCurrentThemeFromThemeSpecifics(
       // No extension with this id exists -- we must install it; we do
       // so by adding it as a pending extension and then triggering an
       // auto-update cycle.
-      scoped_ptr<Version> version(Version::GetVersionFromString("0.0.0.0"));
-      DCHECK(version.get());
-      const bool kIsTheme = true;
+      const PendingExtensionInfo::ExpectedCrxType kExpectedCrxType =
+          PendingExtensionInfo::THEME;
       // Themes don't need to install silently as they just pop up an
       // informational dialog after installation instead of a
       // confirmation dialog.
       const bool kInstallSilently = false;
-      extensions_service->AddPendingExtension(id, update_url, *version,
-                                              kIsTheme, kInstallSilently);
+      const bool kEnableOnInstall = true;
+      const bool kEnableIncognitoOnInstall = false;
+      extensions_service->AddPendingExtensionFromSync(
+          id, update_url, kExpectedCrxType,
+          kInstallSilently, kEnableOnInstall, kEnableIncognitoOnInstall);
       ExtensionUpdater* extension_updater = extensions_service->updater();
       // Auto-updates should now be on always (see the construction of
       // the ExtensionsService in ProfileImpl::InitExtensions()).
@@ -153,13 +154,26 @@ void SetCurrentThemeFromThemeSpecifics(
   }
 }
 
+bool UpdateThemeSpecificsOrSetCurrentThemeIfNecessary(
+    Profile* profile, sync_pb::ThemeSpecifics* theme_specifics) {
+  if (!theme_specifics->use_custom_theme() &&
+      (profile->GetTheme() || (UseSystemTheme(profile) &&
+                               IsSystemThemeDistinctFromDefaultTheme()))) {
+    GetThemeSpecificsFromCurrentTheme(profile, theme_specifics);
+    return true;
+  } else {
+    SetCurrentThemeFromThemeSpecificsIfNecessary(*theme_specifics, profile);
+    return false;
+  }
+}
+
 void GetThemeSpecificsFromCurrentTheme(
     Profile* profile,
     sync_pb::ThemeSpecifics* theme_specifics) {
   DCHECK(profile);
   const Extension* current_theme = profile->GetTheme();
   if (current_theme) {
-    DCHECK(current_theme->IsTheme());
+    DCHECK(current_theme->is_theme());
   }
   GetThemeSpecificsFromCurrentThemeHelper(
       current_theme,
@@ -183,7 +197,7 @@ void GetThemeSpecificsFromCurrentThemeHelper(
   }
   if (use_custom_theme) {
     DCHECK(current_theme);
-    DCHECK(current_theme->IsTheme());
+    DCHECK(current_theme->is_theme());
     theme_specifics->set_custom_theme_name(current_theme->name());
     theme_specifics->set_custom_theme_id(current_theme->id());
     theme_specifics->set_custom_theme_update_url(

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_SESSIONS_ORDERED_COMMIT_SET_H_
 #define CHROME_BROWSER_SYNC_SESSIONS_ORDERED_COMMIT_SET_H_
+#pragma once
 
 #include <map>
 #include <set>
@@ -29,10 +30,8 @@ class OrderedCommitSet {
   typedef std::vector<size_t> Projection;
 
   // TODO(chron): Reserve space according to batch size?
-  explicit OrderedCommitSet(const browser_sync::ModelSafeRoutingInfo& routes)
-      : routes_(routes) {}
-
-  ~OrderedCommitSet() {}
+  explicit OrderedCommitSet(const browser_sync::ModelSafeRoutingInfo& routes);
+  ~OrderedCommitSet();
 
   bool HaveCommitItem(const int64 metahandle) const {
     return inserted_metahandles_.count(metahandle) > 0;

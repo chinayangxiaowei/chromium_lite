@@ -8,6 +8,8 @@
 #include "chrome/browser/cocoa/browser_test_helper.h"
 #include "chrome/browser/cocoa/cocoa_test_helper.h"
 #import "chrome/browser/cocoa/keyword_editor_cocoa_controller.h"
+#include "chrome/browser/search_engines/template_url.h"
+#include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/test/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -148,7 +150,7 @@ TEST_F(KeywordEditorCocoaControllerTest, IndexInModelForRowMixed) {
 
   // Add a default engine.
   TemplateURL* t_url = new TemplateURL();
-  t_url->SetURL(L"http://test1/{searchTerms}", 0, 0);
+  t_url->SetURL("http://test1/{searchTerms}", 0, 0);
   t_url->set_keyword(L"test1");
   t_url->set_short_name(L"Test1");
   t_url->set_show_in_default_list(true);
@@ -156,7 +158,7 @@ TEST_F(KeywordEditorCocoaControllerTest, IndexInModelForRowMixed) {
 
   // Add a non-default engine.
   t_url = new TemplateURL();
-  t_url->SetURL(L"http://test2/{searchTerms}", 0, 0);
+  t_url->SetURL("http://test2/{searchTerms}", 0, 0);
   t_url->set_keyword(L"test2");
   t_url->set_short_name(L"Test2");
   t_url->set_show_in_default_list(false);
@@ -191,14 +193,14 @@ TEST_F(KeywordEditorCocoaControllerTest, IndexInModelForDefault) {
 
   // Add 2 default engines.
   TemplateURL* t_url = new TemplateURL();
-  t_url->SetURL(L"http://test1/{searchTerms}", 0, 0);
+  t_url->SetURL("http://test1/{searchTerms}", 0, 0);
   t_url->set_keyword(L"test1");
   t_url->set_short_name(L"Test1");
   t_url->set_show_in_default_list(true);
   template_model->Add(t_url);
 
   t_url = new TemplateURL();
-  t_url->SetURL(L"http://test2/{searchTerms}", 0, 0);
+  t_url->SetURL("http://test2/{searchTerms}", 0, 0);
   t_url->set_keyword(L"test2");
   t_url->set_short_name(L"Test2");
   t_url->set_show_in_default_list(true);

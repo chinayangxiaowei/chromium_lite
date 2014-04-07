@@ -13,7 +13,7 @@
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/plugin_process_host.h"
 #include "chrome/common/plugin_messages.h"
-
+#include "gfx/rect.h"
 
 void PluginProcessHost::OnPluginSelectWindow(uint32 window_id,
                                              gfx::Rect window_rect,
@@ -42,8 +42,8 @@ void PluginProcessHost::OnPluginShowWindow(uint32 window_id,
     // the main display, hide the menubar so that it has the whole screen.
     // (but only if we haven't already seen this fullscreen window, since
     // otherwise our refcounting can get skewed).
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableFunction(mac_util::RequestFullScreen,
                             mac_util::kFullScreenModeHideAll));
   }
@@ -75,49 +75,36 @@ void PluginProcessHost::OnPluginHideWindow(uint32 window_id,
     plugin_fullscreen_windows_set_.erase(window_id);
     pid_t plugin_pid = browser_needs_activation ? -1 : handle();
     browser_needs_activation = false;
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableFunction(ReleasePluginFullScreen, plugin_pid));
   }
 
   if (browser_needs_activation) {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableFunction(mac_util::ActivateProcess,
                             base::GetCurrentProcId()));
   }
 }
 
 void PluginProcessHost::OnAppActivation() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
   // If our plugin process has any modal windows up, we need to bring it forward
   // so that they act more like an in-process modal window would.
   if (!plugin_modal_windows_set_.empty()) {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableFunction(mac_util::ActivateProcess, handle()));
-  }
-}
-
-void PluginProcessHost::OnPluginReceivedFocus(int process_id, int instance_id) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
-  // A plugin has received keyboard focus, so tell all other plugin processes
-  // that they no longer have it (simulating the OS-level focus notifications
-  // that Gtk and Windows provide).
-  for (ChildProcessHost::Iterator iter(ChildProcessInfo::PLUGIN_PROCESS);
-       !iter.Done(); ++iter) {
-    PluginProcessHost* plugin = static_cast<PluginProcessHost*>(*iter);
-    int instance = (plugin->handle() == process_id) ? instance_id : 0;
-    plugin->Send(new PluginProcessMsg_PluginFocusNotify(instance));
   }
 }
 
 void PluginProcessHost::OnPluginSetCursorVisibility(bool visible) {
   if (plugin_cursor_visible_ != visible) {
     plugin_cursor_visible_ = visible;
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableFunction(mac_util::SetCursorVisibility,
                             visible));
   }

@@ -1,11 +1,13 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TEST_AUTOMATION_AUTOMATION_PROXY_H__
 #define CHROME_TEST_AUTOMATION_AUTOMATION_PROXY_H__
+#pragma once
 
 #include <string>
+#include <vector>
 
 #include "app/message_box_flags.h"
 #include "base/basictypes.h"
@@ -56,7 +58,7 @@ class AutomationMessageSender : public IPC::Message::Sender {
 class AutomationProxy : public IPC::Channel::Listener,
                         public AutomationMessageSender {
  public:
-  explicit AutomationProxy(int command_execution_timeout_ms);
+  AutomationProxy(int command_execution_timeout_ms, bool disconnect_on_failure);
   virtual ~AutomationProxy();
 
   // IPC callback
@@ -114,7 +116,7 @@ class AutomationProxy : public IPC::Channel::Listener,
   bool GetShowingAppModalDialog(bool* showing_app_modal_dialog,
       MessageBoxFlags::DialogButton* button) WARN_UNUSED_RESULT;
 
-  // Simulates a click on a dialog button.
+  // Simulates a click on a dialog button. Synchronous.
   bool ClickAppModalDialogButton(
       MessageBoxFlags::DialogButton button) WARN_UNUSED_RESULT;
 
@@ -182,10 +184,12 @@ class AutomationProxy : public IPC::Channel::Listener,
   // sent.
   bool SavePackageShouldPromptUser(bool should_prompt) WARN_UNUSED_RESULT;
 
-  // Installs the extension crx. Returns the ExtensionProxy for the
-  // installed extension, or NULL on failure.
+  // Installs the extension crx. If |with_ui| is true an install confirmation
+  // and notification UI is shown, otherwise the install is silent. Returns the
+  // ExtensionProxy for the installed extension, or NULL on failure.
   // Note: Overinstalls and downgrades will return NULL.
-  scoped_refptr<ExtensionProxy> InstallExtension(const FilePath& crx_file);
+  scoped_refptr<ExtensionProxy> InstallExtension(const FilePath& crx_file,
+                                                 bool with_ui);
 
   // Asserts that the next extension test result is true.
   void EnsureExtensionTestResult();
@@ -193,6 +197,9 @@ class AutomationProxy : public IPC::Channel::Listener,
   // Gets a list of all enabled extensions' base directories.
   // Returns true on success.
   bool GetEnabledExtensions(std::vector<FilePath>* extension_directories);
+
+  // Resets to the default theme. Returns true on success.
+  bool ResetToDefaultTheme();
 
 #if defined(OS_CHROMEOS)
   // Logs in through the Chrome OS login wizard with given |username|
@@ -227,6 +234,13 @@ class AutomationProxy : public IPC::Channel::Listener,
 
   int command_execution_timeout_ms() const {
     return static_cast<int>(command_execution_timeout_.InMilliseconds());
+  }
+
+  // Sets the timeout for subsequent automation calls.
+  void set_command_execution_timeout_ms(int timeout_ms) {
+    DCHECK(timeout_ms <= 10 * 60 * 1000 ) << "10+ min of automation timeout "
+        "can make the test hang and be killed by buildbot";
+    command_execution_timeout_ = base::TimeDelta::FromMilliseconds(timeout_ms);
   }
 
   // Returns the server version of the server connected. You may only call this
@@ -278,6 +292,10 @@ class AutomationProxy : public IPC::Channel::Listener,
   // set this to true if building the automation proxy into a module with
   // a version resource.
   bool perform_version_check_;
+
+  // If true, the proxy will disconnect the IPC channel on first failure
+  // to send an IPC message. This helps avoid long timeouts in tests.
+  bool disconnect_on_failure_;
 
   // Delay to let the browser execute the command.
   base::TimeDelta command_execution_timeout_;

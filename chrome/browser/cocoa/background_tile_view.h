@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_COCOA_BACKGROUND_TILE_VIEW_H_
 #define CHROME_BROWSER_COCOA_BACKGROUND_TILE_VIEW_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -16,7 +17,7 @@
   NSImage* tileImage_;
 }
 
-@property(retain) NSImage* tileImage;
+@property(nonatomic, retain) NSImage* tileImage;
 @end
 
 #endif  // CHROME_BROWSER_COCOA_BACKGROUND_TILE_VIEW_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -16,12 +16,14 @@
 
 #ifndef CHROME_BROWSER_SAFE_BROWSING_BLOOM_FILTER_H_
 #define CHROME_BROWSER_SAFE_BROWSING_BLOOM_FILTER_H_
+#pragma once
 
 #include <vector>
 
+#include "base/gtest_prod_util.h"
 #include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 class FilePath;
 
@@ -45,7 +47,7 @@ class BloomFilter : public base::RefCountedThreadSafe<BloomFilter> {
 
   // Loading and storing the filter from / to disk.
   static BloomFilter* LoadFile(const FilePath& filter_name);
-  bool WriteFile(const FilePath& filter_name);
+  bool WriteFile(const FilePath& filter_name) const;
 
   // How many bits to use per item. See the design doc for more information.
   static const int kBloomFilterSizeRatio = 25;
@@ -58,10 +60,17 @@ class BloomFilter : public base::RefCountedThreadSafe<BloomFilter> {
   // (in bytes).
   static const int kBloomFilterMaxSize = 2 * 1024 * 1024;
 
+  // Use the above constants to calculate an appropriate size to pass
+  // to the BloomFilter constructor based on the intended |key_count|.
+  // TODO(shess): This is very clunky.  It would be cleaner to have
+  // the constructor manage this, but at this time the unit and perf
+  // tests wish to make their own calculations.
+  static int FilterSizeForKeyCount(int key_count);
+
  private:
   friend class base::RefCountedThreadSafe<BloomFilter>;
-  FRIEND_TEST(SafeBrowsingBloomFilter, BloomFilterUse);
-  FRIEND_TEST(SafeBrowsingBloomFilter, BloomFilterFile);
+  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingBloomFilter, BloomFilterUse);
+  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingBloomFilter, BloomFilterFile);
 
   static const int kNumHashKeys = 20;
   static const int kFileVersion = 1;

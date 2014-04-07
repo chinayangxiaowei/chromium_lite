@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "webkit/glue/dom_operations.h"
+
 #include <set>
 
 #include "base/compiler_specific.h"
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
+#include "base/string_split.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebAnimationController.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebElement.h"
@@ -17,8 +20,8 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebNodeList.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebVector.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebView.h"
-#include "webkit/glue/dom_operations.h"
 #include "webkit/glue/form_data.h"
+#include "webkit/glue/password_form_dom_manager.h"
 #include "webkit/glue/webpasswordautocompletelistener_impl.h"
 
 using WebKit::WebAnimationController;
@@ -138,7 +141,7 @@ void GetAllSavableResourceLinksForFrame(WebFrame* current_frame,
     // We only save HTML resources.
     if (!node.isElementNode())
       continue;
-    WebElement element = node.toElement<WebElement>();
+    WebElement element = node.to<WebElement>();
     GetSavableResourceLinkForElement(element,
                                      current_doc,
                                      unique_check,
@@ -152,7 +155,7 @@ namespace webkit_glue {
 
 // Map element name to a list of pointers to corresponding elements to simplify
 // form filling.
-typedef std::map<string16, WebKit::WebInputElement >
+typedef std::map<string16, WebKit::WebInputElement>
     FormInputElementMap;
 
 // Utility struct for form lookup and autofill. When we parse the DOM to lookup
@@ -175,17 +178,24 @@ static bool FillFormImpl(FormElements* fe, const FormData& data) {
     return false;
 
   std::map<string16, string16> data_map;
-  for (size_t i = 0; i < data.fields.size(); i++) {
+  for (size_t i = 0; i < data.fields.size(); i++)
     data_map[data.fields[i].name()] = data.fields[i].value();
-  }
 
   for (FormInputElementMap::iterator it = fe->input_elements.begin();
        it != fe->input_elements.end(); ++it) {
-    if (!it->second.value().isEmpty())  // Don't overwrite pre-filled values.
+    WebKit::WebInputElement& element = it->second;
+    if (!element.value().isEmpty())  // Don't overwrite pre-filled values.
       continue;
-    it->second.setValue(data_map[it->first]);
-    it->second.setAutofilled(true);
-    it->second.dispatchFormControlChangeEvent();
+    if (element.isPasswordField() &&
+        (!element.isEnabledFormControl() || element.hasAttribute("readonly"))) {
+      continue;  // Don't fill uneditable password fields.
+    }
+    if (!element.isValidValue(data_map[it->first]))
+      continue;
+
+    element.setValue(data_map[it->first]);
+    element.setAutofilled(true);
+    element.dispatchFormControlChangeEvent();
   }
 
   return false;
@@ -216,7 +226,7 @@ static bool FindFormInputElements(WebFormElement* fe,
     // matching elements it can get at them through the FormElement*.
     // Note: This assignment adds a reference to the InputElement.
     result->input_elements[data.fields[j].name()] =
-        temp_elements[0].toElement<WebInputElement>();
+        temp_elements[0].to<WebInputElement>();
   }
   return true;
 }
@@ -251,7 +261,7 @@ static void FindFormElements(WebView* view,
     for (size_t i = 0; i < forms.size(); ++i) {
       WebFormElement fe = forms[i];
       // Action URL must match.
-      GURL full_action(f->completeURL(fe.action()));
+      GURL full_action(f->document().completeURL(fe.action()));
       if (data.action != full_action.ReplaceComponents(rep))
         continue;
 
@@ -268,14 +278,12 @@ static void FindFormElements(WebView* view,
 }
 
 void FillPasswordForm(WebView* view,
-                      const PasswordFormDomManager::FillData& data) {
+                      const PasswordFormFillData& data) {
   FormElementsList forms;
   // We own the FormElements* in forms.
   FindFormElements(view, data.basic_data, &forms);
   FormElementsList::iterator iter;
   for (iter = forms.begin(); iter != forms.end(); ++iter) {
-    // TODO(timsteele): Move STLDeleteElements to base/ and have
-    // FormElementsList use that.
     scoped_ptr<FormElements> form_elements(*iter);
 
     // If wait_for_username is true, we don't want to initially fill the form
@@ -293,7 +301,7 @@ void FillPasswordForm(WebView* view,
     WebInputElement password_element =
         form_elements->input_elements[data.basic_data.fields[1].name()];
 
-    username_element.frame()->registerPasswordListener(
+    username_element.document().frame()->registerPasswordListener(
         username_element,
         new WebPasswordAutocompleteListenerImpl(
             new WebInputElementDelegate(username_element),
@@ -308,8 +316,8 @@ WebString GetSubResourceLinkFromElement(const WebElement& element) {
       element.hasTagName("script")) {
     attribute_name = "src";
   } else if (element.hasTagName("input")) {
-    const WebInputElement input = element.toConstElement<WebInputElement>();
-    if (input.inputType() == WebInputElement::Image) {
+    const WebInputElement input = element.toConst<WebInputElement>();
+    if (input.isImageButton()) {
       attribute_name = "src";
     }
   } else if (element.hasTagName("body") ||
@@ -402,7 +410,7 @@ static int ParseSingleIconSize(const string16& text) {
       return 0;
   }
   int output;
-  if (!StringToInt(text, &output))
+  if (!base::StringToInt(text, &output))
     return 0;
   return output;
 }
@@ -412,7 +420,7 @@ static int ParseSingleIconSize(const string16& text) {
 // If the input couldn't be parsed, a size with a width/height < 0 is returned.
 static gfx::Size ParseIconSize(const string16& text) {
   std::vector<string16> sizes;
-  SplitStringDontTrim(text, L'x', &sizes);
+  base::SplitStringDontTrim(text, L'x', &sizes);
   if (sizes.size() != 2)
     return gfx::Size();
 
@@ -489,7 +497,7 @@ void GetApplicationInfo(WebView* view, WebApplicationInfo* app_info) {
     WebNode child = children.item(i);
     if (!child.isElementNode())
       continue;
-    WebElement elem = child.toElement<WebElement>();
+    WebElement elem = child.to<WebElement>();
 
     if (elem.hasTagName("link")) {
       std::string rel = elem.getAttribute("rel").utf8();
@@ -572,7 +580,7 @@ bool ElementDoesAutoCompleteForElementWithId(WebView* view,
   if (element.isNull() || !element.hasTagName("input"))
     return false;
 
-  WebInputElement input_element = element.toElement<WebInputElement>();
+  WebInputElement input_element = element.to<WebInputElement>();
   return input_element.autoComplete();
 }
 
@@ -586,6 +594,32 @@ int NumberOfActiveAnimations(WebView* view) {
     return -1;
 
   return controller->numberOfActiveAnimations();
+}
+
+void GetMetaElementsWithAttribute(WebDocument* document,
+                                  const string16& attribute_name,
+                                  const string16& attribute_value,
+                                  std::vector<WebElement>* meta_elements) {
+  DCHECK(document);
+  DCHECK(meta_elements);
+  meta_elements->clear();
+  WebElement head = document->head();
+  if (head.isNull() || !head.hasChildNodes())
+    return;
+
+  WebNodeList children = head.childNodes();
+  for (size_t i = 0; i < children.length(); ++i) {
+    WebNode node = children.item(i);
+    if (!node.isElementNode())
+      continue;
+    WebElement element = node.to<WebElement>();
+    if (!element.hasTagName("meta"))
+      continue;
+    WebString value = element.getAttribute(attribute_name);
+    if (value.isNull() || value != attribute_value)
+      continue;
+    meta_elements->push_back(element);
+  }
 }
 
 }  // webkit_glue

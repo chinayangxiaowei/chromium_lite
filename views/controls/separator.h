@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_SEPARATOR_H_
 #define VIEWS_CONTROLS_SEPARATOR_H_
+#pragma once
 
 #include <string>
 
@@ -25,7 +26,7 @@ class Separator : public View {
   // Overridden from View:
   virtual void Layout();
   virtual gfx::Size GetPreferredSize();
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
  protected:
   virtual void ViewHierarchyChanged(bool is_add, View* parent,

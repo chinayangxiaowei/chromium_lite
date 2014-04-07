@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTERNAL_REGISTRY_EXTENSION_PROVIDER_WIN_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTERNAL_REGISTRY_EXTENSION_PROVIDER_WIN_H_
+#pragma once
 
 #include <set>
 #include <string>
@@ -23,8 +24,11 @@ class ExternalRegistryExtensionProvider : public ExternalExtensionProvider {
   virtual void VisitRegisteredExtension(
       Visitor* visitor, const std::set<std::string>& ids_to_ignore) const;
 
-  virtual Version* RegisteredVersion(const std::string& id,
-                                     Extension::Location* location) const;
+  virtual bool HasExtension(const std::string& id) const;
+
+  virtual bool GetExtensionDetails(const std::string& id,
+                                   Extension::Location* location,
+                                   scoped_ptr<Version>* version) const;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTERNAL_REGISTRY_EXTENSION_PROVIDER_WIN_H_

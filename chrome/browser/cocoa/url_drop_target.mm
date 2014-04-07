@@ -1,11 +1,11 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/cocoa/url_drop_target.h"
 
-#include "base/logging.h"
-#import "third_party/mozilla/include/NSPasteboard+Utils.h"
+#include "base/basictypes.h"
+#import "third_party/mozilla/NSPasteboard+Utils.h"
 
 @interface URLDropTargetHandler(Private)
 
@@ -19,15 +19,18 @@
 
 @implementation URLDropTargetHandler
 
-- (id)initWithView:(NSView*)view {
-  if ((self = [super init])) {
-    view_ = view;
-    [view_ registerForDraggedTypes:
-         [NSArray arrayWithObjects:kWebURLsWithTitlesPboardType,
++ (NSArray*)handledDragTypes {
+  return [NSArray arrayWithObjects:kWebURLsWithTitlesPboardType,
                                    NSURLPboardType,
                                    NSStringPboardType,
                                    NSFilenamesPboardType,
-                                   nil]];
+                                   nil];
+}
+
+- (id)initWithView:(NSView<URLDropTarget>*)view {
+  if ((self = [super init])) {
+    view_ = view;
+    [view_ registerForDraggedTypes:[URLDropTargetHandler handledDragTypes]];
   }
   return self;
 }
@@ -62,7 +65,7 @@
   if ([pboard containsURLData]) {
     NSArray* urls = nil;
     NSArray* titles;  // discarded
-    [pboard getURLs:&urls andTitles:&titles];
+    [pboard getURLs:&urls andTitles:&titles convertingFilenames:YES];
 
     if ([urls count]) {
       // Tell the window controller about the dropped URL(s).
@@ -81,6 +84,9 @@
 @implementation URLDropTargetHandler(Private)
 
 - (NSDragOperation)getDragOperation:(id<NSDraggingInfo>)sender {
+  if (![[sender draggingPasteboard] containsURLData])
+    return NSDragOperationNone;
+
   // Only allow the copy operation.
   return [sender draggingSourceOperationMask] & NSDragOperationCopy;
 }

@@ -138,11 +138,58 @@ void WebPluginDelegateImpl::DestroyInstance() {
 void WebPluginDelegateImpl::UpdateGeometry(
     const gfx::Rect& window_rect,
     const gfx::Rect& clip_rect) {
+
+  if (first_set_window_call_) {
+    first_set_window_call_ = false;
+    // Plugins like media player on Windows have a bug where in they handle the
+    // first geometry update and ignore the rest resulting in painting issues.
+    // This quirk basically ignores the first set window call sequence for
+    // these plugins and has been tested for Windows plugins only.
+    if (quirks_ & PLUGIN_QUIRK_IGNORE_FIRST_SETWINDOW_CALL)
+      return;
+  }
+
   if (windowless_) {
     WindowlessUpdateGeometry(window_rect, clip_rect);
   } else {
     WindowedUpdateGeometry(window_rect, clip_rect);
   }
+}
+
+void WebPluginDelegateImpl::SetFocus(bool focused) {
+  DCHECK(windowless_);
+  // This is called when internal WebKit focus (the focused element on the page)
+  // changes, but plugins need to know about OS-level focus, so we have an extra
+  // layer of focus tracking.
+  //
+  // On Windows, historically browsers did not set focus events to windowless
+  // plugins when the toplevel window focus changes. Sending such focus events
+  // breaks full screen mode in Flash because it will come out of full screen
+  // mode when it loses focus, and its full screen window causes the browser to
+  // lose focus.
+  has_webkit_focus_ = focused;
+#ifndef OS_WIN
+  if (containing_view_has_focus_)
+    SetPluginHasFocus(focused);
+#else
+  SetPluginHasFocus(focused);
+#endif
+}
+
+void WebPluginDelegateImpl::SetPluginHasFocus(bool focused) {
+  if (focused == plugin_has_focus_)
+    return;
+  if (PlatformSetPluginHasFocus(focused))
+    plugin_has_focus_ = focused;
+}
+
+void WebPluginDelegateImpl::SetContentAreaHasFocus(bool has_focus) {
+  containing_view_has_focus_ = has_focus;
+  if (!windowless_)
+    return;
+#ifndef OS_WIN  // See SetFocus above.
+  SetPluginHasFocus(containing_view_has_focus_ && has_webkit_focus_);
+#endif
 }
 
 NPObject* WebPluginDelegateImpl::GetPluginScriptableObject() {

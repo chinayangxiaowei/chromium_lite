@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,81 +6,41 @@
 
 #include "build/build_config.h"
 
-#include <vector>
-
 #if defined(OS_WIN)
 #include <windows.h>
 #endif
 
+#include <vector>
+
 #include "app/clipboard/clipboard.h"
-#include "app/clipboard/scoped_clipboard_writer.h"
 #include "app/resource_bundle.h"
+#include "base/command_line.h"
+#include "base/ref_counted.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/chrome_version_info.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/socket_stream_dispatcher.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/plugin/npobject_util.h"
-#include "chrome/renderer/net/render_dns_master.h"
+#include "chrome/renderer/net/renderer_net_predictor.h"
 #include "chrome/renderer/render_process.h"
 #include "chrome/renderer/render_thread.h"
 #include "googleurl/src/url_util.h"
-#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKitClient.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "webkit/glue/scoped_clipboard_writer_glue.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/websocketstreamhandle_bridge.h"
 
 #if defined(OS_WIN)
 #include <strsafe.h>  // note: per msdn docs, this must *follow* other includes
+#elif defined(OS_LINUX)
+#include "chrome/renderer/renderer_sandbox_support_linux.h"
 #endif
-
-template <typename T, size_t stack_capacity>
-class ResizableStackArray {
- public:
-  ResizableStackArray()
-      : cur_buffer_(stack_buffer_), cur_capacity_(stack_capacity) {
-  }
-  ~ResizableStackArray() {
-    FreeHeap();
-  }
-
-  T* get() const {
-    return cur_buffer_;
-  }
-
-  T& operator[](size_t i) {
-    return cur_buffer_[i];
-  }
-
-  size_t capacity() const {
-    return cur_capacity_;
-  }
-
-  void Resize(size_t new_size) {
-    if (new_size < cur_capacity_)
-      return;  // already big enough
-    FreeHeap();
-    cur_capacity_ = new_size;
-    cur_buffer_ = new T[new_size];
-  }
-
- private:
-  // Resets the heap buffer, if any
-  void FreeHeap() {
-    if (cur_buffer_ != stack_buffer_) {
-      delete[] cur_buffer_;
-      cur_buffer_ = stack_buffer_;
-      cur_capacity_ = stack_capacity;
-    }
-  }
-
-  T stack_buffer_[stack_capacity];
-  T* cur_buffer_;
-  size_t cur_capacity_;
-};
 
 // This definition of WriteBitmapFromPixels uses shared memory to communicate
 // across processes.
@@ -118,7 +78,7 @@ void ScopedClipboardWriterGlue::WriteBitmapFromPixels(const void* pixels,
 #else  // !OS_POSIX
   shared_buf_ = new base::SharedMemory;
   const bool created = shared_buf_ && shared_buf_->Create(
-      L"", false /* read write */, true /* open existing */, buf_size);
+      "", false /* read write */, true /* open existing */, buf_size);
   if (!shared_buf_ || !created || !shared_buf_->Map(buf_size)) {
     NOTREACHED();
     return;
@@ -217,6 +177,31 @@ void ClipboardReadHTML(Clipboard::Buffer buffer, string16* markup, GURL* url) {
                                                                   markup, url));
 }
 
+bool ClipboardReadAvailableTypes(Clipboard::Buffer buffer,
+                                 std::vector<string16>* types,
+                                 bool* contains_filenames) {
+  bool result = false;
+  RenderThread::current()->Send(new ViewHostMsg_ClipboardReadAvailableTypes(
+      buffer, &result, types, contains_filenames));
+  return result;
+}
+
+bool ClipboardReadData(Clipboard::Buffer buffer, const string16& type,
+                       string16* data, string16* metadata) {
+  bool result = false;
+  RenderThread::current()->Send(new ViewHostMsg_ClipboardReadData(
+      buffer, type, &result, data, metadata));
+  return result;
+}
+
+bool ClipboardReadFilenames(Clipboard::Buffer buffer,
+                            std::vector<string16>* filenames) {
+  bool result;
+  RenderThread::current()->Send(new ViewHostMsg_ClipboardReadFilenames(
+      buffer, &result, filenames));
+  return result;
+}
+
 void GetPlugins(bool refresh, std::vector<WebPluginInfo>* plugins) {
   if (!RenderThread::current()->plugin_refresh_allowed())
     refresh = false;
@@ -229,7 +214,8 @@ bool IsProtocolSupportedForMedia(const GURL& url) {
   if (url.SchemeIsFile() || url.SchemeIs(chrome::kHttpScheme) ||
       url.SchemeIs(chrome::kHttpsScheme) ||
       url.SchemeIs(chrome::kDataScheme) ||
-      url.SchemeIs(chrome::kExtensionScheme))
+      url.SchemeIs(chrome::kExtensionScheme) ||
+      url.SchemeIs(chrome::kBlobScheme))
     return true;
   return false;
 }
@@ -264,5 +250,44 @@ void CloseCurrentConnections() {
 void SetCacheMode(bool enabled) {
   RenderThread::current()->SetCacheMode(enabled);
 }
+
+void ClearCache() {
+  RenderThread::current()->ClearCache();
+}
+
+std::string GetProductVersion() {
+  chrome::VersionInfo version_info;
+  std::string product("Chrome/");
+  product += version_info.is_valid() ? version_info.Version()
+                                     : "0.0.0.0";
+  return product;
+}
+
+bool IsSingleProcess() {
+  return CommandLine::ForCurrentProcess()->HasSwitch(switches::kSingleProcess);
+}
+
+void EnableSpdy(bool enable) {
+  RenderThread::current()->EnableSpdy(enable);
+}
+
+void UserMetricsRecordAction(const std::string& action) {
+  RenderThread::current()->Send(
+      new ViewHostMsg_UserMetricsRecordAction(action));
+}
+
+#if defined(OS_LINUX)
+int MatchFontWithFallback(const std::string& face, bool bold,
+                          bool italic, int charset) {
+  return renderer_sandbox_support::MatchFontWithFallback(
+      face, bold, italic, charset);
+}
+
+bool GetFontTable(int fd, uint32_t table, uint8_t* output,
+                  size_t* output_length) {
+  return renderer_sandbox_support::GetFontTable(
+      fd, table, output, output_length);
+}
+#endif
 
 }  // namespace webkit_glue

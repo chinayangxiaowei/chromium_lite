@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "chrome/browser/cocoa/infobar.h"
 #import "chrome/browser/cocoa/infobar_container_controller.h"
 #import "chrome/browser/cocoa/infobar_controller.h"
+#include "chrome/browser/tab_contents/infobar_delegate.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
@@ -85,10 +86,6 @@ const float kAnimateCloseDuration = 0.12;
 // notifying the InfoBarDelegate that the infobar was closed and removing the
 // infobar from its container, if necessary.
 - (void)cleanUpAfterAnimation:(BOOL)finished;
-
-// Removes the ok and cancel buttons, and resizes the textfield to use the
-// space.
-- (void)removeButtons;
 
 // Sets the info bar message to the specified |message|, with a hypertext
 // style link. |link| will be inserted into message at |linkOffset|.
@@ -215,6 +212,15 @@ const float kAnimateCloseDuration = 0.12;
   [[label_.get() textStorage] setAttributedString:attributedString];
 }
 
+- (void)removeButtons {
+  // Extend the label all the way across.
+  NSRect labelFrame = [label_.get() frame];
+  labelFrame.size.width = NSMaxX([cancelButton_ frame]) - NSMinX(labelFrame);
+  [okButton_ removeFromSuperview];
+  [cancelButton_ removeFromSuperview];
+  [label_.get() setFrame:labelFrame];
+}
+
 @end
 
 @implementation InfoBarController (PrivateMethods)
@@ -238,18 +244,11 @@ const float kAnimateCloseDuration = 0.12;
 }
 
 - (void)removeInfoBar {
-  DCHECK(delegate_);
+  // TODO(rohitrao): This method can be called even if the infobar has already
+  // been removed and |delegate_| is NULL.  Is there a way to rewrite the code
+  // so that inner event loops don't cause us to try and remove the infobar
+  // twice?  http://crbug.com/54253
   [containerController_ removeDelegate:delegate_];
-}
-
-- (void)removeButtons {
-  // Extend the label all the way across.
-  // Remove the ok and cancel buttons, since they are not needed.
-  NSRect labelFrame = [label_.get() frame];
-  labelFrame.size.width = NSMaxX([cancelButton_ frame]) - NSMinX(labelFrame);
-  [okButton_ removeFromSuperview];
-  [cancelButton_ removeFromSuperview];
-  [label_.get() setFrame:labelFrame];
 }
 
 - (void)cleanUpAfterAnimation:(BOOL)finished {
@@ -286,6 +285,12 @@ const float kAnimateCloseDuration = 0.12;
 - (void)setLabelToMessage:(NSString*)message
                  withLink:(NSString*)link
                  atOffset:(NSUInteger)linkOffset {
+  if (linkOffset == std::wstring::npos) {
+    // linkOffset == std::wstring::npos means the link should be right-aligned,
+    // which is not supported on Mac (http://crbug.com/47728).
+    NOTIMPLEMENTED();
+    linkOffset = [message length];
+  }
   // Create an attributes dictionary for the entire message.  We have
   // to expicitly set the font the control's font.  We also override
   // the cursor to give us the normal cursor rather than the text
@@ -342,7 +347,7 @@ const float kAnimateCloseDuration = 0.12;
   // Insert the text.
   AlertInfoBarDelegate* delegate = delegate_->AsAlertInfoBarDelegate();
   DCHECK(delegate);
-  [self setLabelToMessage:base::SysWideToNSString(delegate->GetMessageText())];
+  [self setLabelToMessage:base::SysUTF16ToNSString(delegate->GetMessageText())];
 }
 
 @end
@@ -366,9 +371,9 @@ const float kAnimateCloseDuration = 0.12;
   LinkInfoBarDelegate* delegate = delegate_->AsLinkInfoBarDelegate();
   DCHECK(delegate);
   size_t offset = std::wstring::npos;
-  std::wstring message = delegate->GetMessageTextWithOffset(&offset);
-  [self setLabelToMessage:base::SysWideToNSString(message)
-                 withLink:base::SysWideToNSString(delegate->GetLinkText())
+  string16 message = delegate->GetMessageTextWithOffset(&offset);
+  [self setLabelToMessage:base::SysUTF16ToNSString(message)
+                 withLink:base::SysUTF16ToNSString(delegate->GetLinkText())
                  atOffset:offset];
 }
 
@@ -424,7 +429,7 @@ const float kAnimateCloseDuration = 0.12;
 
   // Update and position the Cancel button if needed.  Otherwise, hide it.
   if (visibleButtons & ConfirmInfoBarDelegate::BUTTON_CANCEL) {
-    [cancelButton_ setTitle:base::SysWideToNSString(
+    [cancelButton_ setTitle:base::SysUTF16ToNSString(
           delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_CANCEL))];
     [GTMUILocalizerAndLayoutTweaker sizeToFitView:cancelButton_];
     cancelButtonFrame = [cancelButton_ frame];
@@ -441,7 +446,7 @@ const float kAnimateCloseDuration = 0.12;
 
   // Update and position the OK button if needed.  Otherwise, hide it.
   if (visibleButtons & ConfirmInfoBarDelegate::BUTTON_OK) {
-    [okButton_ setTitle:base::SysWideToNSString(
+    [okButton_ setTitle:base::SysUTF16ToNSString(
           delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_OK))];
     [GTMUILocalizerAndLayoutTweaker sizeToFitView:okButton_];
     okButtonFrame = [okButton_ frame];
@@ -475,8 +480,8 @@ const float kAnimateCloseDuration = 0.12;
   [label_.get() setFrame:frame];
 
   // Set the text and link.
-  NSString* message = base::SysWideToNSString(delegate->GetMessageText());
-  std::wstring link = delegate->GetLinkText();
+  NSString* message = base::SysUTF16ToNSString(delegate->GetMessageText());
+  string16 link = delegate->GetLinkText();
   if (link.empty()) {
     // Simple case: no link, so just set the message directly.
     [self setLabelToMessage:message];
@@ -488,7 +493,7 @@ const float kAnimateCloseDuration = 0.12;
     // Add spacing between the label and the link.
     message = [message stringByAppendingString:@"   "];
     [self setLabelToMessage:message
-                   withLink:base::SysWideToNSString(link)
+                   withLink:base::SysUTF16ToNSString(link)
                    atOffset:[message length]];
   }
 }

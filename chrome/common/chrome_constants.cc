@@ -62,11 +62,6 @@ const char    kStatsFilename[] = "ChromiumStats2";
 #endif
 
 #if defined(OS_WIN)
-#if defined(GOOGLE_CHROME_BUILD)
-const wchar_t kBrowserAppID[] = L"Chrome";
-#else
-const wchar_t kBrowserAppID[] = L"Chromium";
-#endif
 const wchar_t kStatusTrayWindowClass[] = L"Chrome_StatusTrayWindow";
 #endif  // defined(OS_WIN)
 
@@ -76,7 +71,8 @@ const wchar_t kTestingInterfaceDLL[] = L"testing_interface.dll";
 const wchar_t kNotSignedInProfile[] = L"Default";
 const wchar_t kNotSignedInID[] = L"not-signed-in";
 const wchar_t kBrowserResourcesDll[] = L"chrome.dll";
-const FilePath::CharType kExtensionFileExtension[] = FPL("crx");
+const FilePath::CharType kExtensionFileExtension[] = FPL(".crx");
+const FilePath::CharType kExtensionKeyFileExtension[] = FPL(".pem");
 
 // filenames
 const FilePath::CharType kArchivedHistoryFilename[] = FPL("Archived History");
@@ -89,20 +85,20 @@ const FilePath::CharType kChromePluginDataDirname[] = FPL("Plugin Data");
 const FilePath::CharType kThemePackFilename[] = FPL("Cached Theme.pak");
 const FilePath::CharType kCookieFilename[] = FPL("Cookies");
 const FilePath::CharType kExtensionsCookieFilename[] = FPL("Extension Cookies");
+const FilePath::CharType kFaviconsFilename[] = FPL("Favicons");
 const FilePath::CharType kHistoryFilename[] = FPL("History");
 const FilePath::CharType kLocalStateFilename[] = FPL("Local State");
 const FilePath::CharType kPreferencesFilename[] = FPL("Preferences");
-const FilePath::CharType kSafeBrowsingFilename[] = FPL("Safe Browsing");
-// WARNING: SingletonSocket can't contain spaces, because otherwise
-// chrome_process_util_linux would be broken.
+const FilePath::CharType kSafeBrowsingFilename[] = FPL("Safe Browsing Bloom");
+const FilePath::CharType kSingletonCookieFilename[] = FPL("SingletonCookie");
 const FilePath::CharType kSingletonSocketFilename[] = FPL("SingletonSocket");
 const FilePath::CharType kSingletonLockFilename[] = FPL("SingletonLock");
 const FilePath::CharType kThumbnailsFilename[] = FPL("Thumbnails");
 const FilePath::CharType kNewTabThumbnailsFilename[] = FPL("Top Thumbnails");
+const FilePath::CharType kTopSitesFilename[] = FPL("Top Sites");
 const wchar_t kUserDataDirname[] = L"User Data";
 const FilePath::CharType kUserScriptsDirname[] = FPL("User Scripts");
 const FilePath::CharType kWebDataFilename[] = FPL("Web Data");
-const FilePath::CharType kPrivacyBlacklistFileName[] = FPL("Privacy Blacklist");
 const FilePath::CharType kBookmarksFileName[] = FPL("Bookmarks");
 const FilePath::CharType kHistoryBookmarksFileName[] =
     FPL("Bookmarks From History");
@@ -111,6 +107,7 @@ const FilePath::CharType kCustomDictionaryFileName[] =
 const FilePath::CharType kLoginDataFileName[] = FPL("Login Data");
 const FilePath::CharType kJumpListIconDirname[] = FPL("JumpListIcons");
 const FilePath::CharType kWebAppDirname[] = FPL("Web Applications");
+const FilePath::CharType kServiceStateFileName[] = FPL("Service State");
 
 // This number used to be limited to 32 in the past (see b/535234).
 const unsigned int kMaxRendererProcessCount = 42;
@@ -136,6 +133,8 @@ const int kHistogramSynchronizerReservedSequenceNumber = 0;
 const int kMaxSessionHistoryEntries = 50;
 
 const wchar_t kChromiumRendererIdProperty[] = L"ChromiumRendererId";
+
+const char* const kUnknownLanguageCode = "und";
 
 }  // namespace chrome
 

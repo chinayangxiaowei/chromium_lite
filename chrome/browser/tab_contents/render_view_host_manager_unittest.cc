@@ -2,13 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/browser_url_handler.h"
+#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/renderer_host/test/test_render_view_host.h"
 #include "chrome/browser/tab_contents/navigation_controller.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/render_view_host_manager.h"
+#include "chrome/browser/tab_contents/test_tab_contents.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/test_notification_tracker.h"
+#include "chrome/test/testing_profile.h"
 #include "ipc/ipc_message.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -24,6 +30,12 @@ class RenderViewHostManagerTest : public RenderViewHostTestHarness {
             max_page_id() + 1,
         url);
   }
+
+  bool ShouldSwapProcesses(RenderViewHostManager* manager,
+                           const NavigationEntry* cur_entry,
+                           const NavigationEntry* new_entry) const {
+    return manager->ShouldSwapProcessesForNavigation(cur_entry, new_entry);
+  }
 };
 
 // Tests that when you navigate from the New TabPage to another page, and
@@ -31,7 +43,7 @@ class RenderViewHostManagerTest : public RenderViewHostTestHarness {
 // different SiteInstances, BrowsingInstances, and RenderProcessHosts. This is
 // a regression test for bug 9364.
 TEST_F(RenderViewHostManagerTest, NewTabPageProcesses) {
-  ChromeThread ui_thread(ChromeThread::UI, MessageLoop::current());
+  BrowserThread ui_thread(BrowserThread::UI, MessageLoop::current());
   GURL ntp(chrome::kChromeUINewTabURL);
   GURL dest("http://www.google.com/");
 
@@ -76,7 +88,7 @@ TEST_F(RenderViewHostManagerTest, NewTabPageProcesses) {
 // EnableViewSourceMode message is sent on every navigation regardless
 // RenderView is being newly created or reused.
 TEST_F(RenderViewHostManagerTest, AlwaysSendEnableViewSourceMode) {
-  ChromeThread ui_thread(ChromeThread::UI, MessageLoop::current());
+  BrowserThread ui_thread(BrowserThread::UI, MessageLoop::current());
   const GURL kNtpUrl(chrome::kChromeUINewTabURL);
   const GURL kUrl("view-source:http://foo");
 
@@ -140,7 +152,7 @@ TEST_F(RenderViewHostManagerTest, Init) {
   EXPECT_FALSE(manager.pending_render_view_host());
 }
 
-// Tests the Navigate function. We navigate three sites consequently and check
+// Tests the Navigate function. We navigate three sites consecutively and check
 // how the pending/committed RenderViewHost are modified.
 TEST_F(RenderViewHostManagerTest, Navigate) {
   TestNotificationTracker notifications;
@@ -222,7 +234,7 @@ TEST_F(RenderViewHostManagerTest, Navigate) {
 
 // Tests DOMUI creation.
 TEST_F(RenderViewHostManagerTest, DOMUI) {
-  ChromeThread ui_thread(ChromeThread::UI, MessageLoop::current());
+  BrowserThread ui_thread(BrowserThread::UI, MessageLoop::current());
   SiteInstance* instance = SiteInstance::CreateSiteInstance(profile_.get());
 
   TestTabContents tab_contents(profile_.get(), instance);
@@ -254,4 +266,81 @@ TEST_F(RenderViewHostManagerTest, DOMUI) {
 
   EXPECT_FALSE(manager.pending_dom_ui());
   EXPECT_TRUE(manager.dom_ui());
+}
+
+// Tests that chrome: URLs that are not DOM UI pages do not get grouped into
+// DOM UI renderers, even if --process-per-tab is enabled.  In that mode, we
+// still swap processes if ShouldSwapProcessesForNavigation is true.
+// Regression test for bug 46290.
+TEST_F(RenderViewHostManagerTest, NonDOMUIChromeURLs) {
+  SiteInstance* instance = SiteInstance::CreateSiteInstance(profile_.get());
+  TestTabContents tab_contents(profile_.get(), instance);
+  RenderViewHostManager manager(&tab_contents, &tab_contents);
+  manager.Init(profile_.get(), instance, MSG_ROUTING_NONE);
+
+  // NTP is a DOM UI page.
+  GURL ntp_url(chrome::kChromeUINewTabURL);
+  NavigationEntry ntp_entry(NULL /* instance */, -1 /* page_id */, ntp_url,
+                            GURL() /* referrer */, string16() /* title */,
+                            PageTransition::TYPED);
+
+  // about: URLs are not DOM UI pages.
+  GURL about_url(chrome::kAboutMemoryURL);
+  // Rewrite so it looks like chrome://about/memory
+  bool reverse_on_redirect = false;
+  BrowserURLHandler::RewriteURLIfNecessary(
+      &about_url, profile_.get(), &reverse_on_redirect);
+  NavigationEntry about_entry(NULL /* instance */, -1 /* page_id */, about_url,
+                              GURL() /* referrer */, string16() /* title */,
+                              PageTransition::TYPED);
+
+  EXPECT_TRUE(ShouldSwapProcesses(&manager, &ntp_entry, &about_entry));
+}
+
+// Tests that we don't end up in an inconsistent state if a page does a back and
+// then reload. http://crbug.com/51680
+TEST_F(RenderViewHostManagerTest, PageDoesBackAndReload) {
+  GURL url1("http://www.google.com/");
+  GURL url2("http://www.evil-site.com/");
+
+  // Navigate to a safe site, then an evil site.
+  // This will switch RenderViewHosts.  We cannot assert that the first and
+  // second RVHs are different, though, because the first one may be promptly
+  // deleted.
+  contents()->NavigateAndCommit(url1);
+  contents()->NavigateAndCommit(url2);
+  RenderViewHost* evil_rvh = contents()->render_view_host();
+
+  // Casts the TabContents to a RenderViewHostDelegate::BrowserIntegration so we
+  // can call GoToEntryAtOffset which is private.
+  RenderViewHostDelegate::BrowserIntegration* rvh_delegate =
+      static_cast<RenderViewHostDelegate::BrowserIntegration*>(contents());
+
+  // Now let's simulate the evil page calling history.back().
+  rvh_delegate->GoToEntryAtOffset(-1);
+  // We should have a new pending RVH.
+  // Note that in this case, the navigation has not committed, so evil_rvh will
+  // not be deleted yet.
+  EXPECT_NE(evil_rvh, contents()->render_manager()->pending_render_view_host());
+
+  // Before that RVH has committed, the evil page reloads itself.
+  ViewHostMsg_FrameNavigate_Params params;
+  params.page_id = 1;
+  params.url = url2;
+  params.transition = PageTransition::CLIENT_REDIRECT;
+  params.should_update_history = false;
+  params.gesture = NavigationGestureAuto;
+  params.was_within_same_page = false;
+  params.is_post = false;
+  contents()->TestDidNavigate(evil_rvh, params);
+
+  // That should have cancelled the pending RVH, and the evil RVH should be the
+  // current one.
+  EXPECT_TRUE(contents()->render_manager()->pending_render_view_host() == NULL);
+  EXPECT_EQ(evil_rvh, contents()->render_manager()->current_host());
+
+  // Also we should not have a pending navigation entry.
+  NavigationEntry* entry = contents()->controller().GetActiveEntry();
+  ASSERT_TRUE(entry != NULL);
+  EXPECT_EQ(url2, entry->url());
 }

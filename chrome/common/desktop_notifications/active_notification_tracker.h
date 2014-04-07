@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_DESKTOP_NOTIFICATIONS_ACTIVE_NOTIFICATION_TRACKER_H_
 #define CHROME_COMMON_DESKTOP_NOTIFICATIONS_ACTIVE_NOTIFICATION_TRACKER_H_
+#pragma once
 
 #include <map>
 
@@ -21,7 +22,8 @@ class WebNotificationPermissionCallback;
 // the main thread.
 class ActiveNotificationTracker {
  public:
-  ActiveNotificationTracker() {}
+  ActiveNotificationTracker();
+  ~ActiveNotificationTracker();
 
   // Methods for tracking active notification objects.
   int RegisterNotification(const WebKit::WebNotification& notification);
@@ -37,6 +39,10 @@ class ActiveNotificationTracker {
 
   // Clears out all active notifications.  Useful on page navigation.
   void Clear();
+
+  // Detaches all active notifications from their presenter.  Necessary
+  // when the Presenter is destroyed.
+  void DetachAll();
 
  private:
   typedef std::map<WebKit::WebNotification, int> ReverseTable;

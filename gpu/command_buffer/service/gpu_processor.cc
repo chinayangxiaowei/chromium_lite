@@ -5,7 +5,7 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/message_loop.h"
-#include "gpu/command_buffer/service/gl_context.h"
+#include "app/gfx/gl/gl_context.h"
 #include "gpu/command_buffer/service/gpu_processor.h"
 
 using ::base::SharedMemory;
@@ -37,11 +37,12 @@ GPUProcessor::~GPUProcessor() {
   Destroy();
 }
 
-bool GPUProcessor::InitializeCommon(const gfx::Size& size,
+bool GPUProcessor::InitializeCommon(gfx::GLContext* context,
+                                    const gfx::Size& size,
+                                    const std::vector<int32>& attribs,
                                     gles2::GLES2Decoder* parent_decoder,
                                     uint32 parent_texture_id) {
-  // Context should have been created by platform specific Initialize().
-  DCHECK(context_.get());
+  DCHECK(context);
 
   // Map the ring buffer and create the parser.
   Buffer ring_buffer = command_buffer_->GetRingBuffer();
@@ -57,11 +58,21 @@ bool GPUProcessor::InitializeCommon(const gfx::Size& size,
                                     decoder_.get()));
   }
 
+  if (!group_.Initialize(NULL)) {
+    LOG(ERROR) << "GPUProcessor::InitializeCommon failed because group "
+               << "failed to initialize.";
+    Destroy();
+    return false;
+  }
+
   // Initialize the decoder with either the view or pbuffer GLContext.
-  if (!decoder_->Initialize(context_.get(),
+  if (!decoder_->Initialize(context,
                             size,
+                            attribs,
                             parent_decoder,
                             parent_texture_id)) {
+    LOG(ERROR) << "GPUProcessor::InitializeCommon failed because decoder "
+               << "failed to initialize.";
     Destroy();
     return false;
   }
@@ -69,16 +80,15 @@ bool GPUProcessor::InitializeCommon(const gfx::Size& size,
   return true;
 }
 
-void GPUProcessor::Destroy() {
+void GPUProcessor::DestroyCommon() {
+  bool have_context = false;
   if (decoder_.get()) {
+    have_context = decoder_->MakeCurrent();
     decoder_->Destroy();
     decoder_.reset();
   }
 
-  if (context_.get()) {
-    context_->Destroy();
-    context_.reset();
-  }
+  group_.Destroy(have_context);
 
   parser_.reset();
 }
@@ -89,9 +99,11 @@ void GPUProcessor::ProcessCommands() {
     return;
 
   if (decoder_.get()) {
-    // TODO(apatrick): need to do more than this on failure.
-    if (!decoder_->MakeCurrent())
+    if (!decoder_->MakeCurrent()) {
+      LOG(ERROR) << "Context lost because MakeCurrent failed.";
+      command_buffer_->SetParseError(error::kLostContext);
       return;
+    }
   }
 
   parser_->set_put(state.put_offset);
@@ -141,7 +153,10 @@ void GPUProcessor::ResizeOffscreenFrameBuffer(const gfx::Size& size) {
 
 void GPUProcessor::SetSwapBuffersCallback(
     Callback0::Type* callback) {
-  decoder_->SetSwapBuffersCallback(callback);
+  wrapped_swap_buffers_callback_.reset(callback);
+  decoder_->SetSwapBuffersCallback(
+      NewCallback(this,
+                  &GPUProcessor::WillSwapBuffers));
 }
 
 }  // namespace gpu

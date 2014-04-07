@@ -4,6 +4,7 @@
 
 #ifndef CHROME_RENDERER_WEBSHAREDWORKER_PROXY_H_
 #define CHROME_RENDERER_WEBSHAREDWORKER_PROXY_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "chrome/renderer/webworker_base.h"
@@ -34,7 +35,8 @@ class WebSharedWorkerProxy : public WebKit::WebSharedWorker,
   virtual void startWorkerContext(const WebKit::WebURL& script_url,
                                   const WebKit::WebString& name,
                                   const WebKit::WebString& user_agent,
-                                  const WebKit::WebString& source_code);
+                                  const WebKit::WebString& source_code,
+                                  long long script_resource_appcache_id);
   virtual void terminateWorkerContext();
   virtual void clientDestroyed();
 

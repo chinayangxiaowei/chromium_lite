@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_THEME_UTIL_H_
 #define CHROME_BROWSER_SYNC_GLUE_THEME_UTIL_H_
+#pragma once
 
 class Extension;
 class Profile;
@@ -49,6 +50,13 @@ void GetThemeSpecificsFromCurrentThemeHelper(
 // current theme is equivalent to that described by theme_specifics.
 void SetCurrentThemeFromThemeSpecificsIfNecessary(
     const sync_pb::ThemeSpecifics& theme_specifics, Profile* profile);
+
+// Like SetCurrentThemeFromThemeSpecifics() except that in the case where
+// |theme_specifics| uses the default theme and |profile| does not, the local
+// data "wins" against the server's and |theme_specifics| is updated with the
+// custom theme. Returns true iff |theme_specifics| is updated.
+bool UpdateThemeSpecificsOrSetCurrentThemeIfNecessary(
+    Profile* profile, sync_pb::ThemeSpecifics* theme_specifics);
 
 }  // namespace browser_sync
 

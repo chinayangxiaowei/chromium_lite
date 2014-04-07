@@ -31,6 +31,10 @@ static const int64 kMinimumTimeBetweenButtonClicks = 100;
 static const int kMenuMarkerPaddingLeft = 3;
 static const int kMenuMarkerPaddingRight = -1;
 
+// Default menu offset.
+static const int kDefaultMenuOffsetX = -2;
+static const int kDefaultMenuOffsetY = -4;
+
 // static
 const char MenuButton::kViewClassName[] = "views/MenuButton";
 
@@ -46,14 +50,18 @@ MenuButton::MenuButton(ButtonListener* listener,
                        bool show_menu_marker)
     : TextButton(listener, text),
       menu_visible_(false),
+      menu_offset_(kDefaultMenuOffsetX, kDefaultMenuOffsetY),
       menu_delegate_(menu_delegate),
       show_menu_marker_(show_menu_marker),
       menu_marker_(ResourceBundle::GetSharedInstance().GetBitmapNamed(
-          IDR_MENU_DROPARROW)) {
+          IDR_MENU_DROPARROW)),
+      destroyed_flag_(NULL) {
   set_alignment(TextButton::ALIGN_LEFT);
 }
 
 MenuButton::~MenuButton() {
+  if (destroyed_flag_)
+    *destroyed_flag_ = true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -122,14 +130,14 @@ bool MenuButton::Activate() {
     // The position of the menu depends on whether or not the locale is
     // right-to-left.
     gfx::Point menu_position(lb.right(), lb.bottom());
-    if (UILayoutIsRightToLeft())
+    if (base::i18n::IsRTL())
       menu_position.set_x(lb.x());
 
     View::ConvertPointToScreen(this, &menu_position);
-    if (UILayoutIsRightToLeft())
-      menu_position.Offset(2, -4);
+    if (base::i18n::IsRTL())
+      menu_position.Offset(-menu_offset_.x(), menu_offset_.y());
     else
-      menu_position.Offset(-2, -4);
+      menu_position.Offset(menu_offset_.x(), menu_offset_.y());
 
     int max_x_coordinate = GetMaximumScreenXCoordinate();
     if (max_x_coordinate && max_x_coordinate <= menu_position.x())
@@ -145,7 +153,19 @@ bool MenuButton::Activate() {
     GetRootView()->SetMouseHandler(NULL);
 
     menu_visible_ = true;
+
+    bool destroyed = false;
+    destroyed_flag_ = &destroyed;
+
     menu_delegate_->RunMenu(this, menu_position);
+
+    if (destroyed) {
+      // The menu was deleted while showing. Don't attempt any processing.
+      return false;
+    }
+
+    destroyed_flag_ = NULL;
+
     menu_visible_ = false;
     menu_closed_time_ = Time::Now();
 
@@ -198,17 +218,24 @@ void MenuButton::OnMouseReleased(const MouseEvent& e,
   }
 }
 
-// When the space bar or the enter key is pressed we need to show the menu.
-bool MenuButton::OnKeyReleased(const KeyEvent& e) {
-#if defined(OS_WIN)
-  if ((e.GetKeyCode() == base::VKEY_SPACE) ||
-      (e.GetKeyCode() == base::VKEY_RETURN)) {
-    return Activate();
+bool MenuButton::OnKeyPressed(const KeyEvent& e) {
+  if (e.GetKeyCode() == app::VKEY_SPACE ||
+      e.GetKeyCode() == app::VKEY_RETURN ||
+      e.GetKeyCode() == app::VKEY_UP ||
+      e.GetKeyCode() == app::VKEY_DOWN) {
+    bool result = Activate();
+    if (GetFocusManager()->GetFocusedView() == NULL)
+      RequestFocus();
+    return result;
   }
-#else
-  NOTIMPLEMENTED();
-#endif
-  return true;
+  return false;
+}
+
+bool MenuButton::OnKeyReleased(const KeyEvent& e) {
+  // Override CustomButton's implementation, which presses the button when
+  // you press space and clicks it when you release space.  For a MenuButton
+  // we always activate the menu on key press.
+  return false;
 }
 
 // The reason we override View::OnMouseExited is because we get this event when
@@ -228,25 +255,16 @@ void MenuButton::OnMouseExited(const MouseEvent& event) {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-bool MenuButton::GetAccessibleDefaultAction(std::wstring* action) {
-  DCHECK(action);
-
-  action->assign(l10n_util::GetString(IDS_APP_ACCACTION_PRESS));
-  return true;
+std::wstring MenuButton::GetAccessibleDefaultAction() {
+  return l10n_util::GetString(IDS_APP_ACCACTION_PRESS);
 }
 
-bool MenuButton::GetAccessibleRole(AccessibilityTypes::Role* role) {
-  DCHECK(role);
-
-  *role = AccessibilityTypes::ROLE_BUTTONMENU;
-  return true;
+AccessibilityTypes::Role MenuButton::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_BUTTONMENU;
 }
 
-bool MenuButton::GetAccessibleState(AccessibilityTypes::State* state) {
-  DCHECK(state);
-
-  *state = AccessibilityTypes::STATE_HASPOPUP;
-  return true;
+AccessibilityTypes::State MenuButton::GetAccessibleState() {
+  return AccessibilityTypes::STATE_HASPOPUP;
 }
 
 std::string MenuButton::GetClassName() const {

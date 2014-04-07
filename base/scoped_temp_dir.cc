@@ -6,14 +6,12 @@
 
 #include "base/file_util.h"
 #include "base/logging.h"
-#include "base/string_util.h"
 
 ScopedTempDir::ScopedTempDir() {
 }
 
 ScopedTempDir::~ScopedTempDir() {
-  if (!path_.empty() && !file_util::Delete(path_, true))
-    LOG(ERROR) << "ScopedTempDir unable to delete " << path_.value();
+  Delete();
 }
 
 bool ScopedTempDir::CreateUniqueTempDir() {
@@ -26,6 +24,21 @@ bool ScopedTempDir::CreateUniqueTempDir() {
   return true;
 }
 
+bool ScopedTempDir::CreateUniqueTempDirUnderPath(const FilePath& base_path) {
+  // If |path| does not exist, create it.
+  if (!file_util::CreateDirectory(base_path))
+    return false;
+
+  // Create a new, uniquely named directory under |base_path|.
+  if (!file_util::CreateTemporaryDirInDir(
+          base_path,
+          FILE_PATH_LITERAL("scoped_dir_"),
+          &path_)) {
+    return false;
+  }
+  return true;
+}
+
 bool ScopedTempDir::Set(const FilePath& path) {
   DCHECK(path_.empty());
   if (!file_util::DirectoryExists(path) &&
@@ -34,6 +47,12 @@ bool ScopedTempDir::Set(const FilePath& path) {
   }
   path_ = path;
   return true;
+}
+
+void ScopedTempDir::Delete() {
+  if (!path_.empty() && !file_util::Delete(path_, true))
+    LOG(ERROR) << "ScopedTempDir unable to delete " << path_.value();
+  path_.clear();
 }
 
 FilePath ScopedTempDir::Take() {

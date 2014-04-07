@@ -62,9 +62,9 @@ int main(int argc, char* argv[]) {
 
   // Allow tests to analyze GC information from V8 log, and expose GC
   // triggering function.
-  std::wstring js_flags =
-      parsed_command_line.GetSwitchValue(test_shell::kJavaScriptFlags);
-  js_flags += L" --logfile=* --log_gc --expose_gc";
+  std::string js_flags =
+      parsed_command_line.GetSwitchValueASCII(test_shell::kJavaScriptFlags);
+  js_flags += " --logfile=* --log_gc --expose_gc";
   webkit_glue::SetJavaScriptFlags(js_flags);
 
   // Suppress error dialogs and do not show GP fault error box on Windows.
@@ -78,7 +78,7 @@ int main(int argc, char* argv[]) {
 
   // Initialize test shell in layout test mode, which will let us load one
   // request than automatically quit.
-  TestShell::InitializeTestShell(true);
+  TestShell::InitializeTestShell(true, false);
 
   // Allocate a message loop for this thread.  Although it is not used
   // directly, its constructor sets up some necessary state.

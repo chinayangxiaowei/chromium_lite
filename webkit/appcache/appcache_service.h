@@ -1,56 +1,40 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef WEBKIT_APPCACHE_APPCACHE_SERVICE_H_
 #define WEBKIT_APPCACHE_APPCACHE_SERVICE_H_
 
+#include <map>
 #include <set>
-#include <vector>
 
-#include "base/file_path.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "base/time.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
+#include "webkit/appcache/appcache_interfaces.h"
 #include "webkit/appcache/appcache_storage.h"
 
+class FilePath;
 class URLRequestContext;
+
+namespace base {
+class MessageLoopProxy;
+}
 
 namespace appcache {
 
 class AppCacheBackendImpl;
 class AppCachePolicy;
 
-// Structure that contains basic info about an appcache.
-struct AppCacheInfo {
-  AppCacheInfo() {}
-  AppCacheInfo(const GURL& manifest_url,
-               int64 size,
-               base::Time creation_time,
-               base::Time last_access_time,
-               base::Time last_update_time)
-      : manifest_url(manifest_url),
-        size(size),
-        creation_time(creation_time),
-        last_access_time(last_access_time),
-        last_update_time(last_update_time) {
-  }
-  GURL manifest_url;
-  int64 size;
-  base::Time creation_time;
-  base::Time last_access_time;
-  base::Time last_update_time;
-};
-
-typedef std::vector<AppCacheInfo> AppCacheInfoVector;
-
 // Refcounted container to avoid copying the collection in callbacks.
 struct AppCacheInfoCollection
     : public base::RefCountedThreadSafe<AppCacheInfoCollection> {
-  virtual ~AppCacheInfoCollection() {}
+  AppCacheInfoCollection();
+  virtual ~AppCacheInfoCollection();
+
   std::map<GURL, AppCacheInfoVector> infos_by_origin;
 };
 
@@ -62,7 +46,8 @@ class AppCacheService {
   AppCacheService();
   virtual ~AppCacheService();
 
-  void Initialize(const FilePath& cache_directory);
+  void Initialize(const FilePath& cache_directory,
+                  base::MessageLoopProxy* cache_thread);
 
   // Purges any memory not needed.
   void PurgeMemory() {

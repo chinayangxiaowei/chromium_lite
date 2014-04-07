@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_GTK_OPTIONS_PASSWORDS_EXCEPTIONS_PAGE_GTK_H_
 #define CHROME_BROWSER_GTK_OPTIONS_PASSWORDS_EXCEPTIONS_PAGE_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
@@ -19,11 +20,9 @@
 class PasswordsExceptionsPageGtk {
  public:
   explicit PasswordsExceptionsPageGtk(Profile* profile);
-  ~PasswordsExceptionsPageGtk();
+  virtual ~PasswordsExceptionsPageGtk();
 
-  GtkWidget* get_page_widget() const {
-    return page_;
-  }
+  GtkWidget* get_page_widget() const { return page_; }
 
  private:
   // Initialize the exception tree widget, setting the member variables.
@@ -32,16 +31,16 @@ class PasswordsExceptionsPageGtk {
   // The password store associated with the currently active profile.
   PasswordStore* GetPasswordStore();
 
-  // Sets the exception list contents to the given data.
+  // Sets the exception list contents to the given data. We take ownership of
+  // the PasswordForms in the vector.
   void SetExceptionList(const std::vector<webkit_glue::PasswordForm*>& result);
 
   CHROMEGTK_CALLBACK_0(PasswordsExceptionsPageGtk, void, OnRemoveButtonClicked);
   CHROMEGTK_CALLBACK_0(PasswordsExceptionsPageGtk, void,
                        OnRemoveAllButtonClicked);
 
-  static void OnExceptionSelectionChanged(
-      GtkTreeSelection* selection,
-      PasswordsExceptionsPageGtk* page);
+  CHROMEG_CALLBACK_0(PasswordsExceptionsPageGtk, void,
+                     OnExceptionSelectionChanged, GtkTreeSelection*);
 
   // Sorting function.
   static gint CompareSite(GtkTreeModel* model,
@@ -87,7 +86,7 @@ class PasswordsExceptionsPageGtk {
   GtkWidget* page_;
 
   Profile* profile_;
-  std::vector<webkit_glue::PasswordForm> exception_list_;
+  std::vector<webkit_glue::PasswordForm*> exception_list_;
 
   DISALLOW_COPY_AND_ASSIGN(PasswordsExceptionsPageGtk);
 };

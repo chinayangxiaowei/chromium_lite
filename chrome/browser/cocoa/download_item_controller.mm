@@ -7,19 +7,23 @@
 #include "app/l10n_util_mac.h"
 #include "app/resource_bundle.h"
 #include "app/text_elider.h"
+#include "base/histogram.h"
 #include "base/mac_util.h"
+#include "base/string16.h"
+#include "base/string_util.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
-#import "chrome/browser/browser_theme_provider.h"
 #import "chrome/browser/cocoa/download_item_button.h"
 #import "chrome/browser/cocoa/download_item_cell.h"
 #include "chrome/browser/cocoa/download_item_mac.h"
 #import "chrome/browser/cocoa/download_shelf_controller.h"
 #import "chrome/browser/cocoa/themed_window.h"
 #import "chrome/browser/cocoa/ui_localizer.h"
+#include "chrome/browser/download/download_item.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_shelf.h"
 #include "chrome/browser/download/download_util.h"
+#import "chrome/browser/themes/browser_theme_provider.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
@@ -35,6 +39,10 @@ const int kTextWidth = 140;            // Pixels
 // The maximum number of characters we show in a file name when displaying the
 // dangerous download message.
 const int kFileNameMaxLength = 20;
+
+// The maximum width in pixels for the file name tooltip.
+const int kToolTipMaxWidth = 900;
+
 
 // Helper to widen a view.
 void WidenView(NSView* view, CGFloat widthChange) {
@@ -150,6 +158,7 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
   [image_ setImage:alertIcon];
 
   bridge_->LoadIcon();
+  [self updateToolTip];
 }
 
 - (void)setStateFromDownload:(BaseDownloadItemModel*)downloadModel {
@@ -236,11 +245,14 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 }
 
 - (IBAction)handleButtonClick:(id)sender {
-  DownloadItem* download = bridge_->download_model()->download();
-  if (download->state() == DownloadItem::IN_PROGRESS)
-    download->set_open_when_complete(!download->open_when_complete());
-  else if (download->state() == DownloadItem::COMPLETE)
-    download_util::OpenDownload(download);
+  NSEvent* event = [NSApp currentEvent];
+  if ([event modifierFlags] & NSCommandKeyMask) {
+    // Let cmd-click show the file in Finder, like e.g. in Safari and Spotlight.
+    menuBridge_->ExecuteCommand(DownloadShelfContextMenuMac::SHOW_IN_FOLDER);
+  } else {
+    DownloadItem* download = bridge_->download_model()->download();
+    download->OpenDownload();
+  }
 }
 
 - (NSSize)preferredSize {
@@ -252,6 +264,13 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 
 - (DownloadItem*)download {
   return bridge_->download_model()->download();
+}
+
+- (void)updateToolTip {
+  string16 elidedFilename = gfx::ElideFilename(
+      [self download]->GetFileName(),
+      gfx::Font(), kToolTipMaxWidth);
+  [progressView_ setToolTip:base::SysUTF16ToNSString(elidedFilename)];
 }
 
 - (void)clearDangerousMode {
@@ -304,8 +323,7 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
   UMA_HISTOGRAM_LONG_TIMES("clickjacking.save_download",
                            base::Time::Now() - creationTime_);
   // This will change the state and notify us.
-  bridge_->download_model()->download()->manager()->DangerousDownloadValidated(
-      bridge_->download_model()->download());
+  bridge_->download_model()->download()->DangerousDownloadValidated();
 }
 
 - (IBAction)discardDownload:(id)sender {

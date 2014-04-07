@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_VIEWS_FRAME_GLASS_BROWSER_FRAME_VIEW_H_
 #define CHROME_BROWSER_VIEWS_FRAME_GLASS_BROWSER_FRAME_VIEW_H_
+#pragma once
 
 #include "chrome/browser/views/frame/browser_frame_win.h"
 #include "chrome/browser/views/frame/browser_non_client_frame_view.h"
@@ -21,8 +22,8 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView {
 
   // Overridden from BrowserNonClientFrameView:
   virtual gfx::Rect GetBoundsForTabStrip(BaseTabStrip* tabstrip) const;
+  virtual int GetHorizontalTabStripVerticalOffset(bool restored) const;
   virtual void UpdateThrobber(bool running);
-  virtual void PaintTabStripShadow(gfx::Canvas* canvas);
 
   // Overridden from views::NonClientFrameView:
   virtual gfx::Rect GetBoundsForClientView() const;
@@ -49,8 +50,11 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView {
   int NonClientBorderThickness() const;
 
   // Returns the height of the entire nonclient top border, including the window
-  // frame, any title area, and any connected client edge.
-  int NonClientTopBorderHeight() const;
+  // frame, any title area, and any connected client edge.  If |restored| is
+  // true, acts as if the window is restored regardless of the real mode.  If
+  // |ignore_vertical_tabs| is true, acts as if vertical tabs are off regardless
+  // of the real state.
+  int NonClientTopBorderHeight(bool restored, bool ignore_vertical_tabs) const;
 
   // Paint various sub-components of this view.
   void PaintToolbarBackground(gfx::Canvas* canvas);
@@ -70,9 +74,6 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView {
 
   // Displays the next throbber frame.
   void DisplayNextThrobberFrame();
-
-  // The layout rect of the distributor logo, if visible.
-  gfx::Rect logo_bounds_;
 
   // The layout rect of the OTR avatar icon, if visible.
   gfx::Rect otr_avatar_bounds_;
@@ -96,7 +97,7 @@ class GlassBrowserFrameView : public BrowserNonClientFrameView {
   static HICON throbber_icons_[kThrobberIconCount];
   static void InitThrobberIcons();
 
-  DISALLOW_EVIL_CONSTRUCTORS(GlassBrowserFrameView);
+  DISALLOW_COPY_AND_ASSIGN(GlassBrowserFrameView);
 };
 
 #endif  // CHROME_BROWSER_VIEWS_FRAME_GLASS_BROWSER_FRAME_VIEW_H_

@@ -16,8 +16,10 @@
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/dom_ui/html_dialog_ui.h"
+#include "chrome/browser/profile_manager.h"
 #include "chrome/browser/shell_dialogs.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/views/browser_dialogs.h"
 #include "chrome/browser/views/html_dialog_view.h"
 #include "chrome/common/url_constants.h"
 #include "grit/generated_resources.h"
@@ -26,9 +28,10 @@
 
 namespace {
 
-static const wchar_t* kKeyNamePath = L"path";
+const char kKeyNamePath[] = "path";
+const int kSaveCompletePageIndex = 2;
 
-};  // namespace
+}  // namespace
 
 // Implementation of SelectFileDialog that shows an UI for choosing a file
 // or folder using FileBrowseUI.
@@ -51,6 +54,10 @@ class SelectFileDialogImpl : public SelectFileDialog {
                           gfx::NativeWindow owning_window,
                           void* params);
 
+  virtual void set_browser_mode(bool value) {
+    browser_mode_ = value;
+  }
+
  private:
   virtual ~SelectFileDialogImpl();
 
@@ -67,7 +74,7 @@ class SelectFileDialogImpl : public SelectFileDialog {
                        void* params);
 
     // Owner of this FileBrowseDelegate.
-    SelectFileDialogImpl* owner_;
+    scoped_refptr<SelectFileDialogImpl> owner_;
 
     // Parent window.
     gfx::NativeWindow parent_;
@@ -106,6 +113,12 @@ class SelectFileDialogImpl : public SelectFileDialog {
     virtual void GetDialogSize(gfx::Size* size) const;
     virtual std::string GetDialogArgs() const;
     virtual void OnDialogClosed(const std::string& json_retval);
+    virtual void OnCloseContents(TabContents* source, bool* out_close_dialog) {
+    }
+    virtual bool ShouldShowDialogTitle() const { return true; }
+    virtual bool HandleContextMenu(const ContextMenuParams& params) {
+      return true;
+    }
 
     DISALLOW_COPY_AND_ASSIGN(FileBrowseDelegate);
   };
@@ -118,7 +131,7 @@ class SelectFileDialogImpl : public SelectFileDialog {
     virtual void RegisterMessages();
 
     // Callback for the "setDialogTitle" message.
-    void HandleSetDialogTitle(const Value* value);
+    void HandleSetDialogTitle(const ListValue* args);
 
    private:
     FileBrowseDelegate* delegate_;
@@ -129,11 +142,18 @@ class SelectFileDialogImpl : public SelectFileDialog {
   // Notification from FileBrowseDelegate when file browse UI is dismissed.
   void OnDialogClosed(FileBrowseDelegate* delegate, const std::string& json);
 
+  // Callback method to open HTML
+  void OpenHtmlDialog(gfx::NativeWindow owning_window,
+                      FileBrowseDelegate* file_browse_delegate);
+
   // The set of all parent windows for which we are currently running dialogs.
   std::set<gfx::NativeWindow> parents_;
 
   // The set of all FileBrowseDelegate that we are currently running.
   std::set<FileBrowseDelegate*> delegates_;
+
+  // True when opening in browser, otherwise in OOBE/login mode.
+  bool browser_mode_;
 
   // The listener to be notified of selection completion.
   Listener* listener_;
@@ -143,13 +163,14 @@ class SelectFileDialogImpl : public SelectFileDialog {
 
 // static
 SelectFileDialog* SelectFileDialog::Create(Listener* listener) {
-  DCHECK(!ChromeThread::CurrentlyOn(ChromeThread::IO));
-  DCHECK(!ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::IO));
+  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::FILE));
   return new SelectFileDialogImpl(listener);
 }
 
 SelectFileDialogImpl::SelectFileDialogImpl(Listener* listener)
-    : listener_(listener) {
+    : browser_mode_(true),
+      listener_(listener) {
 }
 
 SelectFileDialogImpl::~SelectFileDialogImpl() {
@@ -205,9 +226,19 @@ void SelectFileDialogImpl::SelectFile(
       default_extension, owning_window, params);
   delegates_.insert(file_browse_delegate);
 
-  Browser* browser = BrowserList::GetLastActive();
-  DCHECK(browser);
-  browser->BrowserShowHtmlDialog(file_browse_delegate, owning_window);
+  if (browser_mode_) {
+    Browser* browser = BrowserList::GetLastActive();
+    DCHECK(browser);
+    browser->BrowserShowHtmlDialog(file_browse_delegate, owning_window);
+  } else {
+    BrowserThread::PostTask(
+        BrowserThread::UI,
+        FROM_HERE,
+        NewRunnableMethod(this,
+                          &SelectFileDialogImpl::OpenHtmlDialog,
+                          owning_window,
+                          file_browse_delegate));
+  }
 }
 
 void SelectFileDialogImpl::OnDialogClosed(FileBrowseDelegate* delegate,
@@ -229,12 +260,13 @@ void SelectFileDialogImpl::OnDialogClosed(FileBrowseDelegate* delegate,
       if (delegate->type_ == SELECT_OPEN_FILE ||
           delegate->type_ == SELECT_SAVEAS_FILE ||
           delegate->type_ == SELECT_FOLDER) {
-        std::wstring path_string;
+        std::string path_string;
         if (dict->HasKey(kKeyNamePath) &&
             dict->GetString(kKeyNamePath, &path_string)) {
-          FilePath path = FilePath::FromWStringHack(path_string);
+          FilePath path = FilePath::FromWStringHack(UTF8ToWide(path_string));
 
-          listener_->FileSelected(path, 0, delegate->params_);
+          listener_->FileSelected(path, kSaveCompletePageIndex,
+                                  delegate->params_);
           notification_fired = true;
         }
       } else if (delegate->type_ == SELECT_OPEN_MULTI_FILE) {
@@ -245,10 +277,11 @@ void SelectFileDialogImpl::OnDialogClosed(FileBrowseDelegate* delegate,
           std::vector<FilePath> paths;
           paths.reserve(paths_value->GetSize());
           for (size_t i = 0; i < paths_value->GetSize(); ++i) {
-            std::wstring path_string;
+            std::string path_string;
             if (paths_value->GetString(i, &path_string) &&
                 !path_string.empty()) {
-              paths.push_back(FilePath::FromWStringHack(path_string));
+              paths.push_back(FilePath::FromWStringHack(
+                  UTF8ToWide(path_string)));
             }
           }
 
@@ -267,6 +300,14 @@ void SelectFileDialogImpl::OnDialogClosed(FileBrowseDelegate* delegate,
 
   parents_.erase(delegate->parent_);
   delegates_.erase(delegate);
+}
+
+void SelectFileDialogImpl::OpenHtmlDialog(
+    gfx::NativeWindow owning_window,
+    FileBrowseDelegate* file_browse_delegate) {
+  browser::ShowHtmlDialogView(owning_window,
+                              ProfileManager::GetDefaultProfile(),
+                              file_browse_delegate);
 }
 
 SelectFileDialogImpl::FileBrowseDelegate::FileBrowseDelegate(
@@ -423,8 +464,8 @@ void SelectFileDialogImpl::FileBrowseDelegateHandler::RegisterMessages() {
 }
 
 void SelectFileDialogImpl::FileBrowseDelegateHandler::HandleSetDialogTitle(
-    const Value* value) {
-  std::wstring new_title = ExtractStringValue(value);
+    const ListValue* args) {
+  std::wstring new_title = ExtractStringValue(args);
   if (new_title != delegate_->title_) {
     delegate_->title_ = new_title;
 

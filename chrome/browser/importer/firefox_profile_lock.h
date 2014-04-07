@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_IMPORTER_FIREFOX_PROFILE_LOCK_H__
 #define CHROME_BROWSER_IMPORTER_FIREFOX_PROFILE_LOCK_H__
+#pragma once
 
 #include "build/build_config.h"
 
@@ -11,11 +12,9 @@
 #include <windows.h>
 #endif
 
-#include <string>
-
 #include "base/basictypes.h"
 #include "base/file_path.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
+#include "base/gtest_prod_util.h"
 
 // Firefox is designed to allow only one application to access its
 // profile at the same time.
@@ -69,7 +68,7 @@
 
 class FirefoxProfileLock {
  public:
-  explicit FirefoxProfileLock(const std::wstring& path);
+  explicit FirefoxProfileLock(const FilePath& path);
   ~FirefoxProfileLock();
 
   // Locks and releases the profile.
@@ -80,8 +79,8 @@ class FirefoxProfileLock {
   bool HasAcquired();
 
  private:
-  FRIEND_TEST(FirefoxProfileLockTest, ProfileLock);
-  FRIEND_TEST(FirefoxProfileLockTest, ProfileLockOrphaned);
+  FRIEND_TEST_ALL_PREFIXES(FirefoxProfileLockTest, ProfileLock);
+  FRIEND_TEST_ALL_PREFIXES(FirefoxProfileLockTest, ProfileLockOrphaned);
 
   static const FilePath::CharType* kLockFileName;
   static const FilePath::CharType* kOldLockFileName;

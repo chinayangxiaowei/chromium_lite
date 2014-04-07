@@ -6,6 +6,7 @@
 
 #ifndef CHROME_RENDERER_EXTENSIONS_EXTENSION_PROCESS_BINDINGS_H_
 #define CHROME_RENDERER_EXTENSIONS_EXTENSION_PROCESS_BINDINGS_H_
+#pragma once
 
 #include <set>
 #include <string>
@@ -40,7 +41,7 @@ class ExtensionProcessBindings {
 
   // Sets the API permissions for a particular extension.
   static void SetAPIPermissions(const std::string& extension_id,
-                                const std::vector<std::string>& permissions);
+                                const std::set<std::string>& permissions);
 
   // Sets the host permissions for a particular extension.
   static void SetHostPermissions(const GURL& extension_url,
@@ -48,25 +49,30 @@ class ExtensionProcessBindings {
 
   // Sets whether incognito is enabled for a particular extension.
   static void SetIncognitoEnabled(const std::string& extension_id,
-                                  bool enabled);
+                                  bool enabled,
+                                  bool incognito_split_mode);
 
-  // Checks whether incognito is enabled for a particular extension.
-  static bool HasIncognitoEnabled(const std::string& extension_id);
+  // Checks whether the given extension can see events/data from another
+  // profile (normal to incognito or vice versa).
+  static bool AllowCrossIncognito(const std::string& extension_id);
 
   // Check if the extension in the currently running context has permission to
   // access the given extension function. Must be called with a valid V8
   // context in scope.
   static bool CurrentContextHasPermission(const std::string& function_name);
 
+  // Checks whether |permission| is enabled for |extension_id|.  |permission|
+  // may be a raw permission name (from Extension::kPermissionNames), a
+  // function name (e.g. "tabs.create") or an event name (e.g. "contextMenus/id"
+  // or "devtools.tabid.name").
+  // TODO(erikkay) We should standardize the naming scheme for our events.
+  static bool HasPermission(const std::string& extension_id,
+                            const std::string& permission);
+
   // Throw a V8 exception indicating that permission to access function_name was
   // denied. Must be called with a valid V8 context in scope.
   static v8::Handle<v8::Value> ThrowPermissionDeniedException(
       const std::string& function_name);
-
-  // For EXTENSION_* |type| values, adds/replaces a special class name on to
-  // the document element (e.g. "extension_toolstrip", "extension_mole") so
-  // that the page can use CSS rules to control its display appropriately.
-  static void SetViewType(WebKit::WebView* view, ViewType::Type type);
 };
 
 #endif  // CHROME_RENDERER_EXTENSIONS_EXTENSION_PROCESS_BINDINGS_H_

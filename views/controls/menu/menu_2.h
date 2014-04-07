@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_MENU_MENU_2_H_
 #define VIEWS_CONTROLS_MENU_MENU_2_H_
+#pragma once
 
 #include "app/menus/menu_model.h"
 #include "base/scoped_ptr.h"
@@ -74,6 +75,9 @@ class Menu2 {
 
   // Accessors.
   menus::MenuModel* model() const { return model_; }
+
+  // Sets the minimum width of the menu.
+  void SetMinimumWidth(int width);
 
  private:
   friend class NativeMenuGtk;

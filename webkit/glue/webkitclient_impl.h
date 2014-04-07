@@ -10,7 +10,10 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebKitClient.h"
 #if defined(OS_WIN)
 #include "webkit/glue/webthemeengine_impl_win.h"
+#elif defined(OS_LINUX)
+#include "webkit/glue/webthemeengine_impl_linux.h"
 #endif
+
 
 class MessageLoop;
 
@@ -19,28 +22,13 @@ namespace webkit_glue {
 class WebKitClientImpl : public WebKit::WebKitClient {
  public:
   WebKitClientImpl();
-  virtual ~WebKitClientImpl() {}
+  virtual ~WebKitClientImpl();
 
   // WebKitClient methods (partial implementation):
   virtual WebKit::WebThemeEngine* themeEngine();
-  virtual bool fileExists(const WebKit::WebString& path);
-  virtual bool deleteFile(const WebKit::WebString& path);
-  virtual bool deleteEmptyDirectory(const WebKit::WebString& path);
-  virtual bool getFileSize(const WebKit::WebString& path, long long& result);
-  virtual bool getFileModificationTime(
-      const WebKit::WebString& path,
-      double& result);
-  virtual WebKit::WebString directoryName(const WebKit::WebString& path);
-  virtual WebKit::WebString pathByAppendingComponent(
-      const WebKit::WebString& path, const WebKit::WebString& component);
-  virtual bool makeAllDirectories(const WebKit::WebString& path);
-  virtual WebKit::WebString getAbsolutePath(const WebKit::WebString& path);
-  virtual bool isDirectory(const WebKit::WebString& path);
-  virtual WebKit::WebURL filePathToURL(const WebKit::WebString& path);
+
   virtual base::PlatformFile databaseOpenFile(
-      const WebKit::WebString& vfs_file_name,
-      int desired_flags,
-      base::PlatformFile* dir_handle);
+      const WebKit::WebString& vfs_file_name, int desired_flags);
   virtual int databaseDeleteFile(const WebKit::WebString& vfs_file_name,
                                  bool sync_dir);
   virtual long databaseGetFileAttributes(
@@ -50,6 +38,7 @@ class WebKitClientImpl : public WebKit::WebKitClient {
       unsigned key_size_index, const WebKit::WebString& challenge,
       const WebKit::WebURL& url);
   virtual size_t memoryUsageMB();
+  virtual size_t actualMemoryUsageMB();
   virtual WebKit::WebURLLoader* createURLLoader();
   virtual WebKit::WebSocketStreamHandle* createSocketStreamHandle();
   virtual WebKit::WebString userAgent(const WebKit::WebURL& url);
@@ -68,7 +57,7 @@ class WebKitClientImpl : public WebKit::WebKitClient {
   virtual void setSharedTimerFiredFunction(void (*func)());
   virtual void setSharedTimerFireTime(double fireTime);
   virtual void stopSharedTimer();
-  virtual void callOnMainThread(void (*func)());
+  virtual void callOnMainThread(void (*func)(void*), void* context);
 
   void SuspendSharedTimer();
   void ResumeSharedTimer();
@@ -85,7 +74,7 @@ class WebKitClientImpl : public WebKit::WebKitClient {
   double shared_timer_fire_time_;
   int shared_timer_suspended_;  // counter
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) || defined(OS_LINUX)
   WebThemeEngineImpl theme_engine_;
 #endif
 };

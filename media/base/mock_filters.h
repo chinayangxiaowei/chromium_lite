@@ -18,6 +18,7 @@
 #include "base/callback.h"
 #include "media/base/factory.h"
 #include "media/base/filters.h"
+#include "media/base/video_frame.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace media {
@@ -94,10 +95,10 @@ class MockDataSource : public DataSource {
   MockDataSource() {}
 
   // MediaFilter implementation.
-  MOCK_METHOD0(Stop, void());
+  MOCK_METHOD1(Stop, void(FilterCallback* callback));
   MOCK_METHOD1(SetPlaybackRate, void(float playback_rate));
   MOCK_METHOD2(Seek, void(base::TimeDelta time, FilterCallback* callback));
-  MOCK_METHOD1(OnReceivedMessage, void(FilterMessage message));
+  MOCK_METHOD0(OnAudioRendererDisabled, void());
 
   // DataSource implementation.
   MOCK_METHOD2(Initialize, void(const std::string& url,
@@ -120,10 +121,10 @@ class MockDemuxer : public Demuxer {
   MockDemuxer() {}
 
   // MediaFilter implementation.
-  MOCK_METHOD0(Stop, void());
+  MOCK_METHOD1(Stop, void(FilterCallback* callback));
   MOCK_METHOD1(SetPlaybackRate, void(float playback_rate));
   MOCK_METHOD2(Seek, void(base::TimeDelta time, FilterCallback* callback));
-  MOCK_METHOD1(OnReceivedMessage, void(FilterMessage message));
+  MOCK_METHOD0(OnAudioRendererDisabled, void());
 
   // Demuxer implementation.
   MOCK_METHOD2(Initialize, void(DataSource* data_source,
@@ -146,6 +147,7 @@ class MockDemuxerStream : public DemuxerStream {
   MOCK_METHOD0(media_format, const MediaFormat&());
   MOCK_METHOD1(Read, void(Callback1<Buffer*>::Type* read_callback));
   MOCK_METHOD1(QueryInterface, void*(const char* interface_id));
+  MOCK_METHOD0(EnableBitstreamConverter, void());
 
  protected:
   virtual ~MockDemuxerStream() {}
@@ -161,16 +163,22 @@ class MockVideoDecoder : public VideoDecoder {
   MockVideoDecoder() {}
 
   // MediaFilter implementation.
-  MOCK_METHOD0(Stop, void());
+  MOCK_METHOD1(Stop, void(FilterCallback* callback));
   MOCK_METHOD1(SetPlaybackRate, void(float playback_rate));
   MOCK_METHOD2(Seek, void(base::TimeDelta time, FilterCallback* callback));
-  MOCK_METHOD1(OnReceivedMessage, void(FilterMessage message));
+  MOCK_METHOD0(OnAudioRendererDisabled, void());
 
   // VideoDecoder implementation.
   MOCK_METHOD2(Initialize, void(DemuxerStream* stream,
                                 FilterCallback* callback));
   MOCK_METHOD0(media_format, const MediaFormat&());
-  MOCK_METHOD1(Read, void(Callback1<VideoFrame*>::Type* read_callback));
+  MOCK_METHOD1(ProduceVideoFrame, void(scoped_refptr<VideoFrame>));
+  MOCK_METHOD0(ProvidesBuffer, bool());
+
+  // Make this method public so that tests can make use of it.
+  void VideoFrameReady(scoped_refptr<VideoFrame> frame) {
+    VideoDecoder::VideoFrameReady(frame);
+  }
 
  protected:
   virtual ~MockVideoDecoder() {}
@@ -184,16 +192,21 @@ class MockAudioDecoder : public AudioDecoder {
   MockAudioDecoder() {}
 
   // MediaFilter implementation.
-  MOCK_METHOD0(Stop, void());
+  MOCK_METHOD1(Stop, void(FilterCallback* callback));
   MOCK_METHOD1(SetPlaybackRate, void(float playback_rate));
   MOCK_METHOD2(Seek, void(base::TimeDelta time, FilterCallback* callback));
-  MOCK_METHOD1(OnReceivedMessage, void(FilterMessage message));
+  MOCK_METHOD0(OnAudioRendererDisabled, void());
 
   // AudioDecoder implementation.
   MOCK_METHOD2(Initialize, void(DemuxerStream* stream,
                                 FilterCallback* callback));
   MOCK_METHOD0(media_format, const MediaFormat&());
-  MOCK_METHOD1(Read, void(Callback1<Buffer*>::Type* read_callback));
+  MOCK_METHOD1(ProduceAudioSamples, void(scoped_refptr<Buffer>));
+
+  // change to public to allow unittest for access;
+  ConsumeAudioSamplesCallback* consume_audio_samples_callback() {
+    return AudioDecoder::consume_audio_samples_callback();
+  }
 
  protected:
   virtual ~MockAudioDecoder() {}
@@ -207,15 +220,16 @@ class MockVideoRenderer : public VideoRenderer {
   MockVideoRenderer() {}
 
   // MediaFilter implementation.
-  MOCK_METHOD0(Stop, void());
+  MOCK_METHOD1(Stop, void(FilterCallback* callback));
   MOCK_METHOD1(SetPlaybackRate, void(float playback_rate));
   MOCK_METHOD2(Seek, void(base::TimeDelta time, FilterCallback* callback));
-  MOCK_METHOD1(OnReceivedMessage, void(FilterMessage message));
+  MOCK_METHOD0(OnAudioRendererDisabled, void());
 
   // VideoRenderer implementation.
   MOCK_METHOD2(Initialize, void(VideoDecoder* decoder,
                                 FilterCallback* callback));
   MOCK_METHOD0(HasEnded, bool());
+  MOCK_METHOD1(ConsumeVideoFrame, void(scoped_refptr<VideoFrame> frame));
 
  protected:
   virtual ~MockVideoRenderer() {}
@@ -229,10 +243,10 @@ class MockAudioRenderer : public AudioRenderer {
   MockAudioRenderer() {}
 
   // MediaFilter implementation.
-  MOCK_METHOD0(Stop, void());
+  MOCK_METHOD1(Stop, void(FilterCallback* callback));
   MOCK_METHOD1(SetPlaybackRate, void(float playback_rate));
   MOCK_METHOD2(Seek, void(base::TimeDelta time, FilterCallback* callback));
-  MOCK_METHOD1(OnReceivedMessage, void(FilterMessage message));
+  MOCK_METHOD0(OnAudioRendererDisabled, void());
 
   // AudioRenderer implementation.
   MOCK_METHOD2(Initialize, void(AudioDecoder* decoder,
@@ -323,6 +337,11 @@ void RunFilterCallback(::testing::Unused, FilterCallback* callback);
 // methods.
 void DestroyFilterCallback(::testing::Unused, FilterCallback* callback);
 
+// Helper gmock function that immediately executes and destroys the
+// FilterCallback on behalf of the provided filter.  Can be used when mocking
+// the Stop() method.
+void RunStopFilterCallback(FilterCallback* callback);
+
 // Helper gmock action that calls SetError() on behalf of the provided filter.
 ACTION_P2(SetError, filter, error) {
   filter->host()->SetError(error);
@@ -346,10 +365,10 @@ ACTION_P2(SetBufferedBytes, filter, bytes) {
   filter->host()->SetBufferedBytes(bytes);
 }
 
-// Helper gmock action that calls BroadcastMessage() on behalf of the provided
-// filter.
-ACTION_P2(BroadcastMessage, filter, message) {
-  filter->host()->BroadcastMessage(message);
+// Helper gmock action that calls DisableAudioRenderer() on behalf of the
+// provided filter.
+ACTION_P(DisableAudioRenderer, filter) {
+  filter->host()->DisableAudioRenderer();
 }
 
 }  // namespace media

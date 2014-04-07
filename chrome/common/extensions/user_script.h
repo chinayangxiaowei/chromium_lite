@@ -1,19 +1,21 @@
-// Copyright 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_COMMON_EXTENSIONS_USER_SCRIPT_H_
 #define CHROME_COMMON_EXTENSIONS_USER_SCRIPT_H_
+#pragma once
 
-#include <vector>
 #include <string>
+#include <vector>
 
 #include "base/file_path.h"
 #include "base/string_piece.h"
-#include "chrome/common/extensions/url_pattern.h"
 #include "googleurl/src/gurl.h"
+#include "chrome/common/extensions/url_pattern.h"
 
 class Pickle;
+class URLPattern;
 
 // Represents a user script, either a standalone one, or one that is part of an
 // extension.
@@ -23,6 +25,9 @@ class UserScript {
 
   // The file extension for standalone user scripts.
   static const char kFileExtension[];
+
+  // The bitmask for valid user script injectable schemes used by URLPattern.
+  static const int kValidUserScriptSchemes;
 
   // Check if a file or URL has the user script file extension.
   static bool HasUserScriptFileExtension(const GURL& url);
@@ -46,12 +51,9 @@ class UserScript {
   class File {
    public:
     File(const FilePath& extension_root, const FilePath& relative_path,
-         const GURL& url):
-        extension_root_(extension_root),
-        relative_path_(relative_path),
-        url_(url) {
-    }
-    File() {}
+         const GURL& url);
+    File();
+    ~File();
 
     const FilePath& extension_root() const { return extension_root_; }
     const FilePath& relative_path() const { return relative_path_; }
@@ -100,10 +102,8 @@ class UserScript {
 
   // Constructor. Default the run location to document end, which is like
   // Greasemonkey and probably more useful for typical scripts.
-  UserScript()
-    : run_location_(DOCUMENT_IDLE), emulate_greasemonkey_(false),
-      match_all_frames_(false), incognito_enabled_(false) {
-  }
+  UserScript();
+  ~UserScript();
 
   const std::string& name_space() const { return name_space_; }
   void set_name_space(const std::string& name_space) {
@@ -112,6 +112,11 @@ class UserScript {
 
   const std::string& name() const { return name_; }
   void set_name(const std::string& name) { name_ = name; }
+
+  const std::string& version() const { return version_; }
+  void set_version(const std::string& version) {
+    version_ = version;
+  }
 
   const std::string& description() const { return description_; }
   void set_description(const std::string& description) {
@@ -146,10 +151,8 @@ class UserScript {
   // The URLPatterns, if any, that determine which pages this script runs
   // against.
   const PatternList& url_patterns() const { return url_patterns_; }
-  void add_url_pattern(const URLPattern& pattern) {
-    url_patterns_.push_back(pattern);
-  }
-  void clear_url_patterns() { url_patterns_.clear(); }
+  void add_url_pattern(const URLPattern& pattern);
+  void clear_url_patterns();
 
   // List of js scripts for this user script
   FileList& js_scripts() { return js_scripts_; }
@@ -164,6 +167,9 @@ class UserScript {
 
   bool is_incognito_enabled() const { return incognito_enabled_; }
   void set_incognito_enabled(bool enabled) { incognito_enabled_ = enabled; }
+
+  bool allow_file_access() const { return allow_file_access_; }
+  void set_allow_file_access(bool allowed) { allow_file_access_ = allowed; }
 
   bool is_standalone() const { return extension_id_.empty(); }
 
@@ -194,6 +200,10 @@ class UserScript {
   // A longer description. Only used when parsing Greasemonkey-style scripts.
   std::string description_;
 
+  // A version number of the script. Only used when parsing Greasemonkey-style
+  // scripts.
+  std::string version_;
+
   // Greasemonkey-style globs that determine pages to inject the script into.
   // These are only used with standalone scripts.
   std::vector<std::string> globs_;
@@ -223,6 +233,9 @@ class UserScript {
 
   // True if the script should be injected into an incognito tab.
   bool incognito_enabled_;
+
+  // True if the user agreed to allow this script access to file URLs.
+  bool allow_file_access_;
 };
 
 typedef std::vector<UserScript> UserScriptList;

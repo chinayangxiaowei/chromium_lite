@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,13 @@
 #import <ApplicationServices/ApplicationServices.h>
 #endif
 
+#if defined(OS_WIN)
 typedef struct HDC__* HDC;
 typedef struct _devicemodeW DEVMODE;
+#elif defined(USE_X11)
+typedef struct _GtkPrintSettings GtkPrintSettings;
+typedef struct _GtkPageSetup GtkPageSetup;
+#endif
 
 namespace printing {
 
@@ -23,11 +28,12 @@ namespace printing {
 class PrintSettings {
  public:
   PrintSettings();
+  ~PrintSettings();
 
   // Reinitialize the settings to the default values.
   void Clear();
 
-#ifdef WIN32
+#if defined(OS_WIN)
   // Reads the settings from the selected device context. Calculates derived
   // values like printable_area_.
   void Init(HDC hdc,
@@ -39,11 +45,19 @@ class PrintSettings {
   // Reads the settings from the given PMPrinter and PMPageFormat.
   void Init(PMPrinter printer, PMPageFormat page_format,
             const PageRanges& new_ranges, bool print_selection_only);
+#elif defined(USE_X11)
+  // Initializes the settings from the given GtkPrintSettings and GtkPageSetup.
+  // TODO(jhawkins): This method is a mess across the platforms. Refactor.
+  void Init(GtkPrintSettings* settings,
+            GtkPageSetup* page_setup,
+            const PageRanges& new_ranges,
+            bool print_selection_onl);
 #endif
 
-  // Set printer printable area in in pixels.
-  void SetPrinterPrintableArea(gfx::Size const& physical_size_pixels,
-                               gfx::Rect const& printable_area_pixels);
+  // Set printer printable area in in device units.
+  void SetPrinterPrintableArea(gfx::Size const& physical_size_device_units,
+                               gfx::Rect const& printable_area_device_units,
+                               int units_per_inch);
 
   // Equality operator.
   // NOTE: printer_name is NOT tested for equality since it doesn't affect the
@@ -56,7 +70,16 @@ class PrintSettings {
   }
   const std::wstring& device_name() const { return device_name_; }
   int dpi() const { return dpi_; }
-  const PageSetup& page_setup_pixels() const { return page_setup_pixels_; }
+  const PageSetup& page_setup_device_units() const {
+    return page_setup_device_units_;
+  }
+  int device_units_per_inch() const {
+#if defined(OS_MACOSX)
+    return 72;
+#else  // defined(OS_MACOSX)
+    return dpi();
+#endif  // defined(OS_MACOSX)
+  }
 
   // Multi-page printing. Each PageRange describes a from-to page combination.
   // This permits printing selected pages only.
@@ -105,8 +128,8 @@ class PrintSettings {
   // Printer device name as opened by the OS.
   std::wstring device_name_;
 
-  // Page setup in pixel units, dpi adjusted.
-  PageSetup page_setup_pixels_;
+  // Page setup in device units.
+  PageSetup page_setup_device_units_;
 
   // Printer's device effective dots per inch in both axis.
   int dpi_;

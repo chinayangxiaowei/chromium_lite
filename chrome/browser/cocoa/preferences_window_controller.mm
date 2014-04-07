@@ -8,9 +8,10 @@
 
 #include "app/l10n_util.h"
 #include "app/l10n_util_mac.h"
-#include "base/command_line.h"
+#include "app/resource_bundle.h"
 #include "base/logging.h"
 #include "base/mac_util.h"
+#include "base/scoped_aedesc.h"
 #include "base/string16.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
@@ -28,18 +29,23 @@
 #import "chrome/browser/cocoa/keyword_editor_cocoa_controller.h"
 #import "chrome/browser/cocoa/l10n_util.h"
 #import "chrome/browser/cocoa/search_engine_list_model.h"
-#import "chrome/browser/cocoa/sync_customize_controller_cppsafe.h"
+#import "chrome/browser/cocoa/vertical_gradient_view.h"
+#import "chrome/browser/cocoa/window_size_autosaver.h"
+#include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/browser/metrics/user_metrics.h"
-#include "chrome/browser/net/dns_global.h"
 #include "chrome/browser/net/url_fixer_upper.h"
+#include "chrome/browser/options_util.h"
 #include "chrome/browser/options_window.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/policy/managed_prefs_banner_base.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
-#include "chrome/browser/session_startup_pref.h"
 #include "chrome/browser/shell_integration.h"
+#include "chrome/browser/show_options_url.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
@@ -53,21 +59,21 @@
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
-#import "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
+#include "grit/theme_resources.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
+#import "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 
 namespace {
 
-std::string GetNewTabUIURLString() {
-  return URLFixerUpper::FixupURL(chrome::kChromeUINewTabURL, std::string());
-}
+// Colors for the managed preferences warning banner.
+static const double kBannerGradientColorTop[3] =
+    {255.0 / 255.0, 242.0 / 255.0, 183.0 / 255.0};
+static const double kBannerGradientColorBottom[3] =
+    {250.0 / 255.0, 230.0 / 255.0, 145.0 / 255.0};
+static const double kBannerStrokeColor = 135.0 / 255.0;
 
-// Helper to remove all but the last view from the view hierarchy.
-void RemoveAllButLastView(NSArray* views) {
-  NSArray* toRemove = [views subarrayWithRange:NSMakeRange(0, [views count]-1)];
-  for (NSView* view in toRemove) {
-    [view removeFromSuperviewWithoutNeedingDisplay];
-  }
+bool IsNewTabUIURLString(const GURL& url) {
+  return url == GURL(chrome::kChromeUINewTabURL);
 }
 
 // Helper that sizes two buttons to fit in a row keeping their spacing, returns
@@ -317,35 +323,38 @@ CGFloat AutoSizeUnderTheHoodContent(NSView* view,
 @interface PreferencesWindowController(Private)
 // Callback when preferences are changed. |prefName| is the name of the
 // pref that has changed.
-- (void)prefChanged:(std::wstring*)prefName;
+- (void)prefChanged:(std::string*)prefName;
 // Callback when sync state has changed.  syncService_ needs to be
 // queried to find out what happened.
 - (void)syncStateChanged;
 // Record the user performed a certain action and save the preferences.
 - (void)recordUserAction:(const UserMetricsAction&) action;
 - (void)registerPrefObservers;
-- (void)unregisterPrefObservers;
-
-- (void)customHomePagesChanged;
 
 // KVC setter methods.
 - (void)setNewTabPageIsHomePageIndex:(NSInteger)val;
 - (void)setHomepageURL:(NSString*)urlString;
 - (void)setRestoreOnStartupIndex:(NSInteger)type;
 - (void)setShowHomeButton:(BOOL)value;
-- (void)setShowPageOptionsButtons:(BOOL)value;
 - (void)setPasswordManagerEnabledIndex:(NSInteger)value;
-- (void)setFormAutofillEnabledIndex:(NSInteger)value;
 - (void)setIsUsingDefaultTheme:(BOOL)value;
 - (void)setShowAlternateErrorPages:(BOOL)value;
 - (void)setUseSuggest:(BOOL)value;
 - (void)setDnsPrefetch:(BOOL)value;
 - (void)setSafeBrowsing:(BOOL)value;
-- (void)setMetricsRecording:(BOOL)value;
+- (void)setMetricsReporting:(BOOL)value;
 - (void)setAskForSaveLocation:(BOOL)value;
+- (void)setFileHandlerUIEnabled:(BOOL)value;
 - (void)setTranslateEnabled:(BOOL)value;
+- (void)setTabsToLinks:(BOOL)value;
+- (void)setBackgroundModeEnabled:(BOOL)value;
 - (void)displayPreferenceViewForPage:(OptionsPage)page
                              animate:(BOOL)animate;
+- (void)resetSubViews;
+- (void)initBannerStateForPage:(OptionsPage)page;
+
+// KVC getter methods.
+- (BOOL)fileHandlerUIEnabled;
 @end
 
 namespace PreferencesWindowControllerInternal {
@@ -365,7 +374,7 @@ class PrefObserverBridge : public NotificationObserver,
                        const NotificationSource& source,
                        const NotificationDetails& details) {
     if (type == NotificationType::PREF_CHANGED)
-      [controller_ prefChanged:Details<std::wstring>(details).ptr()];
+      [controller_ prefChanged:Details<std::string>(details).ptr()];
   }
 
   // Overridden from ProfileSyncServiceObserver.
@@ -377,103 +386,52 @@ class PrefObserverBridge : public NotificationObserver,
   PreferencesWindowController* controller_;  // weak, owns us
 };
 
-// PersonalDataManagerObserver facilitates asynchronous loading of
-// PersonalDataManager data before showing the auto fill settings dialog to the
-// user.  It acts as a C++-based delegate for the |PreferencesWindowController|.
-class PersonalDataManagerObserver : public PersonalDataManager::Observer {
+// Tracks state for a managed prefs banner and triggers UI updates through the
+// PreferencesWindowController as appropriate.
+class ManagedPrefsBannerState : public policy::ManagedPrefsBannerBase {
  public:
-  explicit PersonalDataManagerObserver(
-      PersonalDataManager* personal_data_manager,
-      Profile* profile)
-      : personal_data_manager_(personal_data_manager),
-        profile_(profile) {
+  virtual ~ManagedPrefsBannerState() { }
+
+  explicit ManagedPrefsBannerState(PreferencesWindowController* controller,
+                                   OptionsPage page,
+                                   PrefService* local_state,
+                                   PrefService* prefs)
+    : policy::ManagedPrefsBannerBase(local_state, prefs, page),
+        controller_(controller),
+        page_(page) { }
+
+  BOOL IsVisible() {
+    return DetermineVisibility();
   }
 
-  virtual ~PersonalDataManagerObserver();
-
-  // Notifies the observer that the PersonalDataManager has finished loading.
-  virtual void OnPersonalDataLoaded();
-
-  // Static method to dispatch to |ShowAutoFillDialog| method in autofill
-  // module.  This is public to facilitate direct external call when the
-  // data manager has already loaded its data.
-  static void ShowAutoFillDialog(PersonalDataManager* personal_data_manager,
-                                 Profile* profile);
+ protected:
+  // Overridden from ManagedPrefsBannerBase.
+  virtual void OnUpdateVisibility() {
+    [controller_ switchToPage:page_ animate:YES];
+  }
 
  private:
-  // Utility method to remove |this| from |personal_data_manager_| as an
-  // observer.
-  void RemoveObserver();
-
-  // The object in which we are registered as an observer.  We hold on to
-  // it to facilitate un-registering ourself in the destructor and in the
-  // |OnPersonalDataLoaded| method.  This may be NULL.
-  // Weak reference.
-  PersonalDataManager* personal_data_manager_;
-
-  // Profile of caller.  Held as weak reference.  May not be NULL.
-  Profile* profile_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PersonalDataManagerObserver);
+  PreferencesWindowController* controller_;  // weak, owns us
+  OptionsPage page_;  // current options page
 };
-
-// During destruction ensure that we are removed from the
-// |personal_data_manager_| as an observer.
-PersonalDataManagerObserver::~PersonalDataManagerObserver() {
-  RemoveObserver();
-}
-
-void PersonalDataManagerObserver::RemoveObserver() {
-  if (personal_data_manager_) {
-    personal_data_manager_->RemoveObserver(this);
-  }
-}
-
-// The data is ready so display our dialog.  Recursively call
-// |showAutoFillSettings:| to try again now knowing that the
-// |PersonalDataManager| is ready.  Once done we clear the observer
-// (deleting |this| in the process).
-void PersonalDataManagerObserver::OnPersonalDataLoaded() {
-  RemoveObserver();
-  PersonalDataManagerObserver::ShowAutoFillDialog(personal_data_manager_,
-                                                  profile_);
-}
-
-// Dispatches request to show the autofill dialog.  If there are no profiles
-// in the |personal_data_manager| the we create a new one here.  Similary with
-// credit card info.
-void PersonalDataManagerObserver::ShowAutoFillDialog(
-    PersonalDataManager* personal_data_manager, Profile* profile) {
-  DCHECK(profile);
-  if (!personal_data_manager)
-    return;
-
-  std::vector<AutoFillProfile*> profiles =
-      personal_data_manager->web_profiles();
-  AutoFillProfile autofill_profile(ASCIIToUTF16(""), 0);
-  if (profiles.size() == 0) {
-    string16 new_profile_name =
-        l10n_util::GetStringUTF16(IDS_AUTOFILL_NEW_ADDRESS);
-    autofill_profile.set_label(new_profile_name);
-    profiles.push_back(&autofill_profile);
-  }
-
-  std::vector<CreditCard*> credit_cards = personal_data_manager->credit_cards();
-  CreditCard credit_card(ASCIIToUTF16(""), 0);
-  if (credit_cards.size() == 0) {
-    string16 new_credit_card_name =
-        l10n_util::GetStringUTF16(IDS_AUTOFILL_NEW_CREDITCARD);
-    credit_card.set_label(new_credit_card_name);
-    credit_cards.push_back(&credit_card);
-  }
-
-  ::ShowAutoFillDialog(personal_data_manager, profiles, credit_cards, profile);
-}
 
 }  // namespace PreferencesWindowControllerInternal
 
 @implementation PreferencesWindowController
+
+@synthesize restoreButtonsEnabled = restoreButtonsEnabled_;
+@synthesize restoreURLsEnabled = restoreURLsEnabled_;
+@synthesize showHomeButtonEnabled = showHomeButtonEnabled_;
+@synthesize defaultSearchEngineEnabled = defaultSearchEngineEnabled_;
+@synthesize passwordManagerChoiceEnabled = passwordManagerChoiceEnabled_;
+@synthesize passwordManagerButtonEnabled = passwordManagerButtonEnabled_;
+@synthesize autoFillSettingsButtonEnabled = autoFillSettingsButtonEnabled_;
+@synthesize showAlternateErrorPagesEnabled = showAlternateErrorPagesEnabled_;
+@synthesize useSuggestEnabled = useSuggestEnabled_;
+@synthesize dnsPrefetchEnabled = dnsPrefetchEnabled_;
+@synthesize safeBrowsingEnabled = safeBrowsingEnabled_;
+@synthesize metricsReportingEnabled = metricsReportingEnabled_;
+@synthesize proxiesConfigureButtonEnabled = proxiesConfigureButtonEnabled_;
 
 - (id)initWithProfile:(Profile*)profile initialPage:(OptionsPage)initialPage {
   DCHECK(profile);
@@ -498,15 +456,6 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
     const SessionStartupPref startupPref =
         SessionStartupPref::GetStartupPref(prefs_);
     [customPagesSource_ setURLs:startupPref.urls];
-    [customPagesSource_ addObserver:self
-                         forKeyPath:@"customHomePages"
-                            options:0L
-                            context:NULL];
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(homepageEntryChanged:)
-               name:kHomepageEntryChangedNotification
-             object:nil];
 
     // Set up the model for the default search popup. Register for notifications
     // about when the model changes so we can update the selection in the view.
@@ -545,6 +494,33 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
                                green:0x9a/255.0
                                 blue:0x9a/255.0
                                alpha:1.0] retain]);
+
+    // Disable the |autoFillSettingsButton_| if we have no
+    // |personalDataManager|.
+    PersonalDataManager* personalDataManager =
+        profile_->GetPersonalDataManager();
+    [autoFillSettingsButton_ setHidden:(personalDataManager == NULL)];
+    bool autofill_disabled_by_policy =
+        autoFillEnabled_.IsManaged() && !autoFillEnabled_.GetValue();
+    [self setAutoFillSettingsButtonEnabled:!autofill_disabled_by_policy];
+    [self setPasswordManagerChoiceEnabled:!askSavePasswords_.IsManaged()];
+    [self setPasswordManagerButtonEnabled:
+        !askSavePasswords_.IsManaged() || askSavePasswords_.GetValue()];
+
+    // Initialize the enabled state of the elements on the general tab.
+    [self setShowHomeButtonEnabled:!showHomeButton_.IsManaged()];
+    [self setEnabledStateOfRestoreOnStartup];
+    [self setDefaultSearchEngineEnabled:![searchEngineModel_ isDefaultManaged]];
+
+    // Initialize UI state for the advanced page.
+    [self setShowAlternateErrorPagesEnabled:!alternateErrorPages_.IsManaged()];
+    [self setUseSuggestEnabled:!useSuggest_.IsManaged()];
+    [self setDnsPrefetchEnabled:!dnsPrefetch_.IsManaged()];
+    [self setSafeBrowsingEnabled:!safeBrowsing_.IsManaged()];
+    [self setMetricsReportingEnabled:!metricsReporting_.IsManaged()];
+    proxyPrefs_.reset(
+        PrefSetObserver::CreateProxyPrefSetObserver(prefs_, observer_.get()));
+    [self setProxiesConfigureButtonEnabled:!proxyPrefs_->IsManaged()];
   }
   return self;
 }
@@ -573,6 +549,15 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   // remove the checkbox and slide everything above it down.
   RemoveViewFromView(underTheHoodContentView_, enableLoggingCheckbox_);
 #endif  // !defined(GOOGLE_CHROME_BUILD)
+
+  // If BackgroundMode is not enabled, hide the related prefs UI.
+  if (!CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableBackgroundMode)) {
+    RemoveViewFromView(underTheHoodContentView_, backgroundModeTitle_);
+    RemoveViewFromView(underTheHoodContentView_, backgroundModeCheckbox_);
+    RemoveViewFromView(underTheHoodContentView_, backgroundModeDescription_);
+    RemoveViewFromView(underTheHoodContentView_, backgroundModeLearnMore_);
+  }
 
   // There are four problem children within the groups:
   //   Basics - Default Browser
@@ -733,30 +718,51 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   [underTheHoodContentView_ scrollPoint:
       NSMakePoint(0, underTheHoodContentSize.height)];
 
-  // Disable the |autoFillSettingsButton_| if we have no
-  // |personalDataManager|.
-  bool autofillEnabled = CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableAutoFill);
-  PersonalDataManager* personalDataManager =
-      profile_->GetPersonalDataManager();
-  [autoFillSettingsButton_ setHidden:
-      (personalDataManager == NULL || !autofillEnabled)];
+  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  NSImage* alertIcon = rb.GetNSImageNamed(IDR_WARNING);
+  DCHECK(alertIcon);
+  [managedPrefsBannerWarningImage_ setImage:alertIcon];
 
+  [self initBannerStateForPage:initialPage_];
   [self switchToPage:initialPage_ animate:NO];
 
-  // TODO(pinkerton): save/restore position based on prefs.
-  // http://crbug.com/34644
-  [[self window] center];
+  // Save/restore position based on prefs.
+  if (g_browser_process && g_browser_process->local_state()) {
+    sizeSaver_.reset([[WindowSizeAutosaver alloc]
+       initWithWindow:[self window]
+          prefService:g_browser_process->local_state()
+                 path:prefs::kPreferencesWindowPlacement]);
+  }
+
+  // Initialize the banner gradient and stroke color.
+  NSColor* bannerStartingColor =
+      [NSColor colorWithCalibratedRed:kBannerGradientColorTop[0]
+                                green:kBannerGradientColorTop[1]
+                                 blue:kBannerGradientColorTop[2]
+                                alpha:1.0];
+  NSColor* bannerEndingColor =
+      [NSColor colorWithCalibratedRed:kBannerGradientColorBottom[0]
+                                green:kBannerGradientColorBottom[1]
+                                 blue:kBannerGradientColorBottom[2]
+                                alpha:1.0];
+  scoped_nsobject<NSGradient> bannerGradient(
+      [[NSGradient alloc] initWithStartingColor:bannerStartingColor
+                                    endingColor:bannerEndingColor]);
+  [managedPrefsBannerView_ setGradient:bannerGradient];
+
+  NSColor* bannerStrokeColor =
+      [NSColor colorWithCalibratedWhite:kBannerStrokeColor
+                                  alpha:1.0];
+  [managedPrefsBannerView_ setStrokeColor:bannerStrokeColor];
 }
 
 - (void)dealloc {
   if (syncService_) {
     syncService_->RemoveObserver(observer_.get());
   }
-  [customPagesSource_ removeObserver:self forKeyPath:@"customHomePages"];
   [[NSNotificationCenter defaultCenter] removeObserver:self];
-  [self unregisterPrefObservers];
-  personalDataManagerObserver_.reset();
+  [animation_ setDelegate:nil];
+  [animation_ stopAnimation];
   [super dealloc];
 }
 
@@ -774,26 +780,18 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   if (!prefs_) return;
 
   // Basics panel
-  prefs_->AddPrefObserver(prefs::kURLsToRestoreOnStartup, observer_.get());
+  registrar_.Init(prefs_);
+  registrar_.Add(prefs::kURLsToRestoreOnStartup, observer_.get());
   restoreOnStartup_.Init(prefs::kRestoreOnStartup, prefs_, observer_.get());
   newTabPageIsHomePage_.Init(prefs::kHomePageIsNewTabPage,
                              prefs_, observer_.get());
   homepage_.Init(prefs::kHomePage, prefs_, observer_.get());
   showHomeButton_.Init(prefs::kShowHomeButton, prefs_, observer_.get());
-  showPageOptionButtons_.Init(prefs::kShowPageOptionsButtons, prefs_,
-                              observer_.get());
 
   // Personal Stuff panel
   askSavePasswords_.Init(prefs::kPasswordManagerEnabled,
                          prefs_, observer_.get());
-
-  if (CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableAutoFill)) {
-    formAutofill_.Init(prefs::kAutoFillEnabled, prefs_, observer_.get());
-  } else {
-    formAutofill_.Init(prefs::kFormAutofillEnabled, prefs_, observer_.get());
-  }
-
+  autoFillEnabled_.Init(prefs::kAutoFillEnabled, prefs_, observer_.get());
   currentTheme_.Init(prefs::kCurrentThemeID, prefs_, observer_.get());
 
   // Under the hood panel
@@ -802,7 +800,12 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   useSuggest_.Init(prefs::kSearchSuggestEnabled, prefs_, observer_.get());
   dnsPrefetch_.Init(prefs::kDnsPrefetchingEnabled, prefs_, observer_.get());
   safeBrowsing_.Init(prefs::kSafeBrowsingEnabled, prefs_, observer_.get());
+  autoOpenFiles_.Init(
+      prefs::kDownloadExtensionsToOpen, prefs_, observer_.get());
   translateEnabled_.Init(prefs::kEnableTranslate, prefs_, observer_.get());
+  backgroundModeEnabled_.Init(prefs::kBackgroundModeEnabled, prefs_,
+                              observer_.get());
+  tabsToLinks_.Init(prefs::kWebkitTabsToLinks, prefs_, observer_.get());
 
   // During unit tests, there is no local state object, so we fall back to
   // the prefs object (where we've explicitly registered this pref so we
@@ -810,7 +813,7 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   PrefService* local = g_browser_process->local_state();
   if (!local)
     local = prefs_;
-  metricsRecording_.Init(prefs::kMetricsReportingEnabled,
+  metricsReporting_.Init(prefs::kMetricsReportingEnabled,
                          local, observer_.get());
   defaultDownloadLocation_.Init(prefs::kDownloadDefaultDirectory, prefs_,
                                 observer_.get());
@@ -820,30 +823,13 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   lastSelectedPage_.Init(prefs::kOptionsWindowLastTabIndex, local, NULL);
 }
 
-// Clean up what was registered in -registerPrefObservers. We only have to
-// clean up the non-PrefMember registrations.
-- (void)unregisterPrefObservers {
-  if (!prefs_) return;
+// Called when the window wants to be closed.
+- (BOOL)windowShouldClose:(id)sender {
+  // Stop any animation and clear the delegate to avoid stale pointers.
+  [animation_ setDelegate:nil];
+  [animation_ stopAnimation];
 
-  // Basics
-  prefs_->RemovePrefObserver(prefs::kURLsToRestoreOnStartup, observer_.get());
-
-  // Nothing to do for other panels...
-}
-
-// Called when a key we're observing via KVO changes.
-- (void)observeValueForKeyPath:(NSString*)keyPath
-                      ofObject:(id)object
-                        change:(NSDictionary*)change
-                       context:(void*)context {
-  if ([keyPath isEqualToString:@"customHomePages"]) {
-    [self customHomePagesChanged];
-    return;
-  }
-  [super observeValueForKeyPath:keyPath
-                       ofObject:object
-                         change:change
-                        context:context];
+  return YES;
 }
 
 // Called when the user hits the escape key. Closes the window.
@@ -864,8 +850,16 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   NSSet* paths = [super keyPathsForValuesAffectingValueForKey:key];
   if ([key isEqualToString:@"isHomepageURLEnabled"]) {
     paths = [paths setByAddingObject:@"newTabPageIsHomePageIndex"];
-  } else if ([key isEqualToString:@"enableRestoreButtons"]) {
+    paths = [paths setByAddingObject:@"homepageURL"];
+  } else if ([key isEqualToString:@"restoreURLsEnabled"]) {
     paths = [paths setByAddingObject:@"restoreOnStartupIndex"];
+  } else if ([key isEqualToString:@"isHomepageChoiceEnabled"]) {
+    paths = [paths setByAddingObject:@"newTabPageIsHomePageIndex"];
+    paths = [paths setByAddingObject:@"homepageURL"];
+  } else if ([key isEqualToString:@"newTabPageIsHomePageIndex"]) {
+    paths = [paths setByAddingObject:@"homepageURL"];
+  } else if ([key isEqualToString:@"hompageURL"]) {
+    paths = [paths setByAddingObject:@"newTabPageIsHomePageIndex"];
   } else if ([key isEqualToString:@"isDefaultBrowser"]) {
     paths = [paths setByAddingObject:@"defaultBrowser"];
   } else if ([key isEqualToString:@"defaultBrowserTextColor"]) {
@@ -890,18 +884,21 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
 // Basics panel
 
 // Sets the home page preferences for kNewTabPageIsHomePage and kHomePage. If a
-// blank string is passed in we revert to using NewTab page as the Home page.
-// When setting the Home Page to NewTab page, we preserve the old value of
-// kHomePage (we don't overwrite it). Note: using SetValue() causes the
-// observers not to fire, which is actually a good thing as we could end up in a
-// state where setting the homepage to an empty url would automatically reset
-// the prefs back to using the NTP, so we'd be never be able to change it.
-- (void)setHomepage:(const std::string&)homepage {
-  if (homepage.empty() || homepage == GetNewTabUIURLString()) {
-    newTabPageIsHomePage_.SetValue(true);
+// blank or null-host URL is passed in we revert to using NewTab page
+// as the Home page. Note: using SetValue() causes the observers not to fire,
+// which is actually a good thing as we could end up in a state where setting
+// the homepage to an empty url would automatically reset the prefs back to
+// using the NTP, so we'd be never be able to change it.
+- (void)setHomepage:(const GURL&)homepage {
+  if (IsNewTabUIURLString(homepage)) {
+    newTabPageIsHomePage_.SetValueIfNotManaged(true);
+    homepage_.SetValueIfNotManaged(std::string());
+  } else if (!homepage.is_valid()) {
+    newTabPageIsHomePage_.SetValueIfNotManaged(true);
+    if (!homepage.has_host())
+      homepage_.SetValueIfNotManaged(std::string());
   } else {
-    newTabPageIsHomePage_.SetValue(false);
-    homepage_.SetValue(UTF8ToWide(homepage));
+    homepage_.SetValueIfNotManaged(homepage.spec());
   }
 }
 
@@ -910,43 +907,24 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
 // Windows, we don't need to use this method for initializing, that's handled by
 // Cocoa Bindings.
 // Handles prefs for the "Basics" panel.
-- (void)basicsPrefChanged:(std::wstring*)prefName {
+- (void)basicsPrefChanged:(std::string*)prefName {
   if (*prefName == prefs::kRestoreOnStartup) {
     const SessionStartupPref startupPref =
         SessionStartupPref::GetStartupPref(prefs_);
     [self setRestoreOnStartupIndex:startupPref.type];
-  }
-
-  // TODO(beng): Note that the kURLsToRestoreOnStartup pref is a mutable list,
-  //             and changes to mutable lists aren't broadcast through the
-  //             observer system, so this condition will
-  //             never match. Once support for broadcasting such updates is
-  //             added, this will automagically start to work, and this comment
-  //             can be removed.
-  // TODO(chron): We comment out this block right now because we have put in
-  //              broadcast for notifications, but there's some workaround
-  //              currently present that causes an infinite loop.
-  // if (*prefName == prefs::kURLsToRestoreOnStartup) {
-  //  const SessionStartupPref startupPref =
-  //      SessionStartupPref::GetStartupPref(prefs_);
-  //  [customPagesSource_ setURLs:startupPref.urls];
-  // }
-
-  if (*prefName == prefs::kHomePageIsNewTabPage) {
+    [self setEnabledStateOfRestoreOnStartup];
+  } else if (*prefName == prefs::kURLsToRestoreOnStartup) {
+    [customPagesSource_ reloadURLs];
+    [self setEnabledStateOfRestoreOnStartup];
+  } else if (*prefName == prefs::kHomePageIsNewTabPage) {
     NSInteger useNewTabPage = newTabPageIsHomePage_.GetValue() ? 0 : 1;
     [self setNewTabPageIsHomePageIndex:useNewTabPage];
-  }
-  if (*prefName == prefs::kHomePage) {
-    NSString* value = base::SysWideToNSString(homepage_.GetValue());
+  } else if (*prefName == prefs::kHomePage) {
+    NSString* value = base::SysUTF8ToNSString(homepage_.GetValue());
     [self setHomepageURL:value];
-  }
-
-  if (*prefName == prefs::kShowHomeButton) {
+  } else if (*prefName == prefs::kShowHomeButton) {
     [self setShowHomeButton:showHomeButton_.GetValue() ? YES : NO];
-  }
-  if (*prefName == prefs::kShowPageOptionsButtons) {
-    [self setShowPageOptionsButtons:showPageOptionButtons_.GetValue() ?
-        YES : NO];
+    [self setShowHomeButtonEnabled:!showHomeButton_.IsManaged()];
   }
 }
 
@@ -965,20 +943,6 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   pref.type = type;
   pref.urls = [customPagesSource_.get() URLs];
   SessionStartupPref::SetStartupPref(prefs_, pref);
-}
-
-// Called when the custom home pages array changes. Force a save to prefs, but
-// in order to save it, we have to look up what the current radio button
-// setting is (since they're set together). What a pain.
-- (void)customHomePagesChanged {
-  const SessionStartupPref pref = SessionStartupPref::GetStartupPref(prefs_);
-  [self saveSessionStartupWithType:pref.type];
-}
-
-// Called when an entry in the custom home page array changes URLs. Force
-// a save to prefs.
-- (void)homepageEntryChanged:(NSNotification*)notify {
-  [self customHomePagesChanged];
 }
 
 // Sets the pref based on the index of the selected cell in the matrix and
@@ -1002,14 +966,17 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
   [self saveSessionStartupWithType:startupType];
 }
 
-// Returns whether or not the +/-/Current buttons should be enabled, based on
-// the current pref value for the startup urls.
-- (BOOL)enableRestoreButtons {
-  return [self restoreOnStartupIndex] == SessionStartupPref::URLS;
+// Enables or disables the restoreOnStartup elements
+- (void) setEnabledStateOfRestoreOnStartup {
+  const SessionStartupPref startupPref =
+      SessionStartupPref::GetStartupPref(prefs_);
+  [self setRestoreButtonsEnabled:!SessionStartupPref::TypeIsManaged(prefs_)];
+  [self setRestoreURLsEnabled:!SessionStartupPref::URLsAreManaged(prefs_) &&
+      [self restoreOnStartupIndex] == SessionStartupPref::URLS];
 }
 
 // Getter for the |customPagesSource| property for bindings.
-- (id)customPagesSource {
+- (CustomHomePagesModel*)customPagesSource {
   return customPagesSource_.get();
 }
 
@@ -1069,11 +1036,52 @@ void PersonalDataManagerObserver::ShowAutoFillDialog(
 
 enum { kHomepageNewTabPage, kHomepageURL };
 
+// Here's a table describing the desired characteristics of the homepage choice
+// radio value, it's enabled state and the URL field enabled state. They depend
+// on the values of the managed bits for homepage (m_hp) and
+// homepageIsNewTabPage (m_ntp) preferences, as well as the value of the
+// homepageIsNewTabPage preference (ntp) and whether the homepage preference
+// is equal to the new tab page URL (hpisntp).
+//
+// m_hp m_ntp ntp hpisntp | choice value | choice enabled | URL field enabled
+// --------------------------------------------------------------------------
+// 0    0     0   0       | homepage     | 1              | 1
+// 0    0     0   1       | new tab page | 1              | 0
+// 0    0     1   0       | new tab page | 1              | 0
+// 0    0     1   1       | new tab page | 1              | 0
+// 0    1     0   0       | homepage     | 0              | 1
+// 0    1     0   1       | homepage     | 0              | 1
+// 0    1     1   0       | new tab page | 0              | 0
+// 0    1     1   1       | new tab page | 0              | 0
+// 1    0     0   0       | homepage     | 1              | 0
+// 1    0     0   1       | new tab page | 0              | 0
+// 1    0     1   0       | new tab page | 1              | 0
+// 1    0     1   1       | new tab page | 0              | 0
+// 1    1     0   0       | homepage     | 0              | 0
+// 1    1     0   1       | new tab page | 0              | 0
+// 1    1     1   0       | new tab page | 0              | 0
+// 1    1     1   1       | new tab page | 0              | 0
+//
+// thus, we have:
+//
+//    choice value is new tab page === ntp || (hpisntp && (m_hp || !m_ntp))
+//    choice enabled === !m_ntp && !(m_hp && hpisntp)
+//    URL field enabled === !ntp && !mhp && !(hpisntp && !m_ntp)
+//
+// which also make sense if you think about them.
+
+// Checks whether the homepage URL refers to the new tab page.
+- (BOOL)isHomepageNewTabUIURL {
+  return IsNewTabUIURLString(GURL(homepage_.GetValue().c_str()));
+}
+
 // Returns the index of the selected cell in the "home page" marix based on
 // the "new tab is home page" pref. Sadly, the ordering is reversed from the
 // pref value.
 - (NSInteger)newTabPageIsHomePageIndex {
-  return newTabPageIsHomePage_.GetValue() ?
+  return newTabPageIsHomePage_.GetValue() ||
+      ([self isHomepageNewTabUIURL] &&
+          (homepage_.IsManaged() || !newTabPageIsHomePage_.IsManaged())) ?
       kHomepageNewTabPage : kHomepageURL;
 }
 
@@ -1081,23 +1089,34 @@ enum { kHomepageNewTabPage, kHomepageURL };
 // appropriate user metric.
 - (void)setNewTabPageIsHomePageIndex:(NSInteger)index {
   bool useNewTabPage = index == kHomepageNewTabPage ? true : false;
-  if (useNewTabPage)
+  if (useNewTabPage) {
     [self recordUserAction:UserMetricsAction("Options_Homepage_UseNewTab")];
-  else
+  } else {
     [self recordUserAction:UserMetricsAction("Options_Homepage_UseURL")];
-  newTabPageIsHomePage_.SetValue(useNewTabPage);
+    if ([self isHomepageNewTabUIURL])
+      homepage_.SetValueIfNotManaged(std::string());
+  }
+  newTabPageIsHomePage_.SetValueIfNotManaged(useNewTabPage);
+}
+
+// Check whether the new tab and URL homepage radios should be enabled, i.e. if
+// the corresponding preference is not managed through configuration policy.
+- (BOOL)isHomepageChoiceEnabled {
+  return !newTabPageIsHomePage_.IsManaged() &&
+      !(homepage_.IsManaged() && [self isHomepageNewTabUIURL]);
 }
 
 // Returns whether or not the homepage URL text field should be enabled
 // based on if the new tab page is the home page.
 - (BOOL)isHomepageURLEnabled {
-  return newTabPageIsHomePage_.GetValue() ? NO : YES;
+  return !newTabPageIsHomePage_.GetValue() && !homepage_.IsManaged() &&
+      !([self isHomepageNewTabUIURL] && !newTabPageIsHomePage_.IsManaged());
 }
 
 // Returns the homepage URL.
 - (NSString*)homepageURL {
-  NSString* value = base::SysWideToNSString(homepage_.GetValue());
-  return value;
+  NSString* value = base::SysUTF8ToNSString(homepage_.GetValue());
+  return [self isHomepageNewTabUIURL] ? nil : value;
 }
 
 // Sets the homepage URL to |urlString| with some fixing up.
@@ -1107,9 +1126,7 @@ enum { kHomepageNewTabPage, kHomepageURL };
   // to something valid ("http://google.com").
   std::string unfixedURL = urlString ? base::SysNSStringToUTF8(urlString) :
                                        chrome::kChromeUINewTabURL;
-  std::string fixedURL = URLFixerUpper::FixupURL(unfixedURL, std::string());
-  if (GURL(fixedURL).is_valid())
-    [self setHomepage:fixedURL];
+  [self setHomepage:URLFixerUpper::FixupURL(unfixedURL, std::string())];
 }
 
 // Returns whether the home button should be checked based on the preference.
@@ -1126,25 +1143,7 @@ enum { kHomepageNewTabPage, kHomepageURL };
   else
     [self recordUserAction:UserMetricsAction(
                            "Options_Homepage_HideHomeButton")];
-  showHomeButton_.SetValue(value ? true : false);
-}
-
-// Returns whether the page and options button should be checked based on the
-// preference.
-- (BOOL)showPageOptionsButtons {
-  return showPageOptionButtons_.GetValue() ? YES : NO;
-}
-
-// Sets the backend pref for whether or not the page and options buttons should
-// be displayed based on |value|.
-- (void)setShowPageOptionsButtons:(BOOL)value {
-  if (value)
-    [self recordUserAction:UserMetricsAction(
-                           "Options_Homepage_ShowPageOptionsButtons")];
-  else
-    [self recordUserAction:UserMetricsAction(
-                           "Options_Homepage_HidePageOptionsButtons")];
-  showPageOptionButtons_.SetValue(value ? true : false);
+  showHomeButton_.SetValueIfNotManaged(value ? true : false);
 }
 
 // Getter for the |searchEngineModel| property for bindings.
@@ -1168,6 +1167,8 @@ enum { kHomepageNewTabPage, kHomepageURL };
 // popup by tickling the bindings with the new value.
 - (void)searchEngineModelChanged:(NSNotification*)notify {
   [self setSearchEngineSelectedIndex:[self searchEngineSelectedIndex]];
+  [self setDefaultSearchEngineEnabled:![searchEngineModel_ isDefaultManaged]];
+
 }
 
 - (IBAction)manageSearchEngines:(id)sender {
@@ -1214,9 +1215,10 @@ enum { kHomepageNewTabPage, kHomepageURL };
     stringId = IDS_OPTIONS_DEFAULTBROWSER_NOTDEFAULT;
   else
     stringId = IDS_OPTIONS_DEFAULTBROWSER_UNKNOWN;
-  std::wstring text =
-      l10n_util::GetStringF(stringId, l10n_util::GetString(IDS_PRODUCT_NAME));
-  return base::SysWideToNSString(text);
+  string16 text =
+      l10n_util::GetStringFUTF16(stringId,
+                                 l10n_util::GetStringUTF16(IDS_PRODUCT_NAME));
+  return base::SysUTF16ToNSString(text);
 }
 
 //-------------------------------------------------------------------------
@@ -1231,21 +1233,18 @@ const int kDisabledIndex = 1;
 // that has changed. Unlike on Windows, we don't need to use this method for
 // initializing, that's handled by Cocoa Bindings.
 // Handles prefs for the "Personal Stuff" panel.
-- (void)userDataPrefChanged:(std::wstring*)prefName {
+- (void)userDataPrefChanged:(std::string*)prefName {
   if (*prefName == prefs::kPasswordManagerEnabled) {
     [self setPasswordManagerEnabledIndex:askSavePasswords_.GetValue() ?
         kEnabledIndex : kDisabledIndex];
-  }
-  std::wstring autofill_pref;
-  if (CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableAutoFill)) {
-    autofill_pref = prefs::kAutoFillEnabled;
-  } else {
-    autofill_pref = prefs::kFormAutofillEnabled;
+    [self setPasswordManagerChoiceEnabled:!askSavePasswords_.IsManaged()];
+    [self setPasswordManagerButtonEnabled:
+        !askSavePasswords_.IsManaged() || askSavePasswords_.GetValue()];
   }
   if (*prefName == prefs::kAutoFillEnabled) {
-    [self setFormAutofillEnabledIndex:formAutofill_.GetValue() ?
-        kEnabledIndex : kDisabledIndex];
+    bool autofill_disabled_by_policy =
+        autoFillEnabled_.IsManaged() && !autoFillEnabled_.GetValue();
+    [self setAutoFillSettingsButtonEnabled:!autofill_disabled_by_policy];
   }
   if (*prefName == prefs::kCurrentThemeID) {
     [self setIsUsingDefaultTheme:currentTheme_.GetValue().length() == 0];
@@ -1271,19 +1270,7 @@ const int kDisabledIndex = 1;
     return;
   }
 
-  if (personalDataManager->IsDataLoaded()) {
-    // |personalDataManager| data is loaded, we can proceed with the dialog.
-    PreferencesWindowControllerInternal::
-        PersonalDataManagerObserver::ShowAutoFillDialog(personalDataManager,
-                                                        profile_);
-  } else {
-    // |personalDataManager| data is NOT loaded, so we load it here, installing
-    // our observer.
-    personalDataManagerObserver_.reset(
-        new PreferencesWindowControllerInternal::PersonalDataManagerObserver(
-          personalDataManager, profile_));
-    personalDataManager->SetObserver(personalDataManagerObserver_.get());
-  }
+  ShowAutoFillDialog(NULL, personalDataManager, profile_);
 }
 
 // Called to import data from other browsers (Safari, Firefox, etc).
@@ -1312,7 +1299,7 @@ const int kDisabledIndex = 1;
 - (void)stopSyncAlertDidEnd:(NSAlert*)alert
                  returnCode:(int)returnCode
                 contextInfo:(void*)contextInfo {
-  DCHECK(syncService_);
+  DCHECK(syncService_ && !syncService_->IsManaged());
   if (returnCode == NSAlertFirstButtonReturn) {
     syncService_->DisableForUser();
     ProfileSyncService::SyncEvent(ProfileSyncService::STOP_FROM_OPTIONS);
@@ -1322,7 +1309,7 @@ const int kDisabledIndex = 1;
 // Called when the user clicks the multi-purpose sync button in the
 // "Personal Stuff" pane.
 - (IBAction)doSyncAction:(id)sender {
-  DCHECK(syncService_);
+  DCHECK(syncService_ && !syncService_->IsManaged());
   if (syncService_->HasSyncSetupCompleted()) {
     // If sync setup has completed that means the sync button was a
     // "stop syncing" button.  Bring up a confirmation dialog before
@@ -1347,21 +1334,30 @@ const int kDisabledIndex = 1;
   } else {
     // Otherwise, the sync button was a "sync my bookmarks" button.
     // Kick off the sync setup process.
-    syncService_->EnableForUser();
+    syncService_->ShowLoginDialog(NULL);
     ProfileSyncService::SyncEvent(ProfileSyncService::START_FROM_OPTIONS);
   }
+}
+
+// Called when the user clicks on the link to the privacy dashboard.
+- (IBAction)showPrivacyDashboard:(id)sender {
+  Browser* browser = BrowserList::GetLastActive();
+
+  if (!browser || !browser->GetSelectedTabContents())
+    browser = Browser::Create(profile_);
+  browser->OpenPrivacyDashboardTabAndActivate();
 }
 
 // Called when the user clicks the "Customize Sync" button in the
 // "Personal Stuff" pane.  Spawns a dialog-modal sheet that cleans
 // itself up on close.
 - (IBAction)doSyncCustomize:(id)sender {
-  ShowSyncCustomizeDialog([self window], profile_->GetProfileSyncService());
+  syncService_->ShowConfigure(NULL);
 }
 
 - (IBAction)doSyncReauthentication:(id)sender {
-  DCHECK(syncService_);
-  syncService_->ShowLoginDialog();
+  DCHECK(syncService_ && !syncService_->IsManaged());
+  syncService_->ShowLoginDialog(NULL);
 }
 
 - (void)setPasswordManagerEnabledIndex:(NSInteger)value {
@@ -1371,23 +1367,11 @@ const int kDisabledIndex = 1;
   else
     [self recordUserAction:UserMetricsAction(
                            "Options_PasswordManager_Disable")];
-  askSavePasswords_.SetValue(value == kEnabledIndex ? true : false);
+  askSavePasswords_.SetValueIfNotManaged(value == kEnabledIndex ? true : false);
 }
 
 - (NSInteger)passwordManagerEnabledIndex {
   return askSavePasswords_.GetValue() ? kEnabledIndex : kDisabledIndex;
-}
-
-- (void)setFormAutofillEnabledIndex:(NSInteger)value {
-  if (value == kEnabledIndex)
-    [self recordUserAction:UserMetricsAction("Options_FormAutofill_Enable")];
-  else
-    [self recordUserAction:UserMetricsAction("Options_FormAutofill_Disable")];
-  formAutofill_.SetValue(value == kEnabledIndex ? true : false);
-}
-
-- (NSInteger)formAutofillEnabledIndex {
-  return formAutofill_.GetValue() ? kEnabledIndex : kDisabledIndex;
 }
 
 - (void)setIsUsingDefaultTheme:(BOOL)value {
@@ -1410,28 +1394,52 @@ const int kDisabledIndex = 1;
 // that has changed. Unlike on Windows, we don't need to use this method for
 // initializing, that's handled by Cocoa Bindings.
 // Handles prefs for the "Under the hood" panel.
-- (void)underHoodPrefChanged:(std::wstring*)prefName {
+- (void)underHoodPrefChanged:(std::string*)prefName {
   if (*prefName == prefs::kAlternateErrorPagesEnabled) {
     [self setShowAlternateErrorPages:
         alternateErrorPages_.GetValue() ? YES : NO];
+    [self setShowAlternateErrorPagesEnabled:!alternateErrorPages_.IsManaged()];
   }
   else if (*prefName == prefs::kSearchSuggestEnabled) {
     [self setUseSuggest:useSuggest_.GetValue() ? YES : NO];
+    [self setUseSuggestEnabled:!useSuggest_.IsManaged()];
   }
   else if (*prefName == prefs::kDnsPrefetchingEnabled) {
     [self setDnsPrefetch:dnsPrefetch_.GetValue() ? YES : NO];
+    [self setDnsPrefetchEnabled:!dnsPrefetch_.IsManaged()];
   }
   else if (*prefName == prefs::kSafeBrowsingEnabled) {
     [self setSafeBrowsing:safeBrowsing_.GetValue() ? YES : NO];
+    [self setSafeBrowsingEnabled:!safeBrowsing_.IsManaged()];
   }
   else if (*prefName == prefs::kMetricsReportingEnabled) {
-    [self setMetricsRecording:metricsRecording_.GetValue() ? YES : NO];
+    [self setMetricsReporting:metricsReporting_.GetValue() ? YES : NO];
+    [self setMetricsReportingEnabled:!metricsReporting_.IsManaged()];
+  }
+  else if (*prefName == prefs::kDownloadDefaultDirectory) {
+    // Poke KVO.
+    [self willChangeValueForKey:@"defaultDownloadLocation"];
+    [self didChangeValueForKey:@"defaultDownloadLocation"];
   }
   else if (*prefName == prefs::kPromptForDownload) {
     [self setAskForSaveLocation:askForSaveLocation_.GetValue() ? YES : NO];
   }
   else if (*prefName == prefs::kEnableTranslate) {
     [self setTranslateEnabled:translateEnabled_.GetValue() ? YES : NO];
+  }
+  else if (*prefName == prefs::kBackgroundModeEnabled) {
+    [self setBackgroundModeEnabled:backgroundModeEnabled_.GetValue() ?
+          YES : NO];
+  }
+  else if (*prefName == prefs::kWebkitTabsToLinks) {
+    [self setTabsToLinks:tabsToLinks_.GetValue() ? YES : NO];
+  }
+  else if (*prefName == prefs::kDownloadExtensionsToOpen) {
+    // Poke KVC.
+    [self setFileHandlerUIEnabled:[self fileHandlerUIEnabled]];
+  }
+  else if (proxyPrefs_->IsObserved(*prefName)) {
+    [self setProxiesConfigureButtonEnabled:!proxyPrefs_->IsManaged()];
   }
 }
 
@@ -1443,7 +1451,7 @@ const int kDisabledIndex = 1;
     [self recordUserAction:UserMetricsAction("Options_SetDownloadDirectory")];
     NSURL* path = [[panel URLs] lastObject];  // We only allow 1 item.
     [self willChangeValueForKey:@"defaultDownloadLocation"];
-    defaultDownloadLocation_.SetValue(base::SysNSStringToWide([path path]));
+    defaultDownloadLocation_.SetValue(base::SysNSStringToUTF8([path path]));
     [self didChangeValueForKey:@"defaultDownloadLocation"];
   }
 }
@@ -1454,7 +1462,7 @@ const int kDisabledIndex = 1;
   [panel setAllowsMultipleSelection:NO];
   [panel setCanChooseFiles:NO];
   [panel setCanChooseDirectories:YES];
-  NSString* path = base::SysWideToNSString(defaultDownloadLocation_.GetValue());
+  NSString* path = base::SysUTF8ToNSString(defaultDownloadLocation_.GetValue());
   [panel beginSheetForDirectory:path
                            file:nil
                           types:nil
@@ -1481,9 +1489,39 @@ const int kDisabledIndex = 1;
 - (IBAction)privacyLearnMore:(id)sender {
   // We open a new browser window so the Options dialog doesn't get lost
   // behind other windows.
-  Browser* browser = Browser::Create(profile_);
-  browser->OpenURL(GURL(l10n_util::GetStringUTF16(IDS_LEARN_MORE_PRIVACY_URL)),
-                   GURL(), NEW_WINDOW, PageTransition::LINK);
+  browser::ShowOptionsURL(
+      profile_,
+      GURL(l10n_util::GetStringUTF16(IDS_LEARN_MORE_PRIVACY_URL)));
+}
+
+- (IBAction)backgroundModeLearnMore:(id)sender {
+  browser::ShowOptionsURL(
+      profile_,
+      GURL(l10n_util::GetStringUTF16(IDS_LEARN_MORE_BACKGROUND_MODE_URL)));
+}
+
+- (IBAction)resetAutoOpenFiles:(id)sender {
+  profile_->GetDownloadManager()->download_prefs()->ResetAutoOpen();
+  [self recordUserAction:UserMetricsAction("Options_ResetAutoOpenFiles")];
+}
+
+- (IBAction)openProxyPreferences:(id)sender {
+  NSArray* itemsToOpen = [NSArray arrayWithObject:[NSURL fileURLWithPath:
+      @"/System/Library/PreferencePanes/Network.prefPane"]];
+
+  const char* proxyPrefCommand = "Proxies";
+  scoped_aedesc<> openParams;
+  OSStatus status = AECreateDesc('ptru',
+                                 proxyPrefCommand,
+                                 strlen(proxyPrefCommand),
+                                 openParams.OutPointer());
+  LOG_IF(ERROR, status != noErr) << "Failed to create open params: " << status;
+
+  LSLaunchURLSpec launchSpec = { 0 };
+  launchSpec.itemURLs = (CFArrayRef)itemsToOpen;
+  launchSpec.passThruParams = openParams;
+  launchSpec.launchFlags = kLSLaunchAsync | kLSLaunchDontAddToRecents;
+  LSOpenFromURLSpec(&launchSpec, NULL);
 }
 
 // Returns whether the alternate error page checkbox should be checked based
@@ -1501,7 +1539,7 @@ const int kDisabledIndex = 1;
   else
     [self recordUserAction:UserMetricsAction(
                            "Options_LinkDoctorCheckbox_Disable")];
-  alternateErrorPages_.SetValue(value ? true : false);
+  alternateErrorPages_.SetValueIfNotManaged(value ? true : false);
 }
 
 // Returns whether the suggest checkbox should be checked based on the
@@ -1519,7 +1557,7 @@ const int kDisabledIndex = 1;
   else
     [self recordUserAction:UserMetricsAction(
                            "Options_UseSuggestCheckbox_Disable")];
-  useSuggest_.SetValue(value ? true : false);
+  useSuggest_.SetValueIfNotManaged(value ? true : false);
 }
 
 // Returns whether the DNS prefetch checkbox should be checked based on the
@@ -1537,8 +1575,7 @@ const int kDisabledIndex = 1;
   else
     [self recordUserAction:UserMetricsAction(
                            "Options_DnsPrefetchCheckbox_Disable")];
-  dnsPrefetch_.SetValue(value ? true : false);
-  chrome_browser_net::EnableDnsPrefetch(value ? true : false);
+  dnsPrefetch_.SetValueIfNotManaged(value ? true : false);
 }
 
 // Returns whether the safe browsing checkbox should be checked based on the
@@ -1556,31 +1593,37 @@ const int kDisabledIndex = 1;
   else
     [self recordUserAction:UserMetricsAction(
                            "Options_SafeBrowsingCheckbox_Disable")];
-  bool enabled = value ? true : false;
-  safeBrowsing_.SetValue(enabled);
+  safeBrowsing_.SetValueIfNotManaged(value ? true : false);
   SafeBrowsingService* safeBrowsingService =
       g_browser_process->resource_dispatcher_host()->safe_browsing_service();
-  MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
-      safeBrowsingService, &SafeBrowsingService::OnEnable, enabled));
+  MessageLoop::current()->PostTask(
+      FROM_HERE,
+      NewRunnableMethod(safeBrowsingService,
+                        &SafeBrowsingService::OnEnable,
+                        safeBrowsing_.GetValue()));
 }
 
-// Returns whether the suggest checkbox should be checked based on the
+// Returns whether the metrics reporting checkbox should be checked based on the
 // preference.
-- (BOOL)metricsRecording {
-  return metricsRecording_.GetValue() ? YES : NO;
+- (BOOL)metricsReporting {
+  return metricsReporting_.GetValue() ? YES : NO;
 }
 
-// Sets the backend pref for whether or not the suggest checkbox should be
-// displayed based on |value|.
-- (void)setMetricsRecording:(BOOL)value {
+// Sets the backend pref for whether or not the metrics reporting checkbox
+// should be displayed based on |value|.
+- (void)setMetricsReporting:(BOOL)value {
   if (value)
     [self recordUserAction:UserMetricsAction(
                            "Options_MetricsReportingCheckbox_Enable")];
   else
     [self recordUserAction:UserMetricsAction(
                            "Options_MetricsReportingCheckbox_Disable")];
-  bool enabled = value ? true : false;
 
+  // TODO(pinkerton): windows shows a dialog here telling the user they need to
+  // restart for this to take effect. http://crbug.com/34653
+  metricsReporting_.SetValueIfNotManaged(value ? true : false);
+
+  bool enabled = metricsReporting_.GetValue();
   GoogleUpdateSettings::SetCollectStatsConsent(enabled);
   bool update_pref = GoogleUpdateSettings::GetCollectStatsConsent();
   if (enabled != update_pref) {
@@ -1601,15 +1644,11 @@ const int kDisabledIndex = 1;
     else
       metrics->Stop();
   }
-
-  // TODO(pinkerton): windows shows a dialog here telling the user they need to
-  // restart for this to take effect. http://crbug.com/34653
-  metricsRecording_.SetValue(enabled);
 }
 
 - (NSURL*)defaultDownloadLocation {
   NSString* pathString =
-      base::SysWideToNSString(defaultDownloadLocation_.GetValue());
+      base::SysUTF8ToNSString(defaultDownloadLocation_.GetValue());
   return [NSURL fileURLWithPath:pathString];
 }
 
@@ -1628,6 +1667,16 @@ const int kDisabledIndex = 1;
   askForSaveLocation_.SetValue(value);
 }
 
+- (BOOL)fileHandlerUIEnabled {
+  if (!profile_->GetDownloadManager())  // Not set in unit tests.
+    return NO;
+  return profile_->GetDownloadManager()->download_prefs()->IsAutoOpenUsed();
+}
+
+- (void)setFileHandlerUIEnabled:(BOOL)value {
+  [resetFileHandlersButton_ setEnabled:value];
+}
+
 - (BOOL)translateEnabled {
   return translateEnabled_.GetValue();
 }
@@ -1639,6 +1688,32 @@ const int kDisabledIndex = 1;
     [self recordUserAction:UserMetricsAction("Options_Translate_Disable")];
   }
   translateEnabled_.SetValue(value);
+}
+
+- (BOOL)backgroundModeEnabled {
+  return backgroundModeEnabled_.GetValue();
+}
+
+- (void)setBackgroundModeEnabled:(BOOL)value {
+  if (value) {
+    [self recordUserAction:UserMetricsAction("Options_BackgroundMode_Enable")];
+  } else {
+    [self recordUserAction:UserMetricsAction("Options_BackgroundMode_Disable")];
+  }
+  backgroundModeEnabled_.SetValue(value);
+}
+
+- (BOOL)tabsToLinks {
+  return tabsToLinks_.GetValue();
+}
+
+- (void)setTabsToLinks:(BOOL)value {
+  if (value) {
+    [self recordUserAction:UserMetricsAction("Options_TabsToLinks_Enable")];
+  } else {
+    [self recordUserAction:UserMetricsAction("Options_TabsToLinks_Disable")];
+  }
+  tabsToLinks_.SetValue(value);
 }
 
 - (void)fontAndLanguageEndSheet:(NSWindow*)sheet
@@ -1669,11 +1744,37 @@ const int kDisabledIndex = 1;
   [self launchKeychainAccess];
 }
 
+- (IBAction)resetToDefaults:(id)sender {
+  // The alert will clean itself up in the did-end selector.
+  NSAlert* alert = [[NSAlert alloc] init];
+  [alert setMessageText:l10n_util::GetNSString(IDS_OPTIONS_RESET_MESSAGE)];
+  NSButton* resetButton = [alert addButtonWithTitle:
+      l10n_util::GetNSString(IDS_OPTIONS_RESET_OKLABEL)];
+  [resetButton setKeyEquivalent:@""];
+  NSButton* cancelButton = [alert addButtonWithTitle:
+      l10n_util::GetNSString(IDS_OPTIONS_RESET_CANCELLABEL)];
+  [cancelButton setKeyEquivalent:@"\r"];
+
+  [alert beginSheetModalForWindow:[self window]
+                    modalDelegate:self
+                   didEndSelector:@selector(resetToDefaults:returned:context:)
+                      contextInfo:nil];
+}
+
+- (void)resetToDefaults:(NSAlert*)alert
+               returned:(NSInteger)code
+                context:(void*)context {
+  if (code == NSAlertFirstButtonReturn) {
+    OptionsUtil::ResetToDefaults(profile_);
+  }
+  [alert autorelease];
+}
+
 //-------------------------------------------------------------------------
 
 // Callback when preferences are changed. |prefName| is the name of the
 // pref that has changed and should not be NULL.
-- (void)prefChanged:(std::wstring*)prefName {
+- (void)prefChanged:(std::string*)prefName {
   DCHECK(prefName);
   if (!prefName) return;
   [self basicsPrefChanged:prefName];
@@ -1688,6 +1789,11 @@ const int kDisabledIndex = 1;
 // TODO(akalin): Change the background of the status label/link on error.
 - (void)syncStateChanged {
   DCHECK(syncService_);
+
+  string16 statusLabel, linkLabel;
+  sync_ui_util::MessageType status =
+      sync_ui_util::GetStatusLabels(syncService_, &statusLabel, &linkLabel);
+  bool managed = syncService_->IsManaged();
 
   [syncButton_ setEnabled:!syncService_->WizardIsVisible()];
   NSString* buttonLabel;
@@ -1704,14 +1810,14 @@ const int kDisabledIndex = 1;
         IDS_SYNC_START_SYNC_BUTTON_LABEL);
     [syncCustomizeButton_ setHidden:true];
   }
+  [syncCustomizeButton_ setEnabled:!managed];
   [syncButton_ setTitle:buttonLabel];
+  [syncButton_ setEnabled:!managed];
 
-  string16 statusLabel, linkLabel;
-  sync_ui_util::MessageType status =
-      sync_ui_util::GetStatusLabels(syncService_, &statusLabel, &linkLabel);
   [syncStatus_ setStringValue:base::SysUTF16ToNSString(statusLabel)];
   [syncLink_ setHidden:linkLabel.empty()];
   [syncLink_ setTitle:base::SysUTF16ToNSString(linkLabel)];
+  [syncLink_ setEnabled:!managed];
 
   NSButtonCell* syncLinkCell = static_cast<NSButtonCell*>([syncLink_ cell]);
   if (!syncStatusNoErrorBackgroundColor_) {
@@ -1753,17 +1859,9 @@ const int kDisabledIndex = 1;
   NSView* prefsView = [self getPrefsViewForPage:page];
   NSView* contentView = [prefsWindow contentView];
 
-  // Normally there is only one view, but if the user clicks really quickly, the
-  // animation could still been running, and the last view is the one that was
-  // animating in.
-  NSArray* subviews = [contentView subviews];
-  NSView* currentPrefsView = nil;
-  if ([subviews count]) {
-    currentPrefsView = [subviews lastObject];
-  }
-
   // Make sure we aren't being told to display the same thing again.
-  if (currentPrefsView == prefsView) {
+  if (currentPrefsView_ == prefsView &&
+      managedPrefsBannerVisible_ == bannerState_->IsVisible()) {
     return;
   }
 
@@ -1771,15 +1869,29 @@ const int kDisabledIndex = 1;
   if (page != OPTIONS_PAGE_DEFAULT)
     lastSelectedPage_.SetValue(page);
 
-  // Stop any running animation, and remove any past views that were on the way
-  // out.
+  // Stop any running animation, and reset the subviews to the new state. We
+  // re-add any views we need for animation later.
   [animation_ stopAnimation];
-  if ([subviews count]) {
-    RemoveAllButLastView(subviews);
-  }
+  NSView* oldPrefsView = currentPrefsView_;
+  currentPrefsView_ = prefsView;
+  [self resetSubViews];
 
+  // Update the banner state.
+  [self initBannerStateForPage:page];
+  BOOL showBanner = bannerState_->IsVisible();
+
+  // Update the window title.
+  NSToolbarItem* toolbarItem = [self getToolbarItemForPage:page];
+  [prefsWindow setTitle:[toolbarItem label]];
+
+  // Calculate new frames for the subviews.
   NSRect prefsViewFrame = [prefsView frame];
   NSRect contentViewFrame = [contentView frame];
+  NSRect bannerViewFrame = [managedPrefsBannerView_ frame];
+
+  // Determine what height the managed prefs banner will use.
+  CGFloat bannerViewHeight = showBanner ? NSHeight(bannerViewFrame) : 0.0;
+
   if (animate) {
     // NSViewAnimation doesn't seem to honor subview resizing as it animates the
     // Window's frame.  So instead of trying to get the top in the right place,
@@ -1790,18 +1902,12 @@ const int kDisabledIndex = 1;
     // The prefView is anchored to the top of its parent, so set its origin so
     // that the top is where it should be.  When the window's frame is set, the
     // origin will be adjusted to keep it in the right spot.
-    prefsViewFrame.origin.y =
-        NSHeight(contentViewFrame) - NSHeight(prefsViewFrame);
+    prefsViewFrame.origin.y = NSHeight(contentViewFrame) -
+        NSHeight(prefsViewFrame) - bannerViewHeight;
   }
+  bannerViewFrame.origin.y = NSHeight(prefsViewFrame);
+  bannerViewFrame.size.width = NSWidth(contentViewFrame);
   [prefsView setFrame:prefsViewFrame];
-
-  // Add the view.
-  [contentView addSubview:prefsView];
-  [prefsWindow setInitialFirstResponder:prefsView];
-
-  // Update the window title.
-  NSToolbarItem* toolbarItem = [self getToolbarItemForPage:page];
-  [prefsWindow setTitle:[toolbarItem label]];
 
   // Figure out the size of the window.
   NSRect windowFrame = [contentView convertRect:[prefsWindow frame]
@@ -1809,7 +1915,7 @@ const int kDisabledIndex = 1;
   CGFloat titleToolbarHeight =
       NSHeight(windowFrame) - NSHeight(contentViewFrame);
   windowFrame.size.height =
-      NSHeight(prefsViewFrame) + titleToolbarHeight;
+      NSHeight(prefsViewFrame) + titleToolbarHeight + bannerViewHeight;
   DCHECK_GE(NSWidth(windowFrame), NSWidth(prefsViewFrame))
       << "Initial width set wasn't wide enough.";
   windowFrame = [contentView convertRect:windowFrame toView:nil];
@@ -1817,42 +1923,92 @@ const int kDisabledIndex = 1;
 
   // Now change the size.
   if (animate) {
-    NSDictionary* oldViewOut =
+    NSMutableArray* animations = [NSMutableArray arrayWithCapacity:4];
+    if (oldPrefsView != prefsView) {
+      // Fade between prefs views if they change.
+      [contentView addSubview:oldPrefsView
+                   positioned:NSWindowBelow
+                   relativeTo:nil];
+      [animations addObject:
+          [NSDictionary dictionaryWithObjectsAndKeys:
+              oldPrefsView, NSViewAnimationTargetKey,
+              NSViewAnimationFadeOutEffect, NSViewAnimationEffectKey,
+              nil]];
+      [animations addObject:
+          [NSDictionary dictionaryWithObjectsAndKeys:
+              prefsView, NSViewAnimationTargetKey,
+              NSViewAnimationFadeInEffect, NSViewAnimationEffectKey,
+              nil]];
+    } else {
+      // Make sure the prefs pane ends up in the right position in case we
+      // manipulate the banner.
+      [animations addObject:
+          [NSDictionary dictionaryWithObjectsAndKeys:
+              prefsView, NSViewAnimationTargetKey,
+              [NSValue valueWithRect:prefsViewFrame],
+                  NSViewAnimationEndFrameKey,
+              nil]];
+    }
+    if (showBanner != managedPrefsBannerVisible_) {
+      // Slide the warning banner in or out of view.
+      [animations addObject:
+          [NSDictionary dictionaryWithObjectsAndKeys:
+              managedPrefsBannerView_, NSViewAnimationTargetKey,
+              [NSValue valueWithRect:bannerViewFrame],
+                  NSViewAnimationEndFrameKey,
+              nil]];
+    }
+    // Window resize animation.
+    [animations addObject:
         [NSDictionary dictionaryWithObjectsAndKeys:
-         currentPrefsView, NSViewAnimationTargetKey,
-         NSViewAnimationFadeOutEffect, NSViewAnimationEffectKey,
-         nil];
-    NSDictionary* newViewIn =
-        [NSDictionary dictionaryWithObjectsAndKeys:
-         prefsView, NSViewAnimationTargetKey,
-         NSViewAnimationFadeInEffect, NSViewAnimationEffectKey,
-         nil];
-    NSDictionary* windowResize =
-        [NSDictionary dictionaryWithObjectsAndKeys:
-         prefsWindow, NSViewAnimationTargetKey,
-         [NSValue valueWithRect:windowFrame], NSViewAnimationEndFrameKey,
-         nil];
-    [animation_ setViewAnimations:
-        [NSArray arrayWithObjects:oldViewOut, newViewIn, windowResize, nil]];
+            prefsWindow, NSViewAnimationTargetKey,
+            [NSValue valueWithRect:windowFrame], NSViewAnimationEndFrameKey,
+            nil]];
+    [animation_ setViewAnimations:animations];
     // The default duration is 0.5s, which actually feels slow in here, so speed
     // it up a bit.
     [animation_ gtm_setDuration:0.2
                       eventMask:NSLeftMouseUpMask];
     [animation_ startAnimation];
   } else {
-    [currentPrefsView removeFromSuperviewWithoutNeedingDisplay];
     // If not animating, odds are we don't want to display either (because it
     // is initial window setup).
     [prefsWindow setFrame:windowFrame display:NO];
+    [managedPrefsBannerView_ setFrame:bannerViewFrame];
   }
+
+  managedPrefsBannerVisible_ = showBanner;
+}
+
+- (void)resetSubViews {
+  // Reset subviews to current prefs view and banner, remove any views that
+  // might have been left over from previous state or animation.
+  NSArray* subviews = [NSArray arrayWithObjects:
+                          currentPrefsView_, managedPrefsBannerView_, nil];
+  [[[self window] contentView] setSubviews:subviews];
+  [[self window] setInitialFirstResponder:currentPrefsView_];
 }
 
 - (void)animationDidEnd:(NSAnimation*)animation {
   DCHECK_EQ(animation_.get(), animation);
-  // Animation finished, remove everything but the view we just added (it will
-  // be last in the list).
-  NSArray* subviews = [[[self window] contentView] subviews];
-  RemoveAllButLastView(subviews);
+  // Animation finished, reset subviews to current prefs view and the banner.
+  [self resetSubViews];
+}
+
+// Reinitializes the banner state tracker object to watch for managed bits of
+// preferences relevant to the given options |page|.
+- (void)initBannerStateForPage:(OptionsPage)page {
+  page = [self normalizePage:page];
+
+  // During unit tests, there is no local state object, so we fall back to
+  // the prefs object (where we've explicitly registered this pref so we
+  // know it's there).
+  PrefService* local = g_browser_process->local_state();
+  if (!local)
+    local = prefs_;
+  bannerState_.reset(
+      new PreferencesWindowControllerInternal::ManagedPrefsBannerState(
+          self, page, local, prefs_));
 }
 
 - (void)switchToPage:(OptionsPage)page animate:(BOOL)animate {

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_TAB_CONTENTS_TAB_CONTENTS_VIEW_H_
 #define CHROME_BROWSER_TAB_CONTENTS_TAB_CONTENTS_VIEW_H_
+#pragma once
 
 #include <map>
 #include <string>
@@ -15,7 +16,6 @@
 #include "gfx/rect.h"
 #include "gfx/size.h"
 
-class Browser;
 class RenderViewHost;
 class RenderWidgetHost;
 class RenderWidgetHostView;
@@ -115,6 +115,9 @@ class TabContentsView : public RenderViewHostDelegate::View {
   // invoked, SetInitialFocus is invoked.
   virtual void RestoreFocus() = 0;
 
+  // RenderViewHostDelegate::View method. Forwards to the TabContentsDelegate.
+  virtual void LostCapture();
+
   // Keyboard events forwarding from the RenderViewHost.
   // The default implementation just forward the events to the
   // TabContentsDelegate object.
@@ -127,14 +130,14 @@ class TabContentsView : public RenderViewHostDelegate::View {
   virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
 
   // Simple mouse event forwarding from the RenderViewHost.
-  virtual void HandleMouseEvent() {}
+  virtual void HandleMouseMove() {}
+  virtual void HandleMouseDown() {}
   virtual void HandleMouseLeave() {}
+  virtual void HandleMouseUp();
+  virtual void HandleMouseActivate();
 
-  // Set and return the content's intrinsic width.
+  // Notification that the preferred size of the contents has changed.
   virtual void UpdatePreferredSize(const gfx::Size& pref_size);
-  int preferred_width() const {
-    return preferred_width_;
-  }
 
   // If we try to close the tab while a drag is in progress, we crash.  These
   // methods allow the tab contents to determine if a drag is in progress and
@@ -154,6 +157,10 @@ class TabContentsView : public RenderViewHostDelegate::View {
   }
   virtual void CloseTabAfterEventTracking() {}
 
+  virtual bool ShouldDrawDropShadow() {
+    return false;
+  }
+
  protected:
   TabContentsView() {}  // Abstract interface.
 
@@ -171,6 +178,11 @@ class TabContentsView : public RenderViewHostDelegate::View {
       WebKit::WebPopupType popup_type);
   virtual void ShowCreatedWidgetInternal(RenderWidgetHostView* widget_host_view,
                                          const gfx::Rect& initial_pos);
+  virtual void ShowCreatedFullscreenWidgetInternal(
+      RenderWidgetHostView* widget_host_view);
+  virtual RenderWidgetHostView* CreateNewFullscreenWidgetInternal(
+      int route_id,
+      WebKit::WebPopupType popup_type);
 
   // Common implementations of some RenderViewHostDelegate::View methods.
   RenderViewHostDelegateViewHelper delegate_view_helper_;
@@ -179,13 +191,21 @@ class TabContentsView : public RenderViewHostDelegate::View {
   // We implement these functions on RenderViewHostDelegate::View directly and
   // do some book-keeping associated with the request. The request is then
   // forwarded to *Internal which does platform-specific work.
-  virtual void CreateNewWindow(int route_id);
+  virtual void CreateNewWindow(
+      int route_id,
+      WindowContainerType window_container_type,
+      const string16& frame_name);
   virtual void CreateNewWidget(int route_id, WebKit::WebPopupType popup_type);
+  virtual void CreateNewFullscreenWidget(
+      int route_id, WebKit::WebPopupType popup_type);
   virtual void ShowCreatedWindow(int route_id,
                                  WindowOpenDisposition disposition,
                                  const gfx::Rect& initial_pos,
                                  bool user_gesture);
   virtual void ShowCreatedWidget(int route_id, const gfx::Rect& initial_pos);
+  virtual void Activate();
+  virtual void Deactivate();
+  virtual void ShowCreatedFullscreenWidget(int route_id);
 
   // The TabContents whose contents we display.
   TabContents* tab_contents_;
@@ -199,9 +219,6 @@ class TabContentsView : public RenderViewHostDelegate::View {
   // renderer that haven't shown yet.
   typedef std::map<int, RenderWidgetHostView*> PendingWidgetViews;
   PendingWidgetViews pending_widget_views_;
-
-  // The page content's intrinsic width.
-  int preferred_width_;
 
   DISALLOW_COPY_AND_ASSIGN(TabContentsView);
 };

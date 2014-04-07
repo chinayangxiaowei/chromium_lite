@@ -4,16 +4,21 @@
 
 #ifndef VIEWS_CONTROLS_TEXTFIELD_TEXTFIELD_H_
 #define VIEWS_CONTROLS_TEXTFIELD_TEXTFIELD_H_
+#pragma once
 
-#if defined (OS_LINUX)
+#include "build/build_config.h"
+
+#if defined(OS_LINUX)
 #include <gdk/gdk.h>
 #endif
 
 #include <string>
 
+#include "app/keyboard_codes.h"
 #include "base/basictypes.h"
-#include "base/keyboard_codes.h"
+#if !defined(OS_LINUX)
 #include "base/logging.h"
+#endif
 #include "base/string16.h"
 #include "gfx/font.h"
 #include "views/view.h"
@@ -60,7 +65,7 @@ class Textfield : public View {
     }
     const GdkEventKey* event() const { return &event_; }
 #endif
-    base::KeyboardCode GetKeyboardCode() const;
+    app::KeyboardCode GetKeyboardCode() const;
     bool IsControlHeld() const;
     bool IsShiftHeld() const;
 
@@ -172,6 +177,10 @@ class Textfield : public View {
   // 32 bit number, so the left and right margins are effectively 16 bits.
   void SetHorizontalMargins(int left, int right);
 
+  // Sets the top and bottom margins (in pixels) within the textfield.
+  // NOTE: in most cases height could be changed instead.
+  void SetVerticalMargins(int top, int bottom);
+
   // Should only be called on a multi-line text field. Sets how many lines of
   // text can be displayed at once by this text field.
   void SetHeightInLines(int num_lines);
@@ -195,6 +204,14 @@ class Textfield : public View {
   const string16& text_to_display_when_empty() {
     return text_to_display_when_empty_;
   }
+
+  // Getter for the horizontal margins that were set. Returns false if
+  // horizontal margins weren't set.
+  bool GetHorizontalMargins(int* left, int* right);
+
+  // Getter for the vertical margins that were set. Returns false if vertical
+  // margins weren't set.
+  bool GetVerticalMargins(int* top, int* bottom);
 
   // Updates all properties on the textfield. This is invoked internally.
   // Users of Textfield never need to invoke this directly.
@@ -225,9 +242,9 @@ class Textfield : public View {
   virtual void PaintFocusBorder(gfx::Canvas* canvas);
 
   // Accessibility accessors, overridden from View:
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual bool GetAccessibleState(AccessibilityTypes::State* state);
-  virtual bool GetAccessibleValue(std::wstring* value);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual AccessibilityTypes::State GetAccessibleState();
+  virtual std::wstring GetAccessibleValue();
 
  protected:
   virtual void Focus();
@@ -285,8 +302,12 @@ class Textfield : public View {
   //             NativeControlWin.
   bool initialized_;
 
-  // The storage string for the accessibility name associated with this control.
-  std::wstring accessible_name_;
+  // Holds inner textfield margins.
+  gfx::Insets margins_;
+
+  // Holds whether margins were set.
+  bool horizontal_margins_were_set_;
+  bool vertical_margins_were_set_;
 
   // Text to display when empty.
   string16 text_to_display_when_empty_;

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,7 @@
 #endif  // defined(USE_NSS)
 
 #include "base/base64.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "webkit/glue/password_form.h"
@@ -106,7 +107,7 @@ string16 NSSDecryptor::Decrypt(const std::string& crypt) const {
   return UTF8ToUTF16(plain);
 }
 
-// There are three versions of password filess. They store saved user
+// There are three versions of password files. They store saved user
 // names and passwords.
 // References:
 // http://kb.mozillazine.org/Signons.txt
@@ -236,7 +237,7 @@ void NSSDecryptor::ParseSignons(const std::string& content,
 bool NSSDecryptor::ReadAndParseSignons(const FilePath& sqlite_file,
     std::vector<webkit_glue::PasswordForm>* forms) {
   sqlite3* sqlite;
-  if (OpenSqliteDb(sqlite_file, &sqlite) != SQLITE_OK)
+  if (sqlite_utils::OpenSqliteDb(sqlite_file, &sqlite) != SQLITE_OK)
     return false;
   sqlite_utils::scoped_sqlite_db_ptr db(sqlite);
 

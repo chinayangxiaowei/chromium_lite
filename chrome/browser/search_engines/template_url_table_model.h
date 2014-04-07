@@ -1,18 +1,19 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SEARCH_ENGINES_TEMPLATE_URL_TABLE_MODEL_H_
 #define CHROME_BROWSER_SEARCH_ENGINES_TEMPLATE_URL_TABLE_MODEL_H_
+#pragma once
 
 #include "app/table_model.h"
-#include "chrome/browser/search_engines/template_url_model.h"
+#include "base/string16.h"
+#include "chrome/browser/search_engines/template_url_model_observer.h"
 
 class ModelEntry;
 class SkBitmap;
 class TemplateURL;
 class TemplateURLModel;
-class TemplateURLTableModel;
 
 // TemplateURLTableModel is the TableModel implementation used by
 // KeywordEditorView to show the keywords in a TableView.
@@ -52,8 +53,10 @@ class TemplateURLTableModel : public TableModel,
   void Add(int index, TemplateURL* template_url);
 
   // Update the entry at the specified index.
-  void ModifyTemplateURL(int index, const std::wstring& title,
-                         const std::wstring& keyword, const std::wstring& url);
+  void ModifyTemplateURL(int index,
+                         const string16& title,
+                         const string16& keyword,
+                         const std::string& url);
 
   // Reloads the icon at the specified index.
   void ReloadIcon(int index);
@@ -103,7 +106,7 @@ class TemplateURLTableModel : public TableModel,
   // group boundaries.
   int last_search_engine_index_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(TemplateURLTableModel);
+  DISALLOW_COPY_AND_ASSIGN(TemplateURLTableModel);
 };
 
 

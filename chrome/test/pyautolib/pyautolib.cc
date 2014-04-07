@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/scoped_ptr.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/test/automation/extension_proxy.h"
@@ -10,6 +11,11 @@
 #include "chrome/test/pyautolib/pyautolib.h"
 #include "googleurl/src/gurl.h"
 
+static int64 StringToId(const std::wstring& str) {
+  int64 id;
+  base::StringToInt64(WideToUTF8(str), &id);
+  return id;
+}
 
 // PyUITestSuiteBase
 PyUITestSuiteBase::PyUITestSuiteBase(int argc, char** argv)
@@ -30,7 +36,10 @@ void PyUITestSuiteBase::Initialize(const FilePath& browser_dir) {
 PyUITestBase::PyUITestBase(bool clear_profile, std::wstring homepage)
     : UITestBase() {
   set_clear_profile(clear_profile);
-  set_homepage(homepage);
+  set_homepage(WideToASCII(homepage));
+  // We add this so that pyauto can execute javascript in the renderer and
+  // read values back.
+  dom_automation_enabled_ = true;
   message_loop_ = GetSharedMessageLoop(MessageLoop::TYPE_DEFAULT);
 }
 
@@ -156,9 +165,15 @@ bool PyUITestBase::OpenNewBrowserWindow(bool show) {
   return automation()->OpenNewBrowserWindow(Browser::TYPE_NORMAL, show);
 }
 
-bool PyUITestBase::InstallExtension(const FilePath& crx_file) {
+int PyUITestBase::GetBrowserWindowCount() {
+  int num_windows = 0;
+  EXPECT_TRUE(automation()->GetBrowserWindowCount(&num_windows));
+  return num_windows;
+}
+
+bool PyUITestBase::InstallExtension(const FilePath& crx_file, bool with_ui) {
   scoped_refptr<ExtensionProxy> proxy =
-      automation()->InstallExtension(crx_file);
+      automation()->InstallExtension(crx_file, with_ui);
   return proxy.get() != NULL;
 }
 
@@ -203,28 +218,27 @@ std::string PyUITestBase::_GetBookmarksAsJSON() {
 }
 
 bool PyUITestBase::AddBookmarkGroup(std::wstring& parent_id, int index,
-                                     std::wstring& title) {
+                                    std::wstring& title) {
   scoped_refptr<BrowserProxy> browser_proxy =
       automation()->GetBrowserWindow(0);  // Window doesn't matter.
   EXPECT_TRUE(browser_proxy.get());
   if (!browser_proxy.get())
     return false;
 
-  return browser_proxy->AddBookmarkGroup(StringToInt64(WideToUTF16(parent_id)),
-                                         index, title);
+  return browser_proxy->AddBookmarkGroup(StringToId(parent_id), index, title);
 }
 
 bool PyUITestBase::AddBookmarkURL(std::wstring& parent_id, int index,
-                                   std::wstring& title, std::wstring& url) {
+                                  std::wstring& title, std::wstring& url) {
   scoped_refptr<BrowserProxy> browser_proxy =
       automation()->GetBrowserWindow(0);  // Window doesn't matter.
   EXPECT_TRUE(browser_proxy.get());
   if (!browser_proxy.get())
     return false;
 
-  return browser_proxy->AddBookmarkURL(StringToInt64(WideToUTF16(parent_id)),
+  return browser_proxy->AddBookmarkURL(StringToId(parent_id),
                                        index, title,
-                                       GURL(WideToUTF16(url)));
+                                       GURL(WideToUTF8(url)));
 }
 
 bool PyUITestBase::ReparentBookmark(
@@ -235,10 +249,9 @@ bool PyUITestBase::ReparentBookmark(
   if (!browser_proxy.get())
     return false;
 
-  return browser_proxy->ReparentBookmark(
-      StringToInt64(WideToUTF16(id)),
-      StringToInt64(WideToUTF16(new_parent_id)),
-      index);
+  return browser_proxy->ReparentBookmark(StringToId(id),
+                                         StringToId(new_parent_id),
+                                         index);
 }
 
 bool PyUITestBase::SetBookmarkTitle(std::wstring& id, std::wstring& title) {
@@ -248,8 +261,7 @@ bool PyUITestBase::SetBookmarkTitle(std::wstring& id, std::wstring& title) {
   if (!browser_proxy.get())
     return false;
 
-  return browser_proxy->SetBookmarkTitle(StringToInt64(WideToUTF16(id)),
-                                         title);
+  return browser_proxy->SetBookmarkTitle(StringToId(id), title);
 }
 
 bool PyUITestBase::SetBookmarkURL(std::wstring& id, std::wstring& url) {
@@ -259,8 +271,7 @@ bool PyUITestBase::SetBookmarkURL(std::wstring& id, std::wstring& url) {
   if (!browser_proxy.get())
     return false;
 
-  return browser_proxy->SetBookmarkURL(StringToInt64(WideToUTF16(id)),
-                                       GURL(WideToUTF16(url)));
+  return browser_proxy->SetBookmarkURL(StringToId(id), GURL(WideToUTF8(url)));
 }
 
 bool PyUITestBase::RemoveBookmark(std::wstring& id) {
@@ -270,7 +281,7 @@ bool PyUITestBase::RemoveBookmark(std::wstring& id) {
   if (!browser_proxy.get())
     return false;
 
-  return browser_proxy->RemoveBookmark(StringToInt64(WideToUTF16(id)));
+  return browser_proxy->RemoveBookmark(StringToId(id));
 }
 
 scoped_refptr<BrowserProxy> PyUITestBase::GetBrowserWindow(int window_index) {
@@ -278,7 +289,7 @@ scoped_refptr<BrowserProxy> PyUITestBase::GetBrowserWindow(int window_index) {
 }
 
 std::string PyUITestBase::_SendJSONRequest(int window_index,
-                                            std::string& request) {
+                                           std::string& request) {
   scoped_refptr<BrowserProxy> browser_proxy =
       automation()->GetBrowserWindow(window_index);
   EXPECT_TRUE(browser_proxy.get());
@@ -287,4 +298,70 @@ std::string PyUITestBase::_SendJSONRequest(int window_index,
     EXPECT_TRUE(browser_proxy->SendJSONRequest(request, &response));
   }
   return response;
+}
+
+std::wstring PyUITestBase::ExecuteJavascript(const std::wstring& script,
+                                             int window_index,
+                                             int tab_index,
+                                             const std::wstring& frame_xpath) {
+  scoped_refptr<BrowserProxy> browser_proxy =
+      automation()->GetBrowserWindow(window_index);
+  EXPECT_TRUE(browser_proxy.get());
+  std::wstring response;
+  if (!browser_proxy.get())
+    return response;
+  scoped_refptr<TabProxy> tab_proxy =
+      browser_proxy->GetTab(tab_index);
+  EXPECT_TRUE(tab_proxy.get());
+  if (!tab_proxy.get())
+    return response;
+
+  EXPECT_TRUE(tab_proxy->ExecuteAndExtractString(frame_xpath, script,
+                                                 &response));
+  return response;
+}
+
+std::wstring PyUITestBase::GetDOMValue(const std::wstring& expr,
+                                       int window_index,
+                                       int tab_index,
+                                       const std::wstring& frame_xpath) {
+  std::wstring script = std::wstring(L"window.domAutomationController.send(") +
+      expr + std::wstring(L")");
+  return ExecuteJavascript(script, window_index, tab_index, frame_xpath);
+}
+
+bool PyUITestBase::ResetToDefaultTheme() {
+  return automation()->ResetToDefaultTheme();
+}
+
+bool PyUITestBase::SetCookie(const GURL& cookie_url,
+                             const std::string& value,
+                             int window_index,
+                             int tab_index) {
+  scoped_refptr<BrowserProxy> browser_proxy = GetBrowserWindow(window_index);
+  EXPECT_TRUE(browser_proxy.get());
+  if (!browser_proxy.get())
+    return false;
+  scoped_refptr<TabProxy> tab_proxy = browser_proxy->GetTab(tab_index);
+  EXPECT_TRUE(tab_proxy.get());
+  if (!tab_proxy.get())
+    return false;
+  return tab_proxy->SetCookie(cookie_url, value);
+}
+
+std::string PyUITestBase::GetCookie(const GURL& cookie_url,
+                                    int window_index,
+                                    int tab_index) {
+  std::string cookie_val;
+  scoped_refptr<BrowserProxy> browser_proxy = GetBrowserWindow(window_index);
+  EXPECT_TRUE(browser_proxy.get());
+  // TODO(phadjan.jr): figure out a way to unambiguously report error.
+  if (!browser_proxy.get())
+    return cookie_val;
+  scoped_refptr<TabProxy> tab_proxy = browser_proxy->GetTab(tab_index);
+  EXPECT_TRUE(tab_proxy.get());
+  if (!tab_proxy.get())
+    return cookie_val;
+  EXPECT_TRUE(tab_proxy->GetCookies(cookie_url, &cookie_val));
+  return cookie_val;
 }

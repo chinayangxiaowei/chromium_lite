@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2009-2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/time.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -41,8 +42,8 @@ const int kBlockSize = 1024;
 // number of the particular child.
 std::string GenerateChildName(const std::string& base_name, int64 signature,
                               int64 child_id) {
-  return StringPrintf("Range_%s:%" PRIx64 ":%" PRIx64, base_name.c_str(),
-                      signature, child_id);
+  return base::StringPrintf("Range_%s:%" PRIx64 ":%" PRIx64, base_name.c_str(),
+                            signature, child_id);
 }
 
 // This class deletes the children of a sparse entry.
@@ -51,7 +52,7 @@ class ChildrenDeleter
       public disk_cache::FileIOCallback {
  public:
   ChildrenDeleter(disk_cache::BackendImpl* backend, const std::string& name)
-      : backend_(backend), name_(name) {}
+      : backend_(backend->GetWeakPtr()), name_(name) {}
 
   virtual void OnFileIOComplete(int bytes_copied);
 
@@ -66,12 +67,12 @@ class ChildrenDeleter
 
   void DeleteChildren();
 
-  disk_cache::BackendImpl* backend_;
+  base::WeakPtr<disk_cache::BackendImpl> backend_;
   std::string name_;
   disk_cache::Bitmap children_map_;
   int64 signature_;
   scoped_array<char> buffer_;
-  DISALLOW_EVIL_CONSTRUCTORS(ChildrenDeleter);
+  DISALLOW_COPY_AND_ASSIGN(ChildrenDeleter);
 };
 
 // This is the callback of the file operation.
@@ -101,6 +102,9 @@ void ChildrenDeleter::Start(char* buffer, int len) {
 
 void ChildrenDeleter::ReadData(disk_cache::Addr address, int len) {
   DCHECK(address.is_block_file());
+  if (!backend_)
+    return Release();
+
   disk_cache::File* file(backend_->File(address));
   if (!file)
     return Release();
@@ -121,12 +125,12 @@ void ChildrenDeleter::ReadData(disk_cache::Addr address, int len) {
 
 void ChildrenDeleter::DeleteChildren() {
   int child_id = 0;
-  if (!children_map_.FindNextSetBit(&child_id)) {
+  if (!children_map_.FindNextSetBit(&child_id) || !backend_) {
     // We are done. Just delete this object.
     return Release();
   }
   std::string child_name = GenerateChildName(name_, signature_, child_id);
-  backend_->DoomEntry(child_name);
+  backend_->SyncDoomEntry(child_name);
   children_map_.Set(child_id, false);
 
   // Post a task to delete the next child.
@@ -164,6 +168,16 @@ int SparseControl::Init() {
   if (rv == net::OK)
     init_ = true;
   return rv;
+}
+
+bool SparseControl::CouldBeSparse() const {
+  DCHECK(!init_);
+
+  if (entry_->GetDataSize(kSparseData))
+    return false;
+
+  // We don't verify the data, just see if it could be there.
+  return (entry_->GetDataSize(kSparseIndex) != 0);
 }
 
 int SparseControl::StartIO(SparseOperation op, int64 offset, net::IOBuffer* buf,
@@ -363,9 +377,12 @@ bool SparseControl::OpenChild() {
     CloseChild();
   }
 
-  // Se if we are tracking this child.
-  bool child_present = ChildPresent();
-  if (!child_present || !entry_->backend_->OpenEntry(key, &child_))
+  // See if we are tracking this child.
+  if (!ChildPresent())
+    return ContinueWithoutChild(key);
+
+  child_ = entry_->backend_->OpenEntryImpl(key);
+  if (!child_)
     return ContinueWithoutChild(key);
 
   EntryImpl* child = static_cast<EntryImpl*>(child_);
@@ -388,7 +405,7 @@ bool SparseControl::OpenChild() {
 
   if (child_data_.header.last_block_len < 0 ||
       child_data_.header.last_block_len > kBlockSize) {
-    // Make sure this values are always within range.
+    // Make sure these values are always within range.
     child_data_.header.last_block_len = 0;
     child_data_.header.last_block = -1;
   }
@@ -405,7 +422,7 @@ void SparseControl::CloseChild() {
                              NULL, false);
   if (rv != sizeof(child_data_))
     DLOG(ERROR) << "Failed to save child data";
-  child_->Close();
+  child_->Release();
   child_ = NULL;
 }
 
@@ -417,8 +434,8 @@ std::string SparseControl::GenerateChildKey() {
 // We are deleting the child because something went wrong.
 bool SparseControl::KillChildAndContinue(const std::string& key, bool fatal) {
   SetChildBit(false);
-  child_->Doom();
-  child_->Close();
+  child_->DoomImpl();
+  child_->Release();
   child_ = NULL;
   if (fatal) {
     result_ = net::ERR_CACHE_READ_FAILURE;
@@ -434,7 +451,8 @@ bool SparseControl::ContinueWithoutChild(const std::string& key) {
   if (kGetRangeOperation == operation_)
     return true;
 
-  if (!entry_->backend_->CreateEntry(key, &child_)) {
+  child_ = entry_->backend_->CreateEntryImpl(key);
+  if (!child_) {
     child_ = NULL;
     result_ = net::ERR_CACHE_READ_FAILURE;
     return false;
@@ -603,12 +621,12 @@ bool SparseControl::DoChildIO() {
   int rv = 0;
   switch (operation_) {
     case kReadOperation:
-      rv = child_->ReadData(kSparseData, child_offset_, user_buf_, child_len_,
-                            callback);
+      rv = child_->ReadDataImpl(kSparseData, child_offset_, user_buf_,
+                                child_len_, callback);
       break;
     case kWriteOperation:
-      rv = child_->WriteData(kSparseData, child_offset_, user_buf_, child_len_,
-                             callback, false);
+      rv = child_->WriteDataImpl(kSparseData, child_offset_, user_buf_,
+                                 child_len_, callback, false);
       break;
     case kGetRangeOperation:
       rv = DoGetAvailableRange();

@@ -4,18 +4,19 @@
 
 #ifndef CHROME_BROWSER_VIEWS_FIRST_RUN_SEARCH_ENGINE_VIEW_H_
 #define CHROME_BROWSER_VIEWS_FIRST_RUN_SEARCH_ENGINE_VIEW_H_
+#pragma once
 
 #include <vector>
 
-#include "chrome/browser/views/keyword_editor_view.h"
+#include "chrome/browser/search_engines/template_url_model_observer.h"
 #include "gfx/size.h"
 #include "views/controls/button/native_button.h"
-#include "views/controls/link.h"
 #include "views/view.h"
 #include "views/window/window_delegate.h"
 
 namespace views {
 class ButtonListener;
+class ImageView;
 class Label;
 class Separator;
 class Window;
@@ -52,6 +53,10 @@ class SearchEngineChoice : public views::NativeButton {
   // Accessor for the search engine data this button represents.
   const TemplateURL* GetSearchEngine() { return search_engine_; }
 
+  // Used for UX testing.
+  void set_slot(int slot) { slot_ = slot; }
+  int slot() const { return slot_; }
+
  private:
   // Either an ImageView of a logo, or a Label with text.  Owned by
   // FirstRunSearchEngineView.
@@ -63,15 +68,10 @@ class SearchEngineChoice : public views::NativeButton {
   // Data for the search engine held here.
   const TemplateURL* search_engine_;
 
-  DISALLOW_COPY_AND_ASSIGN(SearchEngineChoice);
-};
+  // Used for UX testing. Gives slot in which search engine was shown.
+  int slot_;
 
-// This class receives a callback when the search engine dialog closes.
-class SearchEngineSelectionObserver {
- public:
-  virtual ~SearchEngineSelectionObserver() {}
-  // Called when the user has chosen a search engine.
-  virtual void SearchEngineChosen(const TemplateURL* default_search) = 0;
+  DISALLOW_COPY_AND_ASSIGN(SearchEngineChoice);
 };
 
 // This class displays a large search engine choice dialog view during
@@ -79,36 +79,33 @@ class SearchEngineSelectionObserver {
 class FirstRunSearchEngineView
     : public views::View,
       public views::ButtonListener,
-      public views::LinkController,
       public views::WindowDelegate,
       public TemplateURLModelObserver {
  public:
-  // |observer| is the FirstRunView that waits for us to pass back a search
-  // engine choice; |profile| allows us to get the set of imported search
-  // engines, and display the KeywordEditorView on demand.
-  FirstRunSearchEngineView(SearchEngineSelectionObserver* observer,
-                           Profile* profile);
+  // |profile| allows us to get the set of imported search engines.
+  // |randomize| is true if logos are to be displayed in random order.
+  FirstRunSearchEngineView(Profile* profile, bool randomize);
 
   virtual ~FirstRunSearchEngineView();
 
   // Overridden from views::View:
   virtual gfx::Size GetPreferredSize();
   virtual void Layout();
-  virtual void Paint(gfx::Canvas* canvas);
-
-  // Overridden from views::LinkActivated:
-  virtual void LinkActivated(views::Link* source, int event_flags);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
   // Overridden from views::WindowDelegate:
   virtual std::wstring GetWindowTitle() const;
   views::View* GetContentsView() { return this; }
   bool CanResize() const { return false; }
   bool CanMaximize() const { return false; }
-  bool IsAlwaysOnTop() const { return false; }
+  bool IsAlwaysOnTop() const { return true; }
   bool HasAlwaysOnTopMenu() const { return false; }
 
   // Overridden from views::ButtonListener:
   virtual void ButtonPressed(views::Button* sender, const views::Event& event);
+
+  // Override from View so we can draw the gray background at dialog top.
+  virtual void Paint(gfx::Canvas* canvas);
 
   // Overridden from TemplateURLModelObserver. When the search engines have
   // loaded from the profile, we can populate the logos in the dialog box
@@ -125,32 +122,20 @@ class FirstRunSearchEngineView
   // One for each search engine choice offered, either three or four.
   std::vector<SearchEngineChoice*> search_engine_choices_;
 
+  // If logos are to be displayed in random order. Used for UX testing.
+  bool randomize_;
+
   // The profile associated with this import process.
   Profile* profile_;
 
-  // Gets called back when one of the choice buttons is pressed.
-  SearchEngineSelectionObserver* observer_;
-
   bool text_direction_is_rtl_;
 
+  // Image of browser search box with grey background and bubble arrow.
+  views::ImageView* background_image_;
+
   // UI elements:
-  // Text above the first horizontal separator
   views::Label* title_label_;
   views::Label* text_label_;
-
-  // Horizontal separators
-  views::Separator* separator_1_;
-  views::Separator* separator_2_;
-
-  // Text below the second horizontal divider. The order of appearance of
-  // these three elements is language-dependent.
-  views::Label* subtext_label_1_;
-  views::Label* subtext_label_2_;
-  views::Link* options_link_;
-
-  // Used to figure out positioning of embedded links in RTL languages
-  // (see view_text_utils::DrawTextAndPositionUrl).
-  views::Label* dummy_subtext_label_;
 
   DISALLOW_COPY_AND_ASSIGN(FirstRunSearchEngineView);
 };

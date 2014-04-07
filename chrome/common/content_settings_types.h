@@ -4,6 +4,7 @@
 
 #ifndef CHROME_COMMON_CONTENT_SETTINGS_TYPES_H_
 #define CHROME_COMMON_CONTENT_SETTINGS_TYPES_H_
+#pragma once
 
 // A particular type of content to care about.  We give the user various types
 // of controls over each of these.
@@ -17,6 +18,7 @@ enum ContentSettingsType {
   CONTENT_SETTINGS_TYPE_PLUGINS,
   CONTENT_SETTINGS_TYPE_POPUPS,
   CONTENT_SETTINGS_TYPE_GEOLOCATION,
+  CONTENT_SETTINGS_TYPE_NOTIFICATIONS,
   CONTENT_SETTINGS_NUM_TYPES
 };
 

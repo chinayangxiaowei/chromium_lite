@@ -4,20 +4,25 @@
 
 #include "chrome/browser/browsing_data_remover.h"
 
+#include <map>
+#include <set>
+
 #include "base/callback.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/in_process_webkit/webkit_context.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
-#include "chrome/browser/net/url_request_context_getter.h"
 #include "chrome/browser/password_manager/password_store.h"
+#include "chrome/browser/renderer_host/web_cache_manager.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/webdata/web_data_service.h"
+#include "chrome/common/net/url_request_context_getter.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
 #include "net/base/cookie_monster.h"
@@ -27,15 +32,11 @@
 #include "net/http/http_cache.h"
 #include "net/url_request/url_request_context.h"
 #include "webkit/database/database_tracker.h"
-#include "webkit/glue/password_form.h"
+#include "webkit/database/database_util.h"
 
 // Done so that we can use PostTask on BrowsingDataRemovers and not have
 // BrowsingDataRemover implement RefCounted.
-template <>
-struct RunnableMethodTraits<BrowsingDataRemover> {
-  void RetainCallee(BrowsingDataRemover* remover) {}
-  void ReleaseCallee(BrowsingDataRemover* remover) {}
-};
+DISABLE_RUNNABLE_METHOD_REFCOUNT(BrowsingDataRemover);
 
 bool BrowsingDataRemover::removing_ = false;
 
@@ -47,12 +48,16 @@ BrowsingDataRemover::BrowsingDataRemover(Profile* profile,
       delete_end_(delete_end),
       ALLOW_THIS_IN_INITIALIZER_LIST(database_cleared_callback_(
           this, &BrowsingDataRemover::OnClearedDatabases)),
+      ALLOW_THIS_IN_INITIALIZER_LIST(cache_callback_(
+          this, &BrowsingDataRemover::DoClearCache)),
       ALLOW_THIS_IN_INITIALIZER_LIST(appcache_got_info_callback_(
           this, &BrowsingDataRemover::OnGotAppCacheInfo)),
       ALLOW_THIS_IN_INITIALIZER_LIST(appcache_deleted_callback_(
           this, &BrowsingDataRemover::OnAppCacheDeleted)),
       request_context_getter_(profile->GetRequestContext()),
       appcaches_to_be_deleted_count_(0),
+      next_cache_state_(STATE_NONE),
+      cache_(NULL),
       waiting_for_clear_databases_(false),
       waiting_for_clear_history_(false),
       waiting_for_clear_cache_(false),
@@ -68,12 +73,16 @@ BrowsingDataRemover::BrowsingDataRemover(Profile* profile,
       delete_end_(delete_end),
       ALLOW_THIS_IN_INITIALIZER_LIST(database_cleared_callback_(
           this, &BrowsingDataRemover::OnClearedDatabases)),
+      ALLOW_THIS_IN_INITIALIZER_LIST(cache_callback_(
+          this, &BrowsingDataRemover::DoClearCache)),
       ALLOW_THIS_IN_INITIALIZER_LIST(appcache_got_info_callback_(
           this, &BrowsingDataRemover::OnGotAppCacheInfo)),
       ALLOW_THIS_IN_INITIALIZER_LIST(appcache_deleted_callback_(
           this, &BrowsingDataRemover::OnAppCacheDeleted)),
       request_context_getter_(profile->GetRequestContext()),
       appcaches_to_be_deleted_count_(0),
+      next_cache_state_(STATE_NONE),
+      cache_(NULL),
       waiting_for_clear_databases_(false),
       waiting_for_clear_history_(false),
       waiting_for_clear_cache_(false),
@@ -88,6 +97,25 @@ BrowsingDataRemover::~BrowsingDataRemover() {
 void BrowsingDataRemover::Remove(int remove_mask) {
   DCHECK(!removing_);
   removing_ = true;
+
+  std::vector<GURL> origin_whitelist;
+  ExtensionsService* extensions_service = profile_->GetExtensionsService();
+  if (extensions_service && extensions_service->HasInstalledExtensions()) {
+    std::map<GURL, int> whitelist_map =
+        extensions_service->protected_storage_map();
+    for (std::map<GURL, int>::const_iterator iter = whitelist_map.begin();
+         iter != whitelist_map.end(); ++iter) {
+      origin_whitelist.push_back(iter->first);
+    }
+  }
+
+  std::vector<string16> webkit_db_whitelist;
+  for (size_t i = 0; i < origin_whitelist.size(); ++i) {
+    webkit_db_whitelist.push_back(
+        webkit_database::DatabaseUtil::GetOriginIdentifier(
+            origin_whitelist[i]));
+  }
+
 
   if (remove_mask & REMOVE_HISTORY) {
     HistoryService* history_service =
@@ -147,33 +175,35 @@ void BrowsingDataRemover::Remove(int remove_mask) {
     // REMOVE_COOKIES is actually "cookies and other site data" so we make sure
     // to remove other data such local databases, STS state, etc.
     profile_->GetWebKitContext()->DeleteDataModifiedSince(
-        delete_begin_, chrome::kExtensionScheme);
+        delete_begin_, chrome::kExtensionScheme, webkit_db_whitelist);
 
     database_tracker_ = profile_->GetDatabaseTracker();
     if (database_tracker_.get()) {
       waiting_for_clear_databases_ = true;
-      ChromeThread::PostTask(
-          ChromeThread::FILE, FROM_HERE,
+      BrowserThread::PostTask(
+          BrowserThread::FILE, FROM_HERE,
           NewRunnableMethod(
               this,
               &BrowsingDataRemover::ClearDatabasesOnFILEThread,
-              delete_begin_));
+              delete_begin_,
+              webkit_db_whitelist));
     }
 
-    ChromeThread::PostTask(
-        ChromeThread::IO, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
         NewRunnableMethod(
             profile_->GetTransportSecurityState(),
             &net::TransportSecurityState::DeleteSince,
             delete_begin_));
 
     waiting_for_clear_appcache_ = true;
-    ChromeThread::PostTask(
-        ChromeThread::IO, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
         NewRunnableMethod(
             this,
             &BrowsingDataRemover::ClearAppCacheOnIOThread,
-            delete_begin_));  // we assume end time == now
+            delete_begin_,  // we assume end time == now
+            origin_whitelist));
   }
 
   if (remove_mask & REMOVE_PASSWORDS) {
@@ -182,7 +212,8 @@ void BrowsingDataRemover::Remove(int remove_mask) {
     PasswordStore* password_store =
         profile_->GetPasswordStore(Profile::EXPLICIT_ACCESS);
 
-    password_store->RemoveLoginsCreatedBetween(delete_begin_, delete_end_);
+    if (password_store)
+      password_store->RemoveLoginsCreatedBetween(delete_begin_, delete_end_);
   }
 
   if (remove_mask & REMOVE_FORM_DATA) {
@@ -191,34 +222,27 @@ void BrowsingDataRemover::Remove(int remove_mask) {
     WebDataService* web_data_service =
         profile_->GetWebDataService(Profile::EXPLICIT_ACCESS);
 
-    web_data_service->RemoveFormElementsAddedBetween(delete_begin_,
-        delete_end_);
+    if (web_data_service) {
+      web_data_service->RemoveFormElementsAddedBetween(delete_begin_,
+          delete_end_);
+    }
   }
 
   if (remove_mask & REMOVE_CACHE) {
+    // Tell the renderers to clear their cache.
+    WebCacheManager::GetInstance()->ClearCache();
+
     // Invoke ClearBrowsingDataView::ClearCache on the IO thread.
     waiting_for_clear_cache_ = true;
     UserMetrics::RecordAction(UserMetricsAction("ClearBrowsingData_Cache"),
                               profile_);
 
-    URLRequestContextGetter* main_context_getter =
-        profile_->GetRequestContext();
-    URLRequestContextGetter* media_context_getter =
-        profile_->GetRequestContextForMedia();
+    main_context_getter_ = profile_->GetRequestContext();
+    media_context_getter_ = profile_->GetRequestContextForMedia();
 
-    // Balanced in ClearCacheOnIOThread().
-    main_context_getter->AddRef();
-    media_context_getter->AddRef();
-
-    ChromeThread::PostTask(
-        ChromeThread::IO, FROM_HERE,
-        NewRunnableMethod(
-            this,
-            &BrowsingDataRemover::ClearCacheOnIOThread,
-            main_context_getter,
-            media_context_getter,
-            delete_begin_,
-            delete_end_));
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
+        NewRunnableMethod(this, &BrowsingDataRemover::ClearCacheOnIOThread));
   }
 
   NotifyAndDeleteIfDone();
@@ -298,54 +322,81 @@ void BrowsingDataRemover::ClearedCache() {
   NotifyAndDeleteIfDone();
 }
 
-void BrowsingDataRemover::ClearCacheOnIOThread(
-    URLRequestContextGetter* main_context_getter,
-    URLRequestContextGetter* media_context_getter,
-    base::Time delete_begin,
-    base::Time delete_end) {
+void BrowsingDataRemover::ClearCacheOnIOThread() {
   // This function should be called on the IO thread.
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  DCHECK_EQ(STATE_NONE, next_cache_state_);
+  DCHECK(main_context_getter_);
+  DCHECK(media_context_getter_);
 
-  // Get a pointer to the cache.
-  net::HttpTransactionFactory* factory =
-      main_context_getter->GetURLRequestContext()->http_transaction_factory();
-  disk_cache::Backend* cache = factory->GetCache()->GetBackend();
+  next_cache_state_ = STATE_CREATE_MAIN;
+  DoClearCache(net::OK);
+}
 
-  // |cache| can be null if it cannot be initialized.
-  if (cache) {
-    if (delete_begin.is_null())
-      cache->DoomAllEntries();
-    else
-      cache->DoomEntriesBetween(delete_begin, delete_end);
+// The expected state sequence is STATE_NONE --> STATE_CREATE_MAIN -->
+// STATE_DELETE_MAIN --> STATE_CREATE_MEDIA --> STATE_DELETE_MEDIA -->
+// STATE_DONE, and any errors are ignored.
+void BrowsingDataRemover::DoClearCache(int rv) {
+  DCHECK_NE(STATE_NONE, next_cache_state_);
+
+  while (rv != net::ERR_IO_PENDING && next_cache_state_ != STATE_NONE) {
+    switch (next_cache_state_) {
+      case STATE_CREATE_MAIN:
+      case STATE_CREATE_MEDIA: {
+        // Get a pointer to the cache.
+        URLRequestContextGetter* getter =
+            (next_cache_state_ == STATE_CREATE_MAIN) ?
+                main_context_getter_ : media_context_getter_;
+        net::HttpTransactionFactory* factory =
+            getter->GetURLRequestContext()->http_transaction_factory();
+
+        rv = factory->GetCache()->GetBackend(&cache_, &cache_callback_);
+        next_cache_state_ = (next_cache_state_ == STATE_CREATE_MAIN) ?
+                                STATE_DELETE_MAIN : STATE_DELETE_MEDIA;
+        break;
+      }
+      case STATE_DELETE_MAIN:
+      case STATE_DELETE_MEDIA: {
+        // |cache_| can be null if it cannot be initialized.
+        if (cache_) {
+          if (delete_begin_.is_null()) {
+            rv = cache_->DoomAllEntries(&cache_callback_);
+          } else {
+            rv = cache_->DoomEntriesBetween(delete_begin_, delete_end_,
+                                            &cache_callback_);
+          }
+          cache_ = NULL;
+        }
+        next_cache_state_ = (next_cache_state_ == STATE_DELETE_MAIN) ?
+                                STATE_CREATE_MEDIA : STATE_DONE;
+        break;
+      }
+      case STATE_DONE: {
+        main_context_getter_ = NULL;
+        media_context_getter_ = NULL;
+        cache_ = NULL;
+
+        // Notify the UI thread that we are done.
+        BrowserThread::PostTask(
+            BrowserThread::UI, FROM_HERE,
+            NewRunnableMethod(this, &BrowsingDataRemover::ClearedCache));
+
+        next_cache_state_ = STATE_NONE;
+        break;
+      }
+      default: {
+        NOTREACHED() << "bad state";
+        next_cache_state_ = STATE_NONE;  // Stop looping.
+        break;
+      }
+    }
   }
-
-  // Get a pointer to the media cache.
-  factory = media_context_getter->GetURLRequestContext()->
-      http_transaction_factory();
-  cache = factory->GetCache()->GetBackend();
-
-  // |cache| can be null if it cannot be initialized.
-  if (cache) {
-    if (delete_begin.is_null())
-      cache->DoomAllEntries();
-    else
-      cache->DoomEntriesBetween(delete_begin, delete_end);
-  }
-
-  // Balance the AddRef()s done on the UI thread by Remove().
-  main_context_getter->Release();
-  media_context_getter->Release();
-
-  // Notify the UI thread that we are done.
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
-      NewRunnableMethod(this, &BrowsingDataRemover::ClearedCache));
 }
 
 void BrowsingDataRemover::OnClearedDatabases(int rv) {
-  if (!ChromeThread::CurrentlyOn(ChromeThread::UI)) {
-    bool result = ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+  if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
+    bool result = BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(this, &BrowsingDataRemover::OnClearedDatabases, rv));
     DCHECK(result);
     return;
@@ -357,32 +408,36 @@ void BrowsingDataRemover::OnClearedDatabases(int rv) {
   NotifyAndDeleteIfDone();
 }
 
-void BrowsingDataRemover::ClearDatabasesOnFILEThread(base::Time delete_begin) {
+void BrowsingDataRemover::ClearDatabasesOnFILEThread(base::Time delete_begin,
+    const std::vector<string16>& webkit_db_whitelist) {
   // This function should be called on the FILE thread.
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   int rv = database_tracker_->DeleteDataModifiedSince(
-      delete_begin, &database_cleared_callback_);
+      delete_begin, webkit_db_whitelist, &database_cleared_callback_);
   if (rv != net::ERR_IO_PENDING)
     OnClearedDatabases(rv);
 }
 
 void BrowsingDataRemover::OnClearedAppCache() {
-  if (!ChromeThread::CurrentlyOn(ChromeThread::UI)) {
-    bool result = ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
+  if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
+    bool result = BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
         NewRunnableMethod(this, &BrowsingDataRemover::OnClearedAppCache));
     DCHECK(result);
     return;
   }
+  appcache_whitelist_.clear();
   waiting_for_clear_appcache_ = false;
   NotifyAndDeleteIfDone();
 }
 
-void BrowsingDataRemover::ClearAppCacheOnIOThread(base::Time delete_begin) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+void BrowsingDataRemover::ClearAppCacheOnIOThread(base::Time delete_begin,
+    const std::vector<GURL>& origin_whitelist) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   DCHECK(waiting_for_clear_appcache_);
 
+  appcache_whitelist_ = origin_whitelist;
   appcache_info_ = new appcache::AppCacheInfoCollection;
   GetAppCacheService()->GetAllAppCacheInfo(
       appcache_info_, &appcache_got_info_callback_);
@@ -396,6 +451,15 @@ void BrowsingDataRemover::OnGotAppCacheInfo(int rv) {
   for (InfoByOrigin::const_iterator origin =
            appcache_info_->infos_by_origin.begin();
        origin != appcache_info_->infos_by_origin.end(); ++origin) {
+
+    bool found_in_whitelist = false;
+    for (size_t i = 0; i < appcache_whitelist_.size(); ++i) {
+      if (appcache_whitelist_[i] == origin->first)
+        found_in_whitelist = true;
+    }
+    if (found_in_whitelist)
+      continue;
+
     for (AppCacheInfoVector::const_iterator info = origin->second.begin();
          info != origin->second.end(); ++info) {
       if (info->creation_time > delete_begin_) {
@@ -418,7 +482,7 @@ void BrowsingDataRemover::OnAppCacheDeleted(int rv) {
 }
 
 ChromeAppCacheService* BrowsingDataRemover::GetAppCacheService() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   ChromeURLRequestContext* request_context =
       reinterpret_cast<ChromeURLRequestContext*>(
           request_context_getter_->GetURLRequestContext());

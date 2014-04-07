@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_VIEW_H_
 #define VIEWS_VIEW_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "app/os_exchange_data.h"
+#include "base/i18n/rtl.h"
 #include "base/scoped_ptr.h"
 #include "gfx/native_widget_types.h"
 #include "gfx/rect.h"
@@ -264,6 +266,8 @@ class View : public AcceleratorTarget {
   // Returns whether the view is hot-tracked.
   virtual bool IsHotTracked() const { return false; }
 
+  virtual Widget* child_widget() { return NULL; }
+
   // Returns whether the view is pushed.
   virtual bool IsPushed() const { return false; }
 
@@ -279,6 +283,11 @@ class View : public AcceleratorTarget {
   // specific to the current Layout Manager)
   virtual void Layout();
 
+  // Mark this view and all parents to require a relayout. This ensures the
+  // next call to Layout() will propagate to this view, even if the bounds of
+  // parent views do not change.
+  void InvalidateLayout();
+
   // Gets/Sets the Layout Manager used by this view to size and place its
   // children.
   // The LayoutManager is owned by the View and is deleted when the view is
@@ -287,24 +296,6 @@ class View : public AcceleratorTarget {
   void SetLayoutManager(LayoutManager* layout);
 
   // Right-to-left UI layout functions
-
-  // Indicates whether the UI layout for this view is right-to-left. The view
-  // has an RTL UI layout if RTL hasn't been disabled for the view and if the
-  // locale's language is an RTL language.
-  bool UILayoutIsRightToLeft() const;
-
-  // Enables or disables the right-to-left layout for the view. If |enable| is
-  // true, the layout will become right-to-left only if the locale's language
-  // is right-to-left.
-  //
-  // By default, right-to-left UI layout is enabled for the view and therefore
-  // this function must be called (with false as the |enable| parameter) in
-  // order to disable the right-to-left layout property for a specific instance
-  // of the view. Disabling the right-to-left UI layout is necessary in case a
-  // UI element will not appear correctly when mirrored.
-  void EnableUIMirroringForRTLLanguages(bool enable) {
-    ui_mirroring_is_enabled_for_rtl_languages_ = enable;
-  }
 
   // This method determines whether the gfx::Canvas object passed to
   // View::Paint() needs to be transformed such that anything drawn on the
@@ -315,13 +306,13 @@ class View : public AcceleratorTarget {
   // a flipped gfx::Canvas when the UI layout is right-to-left need to call
   // EnableCanvasFlippingForRTLUI().
   bool FlipCanvasOnPaintForRTLUI() const {
-    return flip_canvas_on_paint_for_rtl_ui_ ? UILayoutIsRightToLeft() : false;
+    return flip_canvas_on_paint_for_rtl_ui_ ? base::i18n::IsRTL() : false;
   }
 
   // Enables or disables flipping of the gfx::Canvas during View::Paint().
   // Note that if canvas flipping is enabled, the canvas will be flipped only
   // if the UI layout is right-to-left; that is, the canvas will be flipped
-  // only if UILayoutIsRightToLeft() returns true.
+  // only if base::i18n::IsRTL() returns true.
   //
   // Enabling canvas flipping is useful for leaf views that draw a bitmap that
   // needs to be flipped horizontally when the UI layout is right-to-left
@@ -361,7 +352,7 @@ class View : public AcceleratorTarget {
   // MirroredXCoordinateInsideView(20) -> 80
   // MirroredXCoordinateInsideView(99) -> 1
   int MirroredXCoordinateInsideView(int x) const {
-    return UILayoutIsRightToLeft() ? width() - x : x;
+    return base::i18n::IsRTL() ? width() - x : x;
   }
 
   // Given a X coordinate and a width inside the View, this function returns
@@ -374,7 +365,7 @@ class View : public AcceleratorTarget {
   // MirroredXCoordinateInsideView(0, 10) -> 90
   // MirroredXCoordinateInsideView(20, 20) -> 60
   int MirroredXWithWidthInsideView(int x, int w) const {
-    return UILayoutIsRightToLeft() ? width() - x - w : x;
+    return base::i18n::IsRTL() ? width() - x - w : x;
   }
 
   // Painting functions
@@ -462,7 +453,7 @@ class View : public AcceleratorTarget {
 
   // Returns the index of the specified |view| in this view's children, or -1
   // if the specified view is not a child of this view.
-  int GetChildIndex(View* v) const;
+  int GetChildIndex(const View* v) const;
 
   // Returns true if the specified view is a direct or indirect child of this
   // view.
@@ -516,13 +507,25 @@ class View : public AcceleratorTarget {
   // IMPORTANT NOTE: loops in the focus hierarchy are not supported.
   void SetNextFocusableView(View* view);
 
-  // Return whether this view can accept the focus.
-  virtual bool IsFocusable() const;
-
   // Sets whether this view can accept the focus.
   // Note that this is false by default so that a view used as a container does
   // not get the focus.
   virtual void SetFocusable(bool focusable);
+
+  // Returns true if the view is focusable (IsFocusable) and visible in the root
+  // view. See also IsFocusable.
+  bool IsFocusableInRootView() const;
+
+  // Return whether this view is focusable when the user requires full keyboard
+  // access, even though it may not be normally focusable.
+  bool IsAccessibilityFocusableInRootView() const;
+
+  // Set whether this view can be made focusable if the user requires
+  // full keyboard access, even though it's not normally focusable.
+  // Note that this is false by default.
+  virtual void set_accessibility_focusable(bool accessibility_focusable) {
+    accessibility_focusable_ = accessibility_focusable;
+  }
 
   // Convenience method to retrieve the FocusManager associated with the
   // Widget that contains this view.  This can return NULL if this view is not
@@ -552,22 +555,27 @@ class View : public AcceleratorTarget {
   virtual bool HasFocus();
 
   // Accessibility support
-  // TODO(klink): Move all this out to a AccessibleInfo wrapper class.
-  //
+  // TODO(ctguil): Move all this out to a AccessibleInfo wrapper class.
+
+  // Notify the platform specific accessibility client of changes in the user
+  // interface.  This will always raise native notifications.
+  virtual void NotifyAccessibilityEvent(AccessibilityTypes::Event event_type);
+
+  // Raise an accessibility notification with an option to also raise a native
+  // notification.
+  virtual void NotifyAccessibilityEvent(AccessibilityTypes::Event event_type,
+      bool send_native_event);
+
   // Returns the MSAA default action of the current view. The string returned
   // describes the default action that will occur when executing
   // IAccessible::DoDefaultAction. For instance, default action of a button is
-  // 'Press'. Sets the input string appropriately, and returns true if
-  // successful.
-  virtual bool GetAccessibleDefaultAction(std::wstring* action) {
-    return false;
-  }
+  // 'Press'.
+  virtual std::wstring GetAccessibleDefaultAction() { return std::wstring(); }
 
   // Returns a string containing the mnemonic, or the keyboard shortcut, for a
-  // given control. Sets the input string appropriately, and returns true if
-  // successful.
-  virtual bool GetAccessibleKeyboardShortcut(std::wstring* shortcut) {
-    return false;
+  // given control.
+  virtual std::wstring GetAccessibleKeyboardShortcut() {
+    return std::wstring();
   }
 
   // Returns a brief, identifying string, containing a unique, readable name of
@@ -577,21 +585,16 @@ class View : public AcceleratorTarget {
 
   // Returns the accessibility role of the current view. The role is what
   // assistive technologies (ATs) use to determine what behavior to expect from
-  // a given control. Sets the input Role appropriately, and returns true if
-  // successful.
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role) {
-    return false;
+  // a given control.
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+
+  // Returns the accessibility state of the current view.
+  virtual AccessibilityTypes::State GetAccessibleState() {
+    return 0;
   }
 
-  // Returns the accessibility state of the current view. Sets the input State
-  // appropriately, and returns true if successful.
-  virtual bool GetAccessibleState(AccessibilityTypes::State* state) {
-    return false;
-  }
-
-  // Returns the current value associated with a view. Sets the input string
-  // appropriately, and returns true if successful.
-  virtual bool GetAccessibleValue(std::wstring* value) { return false; }
+  // Returns the current value associated with a view.
+  virtual std::wstring GetAccessibleValue() { return std::wstring(); }
 
   // Assigns a string name to the given control. Needed as a View does not know
   // which name will be associated with it until it is created to be a
@@ -602,17 +605,6 @@ class View : public AcceleratorTarget {
   // accessibility interface for a given View. If one exists, it will be
   // re-used, otherwise a new instance will be created.
   ViewAccessibilityWrapper* GetViewAccessibilityWrapper();
-
-  // Accessor used to determine if a child view (leaf) has accessibility focus.
-  // Returns NULL if there are no children, or if none of the children has
-  // accessibility focus.
-  virtual View* GetAccFocusedChildView() { return NULL; }
-
-  // Try to give accessibility focus to a given child view. Returns true on
-  // success. Returns false if this view isn't already focused, if it doesn't
-  // support accessibility focus for children, or if the given view isn't a
-  // valid child view that can receive accessibility focus.
-  virtual bool SetAccFocusedChildView(View* child_view) { return false; }
 
   // Utility functions
 
@@ -642,6 +634,9 @@ class View : public AcceleratorTarget {
   // Convert a point from the coordinate system of a View to that of the
   // screen. This is useful for example when placing popup windows.
   static void ConvertPointToScreen(const View* src, gfx::Point* point);
+
+  // Return the bounds of the View in screen coordinate system.
+  gfx::Rect GetScreenBounds() const;
 
   // Event Handlers
 
@@ -701,6 +696,12 @@ class View : public AcceleratorTarget {
   // Default implementation does nothing. Override as needed.
   virtual void OnMouseExited(const MouseEvent& event);
 
+#if defined(TOUCH_UI)
+  // This method is invoked for each touch event. Default implementation
+  // does nothing. Override as needed.
+  virtual bool OnTouchEvent(const TouchEvent& event);
+#endif
+
   // Set the MouseHandler for a drag session.
   //
   // A drag session is a stream of mouse events starting
@@ -708,7 +709,7 @@ class View : public AcceleratorTarget {
   // events and finishing with a MouseReleased event.
   //
   // This method should be only invoked while processing a
-  // MouseDragged or MouseReleased event.
+  // MouseDragged or MousePressed event.
   //
   // All further mouse dragged and mouse up events will be sent
   // the MouseHandler, even if it is reparented to another window.
@@ -929,6 +930,13 @@ class View : public AcceleratorTarget {
   // FocusTraversable for the focus traversal to work properly.
   virtual FocusTraversable* GetFocusTraversable() { return NULL; }
 
+  // Subclasses that can act as a "pane" must implement their own
+  // FocusTraversable to keep the focus trapped within the pane.
+  // If this method returns an object, any view that's a direct or
+  // indirect child of this view will always use this FocusTraversable
+  // rather than the one from the widget.
+  virtual FocusTraversable* GetPaneFocusTraversable() { return NULL; }
+
 #ifndef NDEBUG
   // Debug method that logs the view hierarchy to the output.
   void PrintViewHierarchy();
@@ -965,27 +973,23 @@ class View : public AcceleratorTarget {
   ThemeProvider* GetThemeProvider() const;
 
  protected:
-  // The id of this View. Used to find this View.
-  int id_;
-
-  // The group of this view. Some view subclasses use this id to find other
-  // views of the same group. For example radio button uses this information
-  // to find other radio buttons.
-  int group_;
+  // Returns whether this view can accept focus.
+  // A view can accept focus if it's enabled, focusable and visible.
+  // This method is intended for views to use when calculating preferred size.
+  // The FocusManager and other places use IsFocusableInRootView.
+  virtual bool IsFocusable() const;
 
   // Called when the UI theme has changed, overriding allows individual Views to
   // do special cleanup and processing (such as dropping resource caches).
-  // Subclasses that override this method must call the base class
-  // implementation to ensure child views are processed.
-  // Can only be called by subclasses. To dispatch a theme changed notification,
-  // call this method on the RootView.
-  virtual void ThemeChanged();
+  // To dispatch a theme changed notification, call
+  // RootView::NotifyThemeChanged().
+  virtual void OnThemeChanged() { }
 
   // Called when the locale has changed, overriding allows individual Views to
-  // update locale-dependent resources (strings, bitmaps) it may have cached
-  // internally. Subclasses that override this method must call the base class
-  // implementation to ensure child views are processed.
-  virtual void LocaleChanged();
+  // update locale-dependent strings.
+  // To dispatch a locale changed notification, call
+  // RootView::NotifyLocaleChanged().
+  virtual void OnLocaleChanged() { }
 
 #ifndef NDEBUG
   // Returns true if the View is currently processing a paint.
@@ -1047,7 +1051,9 @@ class View : public AcceleratorTarget {
   // parent an opportunity to do a fresh layout if that makes sense.
   virtual void ChildPreferredSizeChanged(View* child) {}
 
-  // Simply calls ChildPreferredSizeChanged on the parent if there is one.
+  // Invalidates the layout and calls ChildPreferredSizeChanged on the parent
+  // if there is one. Be sure to call View::PreferredSizeChanged when
+  // overriding such that the layout is properly invalidated.
   virtual void PreferredSizeChanged();
 
   // Views must invoke this when the tooltip text they are to display changes.
@@ -1095,11 +1101,23 @@ class View : public AcceleratorTarget {
   static int GetHorizontalDragThreshold();
   static int GetVerticalDragThreshold();
 
+  // The id of this View. Used to find this View.
+  int id_;
+
+  // The group of this view. Some view subclasses use this id to find other
+  // views of the same group. For example radio button uses this information
+  // to find other radio buttons.
+  int group_;
+
   // Whether this view is enabled.
   bool enabled_;
 
   // Whether the view can be focused.
   bool focusable_;
+
+  // Whether this view is focusable if the user requires full keyboard access,
+  // even though it may not be normally focusable.
+  bool accessibility_focusable_;
 
  private:
   friend class RootView;
@@ -1125,11 +1143,26 @@ class View : public AcceleratorTarget {
     gfx::Point start_pt;
   };
 
+  // Used to propagate theme changed notifications from the root view to all
+  // views in the hierarchy.
+  virtual void PropagateThemeChanged();
+
+  // Used to propagate locale changed notifications from the root view to all
+  // views in the hierarchy.
+  virtual void PropagateLocaleChanged();
+
   // RootView invokes these. These in turn invoke the appropriate OnMouseXXX
   // method. If a drag is detected, DoDrag is invoked.
   bool ProcessMousePressed(const MouseEvent& e, DragInfo* drop_info);
   bool ProcessMouseDragged(const MouseEvent& e, DragInfo* drop_info);
   void ProcessMouseReleased(const MouseEvent& e, bool canceled);
+
+#if defined(TOUCH_UI)
+  // RootView will invoke this with incoming TouchEvents. Returns the
+  // the result of OnTouchEvent: true if the event was handled by the
+  // callee.
+  bool ProcessTouchEvent(const TouchEvent& e);
+#endif
 
   // Starts a drag and drop operation originating from this view. This invokes
   // WriteDragData to write the data and GetDragOperations to determine the
@@ -1220,6 +1253,9 @@ class View : public AcceleratorTarget {
   // This View's bounds in the parent coordinate system.
   gfx::Rect bounds_;
 
+  // Whether the view needs to be laid out.
+  bool needs_layout_;
+
   // This view's parent
   View* parent_;
 
@@ -1284,11 +1320,6 @@ class View : public AcceleratorTarget {
 #endif
 
   DragController* drag_controller_;
-
-  // Indicates whether or not the view is going to be mirrored (that is, use a
-  // right-to-left UI layout) if the locale's language is a right-to-left
-  // language like Arabic or Hebrew.
-  bool ui_mirroring_is_enabled_for_rtl_languages_;
 
   // Indicates whether or not the gfx::Canvas object passed to View::Paint()
   // is going to be flipped horizontally (using the appropriate transform) on

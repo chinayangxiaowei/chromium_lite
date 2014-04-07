@@ -4,16 +4,16 @@
 
 #ifndef CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_EDIT_VIEW_MAC_H_
 #define CHROME_BROWSER_AUTOCOMPLETE_AUTOCOMPLETE_EDIT_VIEW_MAC_H_
+#pragma once
 
 #import <Cocoa/Cocoa.h>
 
 #include "base/scoped_ptr.h"
 #include "chrome/browser/autocomplete/autocomplete_edit_view.h"
-#include "chrome/browser/cocoa/autocomplete_text_field.h"
+#include "chrome/browser/cocoa/location_bar/autocomplete_text_field.h"
 
 class AutocompleteEditController;
 class AutocompletePopupViewMac;
-class BubblePositioner;
 class Clipboard;
 class Profile;
 class ToolbarModel;
@@ -24,7 +24,6 @@ class AutocompleteEditViewMac : public AutocompleteEditView,
                                 public AutocompleteTextFieldObserver {
  public:
   AutocompleteEditViewMac(AutocompleteEditController* controller,
-                          const BubblePositioner* bubble_positioner,
                           ToolbarModel* toolbar_model,
                           Profile* profile,
                           CommandUpdater* command_updater,
@@ -32,8 +31,6 @@ class AutocompleteEditViewMac : public AutocompleteEditView,
   virtual ~AutocompleteEditViewMac();
 
   // Implement the AutocompleteEditView interface.
-  // TODO(shess): See if this couldn't be simplified to:
-  //    virtual AEM* model() const { ... }
   virtual AutocompleteEditModel* model() { return model_.get(); }
   virtual const AutocompleteEditModel* model() const { return model_.get(); }
 
@@ -48,9 +45,11 @@ class AutocompleteEditViewMac : public AutocompleteEditView,
                        const std::wstring& keyword);
 
   virtual std::wstring GetText() const;
-  virtual void SetUserText(const std::wstring& text) {
-    SetUserText(text, text, true);
-  }
+
+  virtual bool IsEditingOrEmpty() const;
+  virtual int GetIcon() const;
+
+  virtual void SetUserText(const std::wstring& text);
   virtual void SetUserText(const std::wstring& text,
                            const std::wstring& display_text,
                            bool update_popup);
@@ -61,6 +60,8 @@ class AutocompleteEditViewMac : public AutocompleteEditView,
   virtual void SetForcedQuery();
 
   virtual bool IsSelectAll();
+  virtual void GetSelectionBounds(std::wstring::size_type* start,
+                                  std::wstring::size_type* end);
 
   virtual void SelectAll(bool reversed);
   virtual void RevertAll();
@@ -79,17 +80,19 @@ class AutocompleteEditViewMac : public AutocompleteEditView,
 
   // Implement the AutocompleteTextFieldObserver interface.
   virtual void OnControlKeyChanged(bool pressed);
-  virtual void OnCopy();
+  virtual bool CanCopy();
+  virtual void CopyToPasteboard(NSPasteboard* pboard);
   virtual void OnPaste();
   virtual bool CanPasteAndGo();
   virtual int GetPasteActionStringId();
   virtual void OnPasteAndGo();
   virtual void OnFrameChanged();
-  virtual void OnDidResignKey();  // Closes the popup.
   virtual void OnDidBeginEditing();
   virtual void OnDidChange();
   virtual void OnDidEndEditing();
   virtual bool OnDoCommandBySelector(SEL cmd);
+  virtual void OnSetFocus(bool control_down);
+  virtual void OnKillFocus();
 
   // Helper for LocationBarViewMac.  Optionally selects all in |field_|.
   void FocusLocation(bool select_all);
@@ -97,6 +100,14 @@ class AutocompleteEditViewMac : public AutocompleteEditView,
   // Helper to get appropriate contents from |clipboard|.  Returns
   // empty string if no appropriate data is found on |clipboard|.
   static std::wstring GetClipboardText(Clipboard* clipboard);
+
+  // Helper to get the font to use in the field, exposed for the
+  // popup.
+  static NSFont* GetFieldFont();
+
+  // If |resource_id| has a PDF image which can be used, return it.
+  // Otherwise return the PNG image from the resource bundle.
+  static NSImage* ImageForResource(int resource_id);
 
  private:
   // Called when the user hits backspace in |field_|.  Checks whether

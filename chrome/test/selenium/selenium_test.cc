@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,13 +15,18 @@
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
-#include "base/rand_util.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/automation/window_proxy.h"
 #include "chrome/test/ui/ui_test.h"
 #include "net/base/net_util.h"
+
+#ifdef SIMULATE_RUN
+#include "base/rand_util.h"
+#endif
 
 // Uncomment this to exercise this test without actually running the selenium
 // test, which can take a while to run.  This define is useful when modifying
@@ -31,7 +36,7 @@
 namespace {
 
 // This file is a comma separated list of tests that are currently failing.
-const wchar_t kExpectedFailuresFileName[] = L"expected_failures.txt";
+const char kExpectedFailuresFileName[] = "expected_failures.txt";
 
 class SeleniumTest : public UITest {
  public:
@@ -66,18 +71,17 @@ class SeleniumTest : public UITest {
   }
 
   // The results file is in trunk/chrome/test/selenium/
-  std::wstring GetResultsFilePath() {
-    std::wstring results_path;
+  FilePath GetResultsFilePath() {
+    FilePath results_path;
     PathService::Get(chrome::DIR_TEST_DATA, &results_path);
-    file_util::UpOneDirectory(&results_path);
-    file_util::AppendToPath(&results_path, L"selenium");
-
-    file_util::AppendToPath(&results_path, kExpectedFailuresFileName);
+    results_path = results_path.DirName();
+    results_path = results_path.AppendASCII("selenium");
+    results_path = results_path.AppendASCII(kExpectedFailuresFileName);
     return results_path;
   }
 
   bool ReadExpectedResults(std::string* results) {
-    std::wstring results_path = GetResultsFilePath();
+    FilePath results_path = GetResultsFilePath();
     return file_util::ReadFileToString(results_path, results);
   }
 

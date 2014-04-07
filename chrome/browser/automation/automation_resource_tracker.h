@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_AUTOMATION_AUTOMATION_RESOURCE_TRACKER_H__
 #define CHROME_BROWSER_AUTOMATION_AUTOMATION_RESOURCE_TRACKER_H__
+#pragma once
 
 #include <map>
 
@@ -31,10 +32,8 @@ struct AutomationResourceTraits<T*> {
 // of AutomationResourceTracker to live in a .cc file.
 class AutomationResourceTrackerImpl {
  public:
-  explicit AutomationResourceTrackerImpl(IPC::Message::Sender* sender)
-    : sender_(sender) {}
-
-  virtual ~AutomationResourceTrackerImpl() {}
+  explicit AutomationResourceTrackerImpl(IPC::Message::Sender* sender);
+  virtual ~AutomationResourceTrackerImpl();
 
   // These need to be implemented in AutomationResourceTracker,
   // since it needs to call the subclass's type-specific notification
@@ -58,7 +57,7 @@ class AutomationResourceTrackerImpl {
   HandleToResourceMap handle_to_resource_;
 
  private:
-  DISALLOW_EVIL_CONSTRUCTORS(AutomationResourceTrackerImpl);
+  DISALLOW_COPY_AND_ASSIGN(AutomationResourceTrackerImpl);
 
   IPC::Message::Sender* sender_;
 };

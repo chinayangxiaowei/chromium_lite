@@ -1,9 +1,12 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VIEWS_CONTROLS_MENU_SUBMENU_VIEW_H_
 #define VIEWS_CONTROLS_MENU_SUBMENU_VIEW_H_
+#pragma once
+
+#include <string>
 
 #include "views/controls/menu/menu_delegate.h"
 #include "views/view.h"
@@ -31,6 +34,9 @@ class MenuScrollViewContainer;
 // are provided that allow the user to see all the menu items.
 class SubmenuView : public View {
  public:
+  // The submenu's class name.
+  static const char kViewClassName[];
+
   // Creates a SubmenuView for the specified menu item.
   explicit SubmenuView(MenuItemView* parent);
   ~SubmenuView();
@@ -51,6 +57,9 @@ class SubmenuView : public View {
   // scrolling occurs, everything is repainted correctly.
   virtual void DidChangeBounds(const gfx::Rect& previous,
                                const gfx::Rect& current);
+
+  // Override from View.
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
   // Painting.
   void PaintChildren(gfx::Canvas* canvas);
@@ -74,7 +83,9 @@ class SubmenuView : public View {
 
   // Shows the menu at the specified location. Coordinates are in screen
   // coordinates. max_width gives the max width the view should be.
-  void ShowAt(gfx::NativeWindow parent, const gfx::Rect& bounds, bool do_capture);
+  void ShowAt(gfx::NativeWindow parent,
+              const gfx::Rect& bounds,
+              bool do_capture);
 
   // Resets the bounds of the submenu to |bounds|.
   void Reposition(const gfx::Rect& bounds);
@@ -118,8 +129,20 @@ class SubmenuView : public View {
   // Returns the NativeWindow host of the menu, or NULL if not showing.
   gfx::NativeWindow native_window() const;
 
+  // Invoked if the menu is prematurely destroyed. This can happen if the window
+  // closes while the menu is shown. If invoked the SubmenuView must drop all
+  // references to the MenuHost as the MenuHost is about to be deleted.
+  void MenuHostDestroyed();
+
+  // Max width of accelerators in child menu items. This doesn't include
+  // children's children, only direct children.
+  int max_accelerator_width() const { return max_accelerator_width_; }
+
   // Padding around the edges of the submenu.
   static const int kSubmenuBorderSize;
+
+ protected:
+  virtual std::string GetClassName() const;
 
  private:
   // Paints the drop indicator. This is only invoked if item is non-NULL and
@@ -138,7 +161,8 @@ class SubmenuView : public View {
   // Parent menu item.
   MenuItemView* parent_menu_item_;
 
-  // Widget subclass used to show the children.
+  // Widget subclass used to show the children. This is deleted when we invoke
+  // |DestroyMenuHost|, or |MenuHostDestroyed| is invoked back on us.
   MenuHost* host_;
 
   // If non-null, indicates a drop is in progress and drop_item is the item
@@ -150,6 +174,9 @@ class SubmenuView : public View {
 
   // Ancestor of the SubmenuView, lazily created.
   MenuScrollViewContainer* scroll_view_container_;
+
+  // See description above getter.
+  int max_accelerator_width_;
 
   DISALLOW_COPY_AND_ASSIGN(SubmenuView);
 };

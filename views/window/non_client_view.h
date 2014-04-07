@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_WINDOW_NON_CLIENT_VIEW_H_
 #define VIEWS_WINDOW_NON_CLIENT_VIEW_H_
+#pragma once
 
 #include "base/task.h"
 #include "views/view.h"
@@ -69,6 +70,7 @@ class NonClientFrameView : public View {
 
   // Overridden from View:
   virtual bool HitTest(const gfx::Point& l) const;
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
  protected:
   virtual void DidChangeBounds(const gfx::Rect& previous,
@@ -208,7 +210,7 @@ class NonClientView : public View {
   virtual gfx::Size GetPreferredSize();
   virtual gfx::Size GetMinimumSize();
   virtual void Layout();
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
+  virtual AccessibilityTypes::Role GetAccessibleRole();
 
  protected:
   // NonClientView, View overrides:
@@ -228,9 +230,6 @@ class NonClientView : public View {
   // This object is not owned by the view hierarchy because it can be replaced
   // dynamically as the system settings change.
   scoped_ptr<NonClientFrameView> frame_view_;
-
-  // The accessible name of this view.
-  std::wstring accessible_name_;
 
   DISALLOW_COPY_AND_ASSIGN(NonClientView);
 };

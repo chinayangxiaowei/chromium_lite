@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_WINDOW_CUSTOM_FRAME_VIEW_H_
 #define VIEWS_WINDOW_CUSTOM_FRAME_VIEW_H_
+#pragma once
 
 #include "views/controls/button/image_button.h"
 #include "views/window/non_client_view.h"
@@ -79,6 +80,10 @@ class CustomFrameView : public NonClientFrameView,
   // there was one).
   gfx::Rect IconBounds() const;
 
+  // Returns true if the client edge should be drawn. This is true if
+  // the window delegate wants a client edge and we are not maxmized.
+  bool ShouldShowClientEdge() const;
+
   // Paint various sub-components of this view.
   void PaintRestoredFrameBorder(gfx::Canvas* canvas);
   void PaintMaximizedFrameBorder(gfx::Canvas* canvas);
@@ -103,6 +108,7 @@ class CustomFrameView : public NonClientFrameView,
   ImageButton* minimize_button_;
   ImageButton* window_icon_;
   bool should_show_minmax_buttons_;
+  bool should_show_client_edge_;
 
   // The window that owns this view.
   Window* frame_;

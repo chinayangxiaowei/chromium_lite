@@ -4,185 +4,409 @@
 
 #include "chrome/browser/chromeos/login/google_authenticator.h"
 
-#include <errno.h>
 #include <string>
 #include <vector>
 
-#include "base/logging.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/lock.h"
+#include "base/logging.h"
 #include "base/path_service.h"
 #include "base/sha2.h"
 #include "base/string_util.h"
 #include "base/third_party/nss/blapi.h"
 #include "base/third_party/nss/sha256.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
+#include "chrome/browser/chromeos/boot_times_loader.h"
 #include "chrome/browser/chromeos/cros/cryptohome_library.h"
 #include "chrome/browser/chromeos/login/auth_response_handler.h"
+#include "chrome/browser/chromeos/login/authentication_notification_details.h"
 #include "chrome/browser/chromeos/login/login_status_consumer.h"
-#include "chrome/browser/net/chrome_url_request_context.h"
-#include "chrome/browser/net/url_fetcher.h"
+#include "chrome/browser/chromeos/login/ownership_service.h"
+#include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/net/gaia/gaia_authenticator2.h"
+#include "chrome/common/net/gaia/gaia_constants.h"
+#include "chrome/common/notification_service.h"
 #include "net/base/load_flags.h"
+#include "net/base/net_errors.h"
 #include "net/url_request/url_request_status.h"
-#include "third_party/libjingle/files/talk/base/urlencode.h"
+#include "third_party/libjingle/source/talk/base/urlencode.h"
 
 using base::Time;
 using base::TimeDelta;
-using namespace file_util;
+using file_util::GetFileSize;
+using file_util::PathExists;
+using file_util::ReadFile;
+using file_util::ReadFileToString;
 
 namespace chromeos {
 
 // static
-const char GoogleAuthenticator::kCookiePersistence[] = "true";
-// static
-const char GoogleAuthenticator::kAccountType[] = "HOSTED_OR_GOOGLE";
-// static
-const char GoogleAuthenticator::kSource[] = "chromeos";
-// static
-const char GoogleAuthenticator::kFormat[] =
-    "Email=%s&"
-    "Passwd=%s&"
-    "PersistentCookie=%s&"
-    "accountType=%s&"
-    "source=%s&";
+const char GoogleAuthenticator::kLocalaccountFile[] = "localaccount";
 
 // static
-const char GoogleAuthenticator::kSystemSalt[] = "/home/.shadow/salt";
+const int GoogleAuthenticator::kClientLoginTimeoutMs = 10000;
 // static
-const char GoogleAuthenticator::kOpenSSLMagic[] = "Salted__";
-// static
-const char GoogleAuthenticator::kLocalaccountFile[] = "localaccount";
-// static
-const char GoogleAuthenticator::kTmpfsTrigger[] = "incognito";
+const int GoogleAuthenticator::kLocalaccountRetryIntervalMs = 20;
 
 const int kPassHashLen = 32;
 
 GoogleAuthenticator::GoogleAuthenticator(LoginStatusConsumer* consumer)
     : Authenticator(consumer),
-      fetcher_(NULL),
-      getter_(NULL),
+      user_manager_(UserManager::Get()),
+      hosted_policy_(GaiaAuthenticator2::HostedAccountsAllowed),
+      unlock_(false),
+      try_again_(true),
       checked_for_localaccount_(false) {
   CHECK(chromeos::CrosLibrary::Get()->EnsureLoaded());
+  // If not already owned, this is a no-op.  If it is, this loads the owner's
+  // public key off of disk.
+  OwnershipService::GetSharedInstance()->StartLoadOwnerKeyAttempt();
 }
 
-GoogleAuthenticator::~GoogleAuthenticator() {
-  ChromeThread::DeleteSoon(ChromeThread::FILE, FROM_HERE, fetcher_);
+GoogleAuthenticator::~GoogleAuthenticator() {}
+
+void GoogleAuthenticator::CancelClientLogin() {
+  if (gaia_authenticator_->HasPendingFetch()) {
+    LOG(INFO) << "Canceling ClientLogin attempt.";
+    gaia_authenticator_->CancelRequest();
+
+    BrowserThread::PostTask(
+        BrowserThread::FILE, FROM_HERE,
+        NewRunnableMethod(this,
+                          &GoogleAuthenticator::LoadLocalaccount,
+                          std::string(kLocalaccountFile)));
+
+    CheckOffline(LoginFailure(LoginFailure::LOGIN_TIMED_OUT));
+  }
 }
 
-bool GoogleAuthenticator::Authenticate(Profile* profile,
-                                       const std::string& username,
-                                       const std::string& password) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
-  getter_ = profile->GetRequestContext();
-  fetcher_ = URLFetcher::Create(0,
-                                GURL(AuthResponseHandler::kClientLoginUrl),
-                                URLFetcher::POST,
-                                this);
-  fetcher_->set_request_context(getter_);
-  fetcher_->set_load_flags(net::LOAD_DO_NOT_SEND_COOKIES);
-  // TODO(cmasone): be more careful about zeroing memory that stores
-  // the user's password.
-  std::string body = StringPrintf(kFormat,
-                                  UrlEncodeString(username).c_str(),
-                                  UrlEncodeString(password).c_str(),
-                                  kCookiePersistence,
-                                  kAccountType,
-                                  kSource);
-  fetcher_->set_upload_data("application/x-www-form-urlencoded", body);
-  username_.assign(username);
-  StoreHashedPassword(password);
-  fetcher_->Start();
+void GoogleAuthenticator::TryClientLogin() {
+  gaia_authenticator_->StartClientLogin(
+      username_,
+      password_,
+      GaiaConstants::kContactsService,
+      login_token_,
+      login_captcha_,
+      hosted_policy_);
+
+  BrowserThread::PostDelayedTask(
+      BrowserThread::UI,
+      FROM_HERE,
+      NewRunnableMethod(this,
+                        &GoogleAuthenticator::CancelClientLogin),
+      kClientLoginTimeoutMs);
+}
+
+void GoogleAuthenticator::PrepareClientLoginAttempt(
+    const std::string& password,
+    const std::string& token,
+    const std::string& captcha) {
+
+  // Save so we can retry.
+  password_.assign(password);
+  login_token_.assign(token);
+  login_captcha_.assign(captcha);
+}
+
+void GoogleAuthenticator::ClearClientLoginAttempt() {
+  // Not clearing the password, because we may need to pass it to the
+  // sync service if login is successful.
+  login_token_.clear();
+  login_captcha_.clear();
+}
+
+bool GoogleAuthenticator::AuthenticateToLogin(
+    Profile* profile,
+    const std::string& username,
+    const std::string& password,
+    const std::string& login_token,
+    const std::string& login_captcha) {
+  unlock_ = false;
+
+  // TODO(cmasone): Figure out how to parallelize fetch, username/password
+  // processing without impacting testability.
+  username_.assign(Canonicalize(username));
+  ascii_hash_.assign(HashPassword(password));
+
+  gaia_authenticator_.reset(
+      new GaiaAuthenticator2(this,
+                             GaiaConstants::kChromeOSSource,
+                             profile->GetRequestContext()));
+  // Will be used for retries.
+  PrepareClientLoginAttempt(password, login_token, login_captcha);
+  TryClientLogin();
   return true;
 }
 
-void GoogleAuthenticator::OnURLFetchComplete(const URLFetcher* source,
-                                             const GURL& url,
-                                             const URLRequestStatus& status,
-                                             int response_code,
-                                             const ResponseCookies& cookies,
-                                             const std::string& data) {
-  if (status.is_success() && response_code == kHttpSuccess) {
-    LOG(INFO) << "Online login successful!";
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
-        NewRunnableMethod(this, &GoogleAuthenticator::OnLoginSuccess, data));
-  } else if (!status.is_success()) {
-    LOG(INFO) << "Network fail";
+bool GoogleAuthenticator::AuthenticateToUnlock(const std::string& username,
+                                               const std::string& password) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  username_.assign(Canonicalize(username));
+  ascii_hash_.assign(HashPassword(password));
+  unlock_ = true;
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
+      NewRunnableMethod(this,
+                        &GoogleAuthenticator::LoadLocalaccount,
+                        std::string(kLocalaccountFile)));
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(this, &GoogleAuthenticator::CheckOffline,
+                        LoginFailure(LoginFailure::UNLOCK_FAILED)));
+  return true;
+}
+
+void GoogleAuthenticator::LoginOffTheRecord() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  int mount_error = chromeos::kCryptohomeMountErrorNone;
+  if (CrosLibrary::Get()->GetCryptohomeLibrary()->MountForBwsi(&mount_error)) {
+    AuthenticationNotificationDetails details(true);
+    NotificationService::current()->Notify(
+        NotificationType::LOGIN_AUTHENTICATION,
+        NotificationService::AllSources(),
+        Details<AuthenticationNotificationDetails>(&details));
+    consumer_->OnOffTheRecordLoginSuccess();
+  } else {
+    LOG(ERROR) << "Could not mount tmpfs: " << mount_error;
+    consumer_->OnLoginFailure(
+        LoginFailure(LoginFailure::COULD_NOT_MOUNT_TMPFS));
+  }
+}
+
+void GoogleAuthenticator::OnClientLoginSuccess(
+    const GaiaAuthConsumer::ClientLoginResult& credentials) {
+
+  LOG(INFO) << "Online login successful!";
+  ClearClientLoginAttempt();
+
+  if (hosted_policy_ == GaiaAuthenticator2::HostedAccountsAllowed &&
+      !user_manager_->IsKnownUser(username_)) {
+    // First time user, and we don't know if the account is HOSTED or not.
+    // Since we don't allow HOSTED accounts to log in, we need to try
+    // again, without allowing HOSTED accounts.
+    //
+    // NOTE: we used to do this in the opposite order, so that we'd only
+    // try the HOSTED pathway if GOOGLE-only failed.  This breaks CAPTCHA
+    // handling, though.
+    hosted_policy_ = GaiaAuthenticator2::HostedAccountsNotAllowed;
+    TryClientLogin();
+    return;
+  }
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(this,
+                        &GoogleAuthenticator::OnLoginSuccess,
+                        credentials, false));
+}
+
+void GoogleAuthenticator::OnClientLoginFailure(
+   const GoogleServiceAuthError& error) {
+
+  if (error.state() == GoogleServiceAuthError::REQUEST_CANCELED) {
+    if (try_again_) {
+      try_again_ = false;
+      LOG(ERROR) << "Login attempt canceled!?!?  Trying again.";
+      TryClientLogin();
+      return;
+    }
+    LOG(ERROR) << "Login attempt canceled again?  Already retried...";
+  }
+
+  if (error.state() == GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS &&
+      !user_manager_->IsKnownUser(username_) &&
+      hosted_policy_ != GaiaAuthenticator2::HostedAccountsAllowed) {
+    // This was a first-time login, we already tried allowing HOSTED accounts
+    // and succeeded.  That we've failed with INVALID_GAIA_CREDENTIALS now
+    // indicates that the account is HOSTED.
+    LoginFailure failure_details =
+        LoginFailure::FromNetworkAuthFailure(
+            GoogleServiceAuthError(
+                GoogleServiceAuthError::HOSTED_NOT_ALLOWED));
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
+        NewRunnableMethod(this,
+                          &GoogleAuthenticator::OnLoginFailure,
+                          failure_details));
+    LOG(WARNING) << "Rejecting valid HOSTED account.";
+    hosted_policy_ = GaiaAuthenticator2::HostedAccountsNotAllowed;
+    return;
+  }
+
+  ClearClientLoginAttempt();
+
+  if (error.state() == GoogleServiceAuthError::TWO_FACTOR) {
+    LOG(WARNING) << "Two factor authenticated. Sync will not work.";
+    GaiaAuthConsumer::ClientLoginResult result;
+    result.two_factor = true;
+    OnClientLoginSuccess(result);
+    return;
+  }
+
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
+      NewRunnableMethod(this,
+                        &GoogleAuthenticator::LoadLocalaccount,
+                        std::string(kLocalaccountFile)));
+
+  LoginFailure failure_details = LoginFailure::FromNetworkAuthFailure(error);
+
+  if (error.state() == GoogleServiceAuthError::CONNECTION_FAILED) {
     // The fetch failed for network reasons, try offline login.
-    LoadLocalaccount(kLocalaccountFile);
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
-        NewRunnableMethod(this, &GoogleAuthenticator::CheckOffline, status));
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
+        NewRunnableMethod(this, &GoogleAuthenticator::CheckOffline,
+                          failure_details));
+    return;
+  }
+
+  // The fetch succeeded, but ClientLogin said no, or we exhausted retries.
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(this,
+        &GoogleAuthenticator::CheckLocalaccount,
+        failure_details));
+}
+
+void GoogleAuthenticator::OnLoginSuccess(
+    const GaiaAuthConsumer::ClientLoginResult& credentials,
+    bool request_pending) {
+  // Send notification of success
+  AuthenticationNotificationDetails details(true);
+  NotificationService::current()->Notify(
+      NotificationType::LOGIN_AUTHENTICATION,
+      NotificationService::AllSources(),
+      Details<AuthenticationNotificationDetails>(&details));
+
+  int mount_error = chromeos::kCryptohomeMountErrorNone;
+  BootTimesLoader::Get()->AddLoginTimeMarker("CryptohomeMounting", false);
+  if (unlock_ ||
+      (CrosLibrary::Get()->GetCryptohomeLibrary()->Mount(username_.c_str(),
+                                                         ascii_hash_.c_str(),
+                                                         &mount_error))) {
+    BootTimesLoader::Get()->AddLoginTimeMarker("CryptohomeMounted", true);
+    consumer_->OnLoginSuccess(username_,
+                              password_,
+                              credentials,
+                              request_pending);
+  } else if (!unlock_ &&
+             mount_error == chromeos::kCryptohomeMountErrorKeyFailure) {
+    consumer_->OnPasswordChangeDetected(credentials);
   } else {
-    // The fetch succeeded, but ClientLogin said no.
-    LoadLocalaccount(kLocalaccountFile);
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
-        NewRunnableMethod(this, &GoogleAuthenticator::CheckLocalaccount, data));
+    OnLoginFailure(LoginFailure(LoginFailure::COULD_NOT_MOUNT_CRYPTOHOME));
   }
 }
 
-void GoogleAuthenticator::OnLoginSuccess(const std::string& data) {
-  if (CrosLibrary::Get()->GetCryptohomeLibrary()->Mount(username_.c_str(),
-                                                        ascii_hash_.c_str())) {
-    consumer_->OnLoginSuccess(username_, data);
-  } else {
-    OnLoginFailure("Could not mount cryptohome");
-  }
-}
-
-void GoogleAuthenticator::CheckOffline(const URLRequestStatus& status) {
+void GoogleAuthenticator::CheckOffline(const LoginFailure& error) {
+  LOG(INFO) << "Attempting offline login";
   if (CrosLibrary::Get()->GetCryptohomeLibrary()->CheckKey(
           username_.c_str(),
           ascii_hash_.c_str())) {
     // The fetch didn't succeed, but offline login did.
     LOG(INFO) << "Offline login successful!";
-    OnLoginSuccess(std::string());
+    OnLoginSuccess(GaiaAuthConsumer::ClientLoginResult(), false);
   } else {
     // We couldn't hit the network, and offline login failed.
-    GoogleAuthenticator::CheckLocalaccount(strerror(status.os_error()));
+    GoogleAuthenticator::CheckLocalaccount(error);
   }
 }
 
-void GoogleAuthenticator::CheckLocalaccount(const std::string& error) {
-  if (!localaccount_.empty() && localaccount_ == username_ &&
-      CrosLibrary::Get()->GetCryptohomeLibrary()->Mount(kTmpfsTrigger, "")) {
-    LOG(WARNING) << "Logging in with localaccount: " << localaccount_;
-    consumer_->OnLoginSuccess(username_, std::string());
+void GoogleAuthenticator::CheckLocalaccount(const LoginFailure& error) {
+  {
+    AutoLock for_this_block(localaccount_lock_);
+    LOG(INFO) << "Checking localaccount";
+    if (!checked_for_localaccount_) {
+      BrowserThread::PostDelayedTask(
+          BrowserThread::UI,
+          FROM_HERE,
+          NewRunnableMethod(this,
+                            &GoogleAuthenticator::CheckLocalaccount,
+                            error),
+          kLocalaccountRetryIntervalMs);
+      return;
+    }
+  }
+  int mount_error = chromeos::kCryptohomeMountErrorNone;
+  if (!localaccount_.empty() && localaccount_ == username_) {
+    if (CrosLibrary::Get()->GetCryptohomeLibrary()->MountForBwsi(
+        &mount_error)) {
+      LOG(WARNING) << "Logging in with localaccount: " << localaccount_;
+      consumer_->OnLoginSuccess(username_,
+                                std::string(),
+                                GaiaAuthConsumer::ClientLoginResult(),
+                                false);
+    } else {
+      LOG(ERROR) << "Could not mount tmpfs for local account: " << mount_error;
+      OnLoginFailure(
+          LoginFailure(LoginFailure::COULD_NOT_MOUNT_TMPFS));
+    }
   } else {
     OnLoginFailure(error);
   }
 }
 
-void GoogleAuthenticator::OnLoginFailure(const std::string& data) {
-  LOG(WARNING) << "Login failed: " << data;
-  // TODO(cmasone): what can we do to expose these OS/server-side error strings
-  // in an internationalizable way?
-  consumer_->OnLoginFailure(data);
+void GoogleAuthenticator::OnLoginFailure(const LoginFailure& error) {
+  // Send notification of failure
+  AuthenticationNotificationDetails details(false);
+  NotificationService::current()->Notify(
+      NotificationType::LOGIN_AUTHENTICATION,
+      NotificationService::AllSources(),
+      Details<AuthenticationNotificationDetails>(&details));
+  LOG(WARNING) << "Login failed: " << error.GetErrorString();
+  consumer_->OnLoginFailure(error);
 }
 
-void GoogleAuthenticator::LoadSystemSalt(const FilePath& path) {
+void GoogleAuthenticator::RecoverEncryptedData(const std::string& old_password,
+    const GaiaAuthConsumer::ClientLoginResult& credentials) {
+
+  std::string old_hash = HashPassword(old_password);
+  if (CrosLibrary::Get()->GetCryptohomeLibrary()->MigrateKey(username_,
+                                                             old_hash,
+                                                             ascii_hash_)) {
+    OnLoginSuccess(credentials, false);
+    return;
+  }
+  // User seems to have given us the wrong old password...
+  consumer_->OnPasswordChangeDetected(credentials);
+}
+
+void GoogleAuthenticator::ResyncEncryptedData(
+    const GaiaAuthConsumer::ClientLoginResult& credentials) {
+
+  if (CrosLibrary::Get()->GetCryptohomeLibrary()->Remove(username_)) {
+    OnLoginSuccess(credentials, false);
+  } else {
+    OnLoginFailure(LoginFailure(LoginFailure::DATA_REMOVAL_FAILED));
+  }
+}
+
+void GoogleAuthenticator::RetryAuth(Profile* profile,
+                                    const std::string& username,
+                                    const std::string& password,
+                                    const std::string& login_token,
+                                    const std::string& login_captcha) {
+  NOTIMPLEMENTED();
+}
+
+void GoogleAuthenticator::LoadSystemSalt() {
   if (!system_salt_.empty())
     return;
-  CHECK(PathExists(path)) << path.value() << " does not exist!";
-  int64 file_size;
-  CHECK(GetFileSize(path, &file_size)) << "Could not get size of "
-                                       << path.value();
-
-  char salt[file_size];
-  int data_read = ReadFile(path, salt, file_size);
-
-  CHECK_EQ(data_read % 2, 0);
-  system_salt_.assign(salt, salt + data_read);
+  system_salt_ = CrosLibrary::Get()->GetCryptohomeLibrary()->GetSystemSalt();
+  CHECK(!system_salt_.empty());
+  CHECK_EQ(system_salt_.size() % 2, 0U);
 }
 
 void GoogleAuthenticator::LoadLocalaccount(const std::string& filename) {
-  if (checked_for_localaccount_)
-    return;
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  {
+    AutoLock for_this_block(localaccount_lock_);
+    if (checked_for_localaccount_)
+      return;
+  }
   FilePath localaccount_file;
   std::string localaccount;
   if (PathService::Get(base::DIR_EXE, &localaccount_file)) {
@@ -195,10 +419,19 @@ void GoogleAuthenticator::LoadLocalaccount(const std::string& filename) {
   } else {
     LOG(INFO) << "Assuming no localaccount";
   }
-  set_localaccount(localaccount);
+  SetLocalaccount(localaccount);
 }
 
-void GoogleAuthenticator::StoreHashedPassword(const std::string& password) {
+void GoogleAuthenticator::SetLocalaccount(const std::string& new_name) {
+  localaccount_ = new_name;
+  {  // extra braces for clarity about AutoLock scope.
+    AutoLock for_this_block(localaccount_lock_);
+    checked_for_localaccount_ = true;
+  }
+}
+
+
+std::string GoogleAuthenticator::HashPassword(const std::string& password) {
   // Get salt, ascii encode, update sha with that, then update with ascii
   // of password, then end.
   std::string ascii_salt = SaltAsAscii();
@@ -225,11 +458,11 @@ void GoogleAuthenticator::StoreHashedPassword(const std::string& password) {
               passhash.size() / 2,  // only want top half, at least for now.
               ascii_buf,
               sizeof(ascii_buf));
-  ascii_hash_.assign(ascii_buf, sizeof(ascii_buf) - 1);
+  return std::string(ascii_buf, sizeof(ascii_buf) - 1);
 }
 
 std::string GoogleAuthenticator::SaltAsAscii() {
-  LoadSystemSalt(FilePath(kSystemSalt));  // no-op if it's already loaded.
+  LoadSystemSalt();  // no-op if it's already loaded.
   unsigned int salt_len = system_salt_.size();
   char ascii_salt[2 * salt_len + 1];
   if (GoogleAuthenticator::BinaryToHex(system_salt_,

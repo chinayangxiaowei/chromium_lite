@@ -4,31 +4,38 @@
 
 #ifndef CHROME_COMMON_EXTENSIONS_EXTENSION_EXTENT_H_
 #define CHROME_COMMON_EXTENSIONS_EXTENSION_EXTENT_H_
+#pragma once
 
-#include <string>
 #include <vector>
 
-#include "googleurl/src/gurl.h"
+class GURL;
+class URLPattern;
 
 // Represents the set of URLs an extension uses for web content.
 class ExtensionExtent {
  public:
-  const std::vector<std::string>& paths() const { return paths_; }
-  void add_path(const std::string& val) { paths_.push_back(val); }
-  void clear_paths() { paths_.clear(); }
+  typedef std::vector<URLPattern> PatternList;
 
-  const GURL& origin() const { return origin_; }
-  void set_origin(const GURL& val) { origin_ = val; }
+  ExtensionExtent();
+  ExtensionExtent(const ExtensionExtent& rhs);
+  ~ExtensionExtent();
+  ExtensionExtent& operator=(const ExtensionExtent& rhs);
 
+  bool is_empty() const;
+
+  const PatternList& patterns() const { return patterns_; }
+  void AddPattern(const URLPattern& pattern);
+  void ClearPaths();
+
+  // Test if the extent contains a URL.
   bool ContainsURL(const GURL& url) const;
 
- private:
-  // The security origin (scheme+host+port) of the extent.
-  GURL origin_;
+  // Returns true if there is a single URL that would be in two extents.
+  bool OverlapsWith(const ExtensionExtent& other) const;
 
-  // A set of path prefixes that further restrict the set of valid URLs below
-  // origin_. This may be empty.
-  std::vector<std::string> paths_;
+ private:
+  // The list of URL patterns that comprise the extent.
+  PatternList patterns_;
 };
 
 #endif  // CHROME_COMMON_EXTENSIONS_EXTENSION_EXTENT_H_

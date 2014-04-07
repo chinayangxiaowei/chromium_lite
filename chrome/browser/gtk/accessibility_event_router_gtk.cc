@@ -12,6 +12,12 @@
 #include "chrome/browser/gtk/gtk_chrome_link_button.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/notification_type.h"
+#include "views/controls/textfield/native_textfield_gtk.h"
+
+#if defined(TOOLKIT_VIEWS)
+#include "views/controls/textfield/gtk_views_textview.h"
+#include "views/controls/textfield/gtk_views_entry.h"
+#endif
 
 namespace {
 
@@ -117,6 +123,34 @@ gboolean OnEntryChanged(GSignalInvocationHint *ihint,
   return TRUE;
 }
 
+gboolean OnTextBufferChanged(GSignalInvocationHint *ihint,
+                             guint n_param_values,
+                             const GValue* param_values,
+                             gpointer user_data) {
+  // The text hasn't changed yet, so defer calling
+  // DispatchAccessibilityNotification.
+  reinterpret_cast<AccessibilityEventRouterGtk*>(user_data)->
+      PostDispatchAccessibilityNotification(
+          NULL, NotificationType::ACCESSIBILITY_TEXT_CHANGED);
+  return TRUE;
+}
+
+gboolean OnTextViewChanged(GSignalInvocationHint *ihint,
+                           guint n_param_values,
+                           const GValue* param_values,
+                           gpointer user_data) {
+  GtkWidget* widget = GTK_WIDGET(g_value_get_object(param_values));
+  if (!GTK_IS_TEXT_VIEW(widget)) {
+    return TRUE;
+  }
+  // The text hasn't changed yet, so defer calling
+  // DispatchAccessibilityNotification.
+  reinterpret_cast<AccessibilityEventRouterGtk*>(user_data)->
+      PostDispatchAccessibilityNotification(
+          widget, NotificationType::ACCESSIBILITY_TEXT_CHANGED);
+  return TRUE;
+}
+
 gboolean OnMenuMoveCurrent(GSignalInvocationHint *ihint,
                            guint n_param_values,
                            const GValue* param_values,
@@ -145,6 +179,7 @@ gboolean OnMenuMoveCurrent(GSignalInvocationHint *ihint,
 AccessibilityEventRouterGtk::AccessibilityEventRouterGtk()
     : listening_(false),
       most_recent_profile_(NULL),
+      most_recent_widget_(NULL),
       method_factory_(this) {
   // We don't want our event listeners to be installed if accessibility is
   // disabled. Install listeners so we can install and uninstall them as
@@ -181,6 +216,20 @@ void AccessibilityEventRouterGtk::InstallEventListener(
   installed_hooks_.push_back(InstalledHook(signal_id, hook_id));
 }
 
+bool AccessibilityEventRouterGtk::IsPassword(GtkWidget* widget) {
+  bool is_password = false;
+#if defined (TOOLKIT_VIEWS)
+  is_password = (GTK_IS_ENTRY(widget) &&
+                 GTK_VIEWS_ENTRY(widget)->host != NULL &&
+                 GTK_VIEWS_ENTRY(widget)->host->IsPassword()) ||
+                (GTK_IS_TEXT_VIEW(widget) &&
+                 GTK_VIEWS_TEXTVIEW(widget)->host != NULL &&
+                 GTK_VIEWS_TEXTVIEW(widget)->host->IsPassword());
+#endif
+  return is_password;
+}
+
+
 void AccessibilityEventRouterGtk::InstallEventListeners() {
   // Create and destroy each type of widget we need signals for,
   // to ensure their modules are loaded, otherwise g_signal_lookup
@@ -190,6 +239,8 @@ void AccessibilityEventRouterGtk::InstallEventListeners() {
   g_object_unref(g_object_ref_sink(gtk_notebook_new()));
   g_object_unref(g_object_ref_sink(gtk_toggle_button_new()));
   g_object_unref(g_object_ref_sink(gtk_tree_view_new()));
+  g_object_unref(g_object_ref_sink(gtk_text_view_new()));
+  g_object_unref(g_object_ref_sink(gtk_text_buffer_new(NULL)));
 
   // Add signal emission hooks for the events we're interested in.
   InstallEventListener("clicked", GTK_TYPE_BUTTON, OnButtonClicked);
@@ -204,6 +255,8 @@ void AccessibilityEventRouterGtk::InstallEventListeners() {
   InstallEventListener("switch-page", GTK_TYPE_NOTEBOOK, OnPageSwitched);
   InstallEventListener("toggled", GTK_TYPE_TOGGLE_BUTTON, OnButtonToggled);
   InstallEventListener("move-current", GTK_TYPE_MENU, OnMenuMoveCurrent);
+  InstallEventListener("changed", GTK_TYPE_TEXT_BUFFER, OnTextBufferChanged);
+  InstallEventListener("move-cursor", GTK_TYPE_TEXT_VIEW, OnTextViewChanged);
 
   listening_ = true;
 }
@@ -221,54 +274,47 @@ void AccessibilityEventRouterGtk::RemoveEventListeners() {
 
 void AccessibilityEventRouterGtk::AddRootWidget(
     GtkWidget* root_widget, Profile* profile) {
-  root_widget_profile_map_[root_widget] = profile;
+  root_widget_info_map_[root_widget].refcount++;
+  root_widget_info_map_[root_widget].profile = profile;
 }
 
 void AccessibilityEventRouterGtk::RemoveRootWidget(GtkWidget* root_widget) {
-  DCHECK(root_widget_profile_map_.find(root_widget) !=
-         root_widget_profile_map_.end());
-  root_widget_profile_map_.erase(root_widget);
+  DCHECK(root_widget_info_map_.find(root_widget) !=
+         root_widget_info_map_.end());
+  root_widget_info_map_[root_widget].refcount--;
+  if (root_widget_info_map_[root_widget].refcount == 0) {
+    root_widget_info_map_.erase(root_widget);
+  }
 }
 
-void AccessibilityEventRouterGtk::IgnoreWidget(GtkWidget* widget) {
-  widget_info_map_[widget].ignore = true;
-}
-
-void AccessibilityEventRouterGtk::SetWidgetName(
+void AccessibilityEventRouterGtk::AddWidgetNameOverride(
     GtkWidget* widget, std::string name) {
   widget_info_map_[widget].name = name;
+  widget_info_map_[widget].refcount++;
 }
 
-void AccessibilityEventRouterGtk::RemoveWidget(GtkWidget* widget) {
+void AccessibilityEventRouterGtk::RemoveWidgetNameOverride(GtkWidget* widget) {
   DCHECK(widget_info_map_.find(widget) != widget_info_map_.end());
-  widget_info_map_.erase(widget);
+  widget_info_map_[widget].refcount--;
+  if (widget_info_map_[widget].refcount == 0) {
+    widget_info_map_.erase(widget);
+  }
 }
 
 void AccessibilityEventRouterGtk::FindWidget(
     GtkWidget* widget, Profile** profile, bool* is_accessible) {
   *is_accessible = false;
 
-  // First see if it's a descendant of a root widget.
-  for (base::hash_map<GtkWidget*, Profile*>::const_iterator iter =
-           root_widget_profile_map_.begin();
-       iter != root_widget_profile_map_.end();
+  for (base::hash_map<GtkWidget*, RootWidgetInfo>::const_iterator iter =
+           root_widget_info_map_.begin();
+       iter != root_widget_info_map_.end();
        ++iter) {
-    if (gtk_widget_is_ancestor(widget, iter->first)) {
+    if (widget == iter->first || gtk_widget_is_ancestor(widget, iter->first)) {
       *is_accessible = true;
       if (profile)
-        *profile = iter->second;
+        *profile = iter->second.profile;
       break;
     }
-  }
-  if (!*is_accessible)
-    return;
-
-  // Now make sure it's not marked as a widget to be ignored.
-  base::hash_map<GtkWidget*, WidgetInfo>::const_iterator iter =
-      widget_info_map_.find(widget);
-  if (iter != widget_info_map_.end() && iter->second.ignore) {
-    *is_accessible = false;
-    return;
   }
 }
 
@@ -292,11 +338,32 @@ void AccessibilityEventRouterGtk::StopListening() {
 
 void AccessibilityEventRouterGtk::DispatchAccessibilityNotification(
     GtkWidget* widget, NotificationType type) {
+  // If there's no message loop, we must be about to shutdown or we're
+  // running inside a test; either way, there's no reason to do any
+  // further processing.
+  if (!MessageLoop::current())
+    return;
+
   if (!listening_)
     return;
 
   Profile* profile = NULL;
   bool is_accessible;
+
+  // Special case: when we get ACCESSIBILITY_TEXT_CHANGED, we don't get
+  // a pointer to the widget, so we try to retrieve it from the most recent
+  // widget.
+  if (widget == NULL &&
+      type == NotificationType::ACCESSIBILITY_TEXT_CHANGED &&
+      most_recent_widget_ &&
+      GTK_IS_TEXT_VIEW(most_recent_widget_)) {
+    widget = most_recent_widget_;
+  }
+
+  if (!widget)
+    return;
+
+  most_recent_widget_ = widget;
   FindWidget(widget, &profile, &is_accessible);
   if (profile)
     most_recent_profile_ = profile;
@@ -331,7 +398,9 @@ void AccessibilityEventRouterGtk::DispatchAccessibilityNotification(
   } else if (GTK_IS_BUTTON(widget)) {
     SendButtonNotification(widget, type, profile);
   } else if (GTK_IS_ENTRY(widget)) {
-    SendTextBoxNotification(widget, type, profile);
+    SendEntryNotification(widget, type, profile);
+  } else if (GTK_IS_TEXT_VIEW(widget)) {
+    SendTextViewNotification(widget, type, profile);
   } else if (GTK_IS_NOTEBOOK(widget)) {
     SendTabNotification(widget, type, profile);
   } else if (GTK_IS_TREE_VIEW(widget)) {
@@ -355,6 +424,9 @@ void AccessibilityEventRouterGtk::DispatchAccessibilityNotification(
 
 void AccessibilityEventRouterGtk::PostDispatchAccessibilityNotification(
     GtkWidget* widget, NotificationType type) {
+  if (!MessageLoop::current())
+    return;
+
   MessageLoop::current()->PostTask(
       FROM_HERE, method_factory_.NewRunnableMethod(
           &AccessibilityEventRouterGtk::DispatchAccessibilityNotification,
@@ -410,14 +482,32 @@ void AccessibilityEventRouterGtk::SendButtonNotification(
   SendAccessibilityNotification(type, &info);
 }
 
-void AccessibilityEventRouterGtk::SendTextBoxNotification(
+void AccessibilityEventRouterGtk::SendEntryNotification(
     GtkWidget* widget, NotificationType type, Profile* profile) {
   std::string name = GetWidgetName(widget);
   std::string value = gtk_entry_get_text(GTK_ENTRY(widget));
   gint start_pos;
   gint end_pos;
   gtk_editable_get_selection_bounds(GTK_EDITABLE(widget), &start_pos, &end_pos);
-  AccessibilityTextBoxInfo info(profile, name, false);
+  AccessibilityTextBoxInfo info(profile, name, IsPassword(widget));
+  info.SetValue(value, start_pos, end_pos);
+  SendAccessibilityNotification(type, &info);
+}
+
+void AccessibilityEventRouterGtk::SendTextViewNotification(
+    GtkWidget* widget, NotificationType type, Profile* profile) {
+  std::string name = GetWidgetName(widget);
+  GtkTextBuffer* buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(widget));
+  GtkTextIter start, end;
+  gtk_text_buffer_get_bounds(buffer, &start, &end);
+  gchar* text = gtk_text_buffer_get_text(buffer, &start, &end, false);
+  std::string value = text;
+  g_free(text);
+  GtkTextIter sel_start, sel_end;
+  gtk_text_buffer_get_selection_bounds(buffer, &sel_start, &sel_end);
+  int start_pos = gtk_text_iter_get_offset(&sel_start);
+  int end_pos = gtk_text_iter_get_offset(&sel_end);
+  AccessibilityTextBoxInfo info(profile, name, IsPassword(widget));
   info.SetValue(value, start_pos, end_pos);
   SendAccessibilityNotification(type, &info);
 }

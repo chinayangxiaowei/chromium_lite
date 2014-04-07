@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -424,6 +424,31 @@ TEST(GLES2FormatTest, CompressedTexImage2D) {
 }
 
 // TODO(gman): Implement test for CompressedTexImage2DImmediate
+TEST(GLES2FormatTest, CompressedTexImage2DBucket) {
+  CompressedTexImage2DBucket cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLenum>(11),
+      static_cast<GLint>(12),
+      static_cast<GLenum>(13),
+      static_cast<GLsizei>(14),
+      static_cast<GLsizei>(15),
+      static_cast<GLint>(16),
+      static_cast<GLuint>(17));
+  EXPECT_EQ(static_cast<uint32>(CompressedTexImage2DBucket::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLenum>(11), cmd.target);
+  EXPECT_EQ(static_cast<GLint>(12), cmd.level);
+  EXPECT_EQ(static_cast<GLenum>(13), cmd.internalformat);
+  EXPECT_EQ(static_cast<GLsizei>(14), cmd.width);
+  EXPECT_EQ(static_cast<GLsizei>(15), cmd.height);
+  EXPECT_EQ(static_cast<GLint>(16), cmd.border);
+  EXPECT_EQ(static_cast<GLuint>(17), cmd.bucket_id);
+}
+
 TEST(GLES2FormatTest, CompressedTexSubImage2D) {
   CompressedTexSubImage2D cmd = { { 0 } };
   void* next_cmd = cmd.Set(
@@ -456,6 +481,33 @@ TEST(GLES2FormatTest, CompressedTexSubImage2D) {
 }
 
 // TODO(gman): Implement test for CompressedTexSubImage2DImmediate
+TEST(GLES2FormatTest, CompressedTexSubImage2DBucket) {
+  CompressedTexSubImage2DBucket cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLenum>(11),
+      static_cast<GLint>(12),
+      static_cast<GLint>(13),
+      static_cast<GLint>(14),
+      static_cast<GLsizei>(15),
+      static_cast<GLsizei>(16),
+      static_cast<GLenum>(17),
+      static_cast<GLuint>(18));
+  EXPECT_EQ(static_cast<uint32>(CompressedTexSubImage2DBucket::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLenum>(11), cmd.target);
+  EXPECT_EQ(static_cast<GLint>(12), cmd.level);
+  EXPECT_EQ(static_cast<GLint>(13), cmd.xoffset);
+  EXPECT_EQ(static_cast<GLint>(14), cmd.yoffset);
+  EXPECT_EQ(static_cast<GLsizei>(15), cmd.width);
+  EXPECT_EQ(static_cast<GLsizei>(16), cmd.height);
+  EXPECT_EQ(static_cast<GLenum>(17), cmd.format);
+  EXPECT_EQ(static_cast<GLuint>(18), cmd.bucket_id);
+}
+
 TEST(GLES2FormatTest, CopyTexImage2D) {
   CopyTexImage2D cmd = { { 0 } };
   void* next_cmd = cmd.Set(
@@ -1776,6 +1828,17 @@ TEST(GLES2FormatTest, ReadPixels) {
   EXPECT_EQ(static_cast<uint32>(20), cmd.result_shm_offset);
 }
 
+TEST(GLES2FormatTest, ReleaseShaderCompiler) {
+  ReleaseShaderCompiler cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd);
+  EXPECT_EQ(static_cast<uint32>(ReleaseShaderCompiler::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+}
+
 TEST(GLES2FormatTest, RenderbufferStorage) {
   RenderbufferStorage cmd = { { 0 } };
   void* next_cmd = cmd.Set(
@@ -1827,6 +1890,31 @@ TEST(GLES2FormatTest, Scissor) {
   EXPECT_EQ(static_cast<GLint>(12), cmd.y);
   EXPECT_EQ(static_cast<GLsizei>(13), cmd.width);
   EXPECT_EQ(static_cast<GLsizei>(14), cmd.height);
+}
+
+TEST(GLES2FormatTest, ShaderBinary) {
+  ShaderBinary cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLsizei>(11),
+      static_cast<uint32>(12),
+      static_cast<uint32>(13),
+      static_cast<GLenum>(14),
+      static_cast<uint32>(15),
+      static_cast<uint32>(16),
+      static_cast<GLsizei>(17));
+  EXPECT_EQ(static_cast<uint32>(ShaderBinary::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLsizei>(11), cmd.n);
+  EXPECT_EQ(static_cast<uint32>(12), cmd.shaders_shm_id);
+  EXPECT_EQ(static_cast<uint32>(13), cmd.shaders_shm_offset);
+  EXPECT_EQ(static_cast<GLenum>(14), cmd.binaryformat);
+  EXPECT_EQ(static_cast<uint32>(15), cmd.binary_shm_id);
+  EXPECT_EQ(static_cast<uint32>(16), cmd.binary_shm_offset);
+  EXPECT_EQ(static_cast<GLsizei>(17), cmd.length);
 }
 
 TEST(GLES2FormatTest, ShaderSource) {
@@ -3200,6 +3288,58 @@ TEST(GLES2FormatTest, Viewport) {
   EXPECT_EQ(static_cast<GLsizei>(14), cmd.height);
 }
 
+TEST(GLES2FormatTest, BlitFramebufferEXT) {
+  BlitFramebufferEXT cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLint>(11),
+      static_cast<GLint>(12),
+      static_cast<GLint>(13),
+      static_cast<GLint>(14),
+      static_cast<GLint>(15),
+      static_cast<GLint>(16),
+      static_cast<GLint>(17),
+      static_cast<GLint>(18),
+      static_cast<GLbitfield>(19),
+      static_cast<GLenum>(20));
+  EXPECT_EQ(static_cast<uint32>(BlitFramebufferEXT::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLint>(11), cmd.srcX0);
+  EXPECT_EQ(static_cast<GLint>(12), cmd.srcY0);
+  EXPECT_EQ(static_cast<GLint>(13), cmd.srcX1);
+  EXPECT_EQ(static_cast<GLint>(14), cmd.srcY1);
+  EXPECT_EQ(static_cast<GLint>(15), cmd.dstX0);
+  EXPECT_EQ(static_cast<GLint>(16), cmd.dstY0);
+  EXPECT_EQ(static_cast<GLint>(17), cmd.dstX1);
+  EXPECT_EQ(static_cast<GLint>(18), cmd.dstY1);
+  EXPECT_EQ(static_cast<GLbitfield>(19), cmd.mask);
+  EXPECT_EQ(static_cast<GLenum>(20), cmd.filter);
+}
+
+TEST(GLES2FormatTest, RenderbufferStorageMultisampleEXT) {
+  RenderbufferStorageMultisampleEXT cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLenum>(11),
+      static_cast<GLsizei>(12),
+      static_cast<GLenum>(13),
+      static_cast<GLsizei>(14),
+      static_cast<GLsizei>(15));
+  EXPECT_EQ(static_cast<uint32>(RenderbufferStorageMultisampleEXT::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLenum>(11), cmd.target);
+  EXPECT_EQ(static_cast<GLsizei>(12), cmd.samples);
+  EXPECT_EQ(static_cast<GLenum>(13), cmd.internalformat);
+  EXPECT_EQ(static_cast<GLsizei>(14), cmd.width);
+  EXPECT_EQ(static_cast<GLsizei>(15), cmd.height);
+}
+
 TEST(GLES2FormatTest, SwapBuffers) {
   SwapBuffers cmd = { { 0 } };
   void* next_cmd = cmd.Set(
@@ -3209,6 +3349,120 @@ TEST(GLES2FormatTest, SwapBuffers) {
   EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
   EXPECT_EQ(static_cast<char*>(next_cmd),
             reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+}
+
+TEST(GLES2FormatTest, GetMaxValueInBuffer) {
+  GetMaxValueInBuffer cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLuint>(11),
+      static_cast<GLsizei>(12),
+      static_cast<GLenum>(13),
+      static_cast<GLuint>(14),
+      static_cast<uint32>(15),
+      static_cast<uint32>(16));
+  EXPECT_EQ(static_cast<uint32>(GetMaxValueInBuffer::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLuint>(11), cmd.buffer_id);
+  EXPECT_EQ(static_cast<GLsizei>(12), cmd.count);
+  EXPECT_EQ(static_cast<GLenum>(13), cmd.type);
+  EXPECT_EQ(static_cast<GLuint>(14), cmd.offset);
+  EXPECT_EQ(static_cast<uint32>(15), cmd.result_shm_id);
+  EXPECT_EQ(static_cast<uint32>(16), cmd.result_shm_offset);
+}
+
+TEST(GLES2FormatTest, GenSharedIds) {
+  GenSharedIds cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLuint>(11),
+      static_cast<GLuint>(12),
+      static_cast<GLsizei>(13),
+      static_cast<uint32>(14),
+      static_cast<uint32>(15));
+  EXPECT_EQ(static_cast<uint32>(GenSharedIds::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLuint>(11), cmd.namespace_id);
+  EXPECT_EQ(static_cast<GLuint>(12), cmd.id_offset);
+  EXPECT_EQ(static_cast<GLsizei>(13), cmd.n);
+  EXPECT_EQ(static_cast<uint32>(14), cmd.ids_shm_id);
+  EXPECT_EQ(static_cast<uint32>(15), cmd.ids_shm_offset);
+}
+
+TEST(GLES2FormatTest, DeleteSharedIds) {
+  DeleteSharedIds cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLuint>(11),
+      static_cast<GLsizei>(12),
+      static_cast<uint32>(13),
+      static_cast<uint32>(14));
+  EXPECT_EQ(static_cast<uint32>(DeleteSharedIds::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLuint>(11), cmd.namespace_id);
+  EXPECT_EQ(static_cast<GLsizei>(12), cmd.n);
+  EXPECT_EQ(static_cast<uint32>(13), cmd.ids_shm_id);
+  EXPECT_EQ(static_cast<uint32>(14), cmd.ids_shm_offset);
+}
+
+TEST(GLES2FormatTest, RegisterSharedIds) {
+  RegisterSharedIds cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLuint>(11),
+      static_cast<GLsizei>(12),
+      static_cast<uint32>(13),
+      static_cast<uint32>(14));
+  EXPECT_EQ(static_cast<uint32>(RegisterSharedIds::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLuint>(11), cmd.namespace_id);
+  EXPECT_EQ(static_cast<GLsizei>(12), cmd.n);
+  EXPECT_EQ(static_cast<uint32>(13), cmd.ids_shm_id);
+  EXPECT_EQ(static_cast<uint32>(14), cmd.ids_shm_offset);
+}
+
+TEST(GLES2FormatTest, CommandBufferEnable) {
+  CommandBufferEnable cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLuint>(11),
+      static_cast<uint32>(12),
+      static_cast<uint32>(13));
+  EXPECT_EQ(static_cast<uint32>(CommandBufferEnable::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLuint>(11), cmd.bucket_id);
+  EXPECT_EQ(static_cast<uint32>(12), cmd.result_shm_id);
+  EXPECT_EQ(static_cast<uint32>(13), cmd.result_shm_offset);
+}
+
+TEST(GLES2FormatTest, CopyTextureToParentTexture) {
+  CopyTextureToParentTexture cmd = { { 0 } };
+  void* next_cmd = cmd.Set(
+      &cmd,
+      static_cast<GLuint>(11),
+      static_cast<GLuint>(12));
+  EXPECT_EQ(static_cast<uint32>(CopyTextureToParentTexture::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<char*>(next_cmd),
+            reinterpret_cast<char*>(&cmd) + sizeof(cmd));
+  EXPECT_EQ(static_cast<GLuint>(11), cmd.client_child_id);
+  EXPECT_EQ(static_cast<GLuint>(12), cmd.client_parent_id);
 }
 
 #endif  // GPU_COMMAND_BUFFER_COMMON_GLES2_CMD_FORMAT_TEST_AUTOGEN_H_

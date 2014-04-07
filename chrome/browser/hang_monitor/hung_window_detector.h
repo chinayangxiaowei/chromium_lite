@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_HANG_MONITOR_HUNG_WINDOW_DETECTOR_H__
 #define CHROME_BROWSER_HANG_MONITOR_HUNG_WINDOW_DETECTOR_H__
+#pragma once
 
 #include "base/lock.h"
 #include "chrome/common/worker_thread_ticker.h"
@@ -84,7 +85,7 @@ class HungWindowDetector : public WorkerThreadTicker::Callback {
   // Indicates if this object is currently enumerating hung windows
   bool enumerating_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(HungWindowDetector);
+  DISALLOW_COPY_AND_ASSIGN(HungWindowDetector);
 };
 
 

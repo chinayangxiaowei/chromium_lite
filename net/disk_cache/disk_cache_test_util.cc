@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 
 #include "base/logging.h"
 #include "base/file_util.h"
+#include "base/message_loop_proxy.h"
 #include "base/path_service.h"
+#include "net/base/net_errors.h"
 #include "net/disk_cache/backend_impl.h"
 #include "net/disk_cache/cache_util.h"
 #include "net/disk_cache/file.h"
@@ -63,7 +65,7 @@ bool CreateCacheTestFile(const FilePath& name) {
               base::PLATFORM_FILE_WRITE;
 
   scoped_refptr<disk_cache::File> file(new disk_cache::File(
-      base::CreatePlatformFile(name, flags, NULL)));
+      base::CreatePlatformFile(name, flags, NULL, NULL)));
   if (!file->IsValid())
     return false;
 
@@ -76,14 +78,29 @@ bool DeleteCache(const FilePath& path) {
   return true;
 }
 
+bool CopyTestCache(const std::string& name) {
+  FilePath path;
+  PathService::Get(base::DIR_SOURCE_ROOT, &path);
+  path = path.AppendASCII("net");
+  path = path.AppendASCII("data");
+  path = path.AppendASCII("cache_tests");
+  path = path.AppendASCII(name);
+
+  FilePath dest = GetCacheFilePath();
+  if (!DeleteCache(dest))
+    return false;
+  return file_util::CopyDirectory(path, dest, false);
+}
+
 bool CheckCacheIntegrity(const FilePath& path, bool new_eviction) {
-  scoped_ptr<disk_cache::BackendImpl> cache(new disk_cache::BackendImpl(path));
+  scoped_ptr<disk_cache::BackendImpl> cache(new disk_cache::BackendImpl(
+      path, base::MessageLoopProxy::CreateForCurrentThread()));
   if (!cache.get())
     return false;
   if (new_eviction)
     cache->SetNewEviction();
   cache->SetFlags(disk_cache::kNoRandom);
-  if (!cache->Init())
+  if (cache->SyncInit() != net::OK)
     return false;
   return cache->SelfCheck() >= 0;
 }
@@ -132,6 +149,9 @@ MessageLoopHelper::MessageLoopHelper()
   // Create a recurrent timer of 50 mS.
   timer_.Start(
       TimeDelta::FromMilliseconds(50), this, &MessageLoopHelper::TimerExpired);
+}
+
+MessageLoopHelper::~MessageLoopHelper() {
 }
 
 bool MessageLoopHelper::WaitUntilCacheIoFinished(int num_callbacks) {

@@ -11,19 +11,19 @@
 // Directory objects everywhere.
 #ifndef CHROME_BROWSER_SYNC_SYNCABLE_DIRECTORY_MANAGER_H_
 #define CHROME_BROWSER_SYNC_SYNCABLE_DIRECTORY_MANAGER_H_
+#pragma once
 
 #include <string>
 #include <vector>
 
-#include "base/atomicops.h"
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/lock.h"
 #include "chrome/browser/sync/syncable/dir_open_result.h"
 #include "chrome/browser/sync/syncable/path_name_cmp.h"
 #include "chrome/browser/sync/syncable/syncable.h"
-#include "chrome/browser/sync/util/event_sys.h"
-#include "chrome/browser/sync/util/sync_types.h"
+#include "chrome/browser/sync/util/cryptographer.h"
+#include "chrome/common/deprecated/event_sys.h"
 
 namespace sync_api { class BaseTransaction; }
 
@@ -31,14 +31,11 @@ namespace syncable {
 
 struct DirectoryManagerEvent {
   enum {
-    OPEN_FAILED,
-    OPENED,
     CLOSED,
     CLOSED_ALL,
     SHUTDOWN,
   } what_happened;
   std::string dirname;
-  DirOpenResult error;  // Only for OPEN_FAILED.
   typedef DirectoryManagerEvent EventType;
   static inline bool IsChannelShutdownEvent(const EventType& event) {
     return SHUTDOWN == event.what_happened;
@@ -53,7 +50,7 @@ class DirectoryManager {
 
   // root_path specifies where db is stored.
   explicit DirectoryManager(const FilePath& root_path);
-  ~DirectoryManager();
+  virtual ~DirectoryManager();
 
   static const FilePath GetSyncDataDatabaseFilename();
   const FilePath GetSyncDataDatabasePath() const;
@@ -76,6 +73,10 @@ class DirectoryManager {
 
   Channel* channel() const { return channel_; }
 
+  browser_sync::Cryptographer* cryptographer() const {
+    return cryptographer_.get();
+  }
+
  protected:
   DirOpenResult OpenImpl(const std::string& name, const FilePath& path,
                          bool* was_open);
@@ -91,8 +92,9 @@ class DirectoryManager {
 
   Channel* const channel_;
 
- private:
+  scoped_ptr<browser_sync::Cryptographer> cryptographer_;
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(DirectoryManager);
 };
 

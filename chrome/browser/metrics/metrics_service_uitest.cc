@@ -11,9 +11,12 @@
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/platform_thread.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/pref_value_store.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/json_pref_store.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/automation/tab_proxy.h"
@@ -51,7 +54,7 @@ class MetricsServiceTest : public UITest {
     FilePath local_state_path = user_data_dir()
         .Append(chrome::kLocalStateFilename);
 
-    return new PrefService(local_state_path);
+    return PrefService::CreateUserPrefService(local_state_path);
   }
 };
 
@@ -92,9 +95,10 @@ TEST_F(MetricsServiceTest, CrashRenderers) {
     scoped_refptr<TabProxy> tab(window->GetTab(1));
     ASSERT_TRUE(tab.get());
 
-// We should get a crash dump on Windows.
-// Also on Linux with Breakpad enabled.
-#if defined(OS_WIN) || defined(USE_LINUX_BREAKPAD)
+    // We can get crash dumps on Windows always, Linux when breakpad is
+    // enabled, and all platforms for official Google Chrome builds.
+#if defined(OS_WIN) || defined(USE_LINUX_BREAKPAD) || \
+    defined(GOOGLE_CHROME_BUILD)
     expected_crashes_ = 1;
 #endif
     ASSERT_TRUE(tab->NavigateToURLAsync(GURL(chrome::kAboutCrashURL)));

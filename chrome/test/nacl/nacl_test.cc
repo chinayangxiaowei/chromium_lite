@@ -21,33 +21,10 @@ const char kTestCompleteSuccess[] = "OK";
 const FilePath::CharType kBaseUrl[] =
     FILE_PATH_LITERAL("http://localhost:5103/tests/prebuilt");
 
-const FilePath::CharType kSrpcHwHtmlFileName[] =
-    FILE_PATH_LITERAL("srpc_hw.html");
-
-const FilePath::CharType kSrpcBasicHtmlFileName[] =
-    FILE_PATH_LITERAL("srpc_basic.html");
-
-const FilePath::CharType kSrpcSockAddrHtmlFileName[] =
-    FILE_PATH_LITERAL("srpc_sockaddr.html");
-
-const FilePath::CharType kSrpcShmHtmlFileName[] =
-    FILE_PATH_LITERAL("srpc_shm.html");
-
-const FilePath::CharType kSrpcPluginHtmlFileName[] =
-    FILE_PATH_LITERAL("srpc_plugin.html");
-
-const FilePath::CharType kSrpcNrdXferHtmlFileName[] =
-    FILE_PATH_LITERAL("srpc_nrd_xfer.html");
-
-const FilePath::CharType kServerHtmlFileName[] =
-    FILE_PATH_LITERAL("server_test.html");
-
-const FilePath::CharType kNpapiHwHtmlFileName[] =
-    FILE_PATH_LITERAL("npapi_hw.html");
-}  // anonymous namespace
+}  // namespace
 
 NaClTest::NaClTest()
-    : UITest(), use_x64_nexes_(false) {
+    : UITest(), use_x64_nexes_(false), multiarch_test_(false) {
   launch_arguments_.AppendSwitch(switches::kEnableNaCl);
 
   // Currently we disable some of the sandboxes.  See:
@@ -56,6 +33,7 @@ NaClTest::NaClTest()
 #if defined(OS_LINUX) && defined(USE_SECCOMP_SANDBOX)
   launch_arguments_.AppendSwitch(switches::kDisableSeccompSandbox);
 #endif
+  launch_arguments_.AppendSwitchASCII(switches::kLoggingLevel, "0");
 }
 
 NaClTest::~NaClTest() {}
@@ -63,20 +41,21 @@ NaClTest::~NaClTest() {}
 FilePath NaClTest::GetTestRootDir() {
   FilePath path;
   PathService::Get(base::DIR_SOURCE_ROOT, &path);
-  path = path.AppendASCII("native_client");
-  return path;
+  return path.AppendASCII("native_client");
 }
 
 GURL NaClTest::GetTestUrl(const FilePath& filename) {
   FilePath path(kBaseUrl);
-  if (use_x64_nexes_)
-    path = path.AppendASCII("x64");
-  else
-    path = path.AppendASCII("x86");
+  // Multiarch tests are in the directory defined by kBaseUrl.
+  if (!multiarch_test_) {
+    if (use_x64_nexes_)
+      path = path.AppendASCII("x64");
+    else
+      path = path.AppendASCII("x86");
+  }
   path = path.Append(filename);
   return GURL(path.value());
 }
-
 
 void NaClTest::WaitForFinish(const FilePath& filename,
                              int wait_time) {
@@ -97,6 +76,10 @@ void NaClTest::RunTest(const FilePath& filename, int timeout) {
   WaitForFinish(filename, timeout);
 }
 
+void NaClTest::RunMultiarchTest(const FilePath& filename, int timeout) {
+  multiarch_test_ = true;
+  RunTest(filename, timeout);
+}
 
 void NaClTest::SetUp() {
   FilePath nacl_test_dir = GetTestRootDir();
@@ -109,50 +92,10 @@ void NaClTest::SetUp() {
 
   UITest::SetUp();
 
-  StartHttpServerWithPort(nacl_test_dir, L"5103");
+  StartHttpServerWithPort(nacl_test_dir, 5103);
 }
 
 void NaClTest::TearDown() {
   StopHttpServer();
   UITest::TearDown();
-}
-
-TEST_F(NaClTest, ServerTest) {
-  FilePath test_file(kServerHtmlFileName);
-  RunTest(test_file, action_max_timeout_ms());
-}
-
-TEST_F(NaClTest, SrpcHelloWorld) {
-  FilePath test_file(kSrpcHwHtmlFileName);
-  RunTest(test_file, action_max_timeout_ms());
-}
-
-TEST_F(NaClTest, SrpcBasicTest) {
-  FilePath test_file(kSrpcBasicHtmlFileName);
-  RunTest(test_file, action_max_timeout_ms());
-}
-
-TEST_F(NaClTest, SrpcSockAddrTest) {
-  FilePath test_file(kSrpcSockAddrHtmlFileName);
-  RunTest(test_file, action_max_timeout_ms());
-}
-
-TEST_F(NaClTest, SrpcShmTest) {
-  FilePath test_file(kSrpcShmHtmlFileName);
-  RunTest(test_file, action_max_timeout_ms());
-}
-
-TEST_F(NaClTest, SrpcPluginTest) {
-  FilePath test_file(kSrpcPluginHtmlFileName);
-  RunTest(test_file, action_max_timeout_ms());
-}
-
-TEST_F(NaClTest, SrpcNrdXferTest) {
-  FilePath test_file(kSrpcNrdXferHtmlFileName);
-  RunTest(test_file, action_max_timeout_ms());
-}
-
-TEST_F(NaClTest, NpapiHwTest) {
-  FilePath test_file(kNpapiHwHtmlFileName);
-  RunTest(test_file, action_max_timeout_ms());
 }

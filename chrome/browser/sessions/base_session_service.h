@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SESSIONS_BASE_SESSION_SERVICE_H_
 #define CHROME_BROWSER_SESSIONS_BASE_SESSION_SERVICE_H_
+#pragma once
 
 #include "base/basictypes.h"
 #include "base/callback.h"
@@ -16,7 +17,6 @@ class NavigationEntry;
 class Profile;
 class SessionBackend;
 class SessionCommand;
-class SessionService;
 class TabNavigation;
 
 namespace base {
@@ -120,7 +120,7 @@ class BaseSessionService : public CancelableRequestProvider,
       const NavigationEntry& entry);
 
   // Creates a SessionCommand that represents marking a tab as an application.
-  SessionCommand* CreateSetTabAppExtensionIDCommand(
+  SessionCommand* CreateSetTabExtensionAppIDCommand(
       SessionID::id_type command_id,
       SessionID::id_type tab_id,
       const std::string& extension_id);
@@ -133,12 +133,12 @@ class BaseSessionService : public CancelableRequestProvider,
                                          SessionID::id_type* tab_id);
 
   // Extracts a SessionCommand as previously created by
-  // CreateSetTabAppExtensionIDCommand into the tab id and application
+  // CreateSetTabExtensionAppIDCommand into the tab id and application
   // extension id.
-  bool RestoreSetTabAppExtensionIDCommand(
+  bool RestoreSetTabExtensionAppIDCommand(
       const SessionCommand& command,
       SessionID::id_type* tab_id,
-      std::string* app_extension_id);
+      std::string* extension_app_id);
 
   // Returns true if the NavigationEntry should be written to disk.
   bool ShouldTrackEntry(const NavigationEntry& entry);

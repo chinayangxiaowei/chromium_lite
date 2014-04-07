@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_HISTORY_API_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_HISTORY_API_H_
+#pragma once
 
 #include <map>
 #include <string>
@@ -70,6 +71,9 @@ class HistoryFunction : public AsyncExtensionFunction {
 // chrome services and the extension thread.
 class HistoryFunctionWithCallback : public HistoryFunction {
  public:
+  HistoryFunctionWithCallback();
+  ~HistoryFunctionWithCallback();
+
   // Return true if the async call was completed, false otherwise.
   virtual bool RunAsyncImpl() = 0;
 
@@ -85,11 +89,9 @@ class HistoryFunctionWithCallback : public HistoryFunction {
   CancelableRequestConsumer cancelable_consumer_;
 
  private:
-  // The actual call to SendReposne.  This is required since the semantics for
+  // The actual call to SendResponse.  This is required since the semantics for
   // CancelableRequestConsumerT require it to be accessed after the call.
   void SendResponseToCallback();
-
-  friend class NewRunnableMethod;
 };
 
 class GetVisitsHistoryFunction : public HistoryFunctionWithCallback {

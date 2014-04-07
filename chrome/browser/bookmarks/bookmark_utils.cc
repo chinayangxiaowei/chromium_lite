@@ -4,15 +4,15 @@
 
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 
-#include "app/clipboard/clipboard.h"
 #include "app/drag_drop_types.h"
 #include "app/l10n_util.h"
 #include "app/tree_node_iterator.h"
 #include "base/basictypes.h"
 #include "base/file_path.h"
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
 #include "base/string16.h"
 #include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_drag_data.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #if defined(OS_MACOSX)
@@ -23,7 +23,8 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/history/query_parser.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/platform_util.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/page_navigator.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
@@ -41,7 +42,6 @@
 #include "views/widget/root_view.h"
 #include "views/widget/widget.h"
 #elif defined(TOOLKIT_GTK)
-#include "app/gtk_util.h"
 #include "chrome/browser/gtk/custom_drag.h"
 #endif
 
@@ -164,37 +164,11 @@ bool ShouldOpenAll(gfx::NativeWindow parent,
   if (descendant_count < bookmark_utils::num_urls_before_prompting)
     return true;
 
-  // Bug 40011: we should refactor this into a cross-platform "prompt before
-  // continuing" function.
-#if defined(OS_WIN)
-  std::wstring message =
-      l10n_util::GetStringF(IDS_BOOKMARK_BAR_SHOULD_OPEN_ALL,
-                            IntToWString(descendant_count));
-  return MessageBox(parent, message.c_str(),
-                    l10n_util::GetString(IDS_PRODUCT_NAME).c_str(),
-                    MB_YESNO | MB_ICONWARNING | MB_TOPMOST) == IDYES;
-#elif defined(TOOLKIT_GTK)
-  std::string message = l10n_util::GetStringFUTF8(
+  string16 message = l10n_util::GetStringFUTF16(
       IDS_BOOKMARK_BAR_SHOULD_OPEN_ALL,
-      IntToString16(descendant_count));
-  GtkWidget* dialog = gtk_message_dialog_new(parent,
-      static_cast<GtkDialogFlags>(
-          GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
-      GTK_MESSAGE_QUESTION,
-      GTK_BUTTONS_YES_NO,
-      "%s", message.c_str());
-  gtk_util::ApplyMessageDialogQuirks(dialog);
-  gtk_window_set_title(GTK_WINDOW(dialog),
-                       l10n_util::GetStringUTF8(IDS_PRODUCT_NAME).c_str());
-  gint result = gtk_dialog_run(GTK_DIALOG(dialog));
-  gtk_widget_destroy(dialog);
-  return (result == GTK_RESPONSE_YES);
-#else
-  // TODO(port): Display a dialog prompt.
-  // http://crbug.com/34481
-  NOTIMPLEMENTED();
-  return true;
-#endif
+      base::IntToString16(descendant_count));
+  string16 title = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
+  return platform_util::SimpleYesNoBox(parent, title, message);
 }
 
 // Comparison function that compares based on date modified of the two nodes.
@@ -204,10 +178,10 @@ bool MoreRecentlyModified(const BookmarkNode* n1, const BookmarkNode* n2) {
 
 // Returns true if |text| contains each string in |words|. This is used when
 // searching for bookmarks.
-bool DoesBookmarkTextContainWords(const std::wstring& text,
-                                  const std::vector<std::wstring>& words) {
+bool DoesBookmarkTextContainWords(const string16& text,
+                                  const std::vector<string16>& words) {
   for (size_t i = 0; i < words.size(); ++i) {
-    if (text.find(words[i]) == std::wstring::npos)
+    if (text.find(words[i]) == string16::npos)
       return false;
   }
   return true;
@@ -216,15 +190,16 @@ bool DoesBookmarkTextContainWords(const std::wstring& text,
 // Returns true if |node|s title or url contains the strings in |words|.
 // |languages| argument is user's accept-language setting to decode IDN.
 bool DoesBookmarkContainWords(const BookmarkNode* node,
-                              const std::vector<std::wstring>& words,
-                              const std::wstring& languages) {
+                              const std::vector<string16>& words,
+                              const std::string& languages) {
   return
       DoesBookmarkTextContainWords(
           l10n_util::ToLower(node->GetTitle()), words) ||
       DoesBookmarkTextContainWords(
-          l10n_util::ToLower(UTF8ToWide(node->GetURL().spec())), words) ||
-      DoesBookmarkTextContainWords(l10n_util::ToLower(net::FormatUrl(
-          node->GetURL(), languages, false, true, NULL, NULL, NULL)), words);
+          l10n_util::ToLower(UTF8ToUTF16(node->GetURL().spec())), words) ||
+      DoesBookmarkTextContainWords(l10n_util::ToLower(
+          net::FormatUrl(node->GetURL(), languages, net::kFormatUrlOmitNothing,
+                         UnescapeRule::NORMAL, NULL, NULL, NULL)), words);
 }
 
 }  // namespace
@@ -356,7 +331,8 @@ void DragBookmarks(Profile* profile,
   BookmarkDragData drag_data(nodes);
   drag_data.Write(profile, &data);
 
-  views::RootView* root_view = views::Widget::GetWidgetFromNativeView(view)->GetRootView();
+  views::RootView* root_view =
+      views::Widget::GetWidgetFromNativeView(view)->GetRootView();
 
   // Allow nested message loop so we get DnD events as we drag this around.
   bool was_nested = MessageLoop::current()->IsNested();
@@ -525,11 +501,11 @@ bool MoreRecentlyAdded(const BookmarkNode* n1, const BookmarkNode* n2) {
 }
 
 void GetBookmarksContainingText(BookmarkModel* model,
-                                const std::wstring& text,
+                                const string16& text,
                                 size_t max_count,
-                                const std::wstring& languages,
+                                const std::string& languages,
                                 std::vector<const BookmarkNode*>* nodes) {
-  std::vector<std::wstring> words;
+  std::vector<string16> words;
   QueryParser parser;
   parser.ExtractQueryWords(l10n_util::ToLower(text), &words);
   if (words.empty())
@@ -547,9 +523,9 @@ void GetBookmarksContainingText(BookmarkModel* model,
 }
 
 bool DoesBookmarkContainText(const BookmarkNode* node,
-                             const std::wstring& text,
-                             const std::wstring& languages) {
-  std::vector<std::wstring> words;
+                             const string16& text,
+                             const std::string& languages) {
+  std::vector<string16> words;
   QueryParser parser;
   parser.ExtractQueryWords(l10n_util::ToLower(text), &words);
   if (words.empty())
@@ -560,8 +536,7 @@ bool DoesBookmarkContainText(const BookmarkNode* node,
 
 static const BookmarkNode* CreateNewNode(BookmarkModel* model,
     const BookmarkNode* parent, const BookmarkEditor::EditDetails& details,
-    const std::wstring& new_title, const GURL& new_url,
-    BookmarkEditor::Handler* handler) {
+    const string16& new_title, const GURL& new_url) {
   const BookmarkNode* node;
   if (details.type == BookmarkEditor::EditDetails::NEW_URL) {
     node = model->AddURL(parent, parent->GetChildCount(), new_title, new_url);
@@ -577,18 +552,15 @@ static const BookmarkNode* CreateNewNode(BookmarkModel* model,
     return NULL;
   }
 
-  if (handler)
-    handler->NodeCreated(node);
   return node;
 }
 
 const BookmarkNode* ApplyEditsWithNoGroupChange(BookmarkModel* model,
     const BookmarkNode* parent, const BookmarkEditor::EditDetails& details,
-    const std::wstring& new_title, const GURL& new_url,
-    BookmarkEditor::Handler* handler) {
+    const string16& new_title, const GURL& new_url) {
   if (details.type == BookmarkEditor::EditDetails::NEW_URL ||
       details.type == BookmarkEditor::EditDetails::NEW_FOLDER) {
-    return CreateNewNode(model, parent, details, new_title, new_url, handler);
+    return CreateNewNode(model, parent, details, new_title, new_url);
   }
 
   const BookmarkNode* node = details.existing_node;
@@ -603,12 +575,10 @@ const BookmarkNode* ApplyEditsWithNoGroupChange(BookmarkModel* model,
 
 const BookmarkNode* ApplyEditsWithPossibleGroupChange(BookmarkModel* model,
     const BookmarkNode* new_parent, const BookmarkEditor::EditDetails& details,
-    const std::wstring& new_title, const GURL& new_url,
-    BookmarkEditor::Handler* handler) {
+    const string16& new_title, const GURL& new_url) {
   if (details.type == BookmarkEditor::EditDetails::NEW_URL ||
       details.type == BookmarkEditor::EditDetails::NEW_FOLDER) {
-    return CreateNewNode(model, new_parent, details, new_title, new_url,
-                         handler);
+    return CreateNewNode(model, new_parent, details, new_title, new_url);
   }
 
   const BookmarkNode* node = details.existing_node;
@@ -640,34 +610,21 @@ void ToggleWhenVisible(Profile* profile) {
       NotificationService::NoDetails());
 }
 
-void RegisterPrefs(PrefService* prefs) {
-  prefs->RegisterDictionaryPref(prefs::kBookmarkManagerPlacement);
-  prefs->RegisterIntegerPref(prefs::kBookmarkManagerSplitLocation, -1);
-}
-
 void RegisterUserPrefs(PrefService* prefs) {
-  // Formerly in BookmarkBarView
   prefs->RegisterBooleanPref(prefs::kShowBookmarkBar, false);
-
-  // Formerly in BookmarkTableView
-  prefs->RegisterIntegerPref(prefs::kBookmarkTableNameWidth1, -1);
-  prefs->RegisterIntegerPref(prefs::kBookmarkTableURLWidth1, -1);
-  prefs->RegisterIntegerPref(prefs::kBookmarkTableNameWidth2, -1);
-  prefs->RegisterIntegerPref(prefs::kBookmarkTableURLWidth2, -1);
-  prefs->RegisterIntegerPref(prefs::kBookmarkTablePathWidth, -1);
 }
 
 void GetURLAndTitleToBookmark(TabContents* tab_contents,
                               GURL* url,
-                              std::wstring* title) {
+                              string16* title) {
   *url = tab_contents->GetURL();
-  *title = UTF16ToWideHack(tab_contents->GetTitle());
+  *title = tab_contents->GetTitle();
 }
 
 void GetURLsForOpenTabs(Browser* browser,
-    std::vector<std::pair<GURL, std::wstring> >* urls) {
+    std::vector<std::pair<GURL, string16> >* urls) {
   for (int i = 0; i < browser->tab_count(); ++i) {
-    std::pair<GURL, std::wstring> entry;
+    std::pair<GURL, string16> entry;
     GetURLAndTitleToBookmark(browser->GetTabContentsAt(i), &(entry.first),
                              &(entry.second));
     urls->push_back(entry);

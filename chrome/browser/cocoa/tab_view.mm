@@ -5,11 +5,14 @@
 #import "chrome/browser/cocoa/tab_view.h"
 
 #include "base/logging.h"
+#import "base/mac_util.h"
 #include "base/nsimage_cache_mac.h"
-#include "chrome/browser/browser_theme_provider.h"
+#include "base/scoped_cftyperef.h"
 #import "chrome/browser/cocoa/tab_controller.h"
 #import "chrome/browser/cocoa/tab_window_controller.h"
 #import "chrome/browser/cocoa/themed_window.h"
+#import "chrome/browser/cocoa/view_id_util.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "grit/theme_resources.h"
 
 namespace {
@@ -46,6 +49,9 @@ const CGFloat kRapidCloseDist = 2.5;
 - (void)resetLastGlowUpdateTime;
 - (NSTimeInterval)timeElapsedSinceLastGlowUpdate;
 - (void)adjustGlowValue;
+// TODO(davidben): When we stop supporting 10.5, this can be removed.
+- (int)getWorkspaceID:(NSWindow*)window useCache:(BOOL)useCache;
+- (NSBezierPath*)bezierPathForRect:(NSRect)rect;
 
 @end  // TabView(Private)
 
@@ -75,9 +81,18 @@ const CGFloat kRapidCloseDist = 2.5;
   [super dealloc];
 }
 
-// Use the TabController to provide the menu rather than obtaining it from the
-// nib file.
+// Called to obtain the context menu for when the user hits the right mouse
+// button (or control-clicks). (Note that -rightMouseDown: is *not* called for
+// control-click.)
 - (NSMenu*)menu {
+  if ([self isClosing])
+    return nil;
+
+  // Sheets, being window-modal, should block contextual menus. For some reason
+  // they do not. Disallow them ourselves.
+  if ([[self window] attachedSheet])
+    return nil;
+
   return [controller_ menu];
 }
 
@@ -152,6 +167,20 @@ const CGFloat kRapidCloseDist = 2.5;
   for (NSWindow* window in [NSApp orderedWindows]) {
     if (window == dragWindow) continue;
     if (![window isVisible]) continue;
+    // Skip windows on the wrong space.
+    if ([window respondsToSelector:@selector(isOnActiveSpace)]) {
+      if (![window performSelector:@selector(isOnActiveSpace)])
+        continue;
+    } else {
+      // TODO(davidben): When we stop supporting 10.5, this can be
+      // removed.
+      //
+      // We don't cache the workspace of |dragWindow| because it may
+      // move around spaces.
+      if ([self getWorkspaceID:dragWindow useCache:NO] !=
+          [self getWorkspaceID:window useCache:YES])
+        continue;
+    }
     NSWindowController* controller = [window windowController];
     if ([controller isKindOfClass:[TabWindowController class]]) {
       TabWindowController* realController =
@@ -171,6 +200,7 @@ const CGFloat kRapidCloseDist = 2.5;
   sourceController_ = nil;
   sourceWindow_ = nil;
   targetController_ = nil;
+  workspaceIDCache_.clear();
 }
 
 // Sets whether the window background should be visible or invisible when
@@ -275,8 +305,6 @@ const CGFloat kRapidCloseDist = 2.5;
         [NSApp nextEventMatchingMask:NSLeftMouseUpMask | NSLeftMouseDraggedMask
                            untilDate:[NSDate distantFuture]
                               inMode:NSDefaultRunLoopMode dequeue:YES];
-    NSPoint thisPoint = [NSEvent mouseLocation];
-
     NSEventType type = [theEvent type];
     if (type == NSLeftMouseDragged) {
       [self mouseDragged:theEvent];
@@ -330,7 +358,6 @@ const CGFloat kRapidCloseDist = 2.5;
   tabWasDragged_ = YES;
 
   if (draggingWithinTabStrip_) {
-    NSRect frame = [self frame];
     NSPoint thisPoint = [NSEvent mouseLocation];
     CGFloat stretchiness = thisPoint.y - dragOrigin_.y;
     stretchiness = copysign(sqrtf(fabs(stretchiness))/sqrtf(kTearDistance),
@@ -356,9 +383,6 @@ const CGFloat kRapidCloseDist = 2.5;
       return;
     }
   }
-
-  NSPoint lastPoint =
-    [[theEvent window] convertBaseToScreen:[theEvent locationInWindow]];
 
   // Do not start dragging until the user has "torn" the tab off by
   // moving more than 3 pixels.
@@ -493,7 +517,6 @@ const CGFloat kRapidCloseDist = 2.5;
 
     // Compute where placeholder should go and insert it into the
     // destination tab strip.
-    NSRect dropTabFrame = [[targetController_ tabStripView] frame];
     TabView* draggedTabView = (TabView*)[draggedController_ selectedTabView];
     NSRect tabFrame = [draggedTabView frame];
     tabFrame.origin = [dragWindow_ convertBaseToScreen:tabFrame.origin];
@@ -501,9 +524,6 @@ const CGFloat kRapidCloseDist = 2.5;
                         convertScreenToBase:tabFrame.origin];
     tabFrame = [[targetController_ tabStripView]
                 convertRect:tabFrame fromView:nil];
-    NSPoint point =
-      [sourceWindow_ convertBaseToScreen:
-       [draggedTabView convertPoint:NSZeroPoint toView:nil]];
     [targetController_ insertPlaceholderForTab:self
                                          frame:tabFrame
                                  yStretchiness:0];
@@ -598,62 +618,18 @@ const CGFloat kRapidCloseDist = 2.5;
   }
 }
 
-- (void)drawRect:(NSRect)rect {
-  // If this tab is phantom, do not draw the tab background itself. The only UI
-  // element that will represent this tab is the favicon.
-  if ([controller_ phantom])
-    return;
-
+- (void)drawRect:(NSRect)dirtyRect {
   NSGraphicsContext* context = [NSGraphicsContext currentContext];
   [context saveGraphicsState];
-  rect = [self bounds];
-  BOOL active = [[self window] isKeyWindow] || [[self window] isMainWindow];
+
+  BrowserThemeProvider* themeProvider =
+      static_cast<BrowserThemeProvider*>([[self window] themeProvider]);
+  [context setPatternPhase:[[self window] themePatternPhase]];
+
+  NSRect rect = [self bounds];
+  NSBezierPath* path = [self bezierPathForRect:rect];
+
   BOOL selected = [self state];
-
-  // Inset by 0.5 in order to draw on pixels rather than on borders (which would
-  // cause blurry pixels). Decrease height by 1 in order to move away from the
-  // edge for the dark shadow.
-  rect = NSInsetRect(rect, -0.5, -0.5);
-  rect.origin.y -= 1;
-
-  NSPoint bottomLeft = NSMakePoint(NSMinX(rect), NSMinY(rect) + 2);
-  NSPoint bottomRight = NSMakePoint(NSMaxX(rect), NSMinY(rect) + 2);
-  NSPoint topRight =
-      NSMakePoint(NSMaxX(rect) - kInsetMultiplier * NSHeight(rect),
-                  NSMaxY(rect));
-  NSPoint topLeft =
-      NSMakePoint(NSMinX(rect)  + kInsetMultiplier * NSHeight(rect),
-                  NSMaxY(rect));
-
-  CGFloat baseControlPointOutset = NSHeight(rect) * kControlPoint1Multiplier;
-  CGFloat bottomControlPointInset = NSHeight(rect) * kControlPoint2Multiplier;
-
-  // Outset many of these values by 1 to cause the fill to bleed outside the
-  // clip area.
-  NSBezierPath* path = [NSBezierPath bezierPath];
-  [path moveToPoint:NSMakePoint(bottomLeft.x - 1, bottomLeft.y - 2)];
-  [path lineToPoint:NSMakePoint(bottomLeft.x - 1, bottomLeft.y)];
-  [path lineToPoint:bottomLeft];
-  [path curveToPoint:topLeft
-       controlPoint1:NSMakePoint(bottomLeft.x + baseControlPointOutset,
-                                 bottomLeft.y)
-       controlPoint2:NSMakePoint(topLeft.x - bottomControlPointInset,
-                                 topLeft.y)];
-  [path lineToPoint:topRight];
-  [path curveToPoint:bottomRight
-       controlPoint1:NSMakePoint(topRight.x + bottomControlPointInset,
-                                 topRight.y)
-       controlPoint2:NSMakePoint(bottomRight.x - baseControlPointOutset,
-                                 bottomRight.y)];
-  [path lineToPoint:NSMakePoint(bottomRight.x + 1, bottomRight.y)];
-  [path lineToPoint:NSMakePoint(bottomRight.x + 1, bottomRight.y - 2)];
-
-  ThemeProvider* themeProvider = [[self window] themeProvider];
-
-  // Set the pattern phase.
-  NSPoint phase = [[self window] themePatternPhase];
-  [context setPatternPhase:phase];
-
   // Don't draw the window/tab bar background when selected, since the tab
   // background overlay drawn over it (see below) will be fully opaque.
   BOOL hasBackgroundImage = NO;
@@ -666,10 +642,10 @@ const CGFloat kRapidCloseDist = 2.5;
         (themeProvider->HasCustomImage(IDR_THEME_TAB_BACKGROUND) ||
          themeProvider->HasCustomImage(IDR_THEME_FRAME));
 
-    NSColor* backgroundImageColor =
-        hasBackgroundImage ?
-          themeProvider->GetNSImageColorNamed(IDR_THEME_TAB_BACKGROUND, true) :
-          nil;
+    NSColor* backgroundImageColor = hasBackgroundImage ?
+        themeProvider->GetNSImageColorNamed(IDR_THEME_TAB_BACKGROUND, true) :
+        nil;
+
     if (backgroundImageColor) {
       [backgroundImageColor set];
       [path fill];
@@ -694,8 +670,7 @@ const CGFloat kRapidCloseDist = 2.5;
   if (selected || hoverAlpha > 0 || alertAlpha > 0) {
     // Draw the selected background / glow overlay.
     [context saveGraphicsState];
-    CGContextRef cgContext =
-        (CGContextRef)([context graphicsPort]);
+    CGContextRef cgContext = static_cast<CGContextRef>([context graphicsPort]);
     CGContextBeginTransparencyLayer(cgContext, 0);
     if (!selected) {
       // The alert glow overlay is like the selected state but at most at most
@@ -721,9 +696,9 @@ const CGFloat kRapidCloseDist = 2.5;
         NSPoint point = hoverPoint_;
         point.y = NSHeight(rect);
         [glow drawFromCenter:point
-                      radius:0
+                      radius:0.0
                     toCenter:point
-                      radius:NSWidth(rect)/3
+                      radius:NSWidth(rect) / 3.0
                      options:NSGradientDrawsBeforeStartingLocation];
 
         [glow drawInBezierPath:path relativeCenterPosition:hoverPoint_];
@@ -734,46 +709,55 @@ const CGFloat kRapidCloseDist = 2.5;
     [context restoreGraphicsState];
   }
 
-  // Draw the top inner highlight.
-  NSAffineTransform* highlightTransform = [NSAffineTransform transform];
-  [highlightTransform translateXBy:1 yBy:-1];
-  scoped_nsobject<NSBezierPath> highlightPath([path copy]);
-  [highlightPath transformUsingAffineTransform:highlightTransform];
-  [[NSColor colorWithCalibratedWhite:1.0 alpha:0.2 + 0.3 * hoverAlpha]
-      setStroke];
-  [highlightPath stroke];
+  BOOL active = [[self window] isKeyWindow] || [[self window] isMainWindow];
+  CGFloat borderAlpha = selected ? (active ? 0.3 : 0.2) : 0.2;
+  NSColor* borderColor = [NSColor colorWithDeviceWhite:0.0 alpha:borderAlpha];
+  NSColor* highlightColor = themeProvider ? themeProvider->GetNSColor(
+      themeProvider->UsingDefaultTheme() ?
+          BrowserThemeProvider::COLOR_TOOLBAR_BEZEL :
+          BrowserThemeProvider::COLOR_TOOLBAR, true) : nil;
+
+  // Draw the top inner highlight within the currently selected tab if using
+  // the default theme.
+  if (selected && themeProvider && themeProvider->UsingDefaultTheme()) {
+    NSAffineTransform* highlightTransform = [NSAffineTransform transform];
+    [highlightTransform translateXBy:1.0 yBy:-1.0];
+    scoped_nsobject<NSBezierPath> highlightPath([path copy]);
+    [highlightPath transformUsingAffineTransform:highlightTransform];
+    [highlightColor setStroke];
+    [highlightPath setLineWidth:1.0];
+    [highlightPath stroke];
+    highlightTransform = [NSAffineTransform transform];
+    [highlightTransform translateXBy:-2.0 yBy:0.0];
+    [highlightPath transformUsingAffineTransform:highlightTransform];
+    [highlightPath stroke];
+  }
 
   [context restoreGraphicsState];
 
   // Draw the top stroke.
   [context saveGraphicsState];
-  if (selected) {
-    [[NSColor colorWithDeviceWhite:0.0 alpha:active ? 0.3 : 0.15] set];
-  } else {
-    [[NSColor colorWithDeviceWhite:0.0 alpha:active ? 0.2 : 0.15] set];
-    [[NSBezierPath bezierPathWithRect:NSOffsetRect(rect, 0, 2.5)] addClip];
-  }
+  [borderColor set];
   [path setLineWidth:1.0];
   [path stroke];
   [context restoreGraphicsState];
 
-  // Draw the bottom border.
+  // Mimic the tab strip's bottom border, which consists of a dark border
+  // and light highlight.
   if (!selected) {
     [path addClip];
-    NSRect borderRect, contentRect;
-    NSDivideRect(rect, &borderRect, &contentRect, 2.5, NSMinYEdge);
-    [[NSColor colorWithDeviceWhite:0.0 alpha:active ? 0.3 : 0.15] set];
+    NSRect borderRect = rect;
+    borderRect.origin.y = 1;
+    borderRect.size.height = 1;
+    [borderColor set];
+    NSRectFillUsingOperation(borderRect, NSCompositeSourceOver);
+
+    borderRect.origin.y = 0;
+    [highlightColor set];
     NSRectFillUsingOperation(borderRect, NSCompositeSourceOver);
   }
-  [context restoreGraphicsState];
-}
 
-// Called when the user hits the right mouse button (or control-clicks) to
-// show a context menu.
-- (void)rightMouseDown:(NSEvent*)theEvent {
-  if ([self isClosing])
-    return;
-  [NSMenu popUpContextMenu:[self menu] withEvent:theEvent forView:self];
+  [context restoreGraphicsState];
 }
 
 - (void)viewDidMoveToWindow {
@@ -864,6 +848,10 @@ const CGFloat kRapidCloseDist = 2.5;
   }
 
   return [super accessibilityAttributeValue:attribute];
+}
+
+- (ViewID)viewID {
+  return VIEW_ID_TAB;
 }
 
 @end  // @implementation TabView
@@ -963,6 +951,96 @@ const CGFloat kRapidCloseDist = 2.5;
 
   [self resetLastGlowUpdateTime];
   [self setNeedsDisplay:YES];
+}
+
+// Returns the workspace id of |window|. If |useCache|, then lookup
+// and remember the value in |workspaceIDCache_| until the end of the
+// current drag.
+- (int)getWorkspaceID:(NSWindow*)window useCache:(BOOL)useCache {
+  CGWindowID windowID = [window windowNumber];
+  if (useCache) {
+    std::map<CGWindowID, int>::iterator iter =
+        workspaceIDCache_.find(windowID);
+    if (iter != workspaceIDCache_.end())
+      return iter->second;
+  }
+
+  int workspace = -1;
+  // It's possible to query in bulk, but probably not necessary.
+  scoped_cftyperef<CFArrayRef> windowIDs(CFArrayCreate(
+      NULL, reinterpret_cast<const void **>(&windowID), 1, NULL));
+  scoped_cftyperef<CFArrayRef> descriptions(
+      CGWindowListCreateDescriptionFromArray(windowIDs));
+  DCHECK(CFArrayGetCount(descriptions.get()) <= 1);
+  if (CFArrayGetCount(descriptions.get()) > 0) {
+    CFDictionaryRef dict = static_cast<CFDictionaryRef>(
+        CFArrayGetValueAtIndex(descriptions.get(), 0));
+    DCHECK(CFGetTypeID(dict) == CFDictionaryGetTypeID());
+
+    // Sanity check the ID.
+    CFNumberRef otherIDRef = (CFNumberRef)mac_util::GetValueFromDictionary(
+        dict, kCGWindowNumber, CFNumberGetTypeID());
+    CGWindowID otherID;
+    if (otherIDRef &&
+        CFNumberGetValue(otherIDRef, kCGWindowIDCFNumberType, &otherID) &&
+        otherID == windowID) {
+      // And then get the workspace.
+      CFNumberRef workspaceRef = (CFNumberRef)mac_util::GetValueFromDictionary(
+          dict, kCGWindowWorkspace, CFNumberGetTypeID());
+      if (!workspaceRef ||
+          !CFNumberGetValue(workspaceRef, kCFNumberIntType, &workspace)) {
+        workspace = -1;
+      }
+    } else {
+      NOTREACHED();
+    }
+  }
+  if (useCache) {
+    workspaceIDCache_[windowID] = workspace;
+  }
+  return workspace;
+}
+
+// Returns the bezier path used to draw the tab given the bounds to draw it in.
+- (NSBezierPath*)bezierPathForRect:(NSRect)rect {
+  // Outset by 0.5 in order to draw on pixels rather than on borders (which
+  // would cause blurry pixels). Subtract 1px of height to compensate, otherwise
+  // clipping will occur.
+  rect = NSInsetRect(rect, -0.5, -0.5);
+  rect.size.height -= 1.0;
+
+  NSPoint bottomLeft = NSMakePoint(NSMinX(rect), NSMinY(rect) + 2);
+  NSPoint bottomRight = NSMakePoint(NSMaxX(rect), NSMinY(rect) + 2);
+  NSPoint topRight =
+      NSMakePoint(NSMaxX(rect) - kInsetMultiplier * NSHeight(rect),
+                  NSMaxY(rect));
+  NSPoint topLeft =
+      NSMakePoint(NSMinX(rect)  + kInsetMultiplier * NSHeight(rect),
+                  NSMaxY(rect));
+
+  CGFloat baseControlPointOutset = NSHeight(rect) * kControlPoint1Multiplier;
+  CGFloat bottomControlPointInset = NSHeight(rect) * kControlPoint2Multiplier;
+
+  // Outset many of these values by 1 to cause the fill to bleed outside the
+  // clip area.
+  NSBezierPath* path = [NSBezierPath bezierPath];
+  [path moveToPoint:NSMakePoint(bottomLeft.x - 1, bottomLeft.y - 2)];
+  [path lineToPoint:NSMakePoint(bottomLeft.x - 1, bottomLeft.y)];
+  [path lineToPoint:bottomLeft];
+  [path curveToPoint:topLeft
+       controlPoint1:NSMakePoint(bottomLeft.x + baseControlPointOutset,
+                                 bottomLeft.y)
+       controlPoint2:NSMakePoint(topLeft.x - bottomControlPointInset,
+                                 topLeft.y)];
+  [path lineToPoint:topRight];
+  [path curveToPoint:bottomRight
+       controlPoint1:NSMakePoint(topRight.x + bottomControlPointInset,
+                                 topRight.y)
+       controlPoint2:NSMakePoint(bottomRight.x - baseControlPointOutset,
+                                 bottomRight.y)];
+  [path lineToPoint:NSMakePoint(bottomRight.x + 1, bottomRight.y)];
+  [path lineToPoint:NSMakePoint(bottomRight.x + 1, bottomRight.y - 2)];
+  return path;
 }
 
 @end  // @implementation TabView(Private)

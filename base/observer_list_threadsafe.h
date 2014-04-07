@@ -1,12 +1,13 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_OBSERVER_LIST_THREADSAFE_H_
 #define BASE_OBSERVER_LIST_THREADSAFE_H_
+#pragma once
 
-#include <vector>
 #include <algorithm>
+#include <map>
 
 #include "base/basictypes.h"
 #include "base/callback.h"
@@ -28,7 +29,7 @@
 //    * Observers can register for notifications from any thread.
 //      Callbacks to the observer will occur on the same thread where
 //      the observer initially called AddObserver() from.
-//    * Any thread may trigger a notification via NOTIFY_OBSERVERS.
+//    * Any thread may trigger a notification via Notify().
 //    * Observers can remove themselves from the observer list inside
 //      of a callback.
 //    * If one thread is notifying observers concurrently with an observer
@@ -52,7 +53,12 @@ template <class ObserverType>
 class ObserverListThreadSafe
     : public base::RefCountedThreadSafe<ObserverListThreadSafe<ObserverType> > {
  public:
-  ObserverListThreadSafe() {}
+  typedef typename ObserverList<ObserverType>::NotificationType
+      NotificationType;
+
+  ObserverListThreadSafe()
+      : type_(ObserverListBase<ObserverType>::NOTIFY_ALL) {}
+  explicit ObserverListThreadSafe(NotificationType type) : type_(type) {}
 
   ~ObserverListThreadSafe() {
     typename ObserversListMap::const_iterator it;
@@ -73,7 +79,7 @@ class ObserverListThreadSafe
     {
       AutoLock lock(list_lock_);
       if (observer_lists_.find(loop) == observer_lists_.end())
-        observer_lists_[loop] = new ObserverList<ObserverType>();
+        observer_lists_[loop] = new ObserverList<ObserverType>(type_);
       list = observer_lists_[loop];
     }
     list->AddObserver(obs);
@@ -176,15 +182,16 @@ class ObserverListThreadSafe
 
     // If there are no more observers on the list, we can now delete it.
     if (list->size() == 0) {
-#ifndef NDEBUG
       {
         AutoLock lock(list_lock_);
-        // Verify this list is no longer registered.
+        // Remove |list| if it's not already removed.
+        // This can happen if multiple observers got removed in a notification.
+        // See http://crbug.com/55725.
         typename ObserversListMap::iterator it =
             observer_lists_.find(MessageLoop::current());
-        DCHECK(it == observer_lists_.end() || it->second != list);
+        if (it != observer_lists_.end() && it->second == list)
+          observer_lists_.erase(it);
       }
-#endif
       delete list;
     }
   }
@@ -194,8 +201,9 @@ class ObserverListThreadSafe
   // These are marked mutable to facilitate having NotifyAll be const.
   Lock list_lock_;  // Protects the observer_lists_.
   ObserversListMap observer_lists_;
+  const NotificationType type_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(ObserverListThreadSafe);
+  DISALLOW_COPY_AND_ASSIGN(ObserverListThreadSafe);
 };
 
 #endif  // BASE_OBSERVER_LIST_THREADSAFE_H_

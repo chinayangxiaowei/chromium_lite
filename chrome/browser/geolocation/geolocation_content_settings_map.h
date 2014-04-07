@@ -11,9 +11,9 @@
 
 #ifndef CHROME_BROWSER_GEOLOCATION_GEOLOCATION_CONTENT_SETTINGS_MAP_H_
 #define CHROME_BROWSER_GEOLOCATION_GEOLOCATION_CONTENT_SETTINGS_MAP_H_
+#pragma once
 
 #include <map>
-#include <string>
 
 #include "base/basictypes.h"
 #include "base/ref_counted.h"
@@ -33,10 +33,6 @@ class GeolocationContentSettingsMap
   explicit GeolocationContentSettingsMap(Profile* profile);
 
   static void RegisterUserPrefs(PrefService* prefs);
-
-  // Return simplified string representing origin.  If origin is using http or
-  // the standard port, those parts are not included in the output.
-  static std::string OriginToString(const GURL& origin);
 
   // Returns the default setting.
   //

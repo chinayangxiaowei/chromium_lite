@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 #include <windows.h>
 
 #include "base/string_util.h"
+#include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/app/breakpad_win.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/gpu_info.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "googleurl/src/gurl.h"
 
@@ -21,8 +22,21 @@ typedef void (__cdecl *MainSetActiveURL)(const wchar_t*);
 typedef void (__cdecl *MainSetClientId)(const wchar_t*);
 
 // exported in breakpad_win.cc:
+//   void __declspec(dllexport) __cdecl SetNumberOfExtensions.
+typedef void (__cdecl *MainSetNumberOfExtensions)(int);
+
+// exported in breakpad_win.cc:
 // void __declspec(dllexport) __cdecl SetExtensionID.
 typedef void (__cdecl *MainSetExtensionID)(size_t, const wchar_t*);
+
+// exported in breakpad_win.cc: void __declspec(dllexport) __cdecl SetGpuInfo.
+typedef void (__cdecl *MainSetGpuInfo)(const wchar_t*, const wchar_t*,
+                                       const wchar_t*, const wchar_t*,
+                                       const wchar_t*);
+
+// exported in breakpad_win.cc:
+//   void __declspec(dllexport) __cdecl SetNumberOfViews.
+typedef void (__cdecl *MainSetNumberOfViews)(int);
 
 void SetActiveURL(const GURL& url) {
   static MainSetActiveURL set_active_url = NULL;
@@ -67,7 +81,26 @@ void SetClientId(const std::string& client_id) {
   (set_client_id)(wstr.c_str());
 }
 
+std::string GetClientId() {
+  std::wstring wstr_client_id;
+  if (GoogleUpdateSettings::GetMetricsId(&wstr_client_id))
+    return WideToASCII(wstr_client_id);
+  else
+    return std::string();
+}
+
 void SetActiveExtensions(const std::set<std::string>& extension_ids) {
+  static MainSetNumberOfExtensions set_number_of_extensions = NULL;
+  if (!set_number_of_extensions) {
+    HMODULE exe_module = GetModuleHandle(chrome::kBrowserProcessExecutableName);
+    if (!exe_module)
+      return;
+    set_number_of_extensions = reinterpret_cast<MainSetNumberOfExtensions>(
+        GetProcAddress(exe_module, "SetNumberOfExtensions"));
+    if (!set_number_of_extensions)
+      return;
+  }
+
   static MainSetExtensionID set_extension_id = NULL;
   if (!set_extension_id) {
     HMODULE exe_module = GetModuleHandle(chrome::kBrowserProcessExecutableName);
@@ -79,6 +112,8 @@ void SetActiveExtensions(const std::set<std::string>& extension_ids) {
       return;
   }
 
+  (set_number_of_extensions)(static_cast<int>(extension_ids.size()));
+
   std::set<std::string>::const_iterator iter = extension_ids.begin();
   for (size_t i = 0; i < kMaxReportedActiveExtensions; ++i) {
     if (iter != extension_ids.end()) {
@@ -88,6 +123,39 @@ void SetActiveExtensions(const std::set<std::string>& extension_ids) {
       (set_extension_id)(i, L"");
     }
   }
+}
+
+void SetGpuInfo(const GPUInfo& gpu_info) {
+  static MainSetGpuInfo set_gpu_info = NULL;
+  if (!set_gpu_info) {
+    HMODULE exe_module = GetModuleHandle(chrome::kBrowserProcessExecutableName);
+    if (!exe_module)
+      return;
+    set_gpu_info = reinterpret_cast<MainSetGpuInfo>(
+        GetProcAddress(exe_module, "SetGpuInfo"));
+    if (!set_gpu_info)
+      return;
+  }
+  (set_gpu_info)(
+      base::UintToString16(gpu_info.vendor_id()).c_str(),
+      base::UintToString16(gpu_info.device_id()).c_str(),
+      gpu_info.driver_version().c_str(),
+      base::UintToString16(gpu_info.pixel_shader_version()).c_str(),
+      base::UintToString16(gpu_info.vertex_shader_version()).c_str());
+}
+
+void SetNumberOfViews(int number_of_views) {
+  static MainSetNumberOfViews set_number_of_views = NULL;
+  if (!set_number_of_views) {
+    HMODULE exe_module = GetModuleHandle(chrome::kBrowserProcessExecutableName);
+    if (!exe_module)
+      return;
+    set_number_of_views = reinterpret_cast<MainSetNumberOfViews>(
+        GetProcAddress(exe_module, "SetNumberOfViews"));
+    if (!set_number_of_views)
+      return;
+  }
+  (set_number_of_views)(number_of_views);
 }
 
 }  // namespace child_process_logging

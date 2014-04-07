@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,7 @@
 DOMMessageHandler* TipsHandler::Attach(DOMUI* dom_ui) {
   dom_ui_ = dom_ui;
   tips_cache_ = dom_ui_->GetProfile()->GetPrefs()->
-      GetMutableDictionary(prefs::kNTPTipsCache);
+      GetMutableDictionary(prefs::kNTPWebResourceCache);
   return DOMMessageHandler::Attach(dom_ui);
 }
 
@@ -30,7 +30,7 @@ void TipsHandler::RegisterMessages() {
       NewCallback(this, &TipsHandler::HandleGetTips));
 }
 
-void TipsHandler::HandleGetTips(const Value* content) {
+void TipsHandler::HandleGetTips(const ListValue* args) {
   // List containing the tips to be displayed.
   ListValue list_value;
 
@@ -45,10 +45,10 @@ void TipsHandler::HandleGetTips(const Value* content) {
   // We need to check here because the new tab page calls for tips before
   // the tip service starts up.
   PrefService* current_prefs = dom_ui_->GetProfile()->GetPrefs();
-  if (current_prefs->HasPrefPath(prefs::kNTPTipsServer)) {
-    std::wstring server = current_prefs->GetString(prefs::kNTPTipsServer);
-    std::wstring locale =
-        ASCIIToWide(g_browser_process->GetApplicationLocale());
+  if (current_prefs->HasPrefPath(prefs::kNTPTipsResourceServer)) {
+    std::string server = current_prefs->GetString(
+        prefs::kNTPTipsResourceServer);
+    std::string locale = g_browser_process->GetApplicationLocale();
     if (!EndsWith(server, locale, false)) {
       dom_ui_->CallJavascriptFunction(L"tips", list_value);
       return;
@@ -65,22 +65,25 @@ void TipsHandler::HandleGetTips(const Value* content) {
         // Check to see whether the home page is set to NTP; if not, add tip
         // to set home page before resetting tip index to 0.
         current_tip_index = 0;
-        if (!dom_ui_->GetProfile()->GetPrefs()->GetBoolean(
-            prefs::kHomePageIsNewTabPage)) {
-          SendTip(WideToUTF8(l10n_util::GetString(
-              IDS_NEW_TAB_MAKE_THIS_HOMEPAGE)), L"set_homepage_tip",
-              current_tip_index);
+        const PrefService::Preference* pref =
+            dom_ui_->GetProfile()->GetPrefs()->FindPreference(
+                prefs::kHomePageIsNewTabPage);
+        bool value;
+        if (pref && !pref->IsManaged() &&
+            pref->GetValue()->GetAsBoolean(&value) && !value) {
+          SendTip(l10n_util::GetStringUTF8(IDS_NEW_TAB_MAKE_THIS_HOMEPAGE),
+                  "set_homepage_tip", current_tip_index);
           return;
         }
       }
       if (wr_list->GetString(current_tip_index, &current_tip)) {
-        SendTip(current_tip, L"tip_html_text", current_tip_index + 1);
+        SendTip(current_tip, "tip_html_text", current_tip_index + 1);
       }
     }
   }
 }
 
-void TipsHandler::SendTip(std::string tip, std::wstring tip_type,
+void TipsHandler::SendTip(const std::string& tip, const std::string& tip_type,
                           int tip_index) {
   // List containing the tips to be displayed.
   ListValue list_value;
@@ -95,8 +98,8 @@ void TipsHandler::SendTip(std::string tip, std::wstring tip_type,
 
 // static
 void TipsHandler::RegisterUserPrefs(PrefService* prefs) {
-  prefs->RegisterDictionaryPref(prefs::kNTPTipsCache);
-  prefs->RegisterStringPref(prefs::kNTPTipsServer,
+  prefs->RegisterDictionaryPref(prefs::kNTPWebResourceCache);
+  prefs->RegisterStringPref(prefs::kNTPLogoResourceServer,
                             WebResourceService::kDefaultResourceServer);
 }
 

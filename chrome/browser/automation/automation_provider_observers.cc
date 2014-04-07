@@ -1,38 +1,69 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/automation/automation_provider_observers.h"
 
 #include "base/basictypes.h"
+#include "base/json/json_writer.h"
+#include "base/scoped_ptr.h"
 #include "base/string_util.h"
+#include "base/values.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/automation/automation_provider.h"
+#include "chrome/browser/automation/automation_provider_json.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
+#include "chrome/browser/browser.h"
+#include "chrome/browser/browser_list.h"
 #include "chrome/browser/dom_operation_notification_details.h"
+#include "chrome/browser/download/download_item.h"
+#include "chrome/browser/download/save_package.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_updater.h"
 #include "chrome/browser/login_prompt.h"
 #include "chrome/browser/metrics/metric_event_duration_details.h"
+#include "chrome/browser/printing/print_job.h"
+#include "chrome/browser/profile.h"
+#include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/browser/tab_contents/navigation_controller.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/translate/page_translated_details.h"
+#include "chrome/browser/translate/translate_infobar_delegate.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/test/automation/automation_constants.h"
-
-#if defined(OS_WIN)
-#include "chrome/browser/printing/print_job.h"
-#endif  // defined(OS_WIN)
+#include "gfx/rect.h"
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/login/authentication_notification_details.h"
 #endif
 
+// Holds onto start and stop timestamps for a particular tab
+class InitialLoadObserver::TabTime {
+ public:
+  explicit TabTime(base::TimeTicks started)
+      : load_start_time_(started) {
+  }
+  void set_stop_time(base::TimeTicks stopped) {
+    load_stop_time_ = stopped;
+  }
+  base::TimeTicks stop_time() const {
+    return load_stop_time_;
+  }
+  base::TimeTicks start_time() const {
+    return load_start_time_;
+  }
+ private:
+  base::TimeTicks load_start_time_;
+  base::TimeTicks load_stop_time_;
+};
+
 InitialLoadObserver::InitialLoadObserver(size_t tab_count,
                                          AutomationProvider* automation)
     : automation_(automation),
-      outstanding_tab_count_(tab_count) {
+      outstanding_tab_count_(tab_count),
+      init_time_(base::TimeTicks::Now()) {
   if (outstanding_tab_count_ > 0) {
     registrar_.Add(this, NotificationType::LOAD_START,
                    NotificationService::AllSources());
@@ -49,17 +80,44 @@ void InitialLoadObserver::Observe(NotificationType type,
                                   const NotificationDetails& details) {
   if (type == NotificationType::LOAD_START) {
     if (outstanding_tab_count_ > loading_tabs_.size())
-      loading_tabs_.insert(source.map_key());
+      loading_tabs_.insert(TabTimeMap::value_type(
+          source.map_key(),
+          TabTime(base::TimeTicks::Now())));
   } else if (type == NotificationType::LOAD_STOP) {
     if (outstanding_tab_count_ > finished_tabs_.size()) {
-      if (loading_tabs_.find(source.map_key()) != loading_tabs_.end())
+      TabTimeMap::iterator iter = loading_tabs_.find(source.map_key());
+      if (iter != loading_tabs_.end()) {
         finished_tabs_.insert(source.map_key());
+        iter->second.set_stop_time(base::TimeTicks::Now());
+      }
       if (outstanding_tab_count_ == finished_tabs_.size())
         ConditionMet();
     }
   } else {
     NOTREACHED();
   }
+}
+
+DictionaryValue* InitialLoadObserver::GetTimingInformation() const {
+  ListValue* items = new ListValue;
+  for (TabTimeMap::const_iterator it = loading_tabs_.begin();
+       it != loading_tabs_.end();
+       ++it) {
+    DictionaryValue* item = new DictionaryValue;
+    base::TimeDelta delta_start = it->second.start_time() - init_time_;
+
+    item->SetReal("load_start_ms", delta_start.InMillisecondsF());
+    if (it->second.stop_time().is_null()) {
+      item->Set("load_stop_ms", Value::CreateNullValue());
+    } else {
+      base::TimeDelta delta_stop = it->second.stop_time() - init_time_;
+      item->SetReal("load_stop_ms", delta_stop.InMillisecondsF());
+    }
+    items->Append(item);
+  }
+  DictionaryValue* return_value = new DictionaryValue;
+  return_value->Set("tabs", items);
+  return return_value;
 }
 
 void InitialLoadObserver::ConditionMet() {
@@ -288,6 +346,49 @@ void TabClosedNotificationObserver::set_for_browser_command(
   for_browser_command_ = for_browser_command;
 }
 
+TabCountChangeObserver::TabCountChangeObserver(AutomationProvider* automation,
+                                               Browser* browser,
+                                               IPC::Message* reply_message,
+                                               int target_tab_count)
+    : automation_(automation),
+      reply_message_(reply_message),
+      tab_strip_model_(browser->tabstrip_model()),
+      target_tab_count_(target_tab_count) {
+  tab_strip_model_->AddObserver(this);
+  CheckTabCount();
+}
+
+TabCountChangeObserver::~TabCountChangeObserver() {
+  tab_strip_model_->RemoveObserver(this);
+}
+
+void TabCountChangeObserver::TabInsertedAt(TabContents* contents,
+                                           int index,
+                                           bool foreground) {
+  CheckTabCount();
+}
+
+void TabCountChangeObserver::TabDetachedAt(TabContents* contents, int index) {
+  CheckTabCount();
+}
+
+void TabCountChangeObserver::TabStripModelDeleted() {
+  AutomationMsg_WaitForTabCountToBecome::WriteReplyParams(reply_message_,
+                                                          false);
+  automation_->Send(reply_message_);
+  delete this;
+}
+
+void TabCountChangeObserver::CheckTabCount() {
+  if (tab_strip_model_->count() != target_tab_count_)
+    return;
+
+  AutomationMsg_WaitForTabCountToBecome::WriteReplyParams(reply_message_,
+                                                          true);
+  automation_->Send(reply_message_);
+  delete this;
+}
+
 bool DidExtensionHostsStopLoading(ExtensionProcessManager* manager) {
   for (ExtensionProcessManager::const_iterator iter = manager->begin();
        iter != manager->end(); ++iter) {
@@ -306,8 +407,6 @@ ExtensionInstallNotificationObserver::ExtensionInstallNotificationObserver(
                  NotificationService::AllSources());
   registrar_.Add(this, NotificationType::EXTENSION_INSTALL_ERROR,
                  NotificationService::AllSources());
-  registrar_.Add(this, NotificationType::EXTENSION_OVERINSTALL_ERROR,
-                 NotificationService::AllSources());
   registrar_.Add(this, NotificationType::EXTENSION_UPDATE_DISABLED,
                  NotificationService::AllSources());
 }
@@ -325,9 +424,6 @@ void ExtensionInstallNotificationObserver::Observe(
     case NotificationType::EXTENSION_INSTALL_ERROR:
     case NotificationType::EXTENSION_UPDATE_DISABLED:
       SendResponse(AUTOMATION_MSG_EXTENSION_INSTALL_FAILED);
-      break;
-    case NotificationType::EXTENSION_OVERINSTALL_ERROR:
-      SendResponse(AUTOMATION_MSG_EXTENSION_ALREADY_INSTALLED);
       break;
     default:
       NOTREACHED();
@@ -373,8 +469,6 @@ ExtensionReadyNotificationObserver::ExtensionReadyNotificationObserver(
                  NotificationService::AllSources());
   registrar_.Add(this, NotificationType::EXTENSION_INSTALL_ERROR,
                  NotificationService::AllSources());
-  registrar_.Add(this, NotificationType::EXTENSION_OVERINSTALL_ERROR,
-                 NotificationService::AllSources());
   registrar_.Add(this, NotificationType::EXTENSION_UPDATE_DISABLED,
                  NotificationService::AllSources());
 }
@@ -402,7 +496,6 @@ void ExtensionReadyNotificationObserver::Observe(
       break;
     case NotificationType::EXTENSION_INSTALL_ERROR:
     case NotificationType::EXTENSION_UPDATE_DISABLED:
-    case NotificationType::EXTENSION_OVERINSTALL_ERROR:
       success = false;
       break;
     default:
@@ -635,9 +728,17 @@ struct CommandNotification {
 const struct CommandNotification command_notifications[] = {
   {IDC_DUPLICATE_TAB, NotificationType::TAB_PARENTED},
   {IDC_NEW_TAB, NotificationType::INITIAL_NEW_TAB_UI_LOAD},
+
   // Returns as soon as the restored tab is created. To further wait until
   // the content page is loaded, use WaitForTabToBeRestored.
-  {IDC_RESTORE_TAB, NotificationType::TAB_PARENTED}
+  {IDC_RESTORE_TAB, NotificationType::TAB_PARENTED},
+
+  // For the following commands, we need to wait for a new tab to be created,
+  // load to finish, and title to change.
+  {IDC_MANAGE_EXTENSIONS, NotificationType::TAB_CONTENTS_TITLE_UPDATED},
+  {IDC_OPTIONS, NotificationType::TAB_CONTENTS_TITLE_UPDATED},
+  {IDC_SHOW_DOWNLOADS, NotificationType::TAB_CONTENTS_TITLE_UPDATED},
+  {IDC_SHOW_HISTORY, NotificationType::TAB_CONTENTS_TITLE_UPDATED},
 };
 
 }  // namespace
@@ -708,6 +809,7 @@ void ExecuteBrowserCommandObserver::Observe(
 ExecuteBrowserCommandObserver::ExecuteBrowserCommandObserver(
     AutomationProvider* automation, IPC::Message* reply_message)
     : automation_(automation),
+      notification_type_(NotificationType::ALL),
       reply_message_(reply_message) {
 }
 
@@ -735,9 +837,10 @@ bool ExecuteBrowserCommandObserver::GetNotificationType(
 
 FindInPageNotificationObserver::FindInPageNotificationObserver(
     AutomationProvider* automation, TabContents* parent_tab,
-    IPC::Message* reply_message)
+    bool reply_with_json, IPC::Message* reply_message)
     : automation_(automation),
       active_match_ordinal_(-1),
+      reply_with_json_(reply_with_json),
       reply_message_(reply_message) {
   registrar_.Add(this, NotificationType::FIND_RESULT_AVAILABLE,
                  Source<TabContents>(parent_tab));
@@ -749,28 +852,40 @@ FindInPageNotificationObserver::~FindInPageNotificationObserver() {
 void FindInPageNotificationObserver::Observe(
     NotificationType type, const NotificationSource& source,
     const NotificationDetails& details) {
-  if (type == NotificationType::FIND_RESULT_AVAILABLE) {
-    Details<FindNotificationDetails> find_details(details);
-    if (find_details->request_id() == kFindInPageRequestId) {
-      // We get multiple responses and one of those will contain the ordinal.
-      // This message comes to us before the final update is sent.
-      if (find_details->active_match_ordinal() > -1)
+  Details<FindNotificationDetails> find_details(details);
+  if (!(find_details->final_update() && reply_message_ != NULL)) {
+    DLOG(INFO) << "Ignoring, since we only care about the final message";
+    return;
+  }
+  // We get multiple responses and one of those will contain the ordinal.
+  // This message comes to us before the final update is sent.
+  if (find_details->request_id() == kFindInPageRequestId) {
+    if (reply_with_json_) {
+      scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
+      return_value->SetInteger("match_count",
+          find_details->number_of_matches());
+      gfx::Rect rect = find_details->selection_rect();
+      // If MatchCount is > 0, then rect should not be Empty.
+      // We dont guard it here because we want to let the test
+      // code catch this invalid case if needed.
+      if (!rect.IsEmpty()) {
+        return_value->SetInteger("match_left", rect.x());
+        return_value->SetInteger("match_top", rect.y());
+        return_value->SetInteger("match_right", rect.right());
+        return_value->SetInteger("match_bottom", rect.bottom());
+      }
+      AutomationJSONReply(automation_, reply_message_)
+          .SendSuccess(return_value.get());
+      delete this;
+    } else {
+      if (find_details->active_match_ordinal() > -1) {
         active_match_ordinal_ = find_details->active_match_ordinal();
-      if (find_details->final_update()) {
-        if (reply_message_ != NULL) {
-          AutomationMsg_FindInPage::WriteReplyParams(reply_message_,
-              active_match_ordinal_, find_details->number_of_matches());
-          automation_->Send(reply_message_);
-          reply_message_ = NULL;
-        } else {
-          DLOG(WARNING) << "Multiple final Find messages observed.";
-        }
-      } else {
-        DLOG(INFO) << "Ignoring, since we only care about the final message";
+        AutomationMsg_Find::WriteReplyParams(reply_message_,
+            active_match_ordinal_, find_details->number_of_matches());
+        automation_->Send(reply_message_);
+        reply_message_ = NULL;
       }
     }
-  } else {
-    NOTREACHED();
   }
 }
 
@@ -802,8 +917,6 @@ void DomOperationNotificationObserver::Observe(
   }
 }
 
-#if defined(OS_WIN)
-// TODO(port): Enable when printing is ported.
 DocumentPrintedNotificationObserver::DocumentPrintedNotificationObserver(
     AutomationProvider* automation, IPC::Message* reply_message)
     : automation_(automation),
@@ -854,7 +967,6 @@ void DocumentPrintedNotificationObserver::Observe(
     }
   }
 }
-#endif  // defined(OS_WIN)
 
 MetricEventDurationObserver::MetricEventDurationObserver() {
   registrar_.Add(this, NotificationType::METRIC_EVENT_DURATION,
@@ -881,6 +993,117 @@ void MetricEventDurationObserver::Observe(NotificationType type,
       metric_event_duration->duration_ms;
 }
 
+PageTranslatedObserver::PageTranslatedObserver(AutomationProvider* automation,
+                                               IPC::Message* reply_message,
+                                               TabContents* tab_contents)
+  : automation_(automation),
+    reply_message_(reply_message) {
+  registrar_.Add(this, NotificationType::PAGE_TRANSLATED,
+                 Source<TabContents>(tab_contents));
+}
+
+void PageTranslatedObserver::Observe(NotificationType type,
+                                     const NotificationSource& source,
+                                     const NotificationDetails& details) {
+  DCHECK(type == NotificationType::PAGE_TRANSLATED);
+  AutomationJSONReply reply(automation_, reply_message_);
+
+  PageTranslatedDetails* translated_details =
+      Details<PageTranslatedDetails>(details).ptr();
+  scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
+  return_value->SetBoolean(
+      "translation_success",
+      translated_details->error_type == TranslateErrors::NONE);
+  reply.SendSuccess(return_value.get());
+  delete this;
+}
+
+TabLanguageDeterminedObserver::TabLanguageDeterminedObserver(
+    AutomationProvider* automation, IPC::Message* reply_message,
+    TabContents* tab_contents, TranslateInfoBarDelegate* translate_bar)
+  : automation_(automation),
+    reply_message_(reply_message),
+    tab_contents_(tab_contents),
+    translate_bar_(translate_bar) {
+  registrar_.Add(this, NotificationType::TAB_LANGUAGE_DETERMINED,
+                 Source<TabContents>(tab_contents));
+}
+
+void TabLanguageDeterminedObserver::Observe(
+    NotificationType type, const NotificationSource& source,
+    const NotificationDetails& details) {
+  DCHECK(type == NotificationType::TAB_LANGUAGE_DETERMINED);
+
+  scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
+  return_value->SetBoolean("page_translated",
+                           tab_contents_->language_state().IsPageTranslated());
+  return_value->SetBoolean(
+      "can_translate_page", TranslatePrefs::CanTranslate(
+          automation_->profile()->GetPrefs(),
+          tab_contents_->language_state().original_language(),
+          tab_contents_->GetURL()));
+  return_value->SetString(
+      "original_language",
+      tab_contents_->language_state().original_language());
+  if (translate_bar_) {
+    DictionaryValue* bar_info = new DictionaryValue;
+    std::map<TranslateInfoBarDelegate::Type, std::string> type_to_string;
+    type_to_string[TranslateInfoBarDelegate::BEFORE_TRANSLATE] =
+        "BEFORE_TRANSLATE";
+    type_to_string[TranslateInfoBarDelegate::TRANSLATING] =
+        "TRANSLATING";
+    type_to_string[TranslateInfoBarDelegate::AFTER_TRANSLATE] =
+        "AFTER_TRANSLATE";
+    type_to_string[TranslateInfoBarDelegate::TRANSLATION_ERROR] =
+        "TRANSLATION_ERROR";
+
+    bar_info->SetBoolean("always_translate_lang_button_showing",
+                         translate_bar_->ShouldShowAlwaysTranslateButton());
+    bar_info->SetBoolean("never_translate_lang_button_showing",
+                         translate_bar_->ShouldShowNeverTranslateButton());
+    bar_info->SetString("bar_state", type_to_string[translate_bar_->type()]);
+    bar_info->SetString("target_lang_code",
+                        translate_bar_->GetTargetLanguageCode());
+    bar_info->SetString("original_lang_code",
+                        translate_bar_->GetOriginalLanguageCode());
+    return_value->Set("translate_bar", bar_info);
+  }
+  AutomationJSONReply(automation_, reply_message_)
+      .SendSuccess(return_value.get());
+  delete this;
+}
+
+InfoBarCountObserver::InfoBarCountObserver(AutomationProvider* automation,
+                                           IPC::Message* reply_message,
+                                           TabContents* tab_contents,
+                                           int target_count)
+    : automation_(automation),
+      reply_message_(reply_message),
+      tab_contents_(tab_contents),
+      target_count_(target_count) {
+  Source<TabContents> source(tab_contents);
+  registrar_.Add(this, NotificationType::TAB_CONTENTS_INFOBAR_ADDED, source);
+  registrar_.Add(this, NotificationType::TAB_CONTENTS_INFOBAR_REMOVED, source);
+  CheckCount();
+}
+
+void InfoBarCountObserver::Observe(NotificationType type,
+                                   const NotificationSource& source,
+                                   const NotificationDetails& details) {
+  DCHECK(type == NotificationType::TAB_CONTENTS_INFOBAR_ADDED ||
+         type == NotificationType::TAB_CONTENTS_INFOBAR_REMOVED);
+  CheckCount();
+}
+
+void InfoBarCountObserver::CheckCount() {
+  if (tab_contents_->infobar_delegate_count() != target_count_)
+    return;
+
+  AutomationMsg_WaitForInfoBarCount::WriteReplyParams(reply_message_, true);
+  automation_->Send(reply_message_);
+  delete this;
+}
+
 #if defined(OS_CHROMEOS)
 LoginManagerObserver::LoginManagerObserver(
     AutomationProvider* automation,
@@ -904,7 +1127,8 @@ void LoginManagerObserver::Observe(NotificationType type,
 }
 #endif
 
-AutomationProviderBookmarkModelObserver::AutomationProviderBookmarkModelObserver(
+AutomationProviderBookmarkModelObserver::
+AutomationProviderBookmarkModelObserver(
     AutomationProvider* provider,
     IPC::Message* reply_message,
     BookmarkModel* model) {
@@ -914,7 +1138,8 @@ AutomationProviderBookmarkModelObserver::AutomationProviderBookmarkModelObserver
   model_->AddObserver(this);
 }
 
-AutomationProviderBookmarkModelObserver::~AutomationProviderBookmarkModelObserver() {
+AutomationProviderBookmarkModelObserver::
+~AutomationProviderBookmarkModelObserver() {
   model_->RemoveObserver(this);
 }
 
@@ -929,9 +1154,191 @@ void AutomationProviderDownloadItemObserver::OnDownloadFileCompleted(
     DownloadItem* download) {
   download->RemoveObserver(this);
   if (--downloads_ == 0) {
-    AutomationMsg_SendJSONRequest::WriteReplyParams(
-        reply_message_, std::string("{}"), true);
-    provider_->Send(reply_message_);
+    AutomationJSONReply(provider_, reply_message_).SendSuccess(NULL);
     delete this;
   }
 }
+
+void AutomationProviderDownloadUpdatedObserver::OnDownloadUpdated(
+    DownloadItem* download) {
+  // If this observer is watching for open, only send the reply if the download
+  // has been auto-opened.
+  if (wait_for_open_ && !download->auto_opened())
+    return;
+
+  download->RemoveObserver(this);
+  scoped_ptr<DictionaryValue> return_value(
+      provider_->GetDictionaryFromDownloadItem(download));
+  AutomationJSONReply(provider_, reply_message_).SendSuccess(
+      return_value.get());
+  delete this;
+}
+
+void AutomationProviderDownloadUpdatedObserver::OnDownloadOpened(
+    DownloadItem* download) {
+  download->RemoveObserver(this);
+  scoped_ptr<DictionaryValue> return_value(
+      provider_->GetDictionaryFromDownloadItem(download));
+  AutomationJSONReply(provider_, reply_message_).SendSuccess(
+      return_value.get());
+  delete this;
+}
+
+void AutomationProviderDownloadModelChangedObserver::ModelChanged() {
+  AutomationJSONReply(provider_, reply_message_).SendSuccess(NULL);
+  download_manager_->RemoveObserver(this);
+  delete this;
+}
+
+void AutomationProviderSearchEngineObserver::OnTemplateURLModelChanged() {
+  TemplateURLModel* url_model = provider_->profile()->GetTemplateURLModel();
+  url_model->RemoveObserver(this);
+  AutomationJSONReply(provider_, reply_message_).SendSuccess(NULL);
+  delete this;
+}
+
+void AutomationProviderHistoryObserver::HistoryQueryComplete(
+    HistoryService::Handle request_handle,
+    history::QueryResults* results) {
+  scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
+
+  ListValue* history_list = new ListValue;
+  for (size_t i = 0; i < results->size(); ++i) {
+    DictionaryValue* page_value = new DictionaryValue;
+    history::URLResult const &page = (*results)[i];
+    page_value->SetString("title", page.title());
+    page_value->SetString("url", page.url().spec());
+    page_value->SetReal("time",
+                        static_cast<double>(page.visit_time().ToDoubleT()));
+    page_value->SetString("snippet", page.snippet().text());
+    page_value->SetBoolean(
+        "starred",
+        provider_->profile()->GetBookmarkModel()->IsBookmarked(page.url()));
+    history_list->Append(page_value);
+  }
+
+  return_value->Set("history", history_list);
+  // Return history info.
+  AutomationJSONReply reply(provider_, reply_message_);
+  reply.SendSuccess(return_value.get());
+  delete this;
+}
+
+void AutomationProviderImportSettingsObserver::ImportEnded() {
+  // Send back an empty success message.
+  AutomationJSONReply(provider_, reply_message_).SendSuccess(NULL);
+  delete this;
+}
+
+void AutomationProviderGetPasswordsObserver::OnPasswordStoreRequestDone(
+    int handle, const std::vector<webkit_glue::PasswordForm*>& result) {
+  scoped_ptr<DictionaryValue> return_value(new DictionaryValue);
+
+  ListValue* passwords = new ListValue;
+  for (std::vector<webkit_glue::PasswordForm*>::const_iterator it =
+          result.begin(); it != result.end(); ++it) {
+    DictionaryValue* password_val = new DictionaryValue;
+    webkit_glue::PasswordForm* password_form = *it;
+    password_val->SetString("username_value", password_form->username_value);
+    password_val->SetString("password_value", password_form->password_value);
+    password_val->SetString("signon_realm", password_form->signon_realm);
+    password_val->SetReal(
+        "time", static_cast<double>(password_form->date_created.ToDoubleT()));
+    password_val->SetString("origin_url", password_form->origin.spec());
+    password_val->SetString("username_element",
+                            password_form->username_element);
+    password_val->SetString("password_element",
+                            password_form->password_element);
+    password_val->SetString("submit_element",
+                                     password_form->submit_element);
+    password_val->SetString("action_target", password_form->action.spec());
+    password_val->SetBoolean("blacklist", password_form->blacklisted_by_user);
+    passwords->Append(password_val);
+  }
+
+  return_value->Set("passwords", passwords);
+  AutomationJSONReply(provider_, reply_message_).SendSuccess(
+      return_value.get());
+  delete this;
+}
+
+void AutomationProviderBrowsingDataObserver::OnBrowsingDataRemoverDone() {
+  // Send back an empty success message
+  AutomationJSONReply(provider_, reply_message_).SendSuccess(NULL);
+  delete this;
+}
+
+OmniboxAcceptNotificationObserver::OmniboxAcceptNotificationObserver(
+    NavigationController* controller,
+    AutomationProvider* automation,
+    IPC::Message* reply_message)
+  : automation_(automation),
+    reply_message_(reply_message),
+    controller_(controller) {
+  Source<NavigationController> source(controller_);
+  registrar_.Add(this, NotificationType::LOAD_STOP, source);
+  // Pages requiring auth don't send LOAD_STOP.
+  registrar_.Add(this, NotificationType::AUTH_NEEDED, source);
+}
+
+OmniboxAcceptNotificationObserver::~OmniboxAcceptNotificationObserver() {
+  automation_->RemoveNavigationStatusListener(this);
+}
+
+void OmniboxAcceptNotificationObserver::Observe(
+    NotificationType type,
+    const NotificationSource& source,
+    const NotificationDetails& details) {
+  if (type == NotificationType::LOAD_STOP ||
+      type == NotificationType::AUTH_NEEDED) {
+    AutomationJSONReply(automation_, reply_message_).SendSuccess(NULL);
+    delete this;
+  } else {
+    NOTREACHED();
+  }
+}
+
+SavePackageNotificationObserver::SavePackageNotificationObserver(
+    SavePackage* save_package,
+    AutomationProvider* automation,
+    IPC::Message* reply_message) : automation_(automation),
+                                   reply_message_(reply_message) {
+  Source<SavePackage> source(save_package);
+  registrar_.Add(this, NotificationType::SAVE_PACKAGE_SUCCESSFULLY_FINISHED,
+                 source);
+}
+
+void SavePackageNotificationObserver::Observe(
+    NotificationType type,
+    const NotificationSource& source,
+    const NotificationDetails& details) {
+  if (type == NotificationType::SAVE_PACKAGE_SUCCESSFULLY_FINISHED) {
+    AutomationJSONReply(automation_, reply_message_).SendSuccess(NULL);
+    delete this;
+  } else {
+    NOTREACHED();
+  }
+}
+
+AutocompleteEditFocusedObserver::AutocompleteEditFocusedObserver(
+    AutomationProvider* automation,
+    AutocompleteEditModel* autocomplete_edit,
+    IPC::Message* reply_message)
+    : automation_(automation),
+      reply_message_(reply_message),
+      autocomplete_edit_model_(autocomplete_edit) {
+  Source<AutocompleteEditModel> source(autocomplete_edit);
+  registrar_.Add(this, NotificationType::AUTOCOMPLETE_EDIT_FOCUSED, source);
+}
+
+void AutocompleteEditFocusedObserver::Observe(
+    NotificationType type,
+    const NotificationSource& source,
+    const NotificationDetails& details) {
+  DCHECK(type == NotificationType::AUTOCOMPLETE_EDIT_FOCUSED);
+  AutomationMsg_WaitForAutocompleteEditFocus::WriteReplyParams(
+      reply_message_, true);
+  automation_->Send(reply_message_);
+  delete this;
+}
+

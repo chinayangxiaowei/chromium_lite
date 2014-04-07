@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -67,8 +67,8 @@ void BookmarkMenuBridge::UpdateMenu(NSMenu* bookmark_menu) {
   }
 
   // Create a submenu for "other bookmarks", and fill it in.
-  NSString* other_items_title = base::SysWideToNSString(
-    l10n_util::GetString(IDS_BOOMARK_BAR_OTHER_FOLDER_NAME));
+  NSString* other_items_title =
+      l10n_util::GetNSString(IDS_BOOMARK_BAR_OTHER_FOLDER_NAME);
   [bookmark_menu addItem:[NSMenuItem separatorItem]];
   AddNodeAsSubmenu(bookmark_menu,
                    model->other_node(),
@@ -183,7 +183,14 @@ void BookmarkMenuBridge::AddNodeAsSubmenu(NSMenu* menu,
 
 // TODO(jrg): limit the number of bookmarks in the menubar?
 void BookmarkMenuBridge::AddNodeToMenu(const BookmarkNode* node, NSMenu* menu) {
-  for (int i = 0; i < node->GetChildCount(); i++) {
+  int child_count = node->GetChildCount();
+  if (!child_count) {
+    NSString* empty_string = l10n_util::GetNSString(IDS_MENU_EMPTY_SUBMENU);
+    NSMenuItem* item = [[[NSMenuItem alloc] initWithTitle:empty_string
+                                                   action:nil
+                                            keyEquivalent:@""] autorelease];
+    [menu addItem:item];
+  } else for (int i = 0; i < child_count; i++) {
     const BookmarkNode* child = node->GetChild(i);
     NSString* title = [BookmarkMenuCocoaController menuTitleForNode:child];
     NSMenuItem* item = [[[NSMenuItem alloc] initWithTitle:title
@@ -215,8 +222,8 @@ void BookmarkMenuBridge::ConfigureMenuItem(const BookmarkNode* node,
   // Add a tooltip
   std::string url_string = node->GetURL().possibly_invalid_spec();
   NSString* tooltip = [NSString stringWithFormat:@"%@\n%s",
-                                base::SysWideToNSString(node->GetTitle()),
-                                url_string.c_str()];
+                          base::SysUTF16ToNSString(node->GetTitle()),
+                          url_string.c_str()];
   [item setToolTip:tooltip];
 
   // Check to see if we have a favicon.

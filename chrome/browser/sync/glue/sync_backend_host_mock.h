@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_SYNC_BACKEND_HOST_MOCK_H__
 #define CHROME_BROWSER_SYNC_GLUE_SYNC_BACKEND_HOST_MOCK_H__
+#pragma once
 
 #include <set>
 
@@ -41,6 +42,7 @@ class SyncBackendHostMock : public SyncBackendHost {
                void(const std::set<syncable::ModelType>&, CancelableTask*));
   MOCK_METHOD0(RequestPause, bool());
   MOCK_METHOD0(RequestResume, bool());
+  MOCK_METHOD0(StartSyncingWithServer, void());
 };
 
 }  // namespace browser_sync

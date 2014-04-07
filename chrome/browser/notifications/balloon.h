@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_BALLOON_H_
 #define CHROME_BROWSER_NOTIFICATIONS_BALLOON_H_
-
-#include <vector>
+#pragma once
 
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
@@ -57,11 +56,22 @@ class Balloon {
   const Notification& notification() const { return *notification_.get(); }
   Profile* profile() const { return profile_; }
 
-  const gfx::Point& position() const { return position_; }
+  gfx::Point GetPosition() const {
+    return position_.Add(offset_);
+  }
   void SetPosition(const gfx::Point& upper_left, bool reposition);
+
+  const gfx::Point& offset() { return offset_;}
+  void set_offset(const gfx::Point& offset) { offset_ = offset; }
+  void add_offset(const gfx::Point& offset) { offset_ = offset_.Add(offset); }
 
   const gfx::Size& content_size() const { return content_size_; }
   void set_content_size(const gfx::Size& size) { content_size_ = size; }
+
+  const gfx::Size& min_scrollbar_size() const { return min_scrollbar_size_; }
+  void set_min_scrollbar_size(const gfx::Size& size) {
+    min_scrollbar_size_ = size;
+  }
 
   // Request a new content size for this balloon.  This will get passed
   // to the balloon collection for checking against available space and
@@ -73,7 +83,7 @@ class Balloon {
   void set_view(BalloonView* balloon_view);
 
   // Returns the balloon view associated with the balloon.
-  BalloonView* view() {
+  BalloonView* view() const {
     return balloon_view_.get();
   }
 
@@ -85,6 +95,9 @@ class Balloon {
 
   // Notify that the content of notification has changed.
   virtual void Update(const Notification& notification);
+
+  // Called when the balloon is clicked by the user.
+  virtual void OnClick();
 
   // Called when the balloon is closed, either by user (through the UI)
   // or by a script.
@@ -109,6 +122,13 @@ class Balloon {
   // Position and size of the balloon on the screen.
   gfx::Point position_;
   gfx::Size content_size_;
+
+  // Temporary offset for balloons that need to be positioned in a non-standard
+  // position for keeping the close buttons under the mouse cursor.
+  gfx::Point offset_;
+
+  // Smallest size for this balloon where scrollbars will be shown.
+  gfx::Size min_scrollbar_size_;
 
   DISALLOW_COPY_AND_ASSIGN(Balloon);
 };

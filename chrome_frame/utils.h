@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,22 +13,33 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/file_path.h"
 #include "base/histogram.h"
 #include "base/lock.h"
 #include "base/logging.h"
 #include "base/thread.h"
-
+#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
+
+class FilePath;
 
 // utils.h : Various utility functions and classes
 
 extern const wchar_t kChromeContentPrefix[];
+extern const char kGCFProtocol[];
 extern const wchar_t kChromeProtocolPrefix[];
 extern const wchar_t kChromeFrameHeadlessMode[];
+extern const wchar_t kChromeFrameAccessibleMode[];
 extern const wchar_t kChromeFrameUnpinnedMode[];
-extern const wchar_t kEnableGCFProtocol[];
+extern const wchar_t kAllowUnsafeURLs[];
+extern const wchar_t kEnableBuggyBhoIntercept[];
 extern const wchar_t kChromeMimeType[];
+extern const wchar_t kChromeFrameAttachTabPattern[];
+extern const wchar_t kChromeFrameConfigKey[];
+extern const wchar_t kRenderInGCFUrlList[];
+extern const wchar_t kRenderInHostUrlList[];
+extern const wchar_t kEnableGCFRendererByDefault[];
+extern const wchar_t kIexploreProfileName[];
+extern const wchar_t kRundllProfileName[];
 
 typedef enum ProtocolPatchMethod {
   PATCH_METHOD_IBROWSER = 0,
@@ -105,11 +116,11 @@ void DisplayVersionMismatchWarning(HWND parent,
 // This class provides a base implementation for ATL modules which want to
 // perform all their registration under HKCU. This class overrides the
 // RegisterServer and UnregisterServer methods and registers the type libraries
-// under HKCU (the rest of the registation is made under HKCU by changing the
+// under HKCU (the rest of the registration is made under HKCU by changing the
 // appropriate .RGS files)
 template < class BaseAtlModule >
 class AtlPerUserModule : public BaseAtlModule {
-  public:
+ public:
   HRESULT RegisterServer(BOOL reg_typelib = FALSE,
                          const CLSID* clsid = NULL) throw() {
     HRESULT hr = BaseAtlModule::RegisterServer(FALSE, clsid);
@@ -169,7 +180,35 @@ typedef enum IEVersion {
   IE_6,
   IE_7,
   IE_8,
+  IE_9,
 };
+
+// The renderer to be used for a page.  Values for Chrome also convey the
+// reason why Chrome is used.
+enum RendererType {
+  RENDERER_TYPE_UNDETERMINED = 0,
+  RENDERER_TYPE_CHROME_MIN,
+  // NOTE: group all _CHROME_ values together below here, as they are used for
+  // generating metrics reported via UMA (adjust MIN/MAX as needed).
+  RENDERER_TYPE_CHROME_GCF_PROTOCOL = RENDERER_TYPE_CHROME_MIN,
+  RENDERER_TYPE_CHROME_HTTP_EQUIV,
+  RENDERER_TYPE_CHROME_RESPONSE_HEADER,
+  RENDERER_TYPE_CHROME_DEFAULT_RENDERER,
+  RENDERER_TYPE_CHROME_OPT_IN_URL,
+  RENDERER_TYPE_CHROME_WIDGET,
+  // NOTE: all _CHOME_ values must go above here (adjust MIN/MAX as needed).
+  RENDERER_TYPE_CHROME_MAX = RENDERER_TYPE_CHROME_WIDGET,
+  RENDERER_TYPE_OTHER,
+};
+
+// Returns true if the given RendererType represents Chrome.
+bool IsChrome(RendererType renderer_type);
+
+// Convenience macro for logging a sample for the launch type metric.
+#define THREAD_SAFE_UMA_LAUNCH_TYPE_COUNT(sample) \
+  THREAD_SAFE_UMA_HISTOGRAM_CUSTOM_COUNTS("ChromeFrame.LaunchType", sample, \
+  RENDERER_TYPE_CHROME_MIN, RENDERER_TYPE_CHROME_MAX, \
+  RENDERER_TYPE_CHROME_MAX + 1 - RENDERER_TYPE_CHROME_MIN)
 
 // To get the IE version when Chrome Frame is hosted in IE.  Make sure that
 // the hosting browser is IE before calling this function, otherwise NON_IE
@@ -188,6 +227,9 @@ FilePath GetIETemporaryFilesFolder();
 // file version.  May be NULL.
 // @returns true if the version info was successfully retrieved.
 bool GetModuleVersion(HMODULE module, uint32* high, uint32* low);
+
+// @returns the module handle to which an address belongs.
+HMODULE GetModuleFromAddress(void* address);
 
 // Return if the IEXPLORE is in private mode. The IEIsInPrivateBrowsing() checks
 // whether current process is IEXPLORE.
@@ -226,12 +268,23 @@ bool DeleteConfigValue(const wchar_t* value_name);
 // gather crash dumps, etc to send them to the crash server.
 bool IsHeadlessMode();
 
+// Returns true if we are running in accessible mode in which we need to enable
+// renderer accessibility for use in automation.
+bool IsAccessibleMode();
+
 // Returns true if we are running in unpinned mode in which case DLL
 // eviction should be possible.
 bool IsUnpinnedMode();
 
+// Returns true if all HTML pages should be rendered in GCF by default.
+bool IsGcfDefaultRenderer();
+
 // Check if this url is opting into Chrome Frame based on static settings.
-bool IsOptInUrl(const wchar_t* url);
+// Returns one of:
+// - RENDERER_TYPE_UNDETERMINED if not opt-in or if explicit opt-out
+// - RENDERER_TYPE_CHROME_DEFAULT_RENDERER
+// - RENDERER_TYPE_CHROME_OPT_IN_URL
+RendererType RendererTypeForUrl(const std::wstring& url);
 
 // A shortcut for QueryService
 template <typename T>
@@ -239,14 +292,13 @@ HRESULT DoQueryService(const IID& service_id, IUnknown* unk, T** service) {
   DCHECK(service);
   if (!unk)
     return E_INVALIDARG;
+
   ScopedComPtr<IServiceProvider> service_provider;
   HRESULT hr = service_provider.QueryFrom(unk);
-  if (!service_provider)
-    return E_NOINTERFACE;
+  if (service_provider)
+    hr = service_provider->QueryService(service_id, service);
 
-  hr = service_provider->QueryService(service_id, service);
-  if (*service == NULL)
-    return E_NOINTERFACE;
+  DCHECK(FAILED(hr) || *service);
   return hr;
 }
 
@@ -268,7 +320,7 @@ bool CheckForCFNavigation(IBrowserService* browser, bool clear_flag);
 // Returns true if the URL passed in is something which can be handled by
 // Chrome. If this function returns false then we should fail the navigation.
 // When is_privileged is true, chrome extension URLs will be considered valid.
-bool IsValidUrlScheme(const std::wstring& url, bool is_privileged);
+bool IsValidUrlScheme(const GURL& url, bool is_privileged);
 
 // Returns the raw http headers for the current request given an
 // IWinInetHttpInfo pointer.
@@ -394,6 +446,11 @@ extern Lock g_ChromeFrameHistogramLock;
   UMA_HISTOGRAM_TIMES(name, sample); \
 }
 
+#define THREAD_SAFE_UMA_HISTOGRAM_COUNTS(name, sample) { \
+  AutoLock lock(g_ChromeFrameHistogramLock); \
+  UMA_HISTOGRAM_COUNTS(name, sample); \
+}
+
 // Fired when we want to notify IE about privacy changes.
 #define WM_FIRE_PRIVACY_CHANGE_NOTIFICATION (WM_APP + 1)
 
@@ -424,12 +481,24 @@ std::string GetHttpHeadersFromBinding(IBinding* binding);
 // Returns the HTTP response code from the binding passed in.
 int GetHttpResponseStatusFromBinding(IBinding* binding);
 
+// Returns the clipboard format for text/html.
+CLIPFORMAT GetTextHtmlClipboardFormat();
+
+// Returns true iff the mime type is text/html.
+bool IsTextHtmlMimeType(const wchar_t* mime_type);
+
+// Returns true iff the clipboard format is text/html.
+bool IsTextHtmlClipFormat(CLIPFORMAT cf);
+
 // Returns the desired patch method (moniker, http_equiv, protocol sink).
 // Defaults to moniker patch.
 ProtocolPatchMethod GetPatchMethod();
 
 // Returns true if the IMoniker patch is enabled.
-bool MonikerPatchEnabled();
+bool IsIBrowserServicePatchEnabled();
+
+// Returns true if we can detect that we are running as SYSTEM, false otherwise.
+bool IsSystemProcess();
 
 // STL helper class that implements a functor to delete objects.
 // E.g: std::for_each(v.begin(), v.end(), utils::DeleteObject());
@@ -442,5 +511,89 @@ class DeleteObject {
   }
 };
 }
+
+// Convert various protocol flags to text representation. Used for logging.
+std::string BindStatus2Str(ULONG bind_status);
+std::string PiFlags2Str(DWORD flags);
+std::string Bscf2Str(DWORD flags);
+
+// Reads data from a stream into a string.
+HRESULT ReadStream(IStream* stream, size_t size, std::string* data);
+
+// Parses urls targeted at ChromeFrame. This class maintains state like
+// whether a url is prefixed with the gcf: prefix, whether it is being
+// attached to an existing external tab, etc.
+class ChromeFrameUrl {
+ public:
+  ChromeFrameUrl();
+
+  // Parses the url passed in. Returns true on success.
+  bool Parse(const std::wstring& url);
+
+  bool is_chrome_protocol() const {
+    return is_chrome_protocol_;
+  }
+
+  bool attach_to_external_tab() const {
+    return attach_to_external_tab_;
+  }
+
+  uint64 cookie() const {
+    return cookie_;
+  }
+
+  int disposition() const {
+    return disposition_;
+  }
+
+  const gfx::Rect& dimensions() const {
+    return dimensions_;
+  }
+
+  const GURL& gurl() const {
+    return parsed_url_;
+  }
+
+  const std::string& profile_name() const {
+    return profile_name_;
+  }
+
+ private:
+  // If we are attaching to an existing external tab, this function parses the
+  // suffix portion of the URL which contains the attach_external_tab prefix.
+  bool ParseAttachExternalTabUrl();
+
+  // Clear state.
+  void Reset();
+
+  bool attach_to_external_tab_;
+  bool is_chrome_protocol_;
+  uint64 cookie_;
+  gfx::Rect dimensions_;
+  int disposition_;
+
+  GURL parsed_url_;
+  std::string profile_name_;
+};
+
+// Returns true if we can navigate to this URL.
+// This function checks if the url scheme is valid for navigation within
+// chrome and whether it is a restricted URL as per IE settings. In either of
+// these cases it returns false.
+bool CanNavigate(const GURL& url, IInternetSecurityManager* security_manager,
+                 bool is_privileged);
+
+// Utility function that prevents the current module from ever being unloaded.
+// Call if you make irreversible patches.
+void PinModule();
+
+// Helper function to spin a message loop and dispatch messages while waiting
+// for a handle to be signaled.
+void WaitWithMessageLoop(HANDLE* handles, int count, DWORD timeout);
+
+// Enumerates values in a key and adds them to an array.
+// The names of the values are not returned.
+void EnumerateKeyValues(HKEY parent_key, const wchar_t* sub_key_name,
+                        std::vector<std::wstring>* values);
 
 #endif  // CHROME_FRAME_UTILS_H_

@@ -8,7 +8,6 @@
 #include <map>
 
 #include "app/clipboard/clipboard.h"
-#include "app/l10n_util.h"
 #include "app/x11_util.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
@@ -16,6 +15,8 @@
 #include "chrome/browser/chrome_thread.h"
 #if defined(TOOLKIT_GTK)
 #include "chrome/browser/printing/print_dialog_gtk.h"
+#else
+#include "chrome/browser/printing/print_dialog_cloud.h"
 #endif
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/render_messages.h"
@@ -54,8 +55,8 @@ void ResourceMessageFilter::DoOnGetScreenInfo(gfx::NativeViewId view,
   WebScreenInfo results = WebScreenInfoFactory::screenInfo(display, screen);
   ViewHostMsg_GetScreenInfo::WriteReplyParams(reply_msg, results);
 
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
 }
@@ -68,6 +69,7 @@ void ResourceMessageFilter::DoOnGetWindowRect(gfx::NativeViewId view,
   gfx::Rect rect;
   XID window;
 
+  AutoLock lock(Singleton<GtkNativeViewManager>()->unrealize_lock());
   if (Singleton<GtkNativeViewManager>()->GetXIDForId(&window, view)) {
     if (window) {
       int x, y;
@@ -79,8 +81,8 @@ void ResourceMessageFilter::DoOnGetWindowRect(gfx::NativeViewId view,
 
   ViewHostMsg_GetWindowRect::WriteReplyParams(reply_msg, rect);
 
-   ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
 }
@@ -107,20 +109,23 @@ void ResourceMessageFilter::DoOnGetRootWindowRect(gfx::NativeViewId view,
   gfx::Rect rect;
   XID window;
 
+  AutoLock lock(Singleton<GtkNativeViewManager>()->unrealize_lock());
   if (Singleton<GtkNativeViewManager>()->GetXIDForId(&window, view)) {
     if (window) {
       const XID toplevel = GetTopLevelWindow(window);
-      int x, y;
-      unsigned width, height;
-      if (x11_util::GetWindowGeometry(&x, &y, &width, &height, toplevel))
-        rect = gfx::Rect(x, y, width, height);
+      if (toplevel) {
+        int x, y;
+        unsigned width, height;
+        if (x11_util::GetWindowGeometry(&x, &y, &width, &height, toplevel))
+          rect = gfx::Rect(x, y, width, height);
+      }
     }
   }
 
   ViewHostMsg_GetRootWindowRect::WriteReplyParams(reply_msg, rect);
 
-   ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
 }
@@ -133,8 +138,8 @@ void ResourceMessageFilter::DoOnClipboardIsFormatAvailable(
 
   ViewHostMsg_ClipboardIsFormatAvailable::WriteReplyParams(reply_msg, result);
 
-   ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
 }
@@ -147,8 +152,8 @@ void ResourceMessageFilter::DoOnClipboardReadText(Clipboard::Buffer buffer,
 
   ViewHostMsg_ClipboardReadText::WriteReplyParams(reply_msg, result);
 
-   ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
 }
@@ -161,8 +166,8 @@ void ResourceMessageFilter::DoOnClipboardReadAsciiText(
 
   ViewHostMsg_ClipboardReadAsciiText::WriteReplyParams(reply_msg, result);
 
-   ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
 }
@@ -177,8 +182,35 @@ void ResourceMessageFilter::DoOnClipboardReadHTML(Clipboard::Buffer buffer,
 
   ViewHostMsg_ClipboardReadHTML::WriteReplyParams(reply_msg, markup, src_url);
 
-   ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      NewRunnableMethod(
+          this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
+}
+
+// Called on the UI thread.
+void ResourceMessageFilter::DoOnClipboardReadAvailableTypes(
+    Clipboard::Buffer buffer, IPC::Message* reply_msg) {
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      NewRunnableMethod(
+          this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
+}
+
+// Called on the UI thread.
+void ResourceMessageFilter::DoOnClipboardReadData(Clipboard::Buffer buffer,
+                                                  const string16& type,
+                                                  IPC::Message* reply_msg) {
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      NewRunnableMethod(
+          this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
+}
+// Called on the UI thread.
+void ResourceMessageFilter::DoOnClipboardReadFilenames(
+    Clipboard::Buffer buffer, IPC::Message* reply_msg) {
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
 }
@@ -217,8 +249,8 @@ void ResourceMessageFilter::DoOnAllocateTempFileForPrinting(
   ViewHostMsg_AllocateTempFileForPrinting::WriteReplyParams(
       reply_msg, temp_file_fd, fd_in_browser);
 
-   ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::SendDelayedReply, reply_msg));
 }
@@ -226,8 +258,8 @@ void ResourceMessageFilter::DoOnAllocateTempFileForPrinting(
 // Called on the IO thread.
 void ResourceMessageFilter::OnGetScreenInfo(gfx::NativeViewId view,
                                             IPC::Message* reply_msg) {
-   ChromeThread::PostTask(
-      ChromeThread::BACKGROUND_X11, FROM_HERE,
+   BrowserThread::PostTask(
+      BrowserThread::BACKGROUND_X11, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::DoOnGetScreenInfo, view, reply_msg));
 }
@@ -235,8 +267,8 @@ void ResourceMessageFilter::OnGetScreenInfo(gfx::NativeViewId view,
 // Called on the IO thread.
 void ResourceMessageFilter::OnGetWindowRect(gfx::NativeViewId view,
                                             IPC::Message* reply_msg) {
-   ChromeThread::PostTask(
-      ChromeThread::BACKGROUND_X11, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::BACKGROUND_X11, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::DoOnGetWindowRect, view, reply_msg));
 }
@@ -244,8 +276,8 @@ void ResourceMessageFilter::OnGetWindowRect(gfx::NativeViewId view,
 // Called on the IO thread.
 void ResourceMessageFilter::OnGetRootWindowRect(gfx::NativeViewId view,
                                                 IPC::Message* reply_msg) {
-   ChromeThread::PostTask(
-      ChromeThread::BACKGROUND_X11, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::BACKGROUND_X11, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::DoOnGetRootWindowRect, view,
           reply_msg));
@@ -255,8 +287,8 @@ void ResourceMessageFilter::OnGetRootWindowRect(gfx::NativeViewId view,
 void ResourceMessageFilter::OnClipboardIsFormatAvailable(
     Clipboard::FormatType format, Clipboard::Buffer buffer,
     IPC::Message* reply_msg) {
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::DoOnClipboardIsFormatAvailable, format,
           buffer, reply_msg));
@@ -265,8 +297,8 @@ void ResourceMessageFilter::OnClipboardIsFormatAvailable(
 // Called on the IO thread.
 void ResourceMessageFilter::OnClipboardReadText(Clipboard::Buffer buffer,
                                                 IPC::Message* reply_msg) {
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::DoOnClipboardReadText, buffer,
           reply_msg));
@@ -275,8 +307,8 @@ void ResourceMessageFilter::OnClipboardReadText(Clipboard::Buffer buffer,
 // Called on the IO thread.
 void ResourceMessageFilter::OnClipboardReadAsciiText(Clipboard::Buffer buffer,
                                                      IPC::Message* reply_msg) {
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::DoOnClipboardReadAsciiText, buffer,
           reply_msg));
@@ -285,18 +317,48 @@ void ResourceMessageFilter::OnClipboardReadAsciiText(Clipboard::Buffer buffer,
 // Called on the IO thread.
 void ResourceMessageFilter::OnClipboardReadHTML(Clipboard::Buffer buffer,
                                                 IPC::Message* reply_msg) {
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::DoOnClipboardReadHTML, buffer,
           reply_msg));
 }
 
 // Called on the IO thread.
+void ResourceMessageFilter::OnClipboardReadAvailableTypes(
+    Clipboard::Buffer buffer, IPC::Message* reply_msg) {
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(
+          this, &ResourceMessageFilter::DoOnClipboardReadAvailableTypes, buffer,
+          reply_msg));
+}
+
+// Called on the IO thread.
+void ResourceMessageFilter::OnClipboardReadData(
+    Clipboard::Buffer buffer, const string16& type, IPC::Message* reply_msg) {
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(
+          this, &ResourceMessageFilter::DoOnClipboardReadData, buffer, type,
+          reply_msg));
+}
+
+// Called on the IO thread.
+void ResourceMessageFilter::OnClipboardReadFilenames(
+    Clipboard::Buffer buffer, IPC::Message* reply_msg) {
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(
+          this, &ResourceMessageFilter::DoOnClipboardReadFilenames, buffer,
+          reply_msg));
+}
+
+// Called on the IO thread.
 void ResourceMessageFilter::OnAllocateTempFileForPrinting(
     IPC::Message* reply_msg) {
-   ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
+   BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
       NewRunnableMethod(
           this, &ResourceMessageFilter::DoOnAllocateTempFileForPrinting,
           reply_msg));
@@ -315,7 +377,10 @@ void ResourceMessageFilter::OnTempFileForPrintingWritten(int fd_in_browser) {
 #if defined(TOOLKIT_GTK)
   PrintDialogGtk::CreatePrintDialogForPdf(it->second);
 #else
-  NOTIMPLEMENTED();
+  if (cloud_print_enabled_)
+    PrintDialogCloud::CreatePrintDialogForPdf(it->second);
+  else
+    NOTIMPLEMENTED();
 #endif
 
   // Erase the entry in the map.

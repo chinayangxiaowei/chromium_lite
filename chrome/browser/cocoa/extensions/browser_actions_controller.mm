@@ -7,42 +7,59 @@
 #include <cmath>
 #include <string>
 
-#include "app/resource_bundle.h"
+#include "base/nsimage_cache_mac.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/browser.h"
-#include "chrome/browser/pref_service.h"
 #import "chrome/browser/cocoa/extensions/browser_action_button.h"
 #import "chrome/browser/cocoa/extensions/browser_actions_container_view.h"
+#import "chrome/browser/cocoa/extensions/chevron_menu_button.h"
 #import "chrome/browser/cocoa/extensions/extension_popup_controller.h"
 #import "chrome/browser/cocoa/menu_button.h"
 #include "chrome/browser/extensions/extension_browser_event_router.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_toolbar_model.h"
 #include "chrome/browser/extensions/extensions_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/common/pref_names.h"
-#include "grit/theme_resources.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 
-extern const CGFloat kBrowserActionButtonPadding = 3;
-
-extern const NSString* kBrowserActionVisibilityChangedNotification =
+NSString* const kBrowserActionVisibilityChangedNotification =
     @"BrowserActionVisibilityChangedNotification";
 
 namespace {
 const CGFloat kAnimationDuration = 0.2;
-// When determining the opacity during a drag, we artificially reduce the
-// distance to the edge in order to make the fade more apparent.
-const CGFloat kButtonOpacityLeadPadding = 5.0;
-const CGFloat kChevronHeight = 28.0;
-const CGFloat kChevronLowerPadding = 5.0;
-const CGFloat kChevronRightPadding = 5.0;
+
 const CGFloat kChevronWidth = 14.0;
-const CGFloat kContainerPadding = 2.0;
-const CGFloat kGrippyXOffset = 8.0;
+
+// Image used for the overflow button.
+NSString* const kOverflowChevronsName =
+    @"browser_actions_overflow_Template.pdf";
+
+// Since the container is the maximum height of the toolbar, we have
+// to move the buttons up by this amount in order to have them look
+// vertically centered within the toolbar.
+const CGFloat kBrowserActionOriginYOffset = 5.0;
+
+// The size of each button on the toolbar.
+const CGFloat kBrowserActionHeight = 29.0;
+const CGFloat kBrowserActionWidth = 29.0;
+
+// The padding between browser action buttons.
+const CGFloat kBrowserActionButtonPadding = 2.0;
+
+// Padding between Omnibox and first button.  Since the buttons have a
+// pixel of internal padding, this needs an extra pixel.
+const CGFloat kBrowserActionLeftPadding = kBrowserActionButtonPadding + 1.0;
+
+// How far to inset from the bottom of the view to get the top border
+// of the popup 2px below the bottom of the Omnibox.
+const CGFloat kBrowserActionBubbleYOffset = 3.0;
+
 }  // namespace
 
 @interface BrowserActionsController(Private)
@@ -64,7 +81,7 @@ const CGFloat kGrippyXOffset = 8.0;
 // Useful in the case of a Browser Action being added/removed from the middle of
 // the container, this method repositions each button according to the current
 // toolbar model.
-- (void)repositionActionButtonsAndAnimate:(BOOL)animate;
+- (void)positionActionButtonsAndAnimate:(BOOL)animate;
 
 // During container resizing, buttons become more transparent as they are pushed
 // off the screen. This method updates each button's opacity determined by the
@@ -344,7 +361,7 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
         profile_->GetPrefs()->GetReal(prefs::kBrowserActionContainerWidth);
     if (predefinedWidth != 0) {
       int iconWidth = kBrowserActionWidth + kBrowserActionButtonPadding;
-      int extraWidth = kContainerPadding + kChevronWidth;
+      int extraWidth = kChevronWidth;
       toolbarModel_->SetVisibleIconCount(
           (predefinedWidth - extraWidth) / iconWidth);
     }
@@ -360,24 +377,20 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
 - (NSPoint)popupPointForBrowserAction:(Extension*)extension {
   if (!extension->browser_action())
     return NSZeroPoint;
-  BrowserActionButton* button = [self buttonForExtension:extension];
+
+  NSButton* button = [self buttonForExtension:extension];
   if (!button)
     return NSZeroPoint;
 
-  NSView* view = button;
-  BOOL isHidden = [hiddenButtons_ containsObject:button];
-  if (isHidden)
-    view = chevronMenuButton_.get();
+  if ([hiddenButtons_ containsObject:button])
+    button = chevronMenuButton_.get();
 
-  NSPoint arrowPoint = [view frame].origin;
-  // Adjust the anchor point to be at the center of the browser action button
-  // or chevron.
-  arrowPoint.x += NSWidth([view frame]) / 2;
-  // Move the arrow up a bit in the case that it's pointing to the chevron.
-  if (isHidden)
-    arrowPoint.y += NSHeight([view frame]) / 4;
-
-  return [[view superview] convertPoint:arrowPoint toView:nil];
+  // Anchor point just above the center of the bottom.
+  const NSRect bounds = [button bounds];
+  DCHECK([button isFlipped]);
+  NSPoint anchor = NSMakePoint(NSMidX(bounds),
+                               NSMaxY(bounds) - kBrowserActionBubbleYOffset);
+  return [button convertPoint:anchor toView:nil];
 }
 
 - (BOOL)chevronIsHidden {
@@ -449,24 +462,22 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
   if ([self buttonCount] == 0)
     [containerView_ setHidden:NO];
 
-  BrowserActionButton* newButton = [[[BrowserActionButton alloc]
-      initWithExtension:extension
-                profile:profile_
-                  tabId:[self currentTabId]] autorelease];
+  NSRect buttonFrame = NSMakeRect(0.0, kBrowserActionOriginYOffset,
+                                  kBrowserActionWidth, kBrowserActionHeight);
+  BrowserActionButton* newButton =
+      [[[BrowserActionButton alloc]
+         initWithFrame:buttonFrame
+             extension:extension
+               profile:profile_
+                 tabId:[self currentTabId]] autorelease];
   [newButton setTarget:self];
   [newButton setAction:@selector(browserActionClicked:)];
   NSString* buttonKey = base::SysUTF8ToNSString(extension->id());
   if (!buttonKey)
     return;
-
   [buttons_ setObject:newButton forKey:buttonKey];
-  if (index < [self containerButtonCapacity]) {
-    [containerView_ addSubview:newButton];
-  } else {
-    [hiddenButtons_ addObject:newButton];
-    [newButton setAlphaValue:0.0];
-    [self updateOverflowMenu];
-  }
+
+  [self positionActionButtonsAndAnimate:NO];
 
   [[NSNotificationCenter defaultCenter]
       addObserver:self
@@ -474,7 +485,7 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
              name:kBrowserActionButtonDraggingNotification
            object:newButton];
 
-  [self repositionActionButtonsAndAnimate:NO];
+
   [containerView_ setMaxWidth:
       [self containerWidthWithButtonCount:[self buttonCount]]];
   [containerView_ setNeedsDisplay:YES];
@@ -505,14 +516,14 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
     // No more buttons? Hide the container.
     [containerView_ setHidden:YES];
   } else {
-    [self repositionActionButtonsAndAnimate:NO];
+    [self positionActionButtonsAndAnimate:NO];
   }
   [containerView_ setMaxWidth:
       [self containerWidthWithButtonCount:[self buttonCount]]];
   [containerView_ setNeedsDisplay:YES];
 }
 
-- (void)repositionActionButtonsAndAnimate:(BOOL)animate {
+- (void)positionActionButtonsAndAnimate:(BOOL)animate {
   NSUInteger i = 0;
   for (ExtensionList::iterator iter = toolbarModel_->begin();
        iter != toolbarModel_->end(); ++iter) {
@@ -530,7 +541,6 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
 - (void)updateButtonOpacity {
   for (BrowserActionButton* button in [buttons_ allValues]) {
     NSRect buttonFrame = [button frame];
-    buttonFrame.origin.x += kButtonOpacityLeadPadding;
     if (NSContainsRect([containerView_ bounds], buttonFrame)) {
       if ([button alphaValue] != 1.0)
         [button setAlphaValue:1.0];
@@ -539,8 +549,7 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
     }
     CGFloat intersectionWidth =
         NSWidth(NSIntersectionRect([containerView_ bounds], buttonFrame));
-    CGFloat alpha = std::max(0.0f,
-        (intersectionWidth - kButtonOpacityLeadPadding) / NSWidth(buttonFrame));
+    CGFloat alpha = std::max(0.0f, intersectionWidth / NSWidth(buttonFrame));
     [button setAlphaValue:alpha];
     [button setNeedsDisplay:YES];
   }
@@ -555,24 +564,34 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
 }
 
 - (CGFloat)containerWidthWithButtonCount:(NSUInteger)buttonCount {
-  CGFloat width = 0.0;
+  // Left-side padding which works regardless of whether a button or
+  // chevron leads.
+  CGFloat width = kBrowserActionLeftPadding;
+
+  // Include the buttons and padding between.
   if (buttonCount > 0) {
-    width = kGrippyXOffset + kContainerPadding +
-        (buttonCount * (kBrowserActionWidth + kBrowserActionButtonPadding));
+    width += buttonCount * kBrowserActionWidth;
+    width += (buttonCount - 1) * kBrowserActionButtonPadding;
   }
+
   // Make room for the chevron if any buttons are hidden.
   if ([self buttonCount] != [self visibleButtonCount]) {
-    width += kChevronWidth + kBrowserActionButtonPadding;
-    // Add extra padding if all buttons are hidden.
-    if ([self visibleButtonCount] == 0)
-      width += 3 * kBrowserActionButtonPadding;
+    // Chevron and buttons both include 1px padding w/in their bounds,
+    // so this leaves 2px between the last browser action and chevron,
+    // and also works right if the chevron is the only button.
+    width += kChevronWidth;
   }
+
   return width;
 }
 
 - (NSUInteger)containerButtonCapacity {
-  CGFloat containerWidth = [self savedWidth];
-  return (containerWidth - kGrippyXOffset + kContainerPadding) /
+  // Edge-to-edge span of the browser action buttons.
+  CGFloat actionSpan = [self savedWidth] - kBrowserActionLeftPadding;
+
+  // Add in some padding for the browser action on the end, then
+  // divide out to get the number of action buttons that fit.
+  return (actionSpan + kBrowserActionButtonPadding) /
       (kBrowserActionWidth + kBrowserActionButtonPadding);
 }
 
@@ -658,7 +677,7 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
     if (intersectionWidth > dragThreshold && button != draggedButton &&
         ![button isAnimating] && index < [self visibleButtonCount]) {
       toolbarModel_->MoveBrowserAction([draggedButton extension], index);
-      [self repositionActionButtonsAndAnimate:YES];
+      [self positionActionButtonsAndAnimate:YES];
       return;
     }
     ++index;
@@ -667,17 +686,31 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
 
 - (void)actionButtonDragFinished:(NSNotification*)notification {
   [self showChevronIfNecessaryInFrame:[containerView_ frame] animate:YES];
-  [self repositionActionButtonsAndAnimate:YES];
+  [self positionActionButtonsAndAnimate:YES];
 }
 
 - (void)moveButton:(BrowserActionButton*)button
            toIndex:(NSUInteger)index
            animate:(BOOL)animate {
-  CGFloat xOffset = kGrippyXOffset +
+  CGFloat xOffset = kBrowserActionLeftPadding +
       (index * (kBrowserActionWidth + kBrowserActionButtonPadding));
   NSRect buttonFrame = [button frame];
   buttonFrame.origin.x = xOffset;
   [button setFrame:buttonFrame animate:animate];
+
+  if (index < [self containerButtonCapacity]) {
+    // Make sure the button is within the visible container.
+    if ([button superview] != containerView_) {
+      [containerView_ addSubview:button];
+      [button setAlphaValue:1.0];
+      [hiddenButtons_ removeObjectIdenticalTo:button];
+    }
+  } else if (![hiddenButtons_ containsObject:button]) {
+    [hiddenButtons_ addObject:button];
+    [button removeFromSuperview];
+    [button setAlphaValue:0.0];
+    [self updateOverflowMenu];
+  }
 }
 
 - (void)browserActionClicked:(BrowserActionButton*)button {
@@ -703,7 +736,7 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
     [ExtensionPopupController showURL:popupUrl
                             inBrowser:browser_
                            anchoredAt:arrowPoint
-                        arrowLocation:kTopRight
+                        arrowLocation:info_bubble::kTopRight
                               devMode:NO];
   } else {
     ExtensionBrowserEventRouter::GetInstance()->BrowserActionExecuted(
@@ -724,11 +757,11 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
 }
 
 - (void)updateChevronPositionInFrame:(NSRect)frame {
-  CGFloat xPos = NSWidth(frame) - kChevronWidth - kChevronRightPadding;
+  CGFloat xPos = NSWidth(frame) - kChevronWidth;
   NSRect buttonFrame = NSMakeRect(xPos,
-                                  kChevronLowerPadding,
+                                  kBrowserActionOriginYOffset,
                                   kChevronWidth,
-                                  kChevronHeight);
+                                  kBrowserActionHeight);
   [chevronMenuButton_ setFrame:buttonFrame];
 }
 
@@ -739,10 +772,11 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
     return;
 
   if (!chevronMenuButton_.get()) {
-    chevronMenuButton_.reset([[MenuButton alloc] init]);
+    chevronMenuButton_.reset([[ChevronMenuButton alloc] init]);
     [chevronMenuButton_ setBordered:NO];
-    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    [chevronMenuButton_ setImage:rb.GetNSImageNamed(IDR_BOOKMARK_BAR_CHEVRONS)];
+    [chevronMenuButton_ setShowsBorderOnlyWhileMouseInside:YES];
+    NSImage* chevronImage = nsimage_cache::ImageNamed(kOverflowChevronsName);
+    [chevronMenuButton_ setImage:chevronImage];
     [containerView_ addSubview:chevronMenuButton_];
   }
 
@@ -817,13 +851,11 @@ class ExtensionsServiceObserverBridge : public NotificationObserver,
 #pragma mark Testing Methods
 
 - (NSButton*)buttonWithIndex:(NSUInteger)index {
-  NSUInteger i = 0;
-  for (ExtensionList::iterator iter = toolbarModel_->begin();
-       iter != toolbarModel_->end(); ++iter) {
-    if (i == index)
-      return [buttons_ objectForKey:base::SysUTF8ToNSString((*iter)->id())];
-
-    ++i;
+  if (profile_->IsOffTheRecord())
+    index = toolbarModel_->IncognitoIndexToOriginal(index);
+  if (index < toolbarModel_->size()) {
+    Extension* extension = toolbarModel_->GetExtensionByIndex(index);
+    return [buttons_ objectForKey:base::SysUTF8ToNSString(extension->id())];
   }
   return nil;
 }

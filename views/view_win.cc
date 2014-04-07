@@ -8,10 +8,13 @@
 #include "base/string_util.h"
 #include "gfx/canvas.h"
 #include "gfx/path.h"
+#include "views/accessibility/view_accessibility.h"
 #include "views/accessibility/view_accessibility_wrapper.h"
 #include "views/border.h"
+#include "views/views_delegate.h"
 #include "views/widget/root_view.h"
 #include "views/widget/widget.h"
+#include "views/widget/widget_win.h"
 
 namespace views {
 
@@ -26,6 +29,24 @@ int View::GetMenuShowDelay() {
   if (!delay && !SystemParametersInfo(SPI_GETMENUSHOWDELAY, 0, &delay, 0))
     delay = View::kShowFolderDropMenuDelay;
   return delay;
+}
+
+void View::NotifyAccessibilityEvent(AccessibilityTypes::Event event_type,
+    bool send_native_event) {
+  // Send the notification to the delegate.
+  if (ViewsDelegate::views_delegate)
+    ViewsDelegate::views_delegate->NotifyAccessibilityEvent(this, event_type);
+
+  // Now call the Windows-specific method to notify MSAA clients of this
+  // event.  The widget gives us a temporary unique child ID to associate
+  // with this view so that clients can call get_accChild in ViewAccessibility
+  // to retrieve the IAccessible associated with this view.
+  if (send_native_event) {
+    WidgetWin* view_widget = static_cast<WidgetWin*>(GetWidget());
+    int child_id = view_widget->AddAccessibilityViewEvent(this);
+    ::NotifyWinEvent(ViewAccessibility::MSAAEvent(event_type),
+        view_widget->GetNativeView(), OBJID_CLIENT, child_id);
+  }
 }
 
 ViewAccessibilityWrapper* View::GetViewAccessibilityWrapper() {

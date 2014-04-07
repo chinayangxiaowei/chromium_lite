@@ -9,11 +9,10 @@
 
 #ifndef NET_URL_REQUEST_URL_REQUEST_CONTEXT_H_
 #define NET_URL_REQUEST_URL_REQUEST_CONTEXT_H_
+#pragma once
 
+#include "base/non_thread_safe.h"
 #include "base/ref_counted.h"
-#include "base/string_util.h"
-#include "net/base/cookie_store.h"
-#include "net/base/host_resolver.h"
 #include "net/base/net_log.h"
 #include "net/base/ssl_config_service.h"
 #include "net/base/transport_security_state.h"
@@ -22,24 +21,23 @@
 
 namespace net {
 class CookiePolicy;
+class CookieStore;
+class DnsRRResolver;
 class FtpTransactionFactory;
+class HostResolver;
 class HttpAuthHandlerFactory;
+class HttpNetworkDelegate;
 class HttpTransactionFactory;
-class SocketStream;
+class SSLConfigService;
 }
 class URLRequest;
 
 // Subclass to provide application-specific context for URLRequest instances.
-class URLRequestContext :
-    public base::RefCountedThreadSafe<URLRequestContext> {
+class URLRequestContext
+    : public base::RefCountedThreadSafe<URLRequestContext>,
+      public NonThreadSafe {
  public:
-  URLRequestContext()
-      : net_log_(NULL),
-        http_transaction_factory_(NULL),
-        ftp_transaction_factory_(NULL),
-        cookie_policy_(NULL),
-        transport_security_state_(NULL) {
-  }
+  URLRequestContext();
 
   net::NetLog* net_log() const {
     return net_log_;
@@ -47,6 +45,10 @@ class URLRequestContext :
 
   net::HostResolver* host_resolver() const {
     return host_resolver_;
+  }
+
+  net::DnsRRResolver* dnsrr_resolver() const {
+    return dnsrr_resolver_;
   }
 
   // Get the proxy service for this context.
@@ -98,9 +100,7 @@ class URLRequestContext :
   // Gets the UA string to use for the given URL.  Pass an invalid URL (such as
   // GURL()) to get the default UA string.  Subclasses should override this
   // method to provide a UA string.
-  virtual const std::string& GetUserAgent(const GURL& url) const {
-    return EmptyString();
-  }
+  virtual const std::string& GetUserAgent(const GURL& url) const;
 
   // In general, referrer_charset is not known when URLRequestContext is
   // constructed. So, we need a setter.
@@ -109,34 +109,27 @@ class URLRequestContext :
     referrer_charset_ = charset;
   }
 
-  // Called before adding cookies to requests. Returns true if cookie can
-  // be added to the request. The cookie might still be modified though.
-  virtual bool InterceptRequestCookies(const URLRequest* request,
-                                       const std::string& cookies) const {
-    return true;
-  }
-
-  // Called before adding cookies from respones to the cookie monster. Returns
-  // true if the cookie can be added. The cookie might still be modified though.
-  virtual bool InterceptResponseCookie(const URLRequest* request,
-                                       const std::string& cookie) const {
-    return true;
-  }
+  // Controls whether or not the URLRequestContext considers itself to be the
+  // "main" URLRequestContext.
+  bool is_main() const { return is_main_; }
+  void set_is_main(bool is_main) { is_main_ = is_main; }
 
  protected:
   friend class base::RefCountedThreadSafe<URLRequestContext>;
 
-  virtual ~URLRequestContext() {}
+  virtual ~URLRequestContext();
 
   // The following members are expected to be initialized and owned by
   // subclasses.
   net::NetLog* net_log_;
-  scoped_refptr<net::HostResolver> host_resolver_;
+  net::HostResolver* host_resolver_;
+  net::DnsRRResolver* dnsrr_resolver_;
   scoped_refptr<net::ProxyService> proxy_service_;
   scoped_refptr<net::SSLConfigService> ssl_config_service_;
   net::HttpTransactionFactory* http_transaction_factory_;
   net::FtpTransactionFactory* ftp_transaction_factory_;
   net::HttpAuthHandlerFactory* http_auth_handler_factory_;
+  net::HttpNetworkDelegate* network_delegate_;
   scoped_refptr<net::CookieStore> cookie_store_;
   net::CookiePolicy* cookie_policy_;
   scoped_refptr<net::TransportSecurityState> transport_security_state_;
@@ -149,6 +142,9 @@ class URLRequestContext :
   std::string referrer_charset_;
 
  private:
+  // Indicates whether or not this is the main URLRequestContext.
+  bool is_main_;
+
   DISALLOW_COPY_AND_ASSIGN(URLRequestContext);
 };
 

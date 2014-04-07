@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "chrome/browser/profile_manager.h"
 
-#include "app/l10n_util.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
@@ -16,12 +15,12 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/chrome_thread.h"
-#include "chrome/browser/net/url_request_context_getter.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/logging_chrome.h"
+#include "chrome/common/net/url_request_context_getter.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
 #include "chrome/common/pref_names.h"
@@ -39,6 +38,8 @@
 // static
 void ProfileManager::ShutdownSessionServices() {
   ProfileManager* pm = g_browser_process->profile_manager();
+  if (!pm) // Is NULL when running unit tests.
+    return;
   for (ProfileManager::const_iterator i = pm->begin(); i != pm->end(); ++i)
     (*i)->ShutdownSessionService();
 }
@@ -70,12 +71,6 @@ ProfileManager::~ProfileManager() {
   for (const_iterator i(begin()); i != end(); ++i)
     delete *i;
   profiles_.clear();
-
-  // Get rid of available profile list
-  for (AvailableProfileVector::const_iterator i(available_profiles_.begin());
-       i != available_profiles_.end(); ++i)
-    delete *i;
-  available_profiles_.clear();
 }
 
 FilePath ProfileManager::GetDefaultProfileDir(
@@ -93,62 +88,55 @@ FilePath ProfileManager::GetProfilePrefsPath(
   return default_prefs_path;
 }
 
-Profile* ProfileManager::GetDefaultProfile(const FilePath& user_data_dir) {
-  FilePath default_profile_dir(user_data_dir);
+FilePath ProfileManager::GetCurrentProfileDir() {
+  FilePath relative_profile_dir;
 #if defined(OS_CHROMEOS)
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
   if (logged_in_) {
-    std::wstring profile_dir;
+    FilePath profile_dir;
     // If the user has logged in, pick up the new profile.
-    // TODO(davemoore) Delete this once chromium os has started using
-    // "--login-profile" instead of "--profile".
     if (command_line.HasSwitch(switches::kLoginProfile)) {
-      profile_dir = command_line.GetSwitchValue(switches::kLoginProfile);
-    } else if (command_line.HasSwitch(switches::kProfile)) {
-      profile_dir = command_line.GetSwitchValue(switches::kProfile);
+      profile_dir = command_line.GetSwitchValuePath(switches::kLoginProfile);
     } else {
       // We should never be logged in with no profile dir.
       NOTREACHED();
-      return NULL;
+      return FilePath("");
     }
-    default_profile_dir = default_profile_dir.Append(
-        FilePath::FromWStringHack(profile_dir));
-    return GetProfile(default_profile_dir);
-  } else {
-    // If not logged in on cros, always return the incognito profile
-    default_profile_dir = default_profile_dir.Append(
-        FilePath::FromWStringHack(chrome::kNotSignedInProfile));
-    Profile*profile = GetProfile(default_profile_dir);
+    relative_profile_dir = relative_profile_dir.Append(profile_dir);
+    return relative_profile_dir;
+  }
+#endif
+  relative_profile_dir = relative_profile_dir.Append(
+      FilePath::FromWStringHack(chrome::kNotSignedInProfile));
+  return relative_profile_dir;
+}
+
+Profile* ProfileManager::GetDefaultProfile(const FilePath& user_data_dir) {
+  FilePath default_profile_dir(user_data_dir);
+  default_profile_dir = default_profile_dir.Append(GetCurrentProfileDir());
+#if defined(OS_CHROMEOS)
+  if (!logged_in_) {
+    Profile* profile;
+    const CommandLine& command_line = *CommandLine::ForCurrentProcess();
 
     // For cros, return the OTR profile so we never accidentally keep
     // user data in an unencrypted profile. But doing this makes
-    // many of the browser and ui tests fail.
+    // many of the browser and ui tests fail. We do return the OTR profile
+    // if the login-profile switch is passed so that we can test this.
     // TODO(davemoore) Fix the tests so they allow OTR profiles.
-    if (!command_line.HasSwitch(switches::kTestType))
+    if (!command_line.HasSwitch(switches::kTestType) ||
+        command_line.HasSwitch(switches::kLoginProfile)) {
+      // Don't init extensions for this profile
+      profile = GetProfile(default_profile_dir, false);
       profile = profile->GetOffTheRecordProfile();
-
+    } else {
+      profile = GetProfile(default_profile_dir, true);
+    }
     return profile;
   }
-#else
-  default_profile_dir = default_profile_dir.Append(
-      FilePath::FromWStringHack(chrome::kNotSignedInProfile));
+#endif
   return GetProfile(default_profile_dir);
-#endif
 }
-
-#if defined(OS_CHROMEOS)
-Profile* ProfileManager::GetWizardProfile() {
-  FilePath user_data_dir;
-  PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
-  FilePath default_profile_dir(user_data_dir);
-  default_profile_dir = default_profile_dir.Append(
-      FilePath::FromWStringHack(chrome::kNotSignedInProfile));
-  ProfileManager* profile_manager = g_browser_process->profile_manager();
-
-  // Don't init extensions for this profile
-  return profile_manager->GetProfile(default_profile_dir, false);
-}
-#endif
 
 Profile* ProfileManager::GetProfile(const FilePath& profile_dir) {
   return GetProfile(profile_dir, true);
@@ -211,8 +199,8 @@ void ProfileManager::OnSuspend() {
   DCHECK(CalledOnValidThread());
 
   for (const_iterator i(begin()); i != end(); ++i) {
-    ChromeThread::PostTask(
-        ChromeThread::IO, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
         NewRunnableFunction(&ProfileManager::SuspendProfile, *i));
   }
 }
@@ -220,8 +208,8 @@ void ProfileManager::OnSuspend() {
 void ProfileManager::OnResume() {
   DCHECK(CalledOnValidThread());
   for (const_iterator i(begin()); i != end(); ++i) {
-    ChromeThread::PostTask(
-        ChromeThread::IO, FROM_HERE,
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
         NewRunnableFunction(&ProfileManager::ResumeProfile, *i));
   }
 }
@@ -232,12 +220,17 @@ void ProfileManager::Observe(
     const NotificationDetails& details) {
 #if defined(OS_CHROMEOS)
   if (type == NotificationType::LOGIN_USER_CHANGED) {
-    CHECK(chromeos::CrosLibrary::Get()->EnsureLoaded());
-    // If we don't have a mounted profile directory we're in trouble.
-    // TODO(davemoore) Once we have better api this check should ensure that
-    // our profile directory is the one that's mounted, and that it's mounted
-    // as the current user.
-    CHECK(chromeos::CrosLibrary::Get()->GetCryptohomeLibrary()->IsMounted());
+    const CommandLine& command_line = *CommandLine::ForCurrentProcess();
+    if (!command_line.HasSwitch(switches::kTestType)) {
+      // This will fail when running on non cros os.
+      // TODO(davemoore) Need to mock this enough to enable testing.
+      CHECK(chromeos::CrosLibrary::Get()->EnsureLoaded());
+      // If we don't have a mounted profile directory we're in trouble.
+      // TODO(davemoore) Once we have better api this check should ensure that
+      // our profile directory is the one that's mounted, and that it's mounted
+      // as the current user.
+      CHECK(chromeos::CrosLibrary::Get()->GetCryptohomeLibrary()->IsMounted());
+    }
     logged_in_ = true;
   }
 #endif
@@ -245,7 +238,7 @@ void ProfileManager::Observe(
 
 void ProfileManager::SuspendProfile(Profile* profile) {
   DCHECK(profile);
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
   for (URLRequestJobTracker::JobIterator i = g_url_request_job_tracker.begin();
        i != g_url_request_job_tracker.end(); ++i)
@@ -257,7 +250,7 @@ void ProfileManager::SuspendProfile(Profile* profile) {
 
 void ProfileManager::ResumeProfile(Profile* profile) {
   DCHECK(profile);
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   profile->GetRequestContext()->GetURLRequestContext()->
       http_transaction_factory()->Suspend(false);
 }

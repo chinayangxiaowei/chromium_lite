@@ -1,10 +1,12 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/fav_icon_helper.h"
 
 #include "build/build_config.h"
+
+#include <vector>
 
 #include "base/callback.h"
 #include "base/ref_counted_memory.h"
@@ -111,6 +113,11 @@ void FavIconHelper::UpdateFavIcon(NavigationEntry* entry,
 void FavIconHelper::UpdateFavIconURL(RenderViewHost* render_view_host,
                                      int32 page_id,
                                      const GURL& icon_url) {
+  // TODO(davemoore) Should clear on empty url. Currently we ignore it.
+  // This appears to be what FF does as well.
+  if (icon_url.is_empty())
+    return;
+
   NavigationEntry* entry = GetEntry();
   if (!entry)
     return;

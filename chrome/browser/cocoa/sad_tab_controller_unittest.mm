@@ -7,6 +7,8 @@
 #import "chrome/browser/cocoa/sad_tab_controller.h"
 #import "chrome/browser/cocoa/sad_tab_view.h"
 #include "chrome/browser/renderer_host/test/test_render_view_host.h"
+#include "chrome/browser/tab_contents/test_tab_contents.h"
+#include "chrome/test/testing_profile.h"
 
 @interface SadTabView (ExposedForTesting)
 // Implementation is below.
@@ -67,6 +69,9 @@ class SadTabControllerTest : public RenderViewHostTestHarness {
   static bool link_clicked_;
   CocoaTestHelperWindow* test_window_;
 };
+
+// static
+bool SadTabControllerTest::link_clicked_;
 
 TEST_F(SadTabControllerTest, WithTabContents) {
   scoped_nsobject<SadTabController> controller(CreateController());

@@ -12,7 +12,7 @@
 #include "chrome/browser/cocoa/browser_window_controller.h"
 #include "chrome/browser/cocoa/cocoa_test_helper.h"
 #include "chrome/browser/cocoa/find_bar_bridge.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/testing_browser_process.h"
@@ -48,6 +48,14 @@
 
 - (NSView*)findBarView {
   return [findBarCocoaController_ view];
+}
+
+- (NSSplitView*)devToolsView {
+  return static_cast<NSSplitView*>([devToolsController_ view]);
+}
+
+- (NSView*)sidebarView {
+  return [sidebarController_ view];
 }
 
 - (BOOL)bookmarkBarVisible {
@@ -109,7 +117,8 @@ TEST_F(BrowserWindowControllerTest, TestNormal) {
 
   // And make sure a controller for a pop-up window is not normal.
   // popup_browser will be owned by its window.
-  Browser *popup_browser(Browser::CreateForPopup(browser_helper_.profile()));
+  Browser *popup_browser(Browser::CreateForType(Browser::TYPE_POPUP,
+                                                browser_helper_.profile()));
   NSWindow *cocoaWindow = popup_browser->window()->GetNativeHandle();
   BrowserWindowController* controller =
       static_cast<BrowserWindowController*>([cocoaWindow windowController]);
@@ -434,13 +443,13 @@ TEST_F(BrowserWindowControllerTest, BookmarkBarIsSameWidth) {
 }
 
 TEST_F(BrowserWindowControllerTest, TestTopRightForBubble) {
-  NSPoint p = [controller_ pointForBubbleArrowTip];
+  NSPoint p = [controller_ bookmarkBubblePoint];
   NSRect all = [[controller_ window] frame];
 
-  // As a sanity check make sure the point is vaguely in the top left
+  // As a sanity check make sure the point is vaguely in the top right
   // of the window.
   EXPECT_GT(p.y, all.origin.y + (all.size.height/2));
-  EXPECT_LT(p.x, all.origin.x + (all.size.width/2));
+  EXPECT_GT(p.x, all.origin.x + (all.size.width/2));
 }
 
 // By the "zoom frame", we mean what Apple calls the "standard frame".
@@ -547,6 +556,38 @@ TEST_F(BrowserWindowControllerTest, TestFindBarOnTop) {
   EXPECT_GT(findBar_index, bookmark_index);
 }
 
+// Tests that the sidebar view and devtools view are both non-opaque.
+TEST_F(BrowserWindowControllerTest, TestSplitViewsAreNotOpaque) {
+  // Add a subview to the sidebar view to mimic what happens when a tab is added
+  // to the window.  NSSplitView only marks itself as non-opaque when one of its
+  // subviews is non-opaque, so the test will not pass without this subview.
+  scoped_nsobject<NSView> view(
+      [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 10, 10)]);
+  [[controller_ sidebarView] addSubview:view];
+
+  EXPECT_FALSE([[controller_ tabContentArea] isOpaque]);
+  EXPECT_FALSE([[controller_ devToolsView] isOpaque]);
+  EXPECT_FALSE([[controller_ sidebarView] isOpaque]);
+}
+
+// Tests that status bubble's base frame does move when devTools are docked.
+TEST_F(BrowserWindowControllerTest, TestStatusBubblePositioning) {
+  ASSERT_EQ(1U, [[[controller_ devToolsView] subviews] count]);
+
+  NSPoint bubbleOrigin = [controller_ statusBubbleBaseFrame].origin;
+
+  // Add a fake subview to devToolsView to emulate docked devTools.
+  scoped_nsobject<NSView> view(
+      [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 10, 10)]);
+  [[controller_ devToolsView] addSubview:view];
+  [[controller_ devToolsView] adjustSubviews];
+
+  NSPoint bubbleOriginWithDevTools = [controller_ statusBubbleBaseFrame].origin;
+
+  // Make sure that status bubble frame is moved.
+  EXPECT_FALSE(NSEqualPoints(bubbleOrigin, bubbleOriginWithDevTools));
+}
+
 @interface BrowserWindowControllerFakeFullscreen : BrowserWindowController {
  @private
   // We release the window ourselves, so we don't have to rely on the unittest
@@ -587,6 +628,10 @@ TEST_F(BrowserWindowFullScreenControllerTest, TestFullscreen) {
   EXPECT_FALSE([controller_ isFullscreen]);
 }
 
+// If this test fails, it is usually a sign that the bots have some sort of
+// problem (such as a modal dialog up).  This tests is a very useful canary, so
+// please do not mark it as flaky without first verifying that there are no bot
+// problems.
 TEST_F(BrowserWindowFullScreenControllerTest, TestActivate) {
   EXPECT_FALSE([controller_ isFullscreen]);
 

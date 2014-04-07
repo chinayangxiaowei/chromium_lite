@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,7 @@
 
 #ifndef NET_DISK_CACHE_TRACE_H__
 #define NET_DISK_CACHE_TRACE_H__
-
-#include <string>
-#include <vector>
+#pragma once
 
 #include "base/basictypes.h"
 #include "base/ref_counted.h"
@@ -29,14 +27,9 @@ class TraceObject : public base::RefCounted<TraceObject> {
   static TraceObject* GetTraceObject();
 
  private:
-  TraceObject() {
-    InitTrace();
-  }
-
-  ~TraceObject() {
-    DestroyTrace();
-  }
-  DISALLOW_EVIL_CONSTRUCTORS(TraceObject);
+  TraceObject();
+  ~TraceObject();
+  DISALLOW_COPY_AND_ASSIGN(TraceObject);
 };
 
 // Traces to the internal buffer.

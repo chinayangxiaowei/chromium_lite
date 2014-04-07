@@ -1,12 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/renderer_host/render_sandbox_host_linux.h"
 
+#include <fcntl.h>
+#include <fontconfig/fontconfig.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <sys/uio.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/poll.h>
 #include <time.h>
@@ -20,9 +23,11 @@
 #include "base/process_util.h"
 #include "base/scoped_ptr.h"
 #include "base/shared_memory.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/unix_domain_socket_posix.h"
 #include "chrome/common/sandbox_methods_linux.h"
+#include "third_party/npapi/bindings/npapi_extensions.h"
 #include "third_party/WebKit/WebKit/chromium/public/gtk/WebFontInfo.h"
 
 #include "SkFontHost_fontconfig_direct.h"
@@ -70,7 +75,7 @@ class SandboxIPCProcess  {
     pfds[1].fd = browser_socket_;
     pfds[1].events = POLLIN;
 
-    bool failed_polls = 0;
+    int failed_polls = 0;
     for (;;) {
       const int r = HANDLE_EINTR(poll(pfds, 2, -1));
       if (r < 1) {
@@ -139,6 +144,8 @@ class SandboxIPCProcess  {
       HandleGetStyleForStrike(fd, pickle, iter, fds);
     } else if (kind == LinuxSandbox::METHOD_MAKE_SHARED_MEMORY_SEGMENT) {
       HandleMakeSharedMemorySegment(fd, pickle, iter, fds);
+    } else if (kind == LinuxSandbox::METHOD_MATCH_WITH_FALLBACK) {
+      HandleMatchWithFallback(fd, pickle, iter, fds);
     }
 
   error:
@@ -150,36 +157,49 @@ class SandboxIPCProcess  {
 
   void HandleFontMatchRequest(int fd, const Pickle& pickle, void* iter,
                               std::vector<int>& fds) {
-    bool fileid_valid;
-    uint32_t fileid;
-    bool is_bold, is_italic;
-    std::string family;
+    bool filefaceid_valid;
+    uint32_t filefaceid;
 
-    if (!pickle.ReadBool(&iter, &fileid_valid))
+    if (!pickle.ReadBool(&iter, &filefaceid_valid))
       return;
-    if (fileid_valid) {
-      if (!pickle.ReadUInt32(&iter, &fileid))
+    if (filefaceid_valid) {
+      if (!pickle.ReadUInt32(&iter, &filefaceid))
         return;
     }
+    bool is_bold, is_italic;
     if (!pickle.ReadBool(&iter, &is_bold) ||
-        !pickle.ReadBool(&iter, &is_italic) ||
-        !pickle.ReadString(&iter, &family)) {
+        !pickle.ReadBool(&iter, &is_italic)) {
       return;
     }
 
-    std::string result_family;
-    unsigned result_fileid;
+    uint32_t characters_bytes;
+    if (!pickle.ReadUInt32(&iter, &characters_bytes))
+      return;
+    const char* characters = NULL;
+    if (characters_bytes > 0) {
+      const uint32_t kMaxCharactersBytes = 1 << 10;
+      if (characters_bytes % 2 != 0 ||  // We expect UTF-16.
+          characters_bytes > kMaxCharactersBytes ||
+          !pickle.ReadBytes(&iter, &characters, characters_bytes))
+        return;
+    }
 
+    std::string family;
+    if (!pickle.ReadString(&iter, &family))
+      return;
+
+    std::string result_family;
+    unsigned result_filefaceid;
     const bool r = font_config_->Match(
-        &result_family, &result_fileid, fileid_valid, fileid, family, &is_bold,
-        &is_italic);
+        &result_family, &result_filefaceid, filefaceid_valid, filefaceid,
+        family, characters, characters_bytes, &is_bold, &is_italic);
 
     Pickle reply;
     if (!r) {
       reply.WriteBool(false);
     } else {
       reply.WriteBool(true);
-      reply.WriteUInt32(result_fileid);
+      reply.WriteUInt32(result_filefaceid);
       reply.WriteString(result_family);
       reply.WriteBool(is_bold);
       reply.WriteBool(is_italic);
@@ -189,10 +209,10 @@ class SandboxIPCProcess  {
 
   void HandleFontOpenRequest(int fd, const Pickle& pickle, void* iter,
                              std::vector<int>& fds) {
-    uint32_t fileid;
-    if (!pickle.ReadUInt32(&iter, &fileid))
+    uint32_t filefaceid;
+    if (!pickle.ReadUInt32(&iter, &filefaceid))
       return;
-    const int result_fd = font_config_->Open(fileid);
+    const int result_fd = font_config_->Open(filefaceid);
 
     Pickle reply;
     if (result_fd == -1) {
@@ -317,14 +337,15 @@ class SandboxIPCProcess  {
     std::string inode_output;
 
     std::vector<std::string> sandbox_cmd = sandbox_cmd_;
-    sandbox_cmd.push_back(Int64ToString(inode));
+    sandbox_cmd.push_back(base::Int64ToString(inode));
     CommandLine get_inode_cmd(sandbox_cmd);
     if (base::GetAppOutput(get_inode_cmd, &inode_output))
-      StringToInt(inode_output, &pid);
+      base::StringToInt(inode_output, &pid);
 
     if (!pid) {
+      // Even though the pid is invalid, we still need to reply to the zygote
+      // and not just return here.
       LOG(ERROR) << "Could not get pid";
-      return;
     }
 
     Pickle reply;
@@ -339,10 +360,232 @@ class SandboxIPCProcess  {
       return;
     int shm_fd = -1;
     base::SharedMemory shm;
-    if (shm.Create(L"", false, false, shm_size))
+    if (shm.Create("", false, false, shm_size))
       shm_fd = shm.handle().fd;
     Pickle reply;
     SendRendererReply(fds, reply, shm_fd);
+  }
+
+  void HandleMatchWithFallback(int fd, const Pickle& pickle, void* iter,
+                               std::vector<int>& fds) {
+    // Unlike the other calls, for which we are an indirection in front of
+    // WebKit or Skia, this call is always made via this sandbox helper
+    // process. Therefore the fontconfig code goes in here directly.
+
+    std::string face;
+    bool is_bold, is_italic;
+    uint32 charset;
+
+    if (!pickle.ReadString(&iter, &face) ||
+        face.empty() ||
+        !pickle.ReadBool(&iter, &is_bold) ||
+        !pickle.ReadBool(&iter, &is_italic) ||
+        !pickle.ReadUInt32(&iter, &charset)) {
+      return;
+    }
+
+    FcLangSet* langset = FcLangSetCreate();
+    MSCharSetToFontconfig(langset, charset);
+
+    FcPattern* pattern = FcPatternCreate();
+    // TODO(agl): FC_FAMILy needs to change
+    FcPatternAddString(pattern, FC_FAMILY, (FcChar8*) face.c_str());
+    if (is_bold)
+      FcPatternAddInteger(pattern, FC_WEIGHT, FC_WEIGHT_BOLD);
+    if (is_italic)
+      FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ITALIC);
+    FcPatternAddLangSet(pattern, FC_LANG, langset);
+    FcPatternAddBool(pattern, FC_SCALABLE, FcTrue);
+    FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+    FcDefaultSubstitute(pattern);
+
+    FcResult result;
+    FcFontSet* font_set = FcFontSort(0, pattern, 0, 0, &result);
+    int font_fd = -1;
+    int good_enough_index = -1;
+    bool good_enough_index_set = false;
+
+    if (font_set) {
+      for (int i = 0; i < font_set->nfont; ++i) {
+        FcPattern* current = font_set->fonts[i];
+
+        // Older versions of fontconfig have a bug where they cannot select
+        // only scalable fonts so we have to manually filter the results.
+        FcBool is_scalable;
+        if (FcPatternGetBool(current, FC_SCALABLE, 0,
+                             &is_scalable) != FcResultMatch ||
+            !is_scalable) {
+          continue;
+        }
+
+        FcChar8* c_filename;
+        if (FcPatternGetString(current, FC_FILE, 0, &c_filename) !=
+            FcResultMatch) {
+          continue;
+        }
+
+        // We only want to return sfnt (TrueType) based fonts. We don't have a
+        // very good way of detecting this so we'll filter based on the
+        // filename.
+        bool is_sfnt = false;
+        static const char kSFNTExtensions[][5] = {
+          ".ttf", ".otc", ".TTF", ".ttc", ""
+        };
+        const size_t filename_len = strlen(reinterpret_cast<char*>(c_filename));
+        for (unsigned j = 0; ; j++) {
+          if (kSFNTExtensions[j][0] == 0) {
+            // None of the extensions matched.
+            break;
+          }
+          const size_t ext_len = strlen(kSFNTExtensions[j]);
+          if (filename_len > ext_len &&
+              memcmp(c_filename + filename_len - ext_len,
+                     kSFNTExtensions[j], ext_len) == 0) {
+            is_sfnt = true;
+            break;
+          }
+        }
+
+        if (!is_sfnt)
+          continue;
+
+        // This font is good enough to pass muster, but we might be able to do
+        // better with subsequent ones.
+        if (!good_enough_index_set) {
+          good_enough_index = i;
+          good_enough_index_set = true;
+        }
+
+        FcValue matrix;
+        bool have_matrix = FcPatternGet(current, FC_MATRIX, 0, &matrix) == 0;
+
+        if (is_italic && have_matrix) {
+          // we asked for an italic font, but fontconfig is giving us a
+          // non-italic font with a transformation matrix.
+          continue;
+        }
+
+        FcValue embolden;
+        const bool have_embolden =
+            FcPatternGet(current, FC_EMBOLDEN, 0, &embolden) == 0;
+
+        if (is_bold && have_embolden) {
+          // we asked for a bold font, but fontconfig gave us a non-bold font
+          // and asked us to apply fake bolding.
+          continue;
+        }
+
+        font_fd = open(reinterpret_cast<char*>(c_filename), O_RDONLY);
+        if (font_fd >= 0)
+          break;
+      }
+    }
+
+    if (font_fd == -1 && good_enough_index_set) {
+      // We didn't find a font that we liked, so we fallback to something
+      // acceptable.
+      FcPattern* current = font_set->fonts[good_enough_index];
+      FcChar8* c_filename;
+      FcPatternGetString(current, FC_FILE, 0, &c_filename);
+      font_fd = open(reinterpret_cast<char*>(c_filename), O_RDONLY);
+    }
+
+    if (font_set)
+      FcFontSetDestroy(font_set);
+    FcPatternDestroy(pattern);
+
+    Pickle reply;
+    SendRendererReply(fds, reply, font_fd);
+
+    if (font_fd >= 0) {
+      if (HANDLE_EINTR(close(font_fd)) < 0)
+        PLOG(ERROR) << "close";
+    }
+  }
+
+  // MSCharSetToFontconfig translates a Microsoft charset identifier to a
+  // fontconfig language set by appending to |langset|.
+  static void MSCharSetToFontconfig(FcLangSet* langset, unsigned fdwCharSet) {
+    // We have need to translate raw fdwCharSet values into terms that
+    // fontconfig can understand. (See the description of fdwCharSet in the MSDN
+    // documentation for CreateFont:
+    // http://msdn.microsoft.com/en-us/library/dd183499(VS.85).aspx )
+    //
+    // Although the argument is /called/ 'charset', the actual values conflate
+    // character sets (which are sets of Unicode code points) and character
+    // encodings (which are algorithms for turning a series of bits into a
+    // series of code points.) Sometimes the values will name a language,
+    // sometimes they'll name an encoding. In the latter case I'm assuming that
+    // they mean the set of code points in the domain of that encoding.
+    //
+    // fontconfig deals with ISO 639-1 language codes:
+    //   http://en.wikipedia.org/wiki/List_of_ISO_639-1_codes
+    //
+    // So, for each of the documented fdwCharSet values I've had to take a
+    // guess at the set of ISO 639-1 languages intended.
+
+    switch (fdwCharSet) {
+      case NPCharsetAnsi:
+      // These values I don't really know what to do with, so I'm going to map
+      // them to English also.
+      case NPCharsetDefault:
+      case NPCharsetMac:
+      case NPCharsetOEM:
+      case NPCharsetSymbol:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("en"));
+        break;
+      case NPCharsetBaltic:
+        // The three baltic languages.
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("et"));
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("lv"));
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("lt"));
+        break;
+      case NPCharsetChineseBIG5:
+      case NPCharsetGB2312:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("zh"));
+        break;
+      case NPCharsetEastEurope:
+        // A scattering of eastern European languages.
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("pl"));
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("cs"));
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("sk"));
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("hu"));
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("hr"));
+        break;
+      case NPCharsetGreek:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("el"));
+        break;
+      case NPCharsetHangul:
+      case NPCharsetJohab:
+        // Korean
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("ko"));
+        break;
+      case NPCharsetRussian:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("ru"));
+        break;
+      case NPCharsetShiftJIS:
+        // Japanese
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("jp"));
+        break;
+      case NPCharsetTurkish:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("tr"));
+        break;
+      case NPCharsetVietnamese:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("vi"));
+        break;
+      case NPCharsetArabic:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("ar"));
+        break;
+      case NPCharsetHebrew:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("he"));
+        break;
+      case NPCharsetThai:
+        FcLangSetAdd(langset, reinterpret_cast<const FcChar8*>("th"));
+        break;
+      // default:
+      // Don't add any languages in that case that we don't recognise the
+      // constant.
+    }
   }
 
   void SendRendererReply(const std::vector<int>& fds, const Pickle& reply,
@@ -356,8 +599,15 @@ class SandboxIPCProcess  {
     char control_buffer[CMSG_SPACE(sizeof(int))];
 
     if (reply_fd != -1) {
-      struct cmsghdr *cmsg;
+      struct stat st;
+      if (fstat(reply_fd, &st) == 0 && S_ISDIR(st.st_mode)) {
+        LOG(FATAL) << "Tried to send a directory descriptor over sandbox IPC";
+        // We must never send directory descriptors to a sandboxed process
+        // because they can use openat with ".." elements in the path in order
+        // to escape the sandbox and reach the real filesystem.
+      }
 
+      struct cmsghdr *cmsg;
       msg.msg_control = control_buffer;
       msg.msg_controllen = sizeof(control_buffer);
       cmsg = CMSG_FIRSTHDR(&msg);
@@ -368,7 +618,8 @@ class SandboxIPCProcess  {
       msg.msg_controllen = cmsg->cmsg_len;
     }
 
-    HANDLE_EINTR(sendmsg(fds[0], &msg, MSG_DONTWAIT));
+    if (HANDLE_EINTR(sendmsg(fds[0], &msg, MSG_DONTWAIT)) < 0)
+      PLOG(ERROR) << "sendmsg";
   }
 
   // ---------------------------------------------------------------------------
@@ -383,7 +634,10 @@ class SandboxIPCProcess  {
 
 // Runs on the main thread at startup.
 RenderSandboxHostLinux::RenderSandboxHostLinux()
-    : init_(false) {
+    : init_(false),
+      renderer_socket_(0),
+      childs_lifeline_fd_(0),
+      pid_(0) {
 }
 
 void RenderSandboxHostLinux::Init(const std::string& sandbox_path) {
@@ -417,7 +671,9 @@ void RenderSandboxHostLinux::Init(const std::string& sandbox_path) {
 
 RenderSandboxHostLinux::~RenderSandboxHostLinux() {
   if (init_) {
-    HANDLE_EINTR(close(renderer_socket_));
-    HANDLE_EINTR(close(childs_lifeline_fd_));
+    if (HANDLE_EINTR(close(renderer_socket_)) < 0)
+      PLOG(ERROR) << "close";
+    if (HANDLE_EINTR(close(childs_lifeline_fd_)) < 0)
+      PLOG(ERROR) << "close";
   }
 }

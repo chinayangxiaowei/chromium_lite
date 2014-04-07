@@ -23,29 +23,34 @@ class TestShellDevToolsClient;
 class TestShellDevToolsAgent : public WebKit::WebDevToolsAgentClient {
 
  public:
-  TestShellDevToolsAgent(WebKit::WebView* web_view);
-  virtual ~TestShellDevToolsAgent() {}
+  TestShellDevToolsAgent();
+  virtual ~TestShellDevToolsAgent();
+
+  void SetWebView(WebKit::WebView* web_view);
 
   // WebDevToolsAgentClient implementation.
-  virtual void sendMessageToFrontend(
-      const WebKit::WebDevToolsMessageData& data);
+  virtual void sendMessageToInspectorFrontend(
+      const WebKit::WebString& data);
   virtual int hostIdentifier() { return routing_id_; }
-  virtual void forceRepaint();
-  virtual void runtimeFeatureStateChanged(const WebKit::WebString& feature,
-                                          bool enabled);
-  virtual WebKit::WebCString injectedScriptSource();
-  virtual WebKit::WebCString injectedScriptDispatcherSource();
+  virtual void runtimePropertyChanged(const WebKit::WebString& name,
+                                      const WebKit::WebString& value);
+  virtual WebKit::WebCString debuggerScriptSource();
+
+  virtual WebKit::WebDevToolsAgentClient::WebKitClientMessageLoop*
+      createClientMessageLoop();
 
   void AsyncCall(const TestShellDevToolsCallArgs& args);
 
   void attach(TestShellDevToolsClient* client);
-  void detach(TestShellDevToolsClient* client);
+  void detach();
+  void frontendLoaded();
 
   bool evaluateInWebInspector(long call_id, const std::string& script);
   bool setTimelineProfilingEnabled(bool enable);
 
  private:
   void Call(const TestShellDevToolsCallArgs& args);
+  void DelayedFrontendLoaded();
   static void DispatchMessageLoop();
   WebKit::WebDevToolsAgent* GetWebAgent();
 

@@ -4,11 +4,12 @@
 
 #ifndef NET_BASE_MAPPED_HOST_RESOLVER_H_
 #define NET_BASE_MAPPED_HOST_RESOLVER_H_
+#pragma once
 
 #include <string>
-#include <vector>
 
-#include "base/ref_counted.h"
+#include "base/scoped_ptr.h"
+#include "net/base/host_mapping_rules.h"
 #include "net/base/host_resolver.h"
 
 namespace net {
@@ -20,8 +21,9 @@ namespace net {
 class MappedHostResolver : public HostResolver {
  public:
   // Creates a MappedHostResolver that forwards all of its requests through
-  // |impl|.
+  // |impl|.  It takes ownership of |impl|.
   explicit MappedHostResolver(HostResolver* impl);
+  virtual ~MappedHostResolver();
 
   // HostResolver methods:
   virtual int Resolve(const RequestInfo& info,
@@ -42,37 +44,19 @@ class MappedHostResolver : public HostResolver {
   // The <replacement_host> can be either a hostname, or an IP address literal.
   //
   // Returns true if the rule was successfully parsed and added.
-  bool AddRuleFromString(const std::string& rule_string);
+  bool AddRuleFromString(const std::string& rule_string) {
+    return rules_.AddRuleFromString(rule_string);
+  }
 
   // Takes a comma separated list of rules, and assigns them to this resolver.
-  void SetRulesFromString(const std::string& rules_string);
+  void SetRulesFromString(const std::string& rules_string) {
+    rules_.SetRulesFromString(rules_string);
+  }
 
  private:
-  struct MapRule {
-    MapRule() : replacement_port(-1) {}
+  scoped_ptr<HostResolver> impl_;
 
-    std::string hostname_pattern;
-    std::string replacement_hostname;
-    int replacement_port;
-  };
-
-  struct ExclusionRule {
-    std::string hostname_pattern;
-  };
-
-  typedef std::vector<MapRule> MapRuleList;
-  typedef std::vector<ExclusionRule> ExclusionRuleList;
-
-  virtual ~MappedHostResolver();
-
-  // Modifies |*info| based on the current rules. Returns true if the
-  // RequestInfo was modified, false otherwise.
-  bool RewriteRequest(RequestInfo* info) const;
-
-  scoped_refptr<HostResolver> impl_;
-
-  MapRuleList map_rules_;
-  ExclusionRuleList exclusion_rules_;
+  HostMappingRules rules_;
 };
 
 }  // namespace net

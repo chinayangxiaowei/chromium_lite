@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "base/callback.h"
+#include "base/gtest_prod_util.h"
 #include "base/waitable_event.h"
 #include "media/base/buffers.h"
 #include "media/base/factory.h"
@@ -33,7 +34,6 @@
 #include "media/base/media_format.h"
 #include "media/filters/ffmpeg_glue.h"
 #include "media/filters/ffmpeg_interfaces.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 // FFmpeg forward declarations.
 struct AVFormatContext;
@@ -60,9 +60,8 @@ class FFmpegDemuxerStream : public DemuxerStream, public AVStreamProvider {
   // Safe to call on any thread.
   virtual bool HasPendingReads();
 
-  // Enqueues and takes ownership over the given AVPacket, returns the timestamp
-  // of the enqueued packet.
-  virtual base::TimeDelta EnqueuePacket(AVPacket* packet);
+  // Enqueues and takes ownership over the given AVPacket.
+  virtual void EnqueuePacket(AVPacket* packet);
 
   // Signals to empty the buffer queue and mark next packet as discontinuous.
   virtual void FlushBuffers();
@@ -76,12 +75,13 @@ class FFmpegDemuxerStream : public DemuxerStream, public AVStreamProvider {
   // DemuxerStream implementation.
   virtual const MediaFormat& media_format();
   virtual void Read(Callback1<Buffer*>::Type* read_callback);
+  // Bitstream converter to convert input packet.
+  void EnableBitstreamConverter();
 
   // AVStreamProvider implementation.
   virtual AVStream* GetAVStream() { return stream_; }
 
-  // Bitstream converter to convert input packet.
-  void SetBitstreamConverter(BitstreamConverter* converter);
+
 
  protected:
   virtual void* QueryInterface(const char* interface_id);
@@ -131,9 +131,9 @@ class FFmpegDemuxer : public Demuxer,
   virtual void PostDemuxTask();
 
   // MediaFilter implementation.
-  virtual void Stop();
+  virtual void Stop(FilterCallback* callback);
   virtual void Seek(base::TimeDelta time, FilterCallback* callback);
-  virtual void OnReceivedMessage(FilterMessage message);
+  virtual void OnAudioRendererDisabled();
 
   // Demuxer implementation.
   virtual void Initialize(DataSource* data_source, FilterCallback* callback);
@@ -151,7 +151,7 @@ class FFmpegDemuxer : public Demuxer,
   // Only allow a factory to create this class.
   friend class FilterFactoryImpl0<FFmpegDemuxer>;
   friend class MockFFmpegDemuxer;
-  FRIEND_TEST(FFmpegDemuxerTest, ProtocolRead);
+  FRIEND_TEST_ALL_PREFIXES(FFmpegDemuxerTest, ProtocolRead);
 
   FFmpegDemuxer();
   virtual ~FFmpegDemuxer();
@@ -166,7 +166,7 @@ class FFmpegDemuxer : public Demuxer,
   void DemuxTask();
 
   // Carries out stopping the demuxer streams on the demuxer thread.
-  void StopTask();
+  void StopTask(FilterCallback* callback);
 
   // Carries out disabling the audio stream on the demuxer thread.
   void DisableAudioStreamTask();
@@ -196,9 +196,6 @@ class FFmpegDemuxer : public Demuxer,
 
   // FFmpeg context handle.
   AVFormatContext* format_context_;
-
-  // Latest timestamp read on the demuxer thread.
-  base::TimeDelta current_timestamp_;
 
   // Two vector of streams:
   //   - |streams_| is indexed for the Demuxer interface GetStream(), which only
@@ -230,10 +227,6 @@ class FFmpegDemuxer : public Demuxer,
 
   size_t last_read_bytes_;
   int64 read_position_;
-
-  // If true, then it's our first seek and we won't call av_read_frame().  It's
-  // a hack to get around some issue with FFmpeg.
-  bool first_seek_hack_;
 
   DISALLOW_COPY_AND_ASSIGN(FFmpegDemuxer);
 };

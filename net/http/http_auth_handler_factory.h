@@ -4,9 +4,11 @@
 
 #ifndef NET_HTTP_HTTP_AUTH_HANDLER_FACTORY_H_
 #define NET_HTTP_HTTP_AUTH_HANDLER_FACTORY_H_
+#pragma once
 
 #include <map>
 #include <string>
+#include <vector>
 
 #include "base/scoped_ptr.h"
 #include "net/http/http_auth.h"
@@ -16,6 +18,8 @@ class GURL;
 
 namespace net {
 
+class BoundNetLog;
+class HostResolver;
 class HttpAuthHandler;
 class HttpAuthHandlerRegistryFactory;
 
@@ -27,15 +31,19 @@ class HttpAuthHandlerFactory {
 
   // Sets an URL security manager.  HttpAuthHandlerFactory doesn't own the URL
   // security manager, and the URL security manager should outlive this object.
-  void set_url_security_manager(
-      const URLSecurityManager* url_security_manager) {
+  void set_url_security_manager(URLSecurityManager* url_security_manager) {
     url_security_manager_ = url_security_manager;
   }
 
   // Retrieves the associated URL security manager.
-  const URLSecurityManager* url_security_manager() const {
+  URLSecurityManager* url_security_manager() {
     return url_security_manager_;
   }
+
+  enum CreateReason {
+    CREATE_CHALLENGE,  // Create a handler in response to a challenge.
+    CREATE_PREEMPTIVE,    // Create a handler preemptively.
+  };
 
   // Creates an HttpAuthHandler object based on the authentication
   // challenge specified by |*challenge|. |challenge| must point to a valid
@@ -50,6 +58,13 @@ class HttpAuthHandlerFactory {
   // If |*challenge| is improperly formed, |*handler| is set to NULL and
   // ERR_INVALID_RESPONSE is returned.
   //
+  // |create_reason| indicates why the handler is being created. This is used
+  // since NTLM and Negotiate schemes do not support preemptive creation.
+  //
+  // |digest_nonce_count| is specifically intended for the Digest authentication
+  // scheme, and indicates the number of handlers generated for a particular
+  // server nonce challenge.
+  //
   // For the NTLM and Negotiate handlers:
   // If |origin| does not match the authentication method's filters for
   // the specified |target|, ERR_INVALID_AUTH_CREDENTIALS is returned.
@@ -59,7 +74,10 @@ class HttpAuthHandlerFactory {
   virtual int CreateAuthHandler(HttpAuth::ChallengeTokenizer* challenge,
                                 HttpAuth::Target target,
                                 const GURL& origin,
-                                scoped_refptr<HttpAuthHandler>* handler) = 0;
+                                CreateReason create_reason,
+                                int digest_nonce_count,
+                                const BoundNetLog& net_log,
+                                scoped_ptr<HttpAuthHandler>* handler) = 0;
 
   // Creates an HTTP authentication handler based on the authentication
   // challenge string |challenge|.
@@ -69,16 +87,36 @@ class HttpAuthHandlerFactory {
   int CreateAuthHandlerFromString(const std::string& challenge,
                                   HttpAuth::Target target,
                                   const GURL& origin,
-                                  scoped_refptr<HttpAuthHandler>* handler);
+                                  const BoundNetLog& net_log,
+                                  scoped_ptr<HttpAuthHandler>* handler);
+
+  // Creates an HTTP authentication handler based on the authentication
+  // challenge string |challenge|.
+  // This is a convenience function which creates a ChallengeTokenizer for
+  // |challenge| and calls |CreateAuthHandler|. See |CreateAuthHandler| for
+  // more details on return values.
+  int CreatePreemptiveAuthHandlerFromString(
+      const std::string& challenge,
+      HttpAuth::Target target,
+      const GURL& origin,
+      int digest_nonce_count,
+      const BoundNetLog& net_log,
+      scoped_ptr<HttpAuthHandler>* handler);
 
   // Creates a standard HttpAuthHandlerRegistryFactory. The caller is
   // responsible for deleting the factory.
   // The default factory supports Basic, Digest, NTLM, and Negotiate schemes.
-  static HttpAuthHandlerRegistryFactory* CreateDefault();
+  //
+  // |resolver| is used by the Negotiate authentication handler to perform
+  // CNAME lookups to generate a Kerberos SPN for the server. It must be
+  // non-NULL.  |resolver| must remain valid for the lifetime of the
+  // HttpAuthHandlerRegistryFactory and any HttpAuthHandlers created by said
+  // factory.
+  static HttpAuthHandlerRegistryFactory* CreateDefault(HostResolver* resolver);
 
  private:
   // The URL security manager
-  const URLSecurityManager* url_security_manager_;
+  URLSecurityManager* url_security_manager_;
 
   DISALLOW_COPY_AND_ASSIGN(HttpAuthHandlerFactory);
 };
@@ -92,7 +130,7 @@ class HttpAuthHandlerRegistryFactory : public HttpAuthHandlerFactory {
 
   // Sets an URL security manager into the factory associated with |scheme|.
   void SetURLSecurityManager(const std::string& scheme,
-                             const URLSecurityManager* url_security_manager);
+                             URLSecurityManager* url_security_manager);
 
   // Registers a |factory| that will be used for a particular HTTP
   // authentication scheme such as Basic, Digest, or Negotiate.
@@ -117,7 +155,33 @@ class HttpAuthHandlerRegistryFactory : public HttpAuthHandlerFactory {
   virtual int CreateAuthHandler(HttpAuth::ChallengeTokenizer* challenge,
                                 HttpAuth::Target target,
                                 const GURL& origin,
-                                scoped_refptr<HttpAuthHandler>* handler);
+                                CreateReason reason,
+                                int digest_nonce_count,
+                                const BoundNetLog& net_log,
+                                scoped_ptr<HttpAuthHandler>* handler);
+
+  // Creates an HttpAuthHandlerRegistryFactory.
+  //
+  // |supported_schemes| is a list of authentication schemes. Valid values
+  // include "basic", "digest", "ntlm", and "negotiate", where case matters.
+  //
+  // |security_manager| is used by the NTLM and Negotiate authenticators
+  // to determine which servers Integrated Authentication can be used with. If
+  // NULL, Integrated Authentication will not be used with any server.
+  //
+  // |host_resolver| is used by the Negotiate authentication handler to perform
+  // CNAME lookups to generate a Kerberos SPN for the server. If the "negotiate"
+  // scheme is used and |negotiate_disable_cname_lookup| is false,
+  // |host_resolver| must not be NULL.
+  //
+  // |negotiate_disable_cname_lookup| and |negotiate_enable_port| both control
+  // how Negotiate does SPN generation, by default these should be false.
+  static HttpAuthHandlerRegistryFactory* Create(
+      const std::vector<std::string>& supported_schemes,
+      URLSecurityManager* security_manager,
+      HostResolver* host_resolver,
+      bool negotiate_disable_cname_lookup,
+      bool negotiate_enable_port);
 
  private:
   typedef std::map<std::string, HttpAuthHandlerFactory*> FactoryMap;

@@ -4,9 +4,13 @@
 
 #ifndef CHROME_PLUGIN_WEBPLUGIN_PROXY_H_
 #define CHROME_PLUGIN_WEBPLUGIN_PROXY_H_
+#pragma once
 
 #include <string>
 
+#if defined(USE_X11)
+#include "app/x11_util.h"
+#endif
 #include "app/surface/transport_dib.h"
 #include "base/hash_tables.h"
 #include "base/ref_counted.h"
@@ -24,6 +28,9 @@
 
 class PluginChannel;
 class WebPluginDelegateImpl;
+#if defined(OS_MACOSX)
+class WebPluginAcceleratedSurfaceProxy;
+#endif
 
 // This is an implementation of WebPlugin that proxies all calls to the
 // renderer.
@@ -134,12 +141,38 @@ class WebPluginProxy : public webkit_glue::WebPlugin {
   gfx::NativeViewId containing_window() { return containing_window_; }
 
 #if defined(OS_MACOSX)
-  virtual void BindFakePluginWindowHandle();
+  virtual void SetImeEnabled(bool enabled);
+
+  virtual void BindFakePluginWindowHandle(bool opaque);
+
+  virtual webkit_glue::WebPluginAcceleratedSurface* GetAcceleratedSurface();
+
+  // Tell the browser (via the renderer) to invalidate because the
+  // accelerated buffers have changed.
   virtual void AcceleratedFrameBuffersDidSwap(gfx::PluginWindowHandle window);
+
+  // Tell the renderer and browser to associate the given plugin handle with
+  // |accelerated_surface_identifier|. The geometry is used to resize any
+  // native "window" (which on the Mac is a just a view).
+  // This method is used when IOSurface support is available.
   virtual void SetAcceleratedSurface(gfx::PluginWindowHandle window,
-                                     int32 width,
-                                     int32 height,
+                                     const gfx::Size& size,
                                      uint64 accelerated_surface_identifier);
+
+  // Tell the renderer and browser to associate the given plugin handle with
+  // |dib_handle|. The geometry is used to resize any native "window" (which
+  // on the Mac is just a view).
+  // This method is used when IOSurface support is not available.
+  virtual void SetAcceleratedDIB(
+      gfx::PluginWindowHandle window,
+      const gfx::Size& size,
+      const TransportDIB::Handle& dib_handle);
+
+  // Create/destroy TranportDIBs via messages to the browser process.
+  // These are only used when IOSurface support is not available.
+  virtual void AllocSurfaceDIB(const size_t size,
+                               TransportDIB::Handle* dib_handle);
+  virtual void FreeSurfaceDIB(TransportDIB::Id dib_id);
 #endif
 
  private:
@@ -177,6 +210,7 @@ class WebPluginProxy : public webkit_glue::WebPlugin {
   scoped_ptr<TransportDIB> background_dib_;
   scoped_cftyperef<CGContextRef> windowless_context_;
   scoped_cftyperef<CGContextRef> background_context_;
+  scoped_ptr<WebPluginAcceleratedSurfaceProxy> accelerated_surface_;
 #else
   scoped_ptr<skia::PlatformCanvas> windowless_canvas_;
   scoped_ptr<skia::PlatformCanvas> background_canvas_;
@@ -184,6 +218,10 @@ class WebPluginProxy : public webkit_glue::WebPlugin {
 #if defined(USE_X11)
   scoped_ptr<TransportDIB> windowless_dib_;
   scoped_ptr<TransportDIB> background_dib_;
+  // If we can use SHM pixmaps for windowless plugin painting or not.
+  bool use_shm_pixmap_;
+  // The SHM pixmap for windowless plugin painting.
+  XID windowless_shm_pixmap_;
 #endif
 
 #endif

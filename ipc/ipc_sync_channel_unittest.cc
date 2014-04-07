@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,12 +8,13 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/dynamic_annotations.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/platform_thread.h"
+#include "base/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
+#include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "base/thread.h"
 #include "base/waitable_event.h"
 #include "ipc/ipc_message.h"
@@ -24,6 +25,10 @@
 
 #define MESSAGES_INTERNAL_FILE "ipc/ipc_sync_message_unittest.h"
 #include "ipc/ipc_message_macros.h"
+
+// Definition of IPC Messages used for this test.
+#define MESSAGES_INTERNAL_IMPL_FILE "ipc/ipc_sync_message_unittest.h"
+#include "ipc/ipc_message_impl_macros.h"
 
 using namespace IPC;
 using base::WaitableEvent;
@@ -155,10 +160,11 @@ class Worker : public Channel::Listener, public Message::Sender {
     NOTREACHED();
   }
 
- private:
   base::Thread* ListenerThread() {
     return overrided_thread_ ? overrided_thread_ : &listener_thread_;
   }
+
+ private:
   // Called on the listener thread to create the sync channel.
   void OnStart() {
     // Link ipc_thread_, listener_thread_ and channel_ altogether.
@@ -222,7 +228,7 @@ class Worker : public Channel::Listener, public Message::Sender {
 
   base::WaitableEvent shutdown_event_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(Worker);
+  DISALLOW_COPY_AND_ASSIGN(Worker);
 };
 
 
@@ -264,7 +270,7 @@ namespace {
 
 class SimpleServer : public Worker {
  public:
-  SimpleServer(bool pump_during_send)
+  explicit SimpleServer(bool pump_during_send)
       : Worker(Channel::MODE_SERVER, "simpler_server"),
         pump_during_send_(pump_during_send) { }
   void Run() {
@@ -425,7 +431,7 @@ class UnblockServer : public Worker {
 
 class UnblockClient : public Worker {
  public:
-  UnblockClient(bool pump_during_send)
+  explicit UnblockClient(bool pump_during_send)
     : Worker(Channel::MODE_CLIENT, "unblock_client"),
       pump_during_send_(pump_during_send) { }
 
@@ -576,7 +582,7 @@ namespace {
 
 class MultipleServer1 : public Worker {
  public:
-  MultipleServer1(bool pump_during_send)
+  explicit MultipleServer1(bool pump_during_send)
     : Worker("test_channel1", Channel::MODE_SERVER),
       pump_during_send_(pump_during_send) { }
 
@@ -693,9 +699,9 @@ namespace {
 // nested calls are issued.
 class QueuedReplyServer : public Worker {
  public:
-   QueuedReplyServer(base::Thread* listener_thread,
-                     const std::string& channel_name,
-                     const std::string& reply_text)
+  QueuedReplyServer(base::Thread* listener_thread,
+                    const std::string& channel_name,
+                    const std::string& reply_text)
       : Worker(channel_name, Channel::MODE_SERVER),
         reply_text_(reply_text) {
     Worker::OverrideThread(listener_thread);
@@ -727,8 +733,8 @@ class QueuedReplyClient : public Worker {
                     const std::string& expected_text,
                     bool pump_during_send)
       : Worker(channel_name, Channel::MODE_CLIENT),
-        expected_text_(expected_text),
-        pump_during_send_(pump_during_send) {
+        pump_during_send_(pump_during_send),
+        expected_text_(expected_text) {
     Worker::OverrideThread(listener_thread);
   }
 
@@ -807,7 +813,7 @@ namespace {
 
 class BadServer : public Worker {
  public:
-  BadServer(bool pump_during_send)
+  explicit BadServer(bool pump_during_send)
     : Worker(Channel::MODE_SERVER, "simpler_server"),
       pump_during_send_(pump_during_send) { }
   void Run() {
@@ -898,9 +904,9 @@ namespace {
 
 class TimeoutServer : public Worker {
  public:
-   TimeoutServer(int timeout_ms,
-                 std::vector<bool> timeout_seq,
-                 bool pump_during_send)
+  TimeoutServer(int timeout_ms,
+                std::vector<bool> timeout_seq,
+                bool pump_during_send)
       : Worker(Channel::MODE_SERVER, "timeout_server"),
         timeout_ms_(timeout_ms),
         timeout_seq_(timeout_seq),
@@ -923,10 +929,10 @@ class TimeoutServer : public Worker {
 
 class UnresponsiveClient : public Worker {
  public:
-   UnresponsiveClient(std::vector<bool> timeout_seq)
+  explicit UnresponsiveClient(std::vector<bool> timeout_seq)
       : Worker(Channel::MODE_CLIENT, "unresponsive_client"),
         timeout_seq_(timeout_seq) {
-   }
+  }
 
   void OnAnswerDelay(Message* reply_msg) {
     DCHECK(!timeout_seq_.empty());
@@ -1009,7 +1015,7 @@ namespace {
 
 class NestedTask : public Task {
  public:
-  NestedTask(Worker* server) : server_(server) { }
+  explicit NestedTask(Worker* server) : server_(server) { }
   void Run() {
     // Sleep a bit so that we wake up after the reply has been received.
     PlatformThread::Sleep(250);
@@ -1106,6 +1112,40 @@ class SyncMessageFilterServer : public Worker {
   scoped_refptr<TestSyncMessageFilter> filter_;
 };
 
+// This class provides functionality to test the case that a Send on the sync
+// channel does not crash after the channel has been closed.
+class ServerSendAfterClose : public Worker {
+ public:
+  ServerSendAfterClose()
+     : Worker(Channel::MODE_SERVER, "simpler_server"),
+       send_result_(true) {
+  }
+
+  bool SendDummy() {
+    ListenerThread()->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+        this, &ServerSendAfterClose::Send, new SyncChannelTestMsg_NoArgs));
+    return true;
+  }
+
+  bool send_result() const {
+    return send_result_;
+  }
+
+ private:
+  virtual void Run() {
+    CloseChannel();
+    Done();
+  }
+
+  bool Send(Message* msg) {
+    send_result_ = Worker::Send(msg);
+    Done();
+    return send_result_;
+  }
+
+  bool send_result_;
+};
+
 }  // namespace
 
 // Tests basic synchronous call
@@ -1115,3 +1155,19 @@ TEST_F(IPCSyncChannelTest, SyncMessageFilter) {
   workers.push_back(new SimpleClient());
   RunTest(workers);
 }
+
+// Test the case when the channel is closed and a Send is attempted after that.
+TEST_F(IPCSyncChannelTest, SendAfterClose) {
+  ServerSendAfterClose server;
+  server.Start();
+
+  server.done_event()->Wait();
+  server.done_event()->Reset();
+
+  server.SendDummy();
+  server.done_event()->Wait();
+
+  EXPECT_FALSE(server.send_result());
+}
+
+

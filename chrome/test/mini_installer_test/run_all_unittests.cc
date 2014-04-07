@@ -1,14 +1,16 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/process_util.h"
 #include "base/test/test_suite.h"
+#include "base/test/test_timeouts.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/util_constants.h"
 #include "chrome/test/mini_installer_test/mini_installer_test_constants.h"
 #include "chrome_mini_installer.h"
-
 
 void BackUpProfile(bool chrome_frame) {
   if (base::GetProcessCount(L"chrome.exe", NULL) > 0) {
@@ -44,11 +46,11 @@ int main(int argc, char** argv) {
   // with cleaning the system or make a backup before continuing.
   CommandLine::Init(argc, argv);
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
-  TestSuite test_suite = TestSuite(argc, argv);
-  if (command_line.HasSwitch("clean")) {
+  base::TestSuite test_suite(argc, argv);
+  if (command_line.HasSwitch(switches::kInstallerTestClean)) {
     printf("Current version of Chrome will be uninstalled "
            "from all levels before proceeding with tests.\n");
-  } else if (command_line.HasSwitch("backup")) {
+  } else if (command_line.HasSwitch(switches::kInstallerTestForce)) {
     BackUpProfile(command_line.HasSwitch(
         installer_util::switches::kChromeFrame));
   } else {
@@ -67,6 +69,9 @@ int main(int argc, char** argv) {
            " regardless of whether it is supported.\n");
     return 1;
   }
+
+  // Initialize the timeouts used by the test.
+  TestTimeouts::Initialize();
 
   return test_suite.Run();
 }

@@ -33,6 +33,7 @@
 
 #ifndef CHROME_BROWSER_NET_WEBSOCKET_EXPERIMENT_WEBSOCKET_EXPERIMENT_TASK_H_
 #define CHROME_BROWSER_NET_WEBSOCKET_EXPERIMENT_WEBSOCKET_EXPERIMENT_TASK_H_
+#pragma once
 
 #include <deque>
 #include <string>
@@ -40,7 +41,7 @@
 #include "base/basictypes.h"
 #include "base/task.h"
 #include "base/time.h"
-#include "chrome/browser/net/url_fetcher.h"
+#include "chrome/common/net/url_fetcher.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_errors.h"

@@ -21,53 +21,100 @@
 #include "base/histogram.h"
 #include "base/path_service.h"
 #include "base/sys_info.h"
-// TODO(jar): DNS calls should be renderer specific, not including browser.
-#include "chrome/browser/net/dns_global.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/nacl_types.h"
+#include "chrome/renderer/render_thread.h"
 #include "chrome/renderer/render_view.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_message_utils.h"
 #include "media/base/media.h"
 #include "media/base/media_switches.h"
 #include "native_client/src/trusted/plugin/nacl_entry_points.h"
+#include "skia/ext/platform_canvas.h"
 #include "webkit/glue/plugins/plugin_instance.h"
 #include "webkit/glue/plugins/plugin_lib.h"
 #include "webkit/glue/webkit_glue.h"
 
 #if defined(OS_MACOSX)
 #include "base/mac_util.h"
+#elif defined(OS_WIN)
+#include "base/iat_patch.h"
 #endif
 
 namespace {
 
-bool LaunchNaClProcess(const char* url,
-                       int imc_fd,
-                       nacl::Handle* imc_handle,
-                       nacl::Handle* nacl_process_handle,
-                       int* nacl_process_id) {
+#if !defined(DISABLE_NACL)
+bool LaunchNaClProcessMultiFD(const char* alleged_url,
+                              int socket_count,
+                              nacl::Handle* imc_handles,
+                              nacl::Handle* nacl_process_handle,
+                              int* nacl_process_id) {
   // TODO(gregoryd): nacl::FileDescriptor will be soon merged with
   // base::FileDescriptor
-  nacl::FileDescriptor imc_descriptor;
+  std::vector<nacl::FileDescriptor> sockets;
   base::ProcessHandle nacl_process;
   if (!RenderThread::current()->Send(
-    new ViewHostMsg_LaunchNaCl(ASCIIToWide(url),
-        imc_fd,
-        &imc_descriptor,
+    new ViewHostMsg_LaunchNaCl(
+        ASCIIToWide(alleged_url),
+        socket_count,
+        &sockets,
         &nacl_process,
         reinterpret_cast<base::ProcessId*>(nacl_process_id)))) {
     return false;
   }
-  *imc_handle = nacl::ToNativeHandle(imc_descriptor);
+  CHECK(static_cast<int>(sockets.size()) == socket_count);
+  for (int i = 0; i < socket_count; i++) {
+    imc_handles[i] = nacl::ToNativeHandle(sockets[i]);
+  }
   *nacl_process_handle = nacl_process;
   return true;
 }
+#endif
 
 }  // namespace
 
 //-----------------------------------------------------------------------------
+
+#if defined(OS_WIN)
+
+static iat_patch::IATPatchFunction g_iat_patch_createdca;
+HDC WINAPI CreateDCAPatch(LPCSTR driver_name,
+                          LPCSTR device_name,
+                          LPCSTR output,
+                          const void* init_data) {
+  DCHECK(std::string("DISPLAY") == std::string(driver_name));
+  DCHECK(!device_name);
+  DCHECK(!output);
+  DCHECK(!init_data);
+
+  // CreateDC fails behind the sandbox, but not CreateCompatibleDC.
+  return CreateCompatibleDC(NULL);
+}
+
+static iat_patch::IATPatchFunction g_iat_patch_get_font_data;
+DWORD WINAPI GetFontDataPatch(HDC hdc,
+                              DWORD table,
+                              DWORD offset,
+                              LPVOID buffer,
+                              DWORD length) {
+  int rv = GetFontData(hdc, table, offset, buffer, length);
+  if (rv == GDI_ERROR && hdc) {
+    HFONT font = static_cast<HFONT>(GetCurrentObject(hdc, OBJ_FONT));
+
+    LOGFONT logfont;
+    if (GetObject(font, sizeof(LOGFONT), &logfont)) {
+      std::vector<char> font_data;
+      if (RenderThread::current()->Send(new ViewHostMsg_PreCacheFont(logfont)))
+        rv = GetFontData(hdc, table, offset, buffer, length);
+    }
+  }
+  return rv;
+}
+
+#endif
 
 RenderProcessImpl::RenderProcessImpl()
     : ALLOW_THIS_IN_INITIALIZER_LIST(shared_mem_cache_cleaner_(
@@ -97,14 +144,14 @@ RenderProcessImpl::RenderProcessImpl()
 
   // Out of process dev tools rely upon auto break behavior.
   webkit_glue::SetJavaScriptFlags(
-      L"--debugger-auto-break"
+      "--debugger-auto-break"
       // Enable lazy in-memory profiling.
-      L" --prof --prof-lazy --logfile=* --compress-log");
+      " --prof --prof-lazy --logfile=* --compress-log");
 
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
   if (command_line.HasSwitch(switches::kJavaScriptFlags)) {
     webkit_glue::SetJavaScriptFlags(
-      command_line.GetSwitchValue(switches::kJavaScriptFlags));
+        command_line.GetSwitchValueASCII(switches::kJavaScriptFlags));
   }
 
   if (command_line.HasSwitch(switches::kEnableWatchdog)) {
@@ -115,9 +162,13 @@ RenderProcessImpl::RenderProcessImpl()
     StatisticsRecorder::set_dump_on_exit(true);
   }
 
-#ifndef DISABLE_NACL
-  if (command_line.HasSwitch(switches::kInternalNaCl))
-    RegisterInternalNaClPlugin(LaunchNaClProcess);
+#if !defined(DISABLE_NACL)
+  if (command_line.HasSwitch(switches::kInternalNaCl)) {
+    std::map<std::string, uintptr_t> funcs;
+    funcs["launch_nacl_process_multi_fd"] =
+        reinterpret_cast<uintptr_t>(LaunchNaClProcessMultiFD);
+    RegisterInternalNaClPlugin(funcs);
+  }
 #endif
 
   if (!command_line.HasSwitch(switches::kDisableByteRangeSupport)) {
@@ -142,20 +193,17 @@ RenderProcessImpl::RenderProcessImpl()
   }
 #endif
 
-  // Load the pdf plugin before the sandbox is turned on.
+#if defined(OS_WIN)
+  // Need to patch a few functions for font loading to work correctly.
   FilePath pdf;
-  if (PathService::Get(chrome::FILE_PDF_PLUGIN, &pdf)) {
-    static scoped_refptr<NPAPI::PluginLib> pdf_lib =
-        NPAPI::PluginLib::CreatePluginLib(pdf);
-    // Actually load the plugin.
-    pdf_lib->NP_Initialize();
-    // Keep an instance around to prevent the plugin unloading after a pdf is
-    // closed.
-    // Don't use scoped_ptr here because then get asserts on process shut down
-    // when running in --single-process.
-    static NPAPI::PluginInstance* instance = pdf_lib->CreateInstance("");
-    instance->plugin_lib();  // Quiet unused variable warnings in gcc.
+  if (PathService::Get(chrome::FILE_PDF_PLUGIN, &pdf) &&
+      file_util::PathExists(pdf)) {
+    g_iat_patch_createdca.Patch(
+        pdf.value().c_str(), "gdi32.dll", "CreateDCA", CreateDCAPatch);
+    g_iat_patch_get_font_data.Patch(
+        pdf.value().c_str(), "gdi32.dll", "GetFontData", GetFontDataPatch);
   }
+#endif
 }
 
 RenderProcessImpl::~RenderProcessImpl() {
@@ -242,7 +290,7 @@ skia::PlatformCanvas* RenderProcessImpl::GetDrawingCanvas(
   if (!GetTransportDIBFromCache(memory, size)) {
     *memory = CreateTransportDIB(size);
     if (!*memory)
-      return false;
+      return NULL;
   }
 
   return (*memory)->GetPlatformCanvas(width, height);

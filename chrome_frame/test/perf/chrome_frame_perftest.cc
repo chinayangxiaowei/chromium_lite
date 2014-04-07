@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "chrome_frame/test/perf/chrome_frame_perftest.h"
@@ -11,7 +11,10 @@
 
 #include "chrome_tab.h"  // Generated from chrome_tab.idl.
 
+#include "base/event_trace_controller_win.h"
+#include "base/event_trace_consumer_win.h"
 #include "base/file_path.h"
+#include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
 #include "base/registry.h"
@@ -20,12 +23,15 @@
 #include "base/scoped_comptr_win.h"
 #include "base/scoped_variant_win.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/time.h"
+#include "base/trace_event_win.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/test/chrome_process_util.h"
-#include "chrome/test/ui/ui_test.h"
+#include "chrome/test/ui/ui_perf_test.h"
 
 #include "chrome_frame/test_utils.h"
 #include "chrome_frame/utils.h"
@@ -169,7 +175,7 @@ class ChromeFrameActiveXContainer
 
     HRESULT hr = tab_->put_src(ScopedBstr(UTF8ToWide(url).c_str()));
     DCHECK(hr == S_OK) << "Chrome frame NavigateToURL(" << url
-                       << StringPrintf(L") failed 0x%08X", hr);
+                       << base::StringPrintf(L") failed 0x%08X", hr);
   }
 
   void SetupEventSinks() {
@@ -270,7 +276,7 @@ class ChromeFrameActiveXContainerPerf : public ChromeFrameActiveXContainer {
 
 // This class provides common functionality which can be used for most of the
 // ChromeFrame/Tab performance tests.
-class ChromeFramePerfTestBase : public UITest {
+class ChromeFramePerfTestBase : public UIPerfTest {
  public:
   ChromeFramePerfTestBase() {}
  protected:
@@ -282,7 +288,6 @@ class ChromeFrameStartupTest : public ChromeFramePerfTestBase {
   ChromeFrameStartupTest() {}
 
   virtual void SetUp() {
-    SetConfigBool(kChromeFrameUnpinnedMode, true);
     ASSERT_TRUE(PathService::Get(chrome::DIR_APP, &dir_app_));
 
     chrome_dll_ = dir_app_.Append(FILE_PATH_LITERAL("chrome.dll"));
@@ -291,10 +296,11 @@ class ChromeFrameStartupTest : public ChromeFramePerfTestBase {
     chrome_frame_dll_ = dir_app_.Append(FILE_PATH_LITERAL("servers"));
     chrome_frame_dll_ = chrome_frame_dll_.Append(
         FilePath::FromWStringHack(kChromeFrameDllName));
-    DLOG(INFO) << __FUNCTION__ << ": " << chrome_frame_dll_.value();
-  }
-  virtual void TearDown() {
-    DeleteConfigValue(kChromeFrameUnpinnedMode);
+    icu_dll_ = dir_app_.Append(FILE_PATH_LITERAL("icudt42.dll"));
+    gears_dll_ = dir_app_.Append(FILE_PATH_LITERAL("gears.dll"));
+    avcodec52_dll_ = dir_app_.Append(FILE_PATH_LITERAL("avcodec-52.dll"));
+    avformat52_dll_ = dir_app_.Append(FILE_PATH_LITERAL("avformat-52.dll"));
+    avutil50_dll_ = dir_app_.Append(FILE_PATH_LITERAL("avutil-50.dll"));
   }
 
   // TODO(iyengar)
@@ -319,6 +325,7 @@ class ChromeFrameStartupTest : public ChromeFramePerfTestBase {
           if (!ignore_cache_error) {
             ASSERT_TRUE(result);
           } else if (!result) {
+            LOG(ERROR) << GetLastError();
             printf("\nFailed to evict file %ls from cache. Not running test\n",
                    binaries_to_evict[binary_index].value().c_str());
             return;
@@ -333,7 +340,6 @@ class ChromeFrameStartupTest : public ChromeFramePerfTestBase {
       timings[i] = end_time - start_time;
 
       CoFreeUnusedLibraries();
-      ASSERT_TRUE(GetModuleHandle(kChromeFrameDllName) == NULL);
 
       // TODO(beng): Can't shut down so quickly. Figure out why, and fix. If we
       // do, we crash.
@@ -351,6 +357,11 @@ class ChromeFrameStartupTest : public ChromeFramePerfTestBase {
   FilePath chrome_dll_;
   FilePath chrome_exe_;
   FilePath chrome_frame_dll_;
+  FilePath icu_dll_;
+  FilePath gears_dll_;
+  FilePath avcodec52_dll_;
+  FilePath avformat52_dll_;
+  FilePath avutil50_dll_;
 
  protected:
   // Individual startup tests should implement this function.
@@ -399,27 +410,42 @@ class ChromeFrameStartupTestActiveX : public ChromeFrameStartupTest {
 
 // This class measures the load time of chrome and chrome frame binaries
 class ChromeFrameBinariesLoadTest : public ChromeFrameStartupTestActiveX {
+  static const size_t kStepSize = 4 * 1024;
+ public:
+  ChromeFrameBinariesLoadTest()
+      : pre_read_(false),
+        step_size_(kStepSize),
+        bytes_to_read_(0) {}
+
  protected:
   virtual void RunStartupTestImpl(TimeTicks* start_time,
                                   TimeTicks* end_time) {
     *start_time = TimeTicks::Now();
 
-    HMODULE chrome_exe = LoadLibrary(chrome_exe_.ToWStringHack().c_str());
-    ASSERT_TRUE(chrome_exe != NULL);
+    if (pre_read_) {
+      EXPECT_TRUE(file_util::PreReadImage(chrome_exe_.value().c_str(),
+                                          bytes_to_read_,
+                                          step_size_));
+      EXPECT_TRUE(file_util::PreReadImage(chrome_dll_.value().c_str(),
+                                          bytes_to_read_,
+                                          step_size_));
+    }
 
-    HMODULE chrome_dll = LoadLibrary(chrome_dll_.ToWStringHack().c_str());
-    ASSERT_TRUE(chrome_dll != NULL);
+    HMODULE chrome_exe = LoadLibrary(chrome_exe_.value().c_str());
+    EXPECT_TRUE(chrome_exe != NULL);
 
-    HMODULE chrome_tab_dll =
-        LoadLibrary(chrome_frame_dll_.ToWStringHack().c_str());
-    ASSERT_TRUE(chrome_tab_dll != NULL);
+    HMODULE chrome_dll = LoadLibrary(chrome_dll_.value().c_str());
+    EXPECT_TRUE(chrome_dll != NULL);
 
     *end_time = TimeTicks::Now();
 
     FreeLibrary(chrome_exe);
     FreeLibrary(chrome_dll);
-    FreeLibrary(chrome_tab_dll);
   }
+
+  bool pre_read_;
+  size_t bytes_to_read_;
+  size_t step_size_;
 };
 
 // This class provides functionality to run the startup performance test for
@@ -508,7 +534,7 @@ class ChromeFrameMemoryTest : public ChromeFramePerfTestBase {
          chrome_frame_memory_test_instance_->PrintResult(
              "ws_final_browser", "", trace_name + "_ws_b",
              working_set_size_ / 1024, "KB", false /* not important */);
-      } else if (process_id_ == GetCurrentProcessId()) {
+      } else if (process_id_ == base::GetCurrentProcId()) {
         chrome_frame_memory_test_instance_->PrintResult(
             "vm_current_process", "", trace_name + "_vm_c",
             virtual_size_ / 1024, "KB", false /* not important */);
@@ -520,7 +546,7 @@ class ChromeFrameMemoryTest : public ChromeFramePerfTestBase {
       printf("\n");
     }
 
-    int process_id_;
+    base::ProcessId process_id_;
     size_t virtual_size_;
     size_t working_set_size_;
     // Set to true if this is the chrome browser process.
@@ -784,6 +810,7 @@ class ChromeFrameActiveXMemoryTest : public MemoryTestBase {
     PrintResults(test_name_.c_str());
 
     CoFreeUnusedLibraries();
+    PlatformThread::Sleep(100);
   }
 
   void NavigateImpl(const std::string& url) {
@@ -924,15 +951,38 @@ TEST_F(ChromeFrameBinariesLoadTest, PerfWarm) {
 }
 
 TEST_F(ChromeFrameStartupTestActiveX, PerfCold) {
-  FilePath binaries_to_evict[] = {chrome_exe_, chrome_dll_, chrome_frame_dll_};
+  SetConfigInt(L"PreRead", 0);
+  FilePath binaries_to_evict[] = { gears_dll_, avcodec52_dll_,
+      avformat52_dll_, avutil50_dll_, chrome_exe_, chrome_dll_,
+      chrome_frame_dll_};
   RunStartupTest("cold", "t", "about:blank", true /* cold */,
+                 arraysize(binaries_to_evict), binaries_to_evict,
+                 false /* not important */, false);
+  DeleteConfigValue(L"PreRead");
+}
+
+TEST_F(ChromeFrameStartupTestActiveX, PerfColdPreRead) {
+  SetConfigInt(L"PreRead", 1);
+  FilePath binaries_to_evict[] = { gears_dll_, avcodec52_dll_,
+      avformat52_dll_, avutil50_dll_, chrome_exe_, chrome_dll_,
+      chrome_frame_dll_};
+  RunStartupTest("cold_preread", "t", "about:blank", true /* cold */,
+                 arraysize(binaries_to_evict), binaries_to_evict,
+                 false /* not important */, false);
+  DeleteConfigValue(L"PreRead");
+}
+
+TEST_F(ChromeFrameBinariesLoadTest, PerfCold) {
+  FilePath binaries_to_evict[] = {chrome_exe_, chrome_dll_};
+  RunStartupTest("binary_load_cold", "t", "", true /* cold */,
                  arraysize(binaries_to_evict), binaries_to_evict,
                  false /* not important */, false);
 }
 
-TEST_F(ChromeFrameBinariesLoadTest, PerfCold) {
-  FilePath binaries_to_evict[] = {chrome_exe_, chrome_dll_, chrome_frame_dll_};
-  RunStartupTest("binary_load_cold", "t", "", true /* cold */,
+TEST_F(ChromeFrameBinariesLoadTest, PerfColdPreRead) {
+  FilePath binaries_to_evict[] = {chrome_exe_, chrome_dll_};
+  pre_read_ = true;
+  RunStartupTest("binary_load_cold_preread", "t", "", true /* cold */,
                  arraysize(binaries_to_evict), binaries_to_evict,
                  false /* not important */, false);
 }
@@ -971,6 +1021,7 @@ TEST_F(RegularChromeFrameActiveXMemoryTest, MemoryTestAboutBlank) {
 // TODO(iyengar)
 // Revisit why the chrome frame dll does not unload correctly when this test is
 // run.
+// http://code.google.com/p/chromium/issues/detail?id=47812
 TEST_F(RegularChromeFrameActiveXMemoryTest, DISABLED_MemoryTestUrls) {
   // TODO(iyengar)
   // We should use static pages to measure memory usage.
@@ -985,7 +1036,11 @@ TEST_F(RegularChromeFrameActiveXMemoryTest, DISABLED_MemoryTestUrls) {
 typedef ChromeFrameActiveXMemoryTest<ChromeFrameMemoryTestReference>
     ReferenceBuildChromeFrameActiveXMemoryTest;
 
-TEST_F(ReferenceBuildChromeFrameActiveXMemoryTest, MemoryTestAboutBlank) {
+// Disabled to investigate why the chrome frame dll does not unload while
+// running this test.
+// http://code.google.com/p/chromium/issues/detail?id=47812
+TEST_F(ReferenceBuildChromeFrameActiveXMemoryTest,
+       DISABLED_MemoryTestAboutBlank) {
   char *urls[] = {"about:blank"};
   RunTest("memory_about_blank_reference", urls, arraysize(urls));
 }
@@ -1037,7 +1092,7 @@ TEST_F(ChromeFrameCreationTest, PerfCold) {
 // from the cache. This could also fail if the Flash control is in use.
 // On Vista this could fail because of UAC
 TEST_F(FlashCreationTest, PerfCold) {
-  RegKey flash_key(HKEY_CLASSES_ROOT, kFlashControlKey);
+  RegKey flash_key(HKEY_CLASSES_ROOT, kFlashControlKey, KEY_READ);
 
   std::wstring plugin_path;
   ASSERT_TRUE(flash_key.ReadValue(L"", &plugin_path));
@@ -1057,7 +1112,7 @@ TEST_F(FlashCreationTest, PerfCold) {
 // correctly causing the attempt to evict the dll from the system cache to
 // fail.
 TEST_F(SilverlightCreationTest, DISABLED_PerfCold) {
-  RegKey silverlight_key(HKEY_CLASSES_ROOT, kSilverlightControlKey);
+  RegKey silverlight_key(HKEY_CLASSES_ROOT, kSilverlightControlKey, KEY_READ);
 
   std::wstring plugin_path;
   ASSERT_TRUE(silverlight_key.ReadValue(L"", &plugin_path));
@@ -1069,4 +1124,341 @@ TEST_F(SilverlightCreationTest, DISABLED_PerfCold) {
   RunStartupTest("creation_cold", "t_silverlight", "", true /* cold */,
                  arraysize(binaries_to_evict), binaries_to_evict,
                  false /* important */, true);
+}
+
+namespace {
+
+// Derive from this class in order to receive custom events traced
+// via TRACE_EVENT_XXXX macros from ChromeFrame/Chrome.
+class TracedEvents {
+ public:
+  virtual void OnTraceEventBegin(EVENT_TRACE* event) {}
+  virtual void OnTraceEventEnd(EVENT_TRACE* event) {}
+  virtual void OnTraceEventInstant(EVENT_TRACE* event) {}
+};
+
+// For the time being we pass to delegate only base::kTraceEventClass32
+// events i.e. these generated by TRACE_EVENT_XXXX macros.
+// We may need to add kernel provider and pass Process Start/Exit events etc,
+// but for the time being we stick with base::kChromeTraceProviderName
+// provider only.
+class EtwConsumer : public EtwTraceConsumerBase<EtwConsumer> {
+ public:
+  EtwConsumer() {
+    set_delegate(NULL);
+  }
+
+  ~EtwConsumer() {
+    set_delegate(NULL);
+  }
+
+  void set_delegate(TracedEvents* delegate) {
+    delegate_ = delegate;
+  }
+
+  static void ProcessEvent(EVENT_TRACE* event) {
+    DCHECK(delegate_);
+    if (event->Header.Guid != base::kTraceEventClass32)
+      return;
+    if (event->Header.Class.Version != 0)
+      return;
+
+    switch (event->Header.Class.Type) {
+      case base::kTraceEventTypeBegin:
+        delegate_->OnTraceEventBegin(event);
+        break;
+      case base::kTraceEventTypeEnd:
+        delegate_->OnTraceEventEnd(event);
+        break;
+      case base::kTraceEventTypeInstant:
+        delegate_->OnTraceEventInstant(event);
+        break;
+      default:
+        NOTREACHED();
+        break;
+    }
+  }
+
+  static TracedEvents* delegate_;
+};
+
+TracedEvents* EtwConsumer::delegate_ = NULL;
+};  // namespace
+
+class EtwPerfSession {
+ public:
+  EtwPerfSession() {
+  }
+
+  ~EtwPerfSession() {
+    file_util::Delete(etl_log_file_, false);
+  }
+
+  void Start() {
+    // To ensure there is no session leftover from crashes, previous runs, etc.
+    EtwTraceProperties ignore;
+    EtwTraceController::Stop(L"cf_perf", &ignore);
+    ASSERT_TRUE(file_util::CreateTemporaryFile(&etl_log_file_));
+    ASSERT_HRESULT_SUCCEEDED(controller_.StartFileSession(L"cf_perf",
+        etl_log_file_.value().c_str(), false));
+    ASSERT_HRESULT_SUCCEEDED(controller_.EnableProvider(
+        base::kChromeTraceProviderName,
+        TRACE_LEVEL_INFORMATION,
+        ~(base::CAPTURE_STACK_TRACE)));
+  }
+
+  HRESULT Stop() {
+    return controller_.Stop(NULL);
+  }
+
+  void AnalyzeOutput(TracedEvents* delegate) {
+    EtwConsumer consumer;
+    consumer.set_delegate(delegate);
+    consumer.OpenFileSession(etl_log_file_.value().c_str());
+    consumer.Consume();
+    consumer.Close();
+  }
+
+  FilePath etl_log_file_;
+  EtwTraceController controller_;
+};
+
+// Base class for the tracing event helper classes.
+class MonitorTraceBase {
+ public:
+  static bool IsMatchingEvent(EVENT_TRACE* event,
+                              const base::StringPiece& event_to_compare) {
+    return event->MofLength > event_to_compare.size() &&
+      (memcmp(event_to_compare.data(), event->MofData,
+              event_to_compare.size() + 1) == 0);
+  }
+
+  bool is_valid() const {
+    return !start_.is_null() && !end_.is_null() && start_ <= end_;
+  }
+
+  base::TimeDelta duration() const {
+    return end_ - start_;
+  }
+
+  base::Time start_;
+  base::Time end_;
+};
+
+// This class measures the time between begin and end events of a particular
+// type.
+class MonitorTracePair : public MonitorTraceBase,
+                         public TracedEvents {
+ public:
+  MonitorTracePair() : event_(NULL) {
+  }
+
+  void set_interesting_event(const char* event) {
+    event_ = event;
+  }
+
+  virtual void OnTraceEventBegin(EVENT_TRACE* event) {
+    if (IsMatchingEvent(event, event_)) {
+      EXPECT_TRUE(start_.is_null());
+      start_ = base::Time::FromFileTime(
+          reinterpret_cast<FILETIME&>(event->Header.TimeStamp));
+    }
+  }
+
+  virtual void OnTraceEventEnd(EVENT_TRACE* event) {
+    if (IsMatchingEvent(event, event_)) {
+      EXPECT_FALSE(start_.is_null());
+      EXPECT_TRUE(end_.is_null());
+      end_ = base::Time::FromFileTime(
+        reinterpret_cast<FILETIME&>(event->Header.TimeStamp));
+    }
+  }
+
+  base::StringPiece event_;
+};
+
+// This class measures the time between two events.
+class MonitorTraceBetweenEventPair : public MonitorTraceBase,
+                                     public TracedEvents {
+ public:
+  MonitorTraceBetweenEventPair() : event_end_(NULL),
+                                   event_start_(NULL) {
+  }
+
+  void set_start_event(const char* event) {
+    event_start_ = event;
+  }
+
+  void set_end_event(const char* event) {
+    event_end_ = event;
+  }
+
+  virtual void OnTraceEventBegin(EVENT_TRACE* event) {
+    if (IsMatchingEvent(event, event_start_)) {
+      EXPECT_TRUE(start_.is_null());
+      EXPECT_TRUE(end_.is_null());
+      start_ = base::Time::FromFileTime(
+        reinterpret_cast<FILETIME&>(event->Header.TimeStamp));
+    } else if (IsMatchingEvent(event, event_end_)) {
+      EXPECT_FALSE(start_.is_null());
+      EXPECT_TRUE(end_.is_null());
+      end_ = base::Time::FromFileTime(
+        reinterpret_cast<FILETIME&>(event->Header.TimeStamp));
+    }
+  }
+
+  virtual void OnTraceEventEnd(EVENT_TRACE* event) {}
+
+  base::StringPiece event_start_;
+  base::StringPiece event_end_;
+};
+
+// The very same as UIPerfTest::PrintResultXXXX without the need to
+// create an UIPerfTest instance.
+void PrintResultsImpl(const std::string& measurement,
+                      const std::string& modifier,
+                      const std::string& trace,
+                      const std::string& values,
+                      const std::string& prefix,
+                      const std::string& suffix,
+                      const std::string& units,
+                      bool important) {
+  // <*>RESULT <graph_name>: <trace_name>= <value> <units>
+  // <*>RESULT <graph_name>: <trace_name>= {<mean>, <std deviation>} <units>
+  // <*>RESULT <graph_name>: <trace_name>= [<value>,value,value,...,] <units>
+  printf("%sRESULT %s%s: %s= %s%s%s %s\n",
+         important ? "*" : "", measurement.c_str(), modifier.c_str(),
+         trace.c_str(), prefix.c_str(), values.c_str(), suffix.c_str(),
+         units.c_str());
+}
+
+void PrintResultList(const std::string& measurement,
+                     const std::string& modifier,
+                     const std::string& trace,
+                     const std::string& values,
+                     const std::string& units,
+                     bool important) {
+  PrintResultsImpl(measurement, modifier, trace, values,
+      "[", "]", units, important);
+}
+
+bool RunSingleTestOutOfProc(const std::string& test_name) {
+  FilePath path;
+  PathService::Get(base::DIR_EXE, &path);
+  path = path.Append(L"chrome_frame_tests.exe");
+
+  CommandLine cmd_line(path);
+  // Always enable disabled tests.  This method is not called with disabled
+  // tests unless this flag was specified to the browser test executable.
+  cmd_line.AppendSwitch("gtest_also_run_disabled_tests");
+  cmd_line.AppendSwitchASCII("gtest_filter", test_name);
+
+  base::ProcessHandle process_handle;
+  if (!base::LaunchApp(cmd_line, false, false, &process_handle))
+    return false;
+
+  int test_terminate_timeout_ms = 60 * 1000;
+  int exit_code = 0;
+  if (!base::WaitForExitCodeWithTimeout(process_handle, &exit_code,
+    test_terminate_timeout_ms)) {
+      LOG(ERROR) << "Test timeout (" << test_terminate_timeout_ms
+        << " ms) exceeded for " << test_name;
+
+      exit_code = -1;  // Set a non-zero exit code to signal a failure.
+
+      // Ensure that the process terminates.
+      base::KillProcess(process_handle, -1, true);
+  }
+
+  return exit_code == 0;
+}
+
+template <class Monitor>
+void PrintPerfTestResults(const Monitor* monitor,
+                          int num_cycles,
+                          const char* result_name) {
+  std::string times;
+
+  for (int i = 0; i < num_cycles; ++i) {
+    ASSERT_TRUE(monitor[i].is_valid());
+    StringAppendF(&times, "%.2f,",
+                  monitor[i].duration().InMillisecondsF());
+  }
+
+  PrintResultList(result_name, "", "t", times, "ms", false);
+}
+
+TEST(TestAsPerfTest, MetaTag_createproxy) {
+  const int kNumCycles = 10;
+
+  MonitorTracePair create_proxy_monitor[kNumCycles];
+  MonitorTraceBetweenEventPair browser_main_start_monitor[kNumCycles];
+  MonitorTraceBetweenEventPair browser_main_loop_monitor[kNumCycles];
+  MonitorTraceBetweenEventPair automation_provider_start_monitor[kNumCycles];
+  MonitorTraceBetweenEventPair automation_provider_connect_monitor[kNumCycles];
+  MonitorTracePair external_tab_navigate_monitor[kNumCycles];
+  MonitorTracePair pre_read_chrome_monitor[kNumCycles];
+  MonitorTraceBetweenEventPair renderer_main_monitor[kNumCycles];
+
+  for (int i = 0; i < kNumCycles; ++i) {
+    EtwPerfSession perf_session;
+    ASSERT_NO_FATAL_FAILURE(perf_session.Start());
+    ASSERT_TRUE(RunSingleTestOutOfProc(
+        "ChromeFrameTestWithWebServer.FullTabModeIE_MetaTag"));
+    // Since we cannot have array of objects with a non-default constructor,
+    // dedicated method is used to initialize watched event.
+    create_proxy_monitor[i].set_interesting_event("chromeframe.createproxy");
+
+    browser_main_start_monitor[i].set_start_event("chromeframe.createproxy");
+    browser_main_start_monitor[i].set_end_event("BrowserMain");
+
+    browser_main_loop_monitor[i].set_start_event("BrowserMain");
+    browser_main_loop_monitor[i].set_end_event("BrowserMain:MESSAGE_LOOP");
+
+    automation_provider_start_monitor[i].set_start_event("BrowserMain");
+    automation_provider_start_monitor[i].set_end_event(
+        "AutomationProvider::AutomationProvider");
+
+    automation_provider_connect_monitor[i].set_start_event(
+        "AutomationProvider::AutomationProvider");
+    automation_provider_connect_monitor[i].set_end_event(
+        "AutomationProvider::ConnectToChannel");
+
+    external_tab_navigate_monitor[i].set_interesting_event(
+        "ExternalTabContainer::Navigate");
+
+    renderer_main_monitor[i].set_start_event("ExternalTabContainer::Navigate");
+    renderer_main_monitor[i].set_end_event("RendererMain");
+
+    pre_read_chrome_monitor[i].set_interesting_event("PreReadImage");
+
+    ASSERT_HRESULT_SUCCEEDED(perf_session.Stop());
+
+    perf_session.AnalyzeOutput(&create_proxy_monitor[i]);
+    perf_session.AnalyzeOutput(&browser_main_start_monitor[i]);
+    perf_session.AnalyzeOutput(&browser_main_loop_monitor[i]);
+    perf_session.AnalyzeOutput(&automation_provider_start_monitor[i]);
+    perf_session.AnalyzeOutput(&automation_provider_connect_monitor[i]);
+    perf_session.AnalyzeOutput(&external_tab_navigate_monitor[i]);
+    perf_session.AnalyzeOutput(&pre_read_chrome_monitor[i]);
+    perf_session.AnalyzeOutput(&renderer_main_monitor[i]);
+  }
+
+  // Print results
+  PrintPerfTestResults(create_proxy_monitor, kNumCycles, "createproxy");
+  PrintPerfTestResults(browser_main_start_monitor, kNumCycles,
+                       "browserstart");
+  PrintPerfTestResults(browser_main_loop_monitor, kNumCycles,
+                       "browserloop");
+  PrintPerfTestResults(automation_provider_start_monitor, kNumCycles,
+                       "automationproviderstart");
+  PrintPerfTestResults(automation_provider_connect_monitor, kNumCycles,
+                       "automationproviderconnect");
+  PrintPerfTestResults(external_tab_navigate_monitor, kNumCycles,
+                       "externaltabnavigate");
+  PrintPerfTestResults(renderer_main_monitor, kNumCycles,
+                       "beginrenderermain");
+#ifdef NDEBUG
+  PrintPerfTestResults(pre_read_chrome_monitor, kNumCycles, "PreReadImage");
+#endif  // NDEBUG
 }

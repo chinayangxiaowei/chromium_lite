@@ -4,15 +4,14 @@
 
 #include "net/base/x509_certificate.h"
 
-#if defined(OS_MACOSX)
-#include <Security/Security.h>
-#elif defined(USE_NSS)
-#include <cert.h>
-#endif
+#include <map>
 
 #include "base/histogram.h"
 #include "base/logging.h"
+#include "base/singleton.h"
+#include "base/string_piece.h"
 #include "base/time.h"
+#include "net/base/pem_tokenizer.h"
 
 namespace net {
 
@@ -20,7 +19,7 @@ namespace {
 
 // Returns true if this cert fingerprint is the null (all zero) fingerprint.
 // We use this as a bogus fingerprint value.
-bool IsNullFingerprint(const X509Certificate::Fingerprint& fingerprint) {
+bool IsNullFingerprint(const SHA1Fingerprint& fingerprint) {
   for (size_t i = 0; i < arraysize(fingerprint.data); ++i) {
     if (fingerprint.data[i] != 0)
       return false;
@@ -28,53 +27,26 @@ bool IsNullFingerprint(const X509Certificate::Fingerprint& fingerprint) {
   return true;
 }
 
+// Indicates the order to use when trying to decode binary data, which is
+// based on (speculation) as to what will be most common -> least common
+const X509Certificate::Format kFormatDecodePriority[] = {
+  X509Certificate::FORMAT_SINGLE_CERTIFICATE,
+  X509Certificate::FORMAT_PKCS7
+};
+
+// The PEM block header used for DER certificates
+const char kCertificateHeader[] = "CERTIFICATE";
+// The PEM block header used for PKCS#7 data
+const char kPKCS7Header[] = "PKCS7";
+
 }  // namespace
-
-// static
-bool X509Certificate::IsSameOSCert(X509Certificate::OSCertHandle a,
-                                   X509Certificate::OSCertHandle b) {
-  DCHECK(a && b);
-  if (a == b)
-    return true;
-#if defined(OS_WIN)
-  return a->cbCertEncoded == b->cbCertEncoded &&
-      memcmp(a->pbCertEncoded, b->pbCertEncoded, a->cbCertEncoded) == 0;
-#elif defined(OS_MACOSX)
-  if (CFEqual(a, b))
-    return true;
-  CSSM_DATA a_data, b_data;
-  return SecCertificateGetData(a, &a_data) == noErr &&
-      SecCertificateGetData(b, &b_data) == noErr &&
-      a_data.Length == b_data.Length &&
-      memcmp(a_data.Data, b_data.Data, a_data.Length) == 0;
-#elif defined(USE_NSS)
-  return a->derCert.len == b->derCert.len &&
-      memcmp(a->derCert.data, b->derCert.data, a->derCert.len) == 0;
-#else
-  // TODO(snej): not implemented
-  UNREACHED();
-  return false;
-#endif
-}
-
-bool X509Certificate::FingerprintLessThan::operator()(
-    const SHA1Fingerprint& lhs,
-    const SHA1Fingerprint& rhs) const {
-  for (size_t i = 0; i < sizeof(lhs.data); ++i) {
-    if (lhs.data[i] < rhs.data[i])
-      return true;
-    if (lhs.data[i] > rhs.data[i])
-      return false;
-  }
-  return false;
-}
 
 bool X509Certificate::LessThan::operator()(X509Certificate* lhs,
                                            X509Certificate* rhs) const {
   if (lhs == rhs)
     return false;
 
-  X509Certificate::FingerprintLessThan fingerprint_functor;
+  SHA1FingerprintLessThan fingerprint_functor;
   return fingerprint_functor(lhs->fingerprint_, rhs->fingerprint_);
 }
 
@@ -83,6 +55,32 @@ bool X509Certificate::LessThan::operator()(X509Certificate* lhs,
 // The cache does not hold a reference to the certificate objects.  The objects
 // must |Remove| themselves from the cache upon destruction (or else the cache
 // will be holding dead pointers to the objects).
+// TODO(rsleevi): There exists a chance of a use-after-free, due to a race
+// between Find() and Remove(). See http://crbug.com/49377
+class X509Certificate::Cache {
+ public:
+  static Cache* GetInstance();
+  void Insert(X509Certificate* cert);
+  void Remove(X509Certificate* cert);
+  X509Certificate* Find(const SHA1Fingerprint& fingerprint);
+
+ private:
+  typedef std::map<SHA1Fingerprint, X509Certificate*, SHA1FingerprintLessThan>
+      CertMap;
+
+  // Obtain an instance of X509Certificate::Cache via GetInstance().
+  Cache() {}
+  friend struct DefaultSingletonTraits<Cache>;
+
+  // You must acquire this lock before using any private data of this object.
+  // You must not block while holding this lock.
+  Lock lock_;
+
+  // The certificate cache.  You must acquire |lock_| before using |cache_|.
+  CertMap cache_;
+
+  DISALLOW_COPY_AND_ASSIGN(Cache);
+};
 
 // Get the singleton object for the cache.
 // static
@@ -113,7 +111,8 @@ void X509Certificate::Cache::Remove(X509Certificate* cert) {
 
 // Find a certificate in the cache with the given fingerprint.  If one does
 // not exist, this method returns NULL.
-X509Certificate* X509Certificate::Cache::Find(const Fingerprint& fingerprint) {
+X509Certificate* X509Certificate::Cache::Find(
+    const SHA1Fingerprint& fingerprint) {
   AutoLock lock(lock_);
 
   CertMap::iterator pos(cache_.find(fingerprint));
@@ -141,8 +140,6 @@ X509Certificate* X509Certificate::CreateFromHandle(
         (cached_cert->source_ == source &&
          cached_cert->HasIntermediateCertificates(intermediates))) {
       // Return the certificate with the same fingerprint from our cache.
-      // But we own the input OSCertHandle, which makes it our job to free it.
-      FreeOSCertHandle(cert_handle);
       DHISTOGRAM_COUNTS("X509CertificateReuseCount", 1);
       return cached_cert;
     }
@@ -163,17 +160,96 @@ X509Certificate* X509Certificate::CreateFromBytes(const char* data,
   if (!cert_handle)
     return NULL;
 
-  return CreateFromHandle(cert_handle,
-                          SOURCE_LONE_CERT_IMPORT,
-                          OSCertHandles());
+  X509Certificate* cert = CreateFromHandle(cert_handle,
+                                           SOURCE_LONE_CERT_IMPORT,
+                                           OSCertHandles());
+  FreeOSCertHandle(cert_handle);
+  return cert;
+}
+
+CertificateList X509Certificate::CreateCertificateListFromBytes(
+    const char* data, int length, int format) {
+  OSCertHandles certificates;
+
+  // Check to see if it is in a PEM-encoded form. This check is performed
+  // first, as both OS X and NSS will both try to convert if they detect
+  // PEM encoding, except they don't do it consistently between the two.
+  base::StringPiece data_string(data, length);
+  std::vector<std::string> pem_headers;
+
+  // To maintain compatibility with NSS/Firefox, CERTIFICATE is a universally
+  // valid PEM block header for any format.
+  pem_headers.push_back(kCertificateHeader);
+  if (format & FORMAT_PKCS7)
+    pem_headers.push_back(kPKCS7Header);
+
+  PEMTokenizer pem_tok(data_string, pem_headers);
+  while (pem_tok.GetNext()) {
+    std::string decoded(pem_tok.data());
+
+    OSCertHandle handle = NULL;
+    if (format & FORMAT_PEM_CERT_SEQUENCE)
+      handle = CreateOSCertHandleFromBytes(decoded.c_str(), decoded.size());
+    if (handle != NULL) {
+      // Parsed a DER encoded certificate. All PEM blocks that follow must
+      // also be DER encoded certificates wrapped inside of PEM blocks.
+      format = FORMAT_PEM_CERT_SEQUENCE;
+      certificates.push_back(handle);
+      continue;
+    }
+
+    // If the first block failed to parse as a DER certificate, and
+    // formats other than PEM are acceptable, check to see if the decoded
+    // data is one of the accepted formats.
+    if (format & ~FORMAT_PEM_CERT_SEQUENCE) {
+      for (size_t i = 0; certificates.empty() &&
+           i < arraysize(kFormatDecodePriority); ++i) {
+        if (format & kFormatDecodePriority[i]) {
+          certificates = CreateOSCertHandlesFromBytes(decoded.c_str(),
+              decoded.size(), kFormatDecodePriority[i]);
+        }
+      }
+    }
+
+    // Stop parsing after the first block for any format but a sequence of
+    // PEM-encoded DER certificates. The case of FORMAT_PEM_CERT_SEQUENCE
+    // is handled above, and continues processing until a certificate fails
+    // to parse.
+    break;
+  }
+
+  // Try each of the formats, in order of parse preference, to see if |data|
+  // contains the binary representation of a Format, if it failed to parse
+  // as a PEM certificate/chain.
+  for (size_t i = 0; certificates.empty() &&
+       i < arraysize(kFormatDecodePriority); ++i) {
+    if (format & kFormatDecodePriority[i])
+      certificates = CreateOSCertHandlesFromBytes(data, length,
+                                                  kFormatDecodePriority[i]);
+  }
+
+  CertificateList results;
+  // No certificates parsed.
+  if (certificates.empty())
+    return results;
+
+  for (OSCertHandles::iterator it = certificates.begin();
+       it != certificates.end(); ++it) {
+    X509Certificate* result = CreateFromHandle(*it, SOURCE_LONE_CERT_IMPORT,
+                                               OSCertHandles());
+    results.push_back(scoped_refptr<X509Certificate>(result));
+    FreeOSCertHandle(*it);
+  }
+
+  return results;
 }
 
 X509Certificate::X509Certificate(OSCertHandle cert_handle,
                                  Source source,
                                  const OSCertHandles& intermediates)
-    : cert_handle_(cert_handle),
+    : cert_handle_(DupOSCertHandle(cert_handle)),
       source_(source) {
-#if defined(OS_MACOSX) || defined(OS_WIN)
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_OPENSSL)
   // Copy/retain the intermediate cert handles.
   for (size_t i = 0; i < intermediates.size(); ++i)
     intermediate_ca_certs_.push_back(DupOSCertHandle(intermediates[i]));
@@ -211,7 +287,7 @@ bool X509Certificate::HasExpired() const {
 }
 
 bool X509Certificate::HasIntermediateCertificate(OSCertHandle cert) {
-#if defined(OS_MACOSX) || defined(OS_WIN)
+#if defined(OS_MACOSX) || defined(OS_WIN) || defined(USE_OPENSSL)
   for (size_t i = 0; i < intermediate_ca_certs_.size(); ++i) {
     if (IsSameOSCert(cert, intermediate_ca_certs_[i]))
       return true;

@@ -1,10 +1,9 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "views/window/window_gtk.h"
 
-#include "app/l10n_util.h"
 #include "gfx/rect.h"
 #include "base/i18n/rtl.h"
 #include "base/utf_string_conversions.h"
@@ -120,7 +119,7 @@ void WindowGtk::SetBounds(const gfx::Rect& bounds,
 }
 
 void WindowGtk::Show() {
-  gtk_widget_show_all(GetNativeView());
+  gtk_widget_show(GetNativeView());
 }
 
 void WindowGtk::HideWindow() {
@@ -129,6 +128,10 @@ void WindowGtk::HideWindow() {
 
 void WindowGtk::Activate() {
   gtk_window_present(GTK_WINDOW(GetNativeView()));
+}
+
+void WindowGtk::Deactivate() {
+  gdk_window_lower(GTK_WIDGET(GetNativeView())->window);
 }
 
 void WindowGtk::Close() {
@@ -366,6 +369,13 @@ gboolean WindowGtk::OnLeaveNotify(GtkWidget* widget, GdkEventCrossing* event) {
   return WidgetGtk::OnLeaveNotify(widget, event);
 }
 
+void WindowGtk::SetInitialFocus() {
+  View* v = window_delegate_->GetInitiallyFocusedView();
+  if (v) {
+    v->RequestFocus();
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WindowGtk, protected:
 
@@ -377,7 +387,8 @@ WindowGtk::WindowGtk(WindowDelegate* window_delegate)
       window_state_(GDK_WINDOW_STATE_WITHDRAWN),
       window_closed_(false) {
   is_window_ = true;
-  window_delegate_->window_.reset(this);
+  DCHECK(!window_delegate_->window_);
+  window_delegate_->window_ = this;
 }
 
 void WindowGtk::Init(GtkWindow* parent, const gfx::Rect& bounds) {
@@ -480,6 +491,8 @@ void WindowGtk::SizeWindowToDefault(GtkWindow* parent) {
 void WindowGtk::OnDestroy(GtkWidget* widget) {
   non_client_view_->WindowClosing();
   WidgetGtk::OnDestroy(widget);
+  window_delegate_->DeleteDelegate();
+  window_delegate_ = NULL;
 }
 
 }  // namespace views

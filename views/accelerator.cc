@@ -6,12 +6,15 @@
 
 #if defined(OS_WIN)
 #include <windows.h>
+#elif defined(OS_LINUX)
+#include <gdk/gdk.h>
 #endif
 
 #include "app/l10n_util.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "grit/app_strings.h"
 
 namespace views {
@@ -19,46 +22,46 @@ namespace views {
 std::wstring Accelerator::GetShortcutText() const {
   int string_id = 0;
   switch(key_code_) {
-    case base::VKEY_TAB:
+    case app::VKEY_TAB:
       string_id = IDS_APP_TAB_KEY;
       break;
-    case base::VKEY_RETURN:
+    case app::VKEY_RETURN:
       string_id = IDS_APP_ENTER_KEY;
       break;
-    case base::VKEY_ESCAPE:
+    case app::VKEY_ESCAPE:
       string_id = IDS_APP_ESC_KEY;
       break;
-    case base::VKEY_PRIOR:
+    case app::VKEY_PRIOR:
       string_id = IDS_APP_PAGEUP_KEY;
       break;
-    case base::VKEY_NEXT:
+    case app::VKEY_NEXT:
       string_id = IDS_APP_PAGEDOWN_KEY;
       break;
-    case base::VKEY_END:
+    case app::VKEY_END:
       string_id = IDS_APP_END_KEY;
       break;
-    case base::VKEY_HOME:
+    case app::VKEY_HOME:
       string_id = IDS_APP_HOME_KEY;
       break;
-    case base::VKEY_INSERT:
+    case app::VKEY_INSERT:
       string_id = IDS_APP_INSERT_KEY;
       break;
-    case base::VKEY_DELETE:
+    case app::VKEY_DELETE:
       string_id = IDS_APP_DELETE_KEY;
       break;
-    case base::VKEY_LEFT:
+    case app::VKEY_LEFT:
       string_id = IDS_APP_LEFT_ARROW_KEY;
       break;
-    case base::VKEY_RIGHT:
+    case app::VKEY_RIGHT:
       string_id = IDS_APP_RIGHT_ARROW_KEY;
       break;
-    case base::VKEY_BACK:
+    case app::VKEY_BACK:
       string_id = IDS_APP_BACKSPACE_KEY;
       break;
-    case base::VKEY_F1:
+    case app::VKEY_F1:
       string_id = IDS_APP_F1_KEY;
       break;
-    case base::VKEY_F11:
+    case app::VKEY_F11:
       string_id = IDS_APP_F11_KEY;
       break;
     default:
@@ -81,7 +84,21 @@ std::wstring Accelerator::GetShortcutText() const {
       key = LOWORD(::MapVirtualKeyW(key_code_, MAPVK_VK_TO_CHAR));
     shortcut += key;
 #elif defined(OS_LINUX)
-    NOTIMPLEMENTED();
+    const gchar* name = NULL;
+    switch (key_code_) {
+      case app::VKEY_OEM_2:
+        name = static_cast<const gchar*>("/");
+        break;
+      default:
+        name = gdk_keyval_name(gdk_keyval_to_lower(key_code_));
+        break;
+    }
+    if (name) {
+      if (name[0] != 0 && name[1] == 0)
+        shortcut += static_cast<wchar_t>(g_ascii_toupper(name[0]));
+      else
+        shortcut += UTF8ToWide(name);
+    }
 #endif
   } else {
     shortcut = l10n_util::GetString(string_id);

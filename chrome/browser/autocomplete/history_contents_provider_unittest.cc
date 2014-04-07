@@ -1,13 +1,15 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/autocomplete/history_contents_provider.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/bookmarks/bookmark_model.h"
+#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/test/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -19,20 +21,20 @@ namespace {
 
 struct TestEntry {
   const char* url;
-  const wchar_t* title;
-  const wchar_t* body;
+  const char* title;
+  const char* body;
 } test_entries[] = {
-  {"http://www.google.com/1", L"PAGEONE 1",   L"FOO some body text"},
-  {"http://www.google.com/2", L"PAGEONE 2",   L"FOO some more blah blah"},
-  {"http://www.google.com/3", L"PAGETHREE 3", L"BAR some hello world for you"},
+  {"http://www.google.com/1", "PAGEONE 1",   "FOO some body text"},
+  {"http://www.google.com/2", "PAGEONE 2",   "FOO some more blah blah"},
+  {"http://www.google.com/3", "PAGETHREE 3", "BAR some hello world for you"},
 };
 
 class HistoryContentsProviderTest : public testing::Test,
                                     public ACProviderListener {
  public:
   HistoryContentsProviderTest()
-      : ui_thread_(ChromeThread::UI, &message_loop_),
-        file_thread_(ChromeThread::FILE, &message_loop_) {}
+      : ui_thread_(BrowserThread::UI, &message_loop_),
+        file_thread_(BrowserThread::FILE, &message_loop_) {}
 
   void RunQuery(const AutocompleteInput& input,
                 bool minimal_changes) {
@@ -71,9 +73,10 @@ class HistoryContentsProviderTest : public testing::Test,
       Time t = Time::Now() - TimeDelta::FromDays(arraysize(test_entries) + i);
 
       history_service->AddPage(url, t, id_scope, i, GURL(),
-          PageTransition::LINK, history::RedirectList(), false);
-      history_service->SetPageTitle(url, test_entries[i].title);
-      history_service->SetPageContents(url, test_entries[i].body);
+                               PageTransition::LINK, history::RedirectList(),
+                               history::SOURCE_BROWSED, false);
+      history_service->SetPageTitle(url, UTF8ToUTF16(test_entries[i].title));
+      history_service->SetPageContents(url, UTF8ToUTF16(test_entries[i].body));
     }
 
     provider_ = new HistoryContentsProvider(this, profile_.get());
@@ -91,8 +94,8 @@ class HistoryContentsProviderTest : public testing::Test,
   }
 
   MessageLoopForUI message_loop_;
-  ChromeThread ui_thread_;
-  ChromeThread file_thread_;
+  BrowserThread ui_thread_;
+  BrowserThread file_thread_;
 
   std::wstring history_dir_;
 
@@ -108,9 +111,9 @@ TEST_F(HistoryContentsProviderTest, Body) {
   const ACMatches& m = matches();
   ASSERT_EQ(2U, m.size());
   EXPECT_EQ(test_entries[0].url, m[0].destination_url.spec());
-  EXPECT_STREQ(test_entries[0].title, m[0].description.c_str());
+  EXPECT_STREQ(test_entries[0].title, WideToUTF8(m[0].description).c_str());
   EXPECT_EQ(test_entries[1].url, m[1].destination_url.spec());
-  EXPECT_STREQ(test_entries[1].title, m[1].description.c_str());
+  EXPECT_STREQ(test_entries[1].title, WideToUTF8(m[1].description).c_str());
 }
 
 TEST_F(HistoryContentsProviderTest, Title) {
@@ -121,9 +124,9 @@ TEST_F(HistoryContentsProviderTest, Title) {
   const ACMatches& m = matches();
   ASSERT_EQ(2U, m.size());
   EXPECT_EQ(test_entries[0].url, m[0].destination_url.spec());
-  EXPECT_STREQ(test_entries[0].title, m[0].description.c_str());
+  EXPECT_STREQ(test_entries[0].title, WideToUTF8(m[0].description).c_str());
   EXPECT_EQ(test_entries[1].url, m[1].destination_url.spec());
-  EXPECT_STREQ(test_entries[1].title, m[1].description.c_str());
+  EXPECT_STREQ(test_entries[1].title, WideToUTF8(m[1].description).c_str());
 }
 
 // The "minimal changes" flag should mean that we don't re-query the DB.
@@ -155,7 +158,8 @@ TEST_F(HistoryContentsProviderTest, Bookmarks) {
 
   // Add a bookmark.
   GURL bookmark_url("http://www.google.com/4");
-  profile()->GetBookmarkModel()->SetURLStarred(bookmark_url, L"bar", true);
+  profile()->GetBookmarkModel()->SetURLStarred(bookmark_url,
+                                               ASCIIToUTF16("bar"), true);
 
   // Ask for synchronous. This should only get the bookmark.
   AutocompleteInput sync_input(L"bar", std::wstring(), true, false, true);

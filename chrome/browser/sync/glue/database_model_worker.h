@@ -4,11 +4,14 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_DATABASE_MODEL_WORKER_H_
 #define CHROME_BROWSER_SYNC_GLUE_DATABASE_MODEL_WORKER_H_
+#pragma once
 
-#include "base/ref_counted.h"
-#include "base/waitable_event.h"
+#include "base/callback.h"
 #include "chrome/browser/sync/engine/model_safe_worker.h"
-#include "chrome/browser/sync/util/closure.h"
+
+namespace base {
+class WaitableEvent;
+}
 
 namespace browser_sync {
 
@@ -19,12 +22,13 @@ class DatabaseModelWorker : public browser_sync::ModelSafeWorker {
   explicit DatabaseModelWorker() {}
 
   // ModelSafeWorker implementation. Called on syncapi SyncerThread.
-  void DoWorkAndWaitUntilDone(Closure* work);
+  void DoWorkAndWaitUntilDone(Callback0::Type* work);
   virtual ModelSafeGroup GetModelSafeGroup() { return GROUP_DB; }
   virtual bool CurrentThreadIsWorkThread();
 
  private:
-  void CallDoWorkAndSignalTask(Closure* work, base::WaitableEvent* done);
+  void CallDoWorkAndSignalTask(Callback0::Type* work,
+                               base::WaitableEvent* done);
 
   DISALLOW_COPY_AND_ASSIGN(DatabaseModelWorker);
 };

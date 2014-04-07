@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,14 @@
 #include "base/file_path.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/registry.h"
 #include "base/scoped_bstr_win.h"
-#include "base/scoped_variant_win.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "chrome_tab.h" // NOLINT
+#include "chrome_frame/crash_reporting/crash_metrics.h"
 #include "chrome_frame/extra_system_apis.h"
 #include "chrome_frame/http_negotiate.h"
+#include "chrome_frame/metrics_service.h"
 #include "chrome_frame/protocol_sink_wrap.h"
 #include "chrome_frame/urlmon_moniker.h"
 #include "chrome_frame/utils.h"
@@ -42,6 +43,13 @@ _ATL_FUNC_INFO Bho::kBeforeNavigate2Info = {
 };
 
 _ATL_FUNC_INFO Bho::kNavigateComplete2Info = {
+  CC_STDCALL, VT_EMPTY, 2, {
+    VT_DISPATCH,
+    VT_VARIANT | VT_BYREF
+  }
+};
+
+_ATL_FUNC_INFO Bho::kDocumentCompleteInfo = {
   CC_STDCALL, VT_EMPTY, 2, {
     VT_DISPATCH,
     VT_VARIANT | VT_BYREF
@@ -84,6 +92,7 @@ STDMETHODIMP Bho::SetSite(IUnknown* site) {
     // information for a URL.
     AddRef();
     RegisterThreadInstance();
+    MetricsService::Start();
   } else {
     UnregisterThreadInstance();
     Release();
@@ -110,9 +119,11 @@ STDMETHODIMP Bho::BeforeNavigate2(IDispatch* dispatch, VARIANT* url,
   }
 
   DLOG(INFO) << "BeforeNavigate2: " << url->bstrVal;
+
   ScopedComPtr<IBrowserService> browser_service;
   DoQueryService(SID_SShellBrowser, web_browser2, browser_service.Receive());
   if (!browser_service || !CheckForCFNavigation(browser_service, false)) {
+    // TODO(tommi): Remove? Isn't this done below by calling set_referrer("")?
     referrer_.clear();
   }
 
@@ -121,7 +132,7 @@ STDMETHODIMP Bho::BeforeNavigate2(IDispatch* dispatch, VARIANT* url,
   if (is_top_level) {
     set_url(url->bstrVal);
     set_referrer("");
-    if (!MonikerPatchEnabled()) {
+    if (IsIBrowserServicePatchEnabled()) {
       ProcessOptInUrls(web_browser2, url->bstrVal);
     }
   }
@@ -130,6 +141,23 @@ STDMETHODIMP Bho::BeforeNavigate2(IDispatch* dispatch, VARIANT* url,
 
 STDMETHODIMP_(void) Bho::NavigateComplete2(IDispatch* dispatch, VARIANT* url) {
   DLOG(INFO) << __FUNCTION__;
+}
+
+STDMETHODIMP_(void) Bho::DocumentComplete(IDispatch* dispatch, VARIANT* url) {
+  DLOG(INFO) << __FUNCTION__;
+
+  ScopedComPtr<IWebBrowser2> web_browser2;
+  if (dispatch)
+    web_browser2.QueryFrom(dispatch);
+
+  if (web_browser2) {
+    VARIANT_BOOL is_top_level = VARIANT_FALSE;
+    web_browser2->get_TopLevelContainer(&is_top_level);
+    if (is_top_level) {
+      CrashMetricsReporter::GetInstance()->IncrementMetric(
+          CrashMetricsReporter::NAVIGATION_COUNT);
+    }
+  }
 }
 
 namespace {
@@ -238,7 +266,7 @@ HRESULT Bho::OnHttpEquiv(IBrowserService_OnHttpEquiv_Fn original_httpequiv,
         NavigationManager* mgr = NavigationManager::GetThreadInstance();
         DCHECK(mgr);
         DLOG(INFO) << "Found tag in page. Marking browser." <<
-            StringPrintf(" tid=0x%08X", ::GetCurrentThreadId());
+            base::StringPrintf(" tid=0x%08X", ::GetCurrentThreadId());
         if (mgr) {
           // TODO(tommi): See if we can't figure out a cleaner way to avoid
           // this.  For some documents we can hit a problem here.  When we
@@ -273,9 +301,9 @@ void Bho::ProcessOptInUrls(IWebBrowser2* browser, BSTR url) {
 #endif
 
   std::wstring current_url(url, SysStringLen(url));
-  if (IsValidUrlScheme(current_url, false)) {
+  if (IsValidUrlScheme(GURL(current_url), false)) {
     bool cf_protocol = StartsWith(current_url, kChromeProtocolPrefix, false);
-    if (!cf_protocol && IsOptInUrl(current_url.c_str())) {
+    if (!cf_protocol && IsChrome(RendererTypeForUrl(current_url))) {
       DLOG(INFO) << "Opt-in URL. Switching to cf.";
       ScopedComPtr<IBrowserService> browser_service;
       DoQueryService(SID_SShellBrowser, browser, browser_service.Receive());
@@ -285,45 +313,23 @@ void Bho::ProcessOptInUrls(IWebBrowser2* browser, BSTR url) {
   }
 }
 
-namespace {
-// Utility function that prevents the current module from ever being unloaded.
-void PinModule() {
-  FilePath module_path;
-  if (PathService::Get(base::FILE_MODULE, &module_path)) {
-    HMODULE unused;
-    if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_PIN,
-                           module_path.value().c_str(), &unused)) {
-      NOTREACHED() << "Failed to pin module " << module_path.value().c_str()
-                   << " , last error: " << GetLastError();
-    }
-  } else {
-    NOTREACHED() << "Could not get module path.";
-  }
-}
-}  // namespace
-
 bool PatchHelper::InitializeAndPatchProtocolsIfNeeded() {
   bool ret = false;
 
   _pAtlModule->m_csStaticDataInitAndTypeInfo.Lock();
 
   if (state_ == UNKNOWN) {
-    // If we're going to start patching things for reals, we'd better make sure
-    // that we stick around for ever more:
-    if (!IsUnpinnedMode())
-      PinModule();
-
-    HttpNegotiatePatch::Initialize();
-
     ProtocolPatchMethod patch_method = GetPatchMethod();
     if (patch_method == PATCH_METHOD_INET_PROTOCOL) {
-      ProtocolSinkWrap::PatchProtocolHandlers();
+      g_trans_hooks.InstallHooks();
       state_ = PATCH_PROTOCOL;
     } else if (patch_method == PATCH_METHOD_IBROWSER) {
-        state_ =  PATCH_IBROWSER;
+      HttpNegotiatePatch::Initialize();
+      state_ =  PATCH_IBROWSER;
     } else {
       DCHECK(patch_method == PATCH_METHOD_MONIKER);
       state_ = PATCH_MONIKER;
+      HttpNegotiatePatch::Initialize();
       MonikerPatch::Initialize();
     }
 
@@ -345,14 +351,14 @@ void PatchHelper::PatchBrowserService(IBrowserService* browser_service) {
 
 void PatchHelper::UnpatchIfNeeded() {
   if (state_ == PATCH_PROTOCOL) {
-    ProtocolSinkWrap::UnpatchProtocolHandlers();
+    g_trans_hooks.RevertHooks();
   } else if (state_ == PATCH_IBROWSER) {
     vtable_patch::UnpatchInterfaceMethods(IBrowserService_PatchInfo);
     MonikerPatch::Uninitialize();
+    HttpNegotiatePatch::Uninitialize();
+  } else {
+    HttpNegotiatePatch::Uninitialize();
   }
-
-  HttpNegotiatePatch::Uninitialize();
 
   state_ = UNKNOWN;
 }
-

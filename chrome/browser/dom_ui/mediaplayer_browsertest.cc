@@ -2,13 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/command_line.h"
 #include "base/ref_counted.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/test/automation/dom_element_proxy.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/dom_ui/mediaplayer_ui.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
@@ -19,6 +22,10 @@ class MediaPlayerBrowserTest : public InProcessBrowserTest {
  public:
   MediaPlayerBrowserTest() {}
 
+  virtual void SetUpCommandLine(CommandLine* command_line) {
+    command_line->AppendSwitch(switches::kEnableMediaPlayer);
+  }
+
   GURL GetMusicTestURL() {
     return GURL("http://localhost:1337/files/plugin/sample_mp3.mp3");
   }
@@ -26,7 +33,7 @@ class MediaPlayerBrowserTest : public InProcessBrowserTest {
   bool IsPlayerVisible() {
     for (BrowserList::const_iterator it = BrowserList::begin();
          it != BrowserList::end(); ++it) {
-      if ((*it)->type() == Browser::TYPE_POPUP) {
+      if ((*it)->type() == Browser::TYPE_APP_PANEL) {
         const GURL& url =
             (*it)->GetTabContentsAt((*it)->selected_index())->GetURL();
 
@@ -42,7 +49,7 @@ class MediaPlayerBrowserTest : public InProcessBrowserTest {
   bool IsPlaylistVisible() {
     for (BrowserList::const_iterator it = BrowserList::begin();
          it != BrowserList::end(); ++it) {
-      if ((*it)->type() == Browser::TYPE_POPUP) {
+      if ((*it)->type() == Browser::TYPE_APP_PANEL) {
         const GURL& url =
             (*it)->GetTabContentsAt((*it)->selected_index())->GetURL();
 
@@ -58,29 +65,30 @@ class MediaPlayerBrowserTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(MediaPlayerBrowserTest, Popup) {
-  StartHTTPServer();
+  ASSERT_TRUE(test_server()->Start());
   // Doing this so we have a valid profile.
   ui_test_utils::NavigateToURL(browser(),
                                GURL("chrome://downloads"));
+
   MediaPlayer* player = MediaPlayer::Get();
-  player->set_profile(browser()->profile());
   // Check that its not currently visible
   ASSERT_FALSE(IsPlayerVisible());
 
-  player->EnqueueMediaURL(GetMusicTestURL());
+  player->EnqueueMediaURL(GetMusicTestURL(), NULL);
 
   ASSERT_TRUE(IsPlayerVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(MediaPlayerBrowserTest, PopupPlaylist) {
-  StartHTTPServer();
+  ASSERT_TRUE(test_server()->Start());
   // Doing this so we have a valid profile.
   ui_test_utils::NavigateToURL(browser(),
                                GURL("chrome://downloads"));
-  MediaPlayer* player = MediaPlayer::Get();
-  player->set_profile(browser()->profile());
 
-  player->EnqueueMediaURL(GetMusicTestURL());
+
+  MediaPlayer* player = MediaPlayer::Get();
+
+  player->EnqueueMediaURL(GetMusicTestURL(), NULL);
 
   EXPECT_FALSE(IsPlaylistVisible());
 

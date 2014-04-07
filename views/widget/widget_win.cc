@@ -1,15 +1,16 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "views/widget/widget_win.h"
 
+#include "app/keyboard_code_conversion_win.h"
 #include "app/l10n_util_win.h"
 #include "app/system_monitor.h"
 #include "app/win_util.h"
 #include "base/string_util.h"
 #include "base/win_util.h"
-#include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "gfx/native_theme_win.h"
 #include "gfx/path.h"
 #include "views/accessibility/view_accessibility.h"
@@ -28,6 +29,12 @@ namespace views {
 // Property used to link the HWND to its RootView.
 static const wchar_t* const kRootViewWindowProperty = L"__ROOT_VIEW__";
 static const wchar_t* kWidgetKey = L"__VIEWS_WIDGET__";
+
+bool WidgetWin::screen_reader_active_ = false;
+
+// A custom MSAA object id used to determine if a screen reader is actively
+// listening for MSAA events.
+#define OBJID_CUSTOM 1
 
 bool SetRootViewForHWND(HWND hwnd, RootView* root_view) {
   return SetProp(hwnd, kRootViewWindowProperty, root_view) ? true : false;
@@ -57,7 +64,9 @@ WidgetWin::WidgetWin()
       is_mouse_down_(false),
       is_window_(false),
       restore_focus_when_enabled_(false),
-      delegate_(NULL) {
+      delegate_(NULL),
+      accessibility_view_events_index_(-1),
+      accessibility_view_events_(kMaxAccessibilityViewEvents) {
 }
 
 WidgetWin::~WidgetWin() {
@@ -65,6 +74,11 @@ WidgetWin::~WidgetWin() {
 
 // static
 WidgetWin* WidgetWin::GetWidget(HWND hwnd) {
+  // TODO(jcivelli): http://crbug.com/44499 We need a way to test that hwnd is
+  //                 associated with a WidgetWin (it might be a pure
+  //                 WindowImpl).
+  if (!WindowImpl::IsWindowImpl(hwnd))
+    return NULL;
   return reinterpret_cast<WidgetWin*>(win_util::GetWindowUserData(hwnd));
 }
 
@@ -107,6 +121,31 @@ void WidgetWin::SetUseLayeredBuffer(bool use_layered_buffer) {
     contents_.reset(NULL);
 }
 
+View* WidgetWin::GetAccessibilityViewEventAt(int id) {
+  // Convert from MSAA child id.
+  id = -(id + 1);
+  DCHECK(id >= 0 && id < kMaxAccessibilityViewEvents);
+  return accessibility_view_events_[id];
+}
+
+int WidgetWin::AddAccessibilityViewEvent(View* view) {
+  accessibility_view_events_index_ =
+      (accessibility_view_events_index_ + 1) % kMaxAccessibilityViewEvents;
+  accessibility_view_events_[accessibility_view_events_index_] = view;
+
+  // Convert to MSAA child id.
+  return -(accessibility_view_events_index_ + 1);
+}
+
+void WidgetWin::ClearAccessibilityViewEvent(View* view) {
+  for (std::vector<View*>::iterator it = accessibility_view_events_.begin();
+      it != accessibility_view_events_.end();
+      ++it) {
+    if (*it == view)
+      *it = NULL;
+  }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Widget implementation:
 
@@ -117,6 +156,10 @@ void WidgetWin::Init(gfx::NativeView parent, const gfx::Rect& bounds) {
 
   // Create the window.
   WindowImpl::Init(parent, bounds);
+
+  // Attempt to detect screen readers by sending an event with our custom id.
+  if (!IsAccessibleWidget())
+    NotifyWinEvent(EVENT_SYSTEM_ALERT, hwnd(), OBJID_CUSTOM, CHILDID_SELF);
 
   // See if the style has been overridden.
   opaque_ = !(window_ex_style() & WS_EX_TRANSPARENT);
@@ -163,6 +206,10 @@ void WidgetWin::Init(gfx::NativeView parent, const gfx::Rect& bounds) {
   // Bug 964884: detach the IME attached to this window.
   // We should attach IMEs only when we need to input CJK strings.
   ImmAssociateContextEx(hwnd(), NULL, 0);
+}
+
+void WidgetWin::InitWithWidget(Widget* parent, const gfx::Rect& bounds) {
+  Init(parent->GetNativeView(), bounds);
 }
 
 WidgetDelegate* WidgetWin::GetWidgetDelegate() {
@@ -346,6 +393,10 @@ bool WidgetWin::IsActive() const {
   return win_util::IsWindowActive(hwnd());
 }
 
+bool WidgetWin::IsAccessibleWidget() const {
+  return screen_reader_active_;
+}
+
 TooltipManager* WidgetWin::GetTooltipManager() {
   return tooltip_manager_.get();
 }
@@ -419,6 +470,9 @@ void WidgetWin::ViewHierarchyChanged(bool is_add, View *parent,
                                      View *child) {
   if (drop_target_.get())
     drop_target_->ResetTargetViewIfEquals(child);
+
+  if (!is_add)
+    ClearAccessibilityViewEvent(child);
 }
 
 
@@ -458,16 +512,8 @@ void WidgetWin::DidProcessMessage(const MSG& msg) {
 ////////////////////////////////////////////////////////////////////////////////
 // FocusTraversable
 
-View* WidgetWin::FindNextFocusableView(
-    View* starting_view, bool reverse, Direction direction,
-    bool check_starting_view, FocusTraversable** focus_traversable,
-    View** focus_traversable_view) {
-  return root_view_->FindNextFocusableView(starting_view,
-                                           reverse,
-                                           direction,
-                                           check_starting_view,
-                                           focus_traversable,
-                                           focus_traversable_view);
+FocusSearch* WidgetWin::GetFocusSearch() {
+  return root_view_->GetFocusSearch();
 }
 
 FocusTraversable* WidgetWin::GetFocusTraversableParent() {
@@ -619,6 +665,16 @@ LRESULT WidgetWin::OnGetObject(UINT uMsg, WPARAM w_param, LPARAM l_param) {
     reference_result = LresultFromObject(IID_IAccessible, w_param,
         static_cast<IAccessible*>(accessibility_root_));
   }
+
+  if (OBJID_CUSTOM == l_param) {
+    // An MSAA client requestes our custom id. Assume that we have detected an
+    // active windows screen reader.
+    OnScreenReaderDetected();
+
+    // Return with failure.
+    return static_cast<LRESULT>(0L);
+  }
+
   return reference_result;
 }
 
@@ -641,7 +697,7 @@ void WidgetWin::OnInitMenuPopup(HMENU menu,
 }
 
 void WidgetWin::OnKeyDown(TCHAR c, UINT rep_cnt, UINT flags) {
-  KeyEvent event(Event::ET_KEY_PRESSED, win_util::WinToKeyboardCode(c),
+  KeyEvent event(Event::ET_KEY_PRESSED, app::KeyboardCodeForWindowsKeyCode(c),
                  KeyEvent::GetKeyStateFlags(), rep_cnt, flags);
   RootView* root_view = GetFocusedViewRootView();
   if (!root_view)
@@ -651,7 +707,7 @@ void WidgetWin::OnKeyDown(TCHAR c, UINT rep_cnt, UINT flags) {
 }
 
 void WidgetWin::OnKeyUp(TCHAR c, UINT rep_cnt, UINT flags) {
-  KeyEvent event(Event::ET_KEY_RELEASED, win_util::WinToKeyboardCode(c),
+  KeyEvent event(Event::ET_KEY_RELEASED, app::KeyboardCodeForWindowsKeyCode(c),
                  KeyEvent::GetKeyStateFlags(), rep_cnt, flags);
   RootView* root_view = GetFocusedViewRootView();
   if (!root_view)
@@ -889,6 +945,8 @@ LRESULT WidgetWin::OnSetText(const wchar_t* text) {
 }
 
 void WidgetWin::OnSettingChange(UINT flags, const wchar_t* section) {
+  if (flags == SPI_SETWORKAREA && GetWidgetDelegate())
+    GetWidgetDelegate()->WorkAreaChanged();
   SetMsgHandled(FALSE);
 }
 
@@ -1061,6 +1119,10 @@ void WidgetWin::LayoutRootView() {
     PaintNow(gfx::Rect(0, 0, size.width(), size.height()));
 }
 
+void WidgetWin::OnScreenReaderDetected() {
+  screen_reader_active_ = true;
+}
+
 bool WidgetWin::ReleaseCaptureOnMouseReleased() {
   return true;
 }
@@ -1088,9 +1150,9 @@ Window* WidgetWin::GetWindowImpl(HWND hwnd) {
 }
 
 void WidgetWin::SizeContents(const gfx::Size& window_size) {
-  contents_.reset(new gfx::Canvas(window_size.width(),
-                                  window_size.height(),
-                                  false));
+  contents_.reset(new gfx::CanvasSkia(window_size.width(),
+                                      window_size.height(),
+                                      false));
 }
 
 void WidgetWin::PaintLayeredWindow() {
@@ -1249,7 +1311,7 @@ Widget* Widget::CreatePopupWidget(TransparencyParam transparent,
                                   DeleteParam delete_on_destroy,
                                   MirroringParam mirror_in_rtl) {
   WidgetWin* popup = new WidgetWin;
-  DWORD ex_style = WS_EX_TOOLWINDOW;
+  DWORD ex_style = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
   if (mirror_in_rtl == MirrorOriginInRTL)
     ex_style |= l10n_util::GetExtendedTooltipStyles();
   if (transparent == Transparent)
@@ -1332,6 +1394,11 @@ Widget* Widget::GetWidgetFromNativeView(gfx::NativeView native_view) {
 // static
 Widget* Widget::GetWidgetFromNativeWindow(gfx::NativeWindow native_window) {
   return Widget::GetWidgetFromNativeView(native_window);
+}
+
+// static
+void Widget::NotifyLocaleChanged() {
+  NOTIMPLEMENTED();
 }
 
 }  // namespace views

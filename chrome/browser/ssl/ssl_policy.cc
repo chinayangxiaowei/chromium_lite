@@ -1,18 +1,16 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ssl/ssl_policy.h"
 
-#include "app/l10n_util.h"
-#include "app/resource_bundle.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/i18n/rtl.h"
 #include "base/singleton.h"
 #include "base/string_piece.h"
 #include "base/string_util.h"
 #include "chrome/browser/cert_store.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
@@ -22,11 +20,10 @@
 #include "chrome/browser/ssl/ssl_request_info.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/browser/pref_service.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/time_format.h"
 #include "chrome/common/url_constants.h"
 #include "grit/browser_resources.h"
@@ -35,6 +32,17 @@
 #include "net/base/ssl_info.h"
 #include "webkit/glue/resource_type.h"
 
+namespace {
+
+static const char kDot = '.';
+
+static bool IsIntranetHost(const std::string& host) {
+  const size_t dot = host.find(kDot);
+  return dot == std::string::npos || dot == host.length() - 1;
+}
+
+}  // namespace
+
 SSLPolicy::SSLPolicy(SSLPolicyBackend* backend)
     : backend_(backend) {
   DCHECK(backend_);
@@ -42,11 +50,11 @@ SSLPolicy::SSLPolicy(SSLPolicyBackend* backend)
 
 void SSLPolicy::OnCertError(SSLCertErrorHandler* handler) {
   // First we check if we know the policy for this error.
-  net::X509Certificate::Policy::Judgment judgment =
+  net::CertPolicy::Judgment judgment =
       backend_->QueryPolicy(handler->ssl_info().cert,
                             handler->request_url().host());
 
-  if (judgment == net::X509Certificate::Policy::ALLOWED) {
+  if (judgment == net::CertPolicy::ALLOWED) {
     handler->ContinueRequest();
     return;
   }
@@ -60,37 +68,28 @@ void SSLPolicy::OnCertError(SSLCertErrorHandler* handler) {
     case net::ERR_CERT_DATE_INVALID:
     case net::ERR_CERT_AUTHORITY_INVALID:
     case net::ERR_CERT_WEAK_SIGNATURE_ALGORITHM:
-      OnCertErrorInternal(handler, true);
+      OnCertErrorInternal(handler, SSLBlockingPage::ERROR_OVERRIDABLE);
       break;
     case net::ERR_CERT_NO_REVOCATION_MECHANISM:
       // Ignore this error.
       handler->ContinueRequest();
       break;
     case net::ERR_CERT_UNABLE_TO_CHECK_REVOCATION:
-      // We ignore this error and display an infobar.
+      // We ignore this error but will show a warning status in the location
+      // bar.
       handler->ContinueRequest();
-      backend_->ShowMessage(l10n_util::GetString(
-          IDS_CERT_ERROR_UNABLE_TO_CHECK_REVOCATION_INFO_BAR));
       break;
     case net::ERR_CERT_CONTAINS_ERRORS:
     case net::ERR_CERT_REVOKED:
     case net::ERR_CERT_INVALID:
-      OnCertErrorInternal(handler, false);
+    case net::ERR_CERT_NOT_IN_DNS:
+      OnCertErrorInternal(handler, SSLBlockingPage::ERROR_FATAL);
       break;
     default:
       NOTREACHED();
       handler->CancelRequest();
       break;
   }
-}
-
-void SSLPolicy::DidDisplayInsecureContent(NavigationEntry* entry) {
-  if (!entry)
-    return;
-
-  // TODO(abarth): We don't actually need to break the whole origin here,
-  //               but we can handle that in a later patch.
-  DidRunInsecureContent(entry, entry->url().spec());
 }
 
 void SSLPolicy::DidRunInsecureContent(NavigationEntry* entry,
@@ -102,16 +101,52 @@ void SSLPolicy::DidRunInsecureContent(NavigationEntry* entry,
   if (!site_instance)
       return;
 
-  backend_->MarkHostAsBroken(GURL(security_origin).host(),
-                             site_instance->GetProcess()->id());
+  backend_->HostRanInsecureContent(GURL(security_origin).host(),
+                                   site_instance->GetProcess()->id());
 }
 
 void SSLPolicy::OnRequestStarted(SSLRequestInfo* info) {
-  if (net::IsCertStatusError(info->ssl_cert_status()))
-    UpdateStateForUnsafeContent(info);
+  // TODO(abarth): This mechanism is wrong.  What we should be doing is sending
+  // this information back through WebKit and out some FrameLoaderClient
+  // methods.
+  //
+  // The behavior for HTTPS resources with cert errors should be as follows:
+  //   1) If we don't know anything about this host (the one hosting the
+  //      resource), the resource load just fails.
+  //   2) If the user has previously approved the same certificate error for
+  //      this host in a full-page interstitial, then we'll proceed with the
+  //      load.
+  //   3) If we proceed with the load, we should treat the resources as if they
+  //      were loaded over HTTP, w.r.t. the display vs. run distinction above.
+  //
+  // However, right now we don't have the proper context to understand where
+  // these resources will be used.  Consequently, we're conservative and treat
+  // them all like DidRunInsecureContent().
+
+  if (net::IsCertStatusError(info->ssl_cert_status())) {
+    backend_->HostRanInsecureContent(info->url().host(), info->child_id());
+
+    // TODO(abarth): We should eventually remove the main_frame_origin and
+    // frame_origin properties.  First, not every resource load is associated
+    // with a frame, so they don't always make sense.  Second, the
+    // main_frame_origin is computed from the first_party_for_cookies, which has
+    // been hacked to death to support third-party cookie blocking.
+
+    if (info->resource_type() != ResourceType::MAIN_FRAME &&
+        info->resource_type() != ResourceType::SUB_FRAME) {
+      // The frame's origin now contains insecure content.
+      OriginRanInsecureContent(info->frame_origin(), info->child_id());
+    }
+
+    if (info->resource_type() != ResourceType::MAIN_FRAME) {
+      // The main frame now contains a frame with insecure content.  Therefore,
+      // we mark the main frame's origin as broken too.
+      OriginRanInsecureContent(info->main_frame_origin(), info->child_id());
+    }
+  }
 }
 
-void SSLPolicy::UpdateEntry(NavigationEntry* entry) {
+void SSLPolicy::UpdateEntry(NavigationEntry* entry, TabContents* tab_contents) {
   DCHECK(entry);
 
   InitializeEntryIfNeeded(entry);
@@ -127,19 +162,38 @@ void SSLPolicy::UpdateEntry(NavigationEntry* entry) {
     return;
   }
 
-  if (net::IsCertStatusError(entry->ssl().cert_status())) {
-    entry->ssl().set_security_style(SECURITY_STYLE_AUTHENTICATION_BROKEN);
+  if (!(entry->ssl().cert_status() & net::CERT_STATUS_COMMON_NAME_INVALID)) {
+    // CAs issue certificates for intranet hosts to everyone.  Therefore, we
+    // mark intranet hosts as being non-unique.
+    if (IsIntranetHost(entry->url().host())) {
+      entry->ssl().set_cert_status(entry->ssl().cert_status() |
+                                   net::CERT_STATUS_NON_UNIQUE_NAME);
+    }
+  }
+
+  // If CERT_STATUS_UNABLE_TO_CHECK_REVOCATION is the only certificate error,
+  // don't lower the security style to SECURITY_STYLE_AUTHENTICATION_BROKEN.
+  int cert_errors = entry->ssl().cert_status() & net::CERT_STATUS_ALL_ERRORS;
+  if (cert_errors) {
+    if (cert_errors != net::CERT_STATUS_UNABLE_TO_CHECK_REVOCATION)
+      entry->ssl().set_security_style(SECURITY_STYLE_AUTHENTICATION_BROKEN);
     return;
   }
 
   SiteInstance* site_instance = entry->site_instance();
   // Note that |site_instance| can be NULL here because NavigationEntries don't
   // necessarily have site instances.  Without a process, the entry can't
-  // possibly have mixed content.  See bug http://crbug.com/12423.
+  // possibly have insecure content.  See bug http://crbug.com/12423.
   if (site_instance &&
-      backend_->DidMarkHostAsBroken(entry->url().host(),
-                                    site_instance->GetProcess()->id()))
-    entry->ssl().set_has_mixed_content();
+      backend_->DidHostRunInsecureContent(entry->url().host(),
+                                          site_instance->GetProcess()->id())) {
+    entry->ssl().set_security_style(SECURITY_STYLE_AUTHENTICATION_BROKEN);
+    entry->ssl().set_ran_insecure_content();
+    return;
+  }
+
+  if (tab_contents->displayed_insecure_content())
+    entry->ssl().set_displayed_insecure_content();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -182,7 +236,7 @@ void SSLPolicy::OnAllowCertificate(SSLCertErrorHandler* handler) {
 // Certificate Error Routines
 
 void SSLPolicy::OnCertErrorInternal(SSLCertErrorHandler* handler,
-                                    bool overridable) {
+                                    SSLBlockingPage::ErrorLevel error_level) {
   if (handler->resource_type() != ResourceType::MAIN_FRAME) {
     // A sub-resource has a certificate error.  The user doesn't really
     // have a context for making the right decision, so block the
@@ -192,7 +246,7 @@ void SSLPolicy::OnCertErrorInternal(SSLCertErrorHandler* handler,
     return;
   }
   SSLBlockingPage* blocking_page = new SSLBlockingPage(handler, this,
-                                                       overridable);
+                                                       error_level);
   blocking_page->Show();
 }
 
@@ -204,33 +258,8 @@ void SSLPolicy::InitializeEntryIfNeeded(NavigationEntry* entry) {
       SECURITY_STYLE_AUTHENTICATED : SECURITY_STYLE_UNAUTHENTICATED);
 }
 
-void SSLPolicy::MarkOriginAsBroken(const std::string& origin, int pid) {
+void SSLPolicy::OriginRanInsecureContent(const std::string& origin, int pid) {
   GURL parsed_origin(origin);
-  if (!parsed_origin.SchemeIsSecure())
-    return;
-
-  backend_->MarkHostAsBroken(parsed_origin.host(), pid);
-}
-
-void SSLPolicy::UpdateStateForMixedContent(SSLRequestInfo* info) {
-  // TODO(abarth): This function isn't right because we need to remove
-  //               info->main_frame_origin().
-
-  if (info->resource_type() != ResourceType::MAIN_FRAME ||
-      info->resource_type() != ResourceType::SUB_FRAME) {
-    // The frame's origin now contains mixed content and therefore is broken.
-    MarkOriginAsBroken(info->frame_origin(), info->child_id());
-  }
-
-  if (info->resource_type() != ResourceType::MAIN_FRAME) {
-    // The main frame now contains a frame with mixed content.  Therefore, we
-    // mark the main frame's origin as broken too.
-    MarkOriginAsBroken(info->main_frame_origin(), info->child_id());
-  }
-}
-
-void SSLPolicy::UpdateStateForUnsafeContent(SSLRequestInfo* info) {
-  // This request as a broken cert, which means its host is broken.
-  backend_->MarkHostAsBroken(info->url().host(), info->child_id());
-  UpdateStateForMixedContent(info);
+  if (parsed_origin.SchemeIsSecure())
+    backend_->HostRanInsecureContent(parsed_origin.host(), pid);
 }

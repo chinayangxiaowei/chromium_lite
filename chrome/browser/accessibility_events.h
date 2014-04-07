@@ -4,12 +4,12 @@
 
 #ifndef CHROME_BROWSER_ACCESSIBILITY_EVENTS_H_
 #define CHROME_BROWSER_ACCESSIBILITY_EVENTS_H_
+#pragma once
 
 #include <string>
 
-#include "base/values.h"
-
 class AccessibilityControlInfo;
+class DictionaryValue;
 class NotificationType;
 class Profile;
 
@@ -28,7 +28,11 @@ class AccessibilityControlInfo {
 
   // Serialize this class as a DictionaryValue that can be converted to
   // a JavaScript object.
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual void SerializeToDict(DictionaryValue* dict) const;
+
+  // Return the specific type of this control, which will be one of the
+  // string constants defined in extension_accessibility_api_constants.h.
+  virtual const char* type() const = 0;
 
   Profile* profile() const { return profile_; }
 
@@ -50,30 +54,27 @@ class AccessibilityControlInfo {
 // and onWindowClosed event listeners.
 class AccessibilityWindowInfo : public AccessibilityControlInfo {
  public:
-  AccessibilityWindowInfo(Profile* profile, std::string window_name)
-      : AccessibilityControlInfo(profile, window_name) { }
+  AccessibilityWindowInfo(Profile* profile, std::string window_name);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
 };
 
 // Accessibility information about a push button passed to onControlFocused
 // and onControlAction event listeners.
 class AccessibilityButtonInfo : public AccessibilityControlInfo {
  public:
-  AccessibilityButtonInfo(Profile* profile, std::string button_name)
-      : AccessibilityControlInfo(profile, button_name) { }
+  AccessibilityButtonInfo(Profile* profile, std::string button_name);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
 };
 
 // Accessibility information about a hyperlink passed to onControlFocused
 // and onControlAction event listeners.
 class AccessibilityLinkInfo : public AccessibilityControlInfo {
  public:
-  AccessibilityLinkInfo(Profile* profile, std::string link_name)
-      : AccessibilityControlInfo(profile, link_name) { }
+  AccessibilityLinkInfo(Profile* profile, std::string link_name);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
 };
 
 // Accessibility information about a radio button passed to onControlFocused
@@ -84,16 +85,17 @@ class AccessibilityRadioButtonInfo : public AccessibilityControlInfo {
                                std::string name,
                                bool checked,
                                int item_index,
-                               int item_count)
-      : AccessibilityControlInfo(profile, name),
-        checked_(checked),
-        item_index_(item_index),
-        item_count_(item_count) {
-  }
+                               int item_count);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
+
+  virtual void SerializeToDict(DictionaryValue* dict) const;
 
   void SetChecked(bool checked) { checked_ = checked; }
+
+  int item_index() const { return item_index_; }
+  int item_count() const { return item_count_; }
+  bool checked() const { return checked_; }
 
  private:
   bool checked_;
@@ -108,14 +110,15 @@ class AccessibilityCheckboxInfo : public AccessibilityControlInfo {
  public:
   AccessibilityCheckboxInfo(Profile* profile,
                             std::string name,
-                            bool checked)
-      : AccessibilityControlInfo(profile, name),
-        checked_(checked) {
-  }
+                            bool checked);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
+
+  virtual void SerializeToDict(DictionaryValue* dict) const;
 
   void SetChecked(bool checked) { checked_ = checked; }
+
+  bool checked() const { return checked_; }
 
  private:
   bool checked_;
@@ -128,18 +131,19 @@ class AccessibilityTabInfo : public AccessibilityControlInfo {
   AccessibilityTabInfo(Profile* profile,
                        std::string tab_name,
                        int tab_index,
-                       int tab_count)
-      : AccessibilityControlInfo(profile, tab_name),
-        tab_index_(tab_index),
-        tab_count_(tab_count) {
-  }
+                       int tab_count);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
+
+  virtual void SerializeToDict(DictionaryValue* dict) const;
 
   void SetTab(int tab_index, std::string tab_name) {
     tab_index_ = tab_index;
     name_ = tab_name;
   }
+
+  int tab_index() const { return tab_index_; }
+  int tab_count() const { return tab_count_; }
 
  private:
   // The 0-based index of this tab and number of tabs in the group.
@@ -155,19 +159,20 @@ class AccessibilityComboBoxInfo : public AccessibilityControlInfo {
                             std::string name,
                             std::string value,
                             int item_index,
-                            int item_count)
-      : AccessibilityControlInfo(profile, name),
-        value_(value),
-        item_index_(item_index),
-        item_count_(item_count) {
-  }
+                            int item_count);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
+
+  virtual void SerializeToDict(DictionaryValue* dict) const;
 
   void SetValue(int item_index, std::string value) {
     item_index_ = item_index;
     value_ = value;
   }
+
+  int item_index() const { return item_index_; }
+  int item_count() const { return item_count_; }
+  const std::string& value() const { return value_; }
 
  private:
   std::string value_;
@@ -184,21 +189,22 @@ class AccessibilityTextBoxInfo : public AccessibilityControlInfo {
  public:
   AccessibilityTextBoxInfo(Profile* profile,
                            std::string name,
-                           bool password)
-      : AccessibilityControlInfo(profile, name),
-        value_(""),
-        password_(password),
-        selection_start_(0),
-        selection_end_(0) {
-  }
+                           bool password);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
+
+  virtual void SerializeToDict(DictionaryValue* dict) const;
 
   void SetValue(std::string value, int selection_start, int selection_end) {
     value_ = value;
     selection_start_ = selection_start;
     selection_end_ = selection_end;
   }
+
+  const std::string& value() const { return value_; }
+  bool password() const { return password_; }
+  int selection_start() const { return selection_start_; }
+  int selection_end() const { return selection_end_; }
 
  private:
   std::string value_;
@@ -215,19 +221,20 @@ class AccessibilityListBoxInfo : public AccessibilityControlInfo {
                            std::string name,
                            std::string value,
                            int item_index,
-                           int item_count)
-      : AccessibilityControlInfo(profile, name),
-        value_(value),
-        item_index_(item_index),
-        item_count_(item_count) {
-  }
+                           int item_count);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
+
+  virtual void SerializeToDict(DictionaryValue* dict) const;
 
   void SetValue(int item_index, std::string value) {
     item_index_ = item_index;
     value_ = value;
   }
+
+  int item_index() const { return item_index_; }
+  int item_count() const { return item_count_; }
+  const std::string& value() const { return value_; }
 
  private:
   std::string value_;
@@ -242,10 +249,9 @@ class AccessibilityListBoxInfo : public AccessibilityControlInfo {
 // onMenuOpened, onMenuClosed, and onControlFocused event listeners.
 class AccessibilityMenuInfo : public AccessibilityControlInfo {
  public:
-  AccessibilityMenuInfo(Profile* profile, std::string menu_name)
-      : AccessibilityControlInfo(profile, menu_name) { }
+  AccessibilityMenuInfo(Profile* profile, std::string menu_name);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
 };
 
 // Accessibility information about a menu item; this class is used by
@@ -256,14 +262,15 @@ class AccessibilityMenuItemInfo : public AccessibilityControlInfo {
                             std::string name,
                             bool has_submenu,
                             int item_index,
-                            int item_count)
-      : AccessibilityControlInfo(profile, name),
-        has_submenu_(has_submenu),
-        item_index_(item_index),
-        item_count_(item_count) {
-  }
+                            int item_count);
 
-  virtual void SerializeToDict(DictionaryValue *dict) const;
+  virtual const char* type() const;
+
+  virtual void SerializeToDict(DictionaryValue* dict) const;
+
+  int item_index() const { return item_index_; }
+  int item_count() const { return item_count_; }
+  bool has_submenu() const { return has_submenu_; }
 
  private:
   bool has_submenu_;

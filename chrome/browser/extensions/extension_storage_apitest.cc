@@ -7,7 +7,3 @@
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Storage) {
   ASSERT_TRUE(RunExtensionTest("storage")) << message_;
 }
-
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Cookies) {
-  ASSERT_TRUE(RunExtensionTest("cookies")) << message_;
-}

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,11 +18,14 @@
 #include "base/logging_win.h"
 #include "base/path_service.h"
 #include "base/registry.h"
+#include "base/string_number_conversions.h"
 #include "base/string_piece.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
 #include "base/win_util.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/installer/util/google_update_settings.h"
 #include "grit/chrome_frame_resources.h"
 #include "chrome_frame/bho.h"
 #include "chrome_frame/chrome_active_document.h"
@@ -30,7 +33,7 @@
 #include "chrome_frame/chrome_frame_automation.h"
 #include "chrome_frame/exception_barrier.h"
 #include "chrome_frame/chrome_frame_reporting.h"
-#include "chrome_frame/chrome_launcher.h"
+#include "chrome_frame/chrome_launcher_utils.h"
 #include "chrome_frame/chrome_protocol.h"
 #include "chrome_frame/module_utils.h"
 #include "chrome_frame/resource.h"
@@ -40,7 +43,7 @@
 namespace {
 // This function has the side effect of initializing an unprotected
 // vector pointer inside GoogleUrl. If this is called during DLL loading,
-// it has the effect of avoiding an initializiation race on that pointer.
+// it has the effect of avoiding an initialization race on that pointer.
 // TODO(siggi): fix GoogleUrl.
 void InitGoogleUrl() {
   static const char kDummyUrl[] = "http://www.google.com";
@@ -60,7 +63,21 @@ const wchar_t kInternetSettings[] =
 const wchar_t kProtocolHandlers[] =
     L"Software\\Classes\\Protocols\\Handler";
 
-const wchar_t kBhoNoLoadExplorerValue[] = L"NoExplorer";
+const wchar_t kRunOnce[] =
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+
+const wchar_t kRunKeyName[] = L"ChromeFrameHelper";
+
+const wchar_t kChromeFrameHelperExe[] = L"chrome_frame_helper.exe";
+
+// Window class and window names.
+// TODO(robertshield): These and other constants need to be refactored into
+// a common chrome_frame_constants.h|cc and built into a separate lib
+// (either chrome_frame_utils or make another one).
+const wchar_t kChromeFrameHelperWindowClassName[] =
+    L"ChromeFrameHelperWindowClass";
+const wchar_t kChromeFrameHelperWindowName[] =
+    L"ChromeFrameHelperWindowName";
 
 // {0562BFC3-2550-45b4-BD8E-A310583D3A6F}
 static const GUID kChromeFrameProvider =
@@ -78,10 +95,11 @@ OBJECT_ENTRY_AUTO(__uuidof(ChromeProtocol), ChromeProtocol)
 // See comments in DllGetClassObject.
 LPFNGETCLASSOBJECT g_dll_get_class_object_redir_ptr = NULL;
 
-class ChromeTabModule
-    : public AtlPerUserModule<CAtlDllModuleT<ChromeTabModule> > {
+class ChromeTabModule : public CAtlDllModuleT<ChromeTabModule> {
  public:
-  typedef AtlPerUserModule<CAtlDllModuleT<ChromeTabModule> > ParentClass;
+  typedef CAtlDllModuleT<ChromeTabModule> ParentClass;
+
+  ChromeTabModule() : do_system_registration_(true) {}
 
   DECLARE_LIBID(LIBID_ChromeTabLib)
   DECLARE_REGISTRY_APPID_RESOURCEID(IDR_CHROMETAB,
@@ -95,7 +113,7 @@ class ChromeTabModule
     if (SUCCEEDED(hr)) {
       SYSTEMTIME local_time;
       ::GetSystemTime(&local_time);
-      std::string hex(HexEncode(&local_time, sizeof(local_time)));
+      std::string hex(base::HexEncode(&local_time, sizeof(local_time)));
       base::StringPiece sp_hex(hex);
       hr = registrar->AddReplacement(L"SYSTIME",
                                      base::SysNativeMBToWide(sp_hex).c_str());
@@ -130,7 +148,7 @@ class ChromeTabModule
       std::wstring module_dir;
       FilePath module_path;
       if (PathService::Get(base::FILE_MODULE, &module_path)) {
-        module_dir = module_path.DirName().ToWStringHack();
+        module_dir = module_path.DirName().value();
       } else {
         NOTREACHED();
       }
@@ -146,14 +164,32 @@ class ChromeTabModule
       DCHECK(SUCCEEDED(hr));
     }
 
+    if (SUCCEEDED(hr)) {
+      // Add the registry hive to use.
+      // Note: This is ugly as hell. I'd rather use the pMapEntries parameter
+      // to CAtlModule::UpdateRegistryFromResource, unfortunately we have a
+      // few components that are registered by calling their
+      // static T::UpdateRegistry() methods directly, which doesn't allow
+      // pMapEntries to be passed through :-(
+      if (do_system_registration_) {
+        hr = registrar->AddReplacement(L"HIVE", L"HKLM");
+      } else {
+        hr = registrar->AddReplacement(L"HIVE", L"HKCU");
+      }
+      DCHECK(SUCCEEDED(hr));
+    }
+
     return hr;
   }
+
+  // See comments in AddCommonRGSReplacements
+  bool do_system_registration_;
 };
 
 ChromeTabModule _AtlModule;
 
 base::AtExitManager* g_exit_manager = NULL;
-bool RegisterSecuredMimeHandler(bool enable);  // forward
+bool RegisterSecuredMimeHandler(bool enable, bool is_system);  // forward
 
 // DLL Entry Point
 extern "C" BOOL WINAPI DllMain(HINSTANCE instance,
@@ -206,31 +242,6 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance,
 #pragma managed(pop)
 #endif
 
-const wchar_t kPostPlatformUAKey[] =
-    L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\"
-    L"User Agent\\Post Platform";
-const wchar_t kClockUserAgent[] = L"chromeframe";
-
-// To delete the clock user agent, set value to NULL.
-// TODO(tommi): Remove this method when it's no longer used.
-HRESULT SetClockUserAgent(const wchar_t* value) {
-  HRESULT hr;
-  RegKey ua_key;
-  if (ua_key.Create(HKEY_LOCAL_MACHINE, kPostPlatformUAKey, KEY_WRITE)) {
-    if (value) {
-      ua_key.WriteValue(kClockUserAgent, value);
-    } else {
-      ua_key.DeleteValue(kClockUserAgent);
-    }
-    hr = S_OK;
-  } else {
-    DLOG(ERROR) << __FUNCTION__ << ": " << kPostPlatformUAKey;
-    hr = E_UNEXPECTED;
-  }
-
-  return hr;
-}
-
 HRESULT RefreshElevationPolicy() {
   const wchar_t kIEFrameDll[] = L"ieframe.dll";
   const char kIERefreshPolicy[] = "IERefreshElevationPolicy";
@@ -262,83 +273,113 @@ HRESULT RefreshElevationPolicy() {
   return hr;
 }
 
-HRESULT RegisterChromeTabBHO() {
-  RegKey ie_bho_key;
-  if (!ie_bho_key.Create(HKEY_LOCAL_MACHINE, kBhoRegistryPath,
-                       KEY_CREATE_SUB_KEY)) {
-    DLOG(WARNING) << "Failed to open registry key "
-                  << kBhoRegistryPath
-                  << " for write";
-    return E_FAIL;
+// Experimental boot prefetch optimization for Chrome Frame
+//
+// If chrome is warmed up during a single reboot, it gets paged
+// in for subsequent reboots and the cold startup times essentially
+// look like warm times thereafter! The 'warm up' is done by
+// setting up a 'RunOnce' key during DLLRegisterServer of
+// npchrome_frame.dll.
+//
+// This works because chrome prefetch becomes part of boot
+// prefetch file ntosboot-b00dfaad.pf and paged in on subsequent
+// reboots. As long as the sytem does not undergo significant
+// memory pressure those pages remain in memory and we get pretty
+// amazing startup times, down to about 300 ms from 1200 ms
+//
+// The downside is:
+// - Whether chrome frame is used or not, there's a read penalty
+//  (1200-300 =) 900 ms for every boot.
+// - Heavy system memory usage after reboot will nullify the benefits
+//  but the user will still pay the cost.
+// - Overall the time saved will always be less than total time spent
+//  paging in chrome
+// - We are not sure when the chrome 'warm up' will age out from the
+//  boot prefetch file.
+//
+// The idea here is to try this out on chrome frame dev channel
+// and see if it produces a significant drift in startup numbers.
+HRESULT SetupRunOnce() {
+  if (win_util::GetWinVersion() >= win_util::WINVERSION_VISTA)
+    return S_OK;
+
+  std::wstring channel_name;
+  if (!GoogleUpdateSettings::GetChromeChannel(true, &channel_name) ||
+      (0 != lstrcmpiW(L"dev", channel_name.c_str()))) {
+    return S_OK;
   }
 
-  wchar_t bho_class_id_as_string[MAX_PATH] = {0};
-  StringFromGUID2(CLSID_ChromeFrameBHO, bho_class_id_as_string,
-                  arraysize(bho_class_id_as_string));
-
-  if (!ie_bho_key.CreateKey(bho_class_id_as_string, KEY_READ | KEY_WRITE)) {
-    DLOG(WARNING) << "Failed to create bho registry key under "
-                  << kBhoRegistryPath
-                  << " for write";
-    return E_FAIL;
+  HKEY hive = HKEY_CURRENT_USER;
+  if (IsSystemProcess()) {
+    // For system installs, our updates will be running as SYSTEM which
+    // makes writing to a RunOnce key under HKCU not so terribly useful.
+    hive = HKEY_LOCAL_MACHINE;
   }
 
-  ie_bho_key.WriteValue(kBhoNoLoadExplorerValue, 1);
-  DLOG(INFO) << "Registered ChromeTab BHO";
+  RegKey run_once;
+  if (run_once.Create(hive, kRunOnce, KEY_READ | KEY_WRITE)) {
+    CommandLine run_once_command(chrome_launcher::GetChromeExecutablePath());
+    run_once_command.AppendSwitchASCII(switches::kAutomationClientChannelID,
+                                       "0");
+    run_once_command.AppendSwitch(switches::kChromeFrame);
+    run_once.WriteValue(L"A", run_once_command.command_line_string().c_str());
+  }
 
-  // We now add the chromeframe user agent at runtime.
-  RefreshElevationPolicy();
   return S_OK;
 }
 
-HRESULT UnregisterChromeTabBHO() {
-  // TODO(tommi): remove this in future versions.
-  SetClockUserAgent(NULL);
+// Helper method called for user-level installs where we don't have admin
+// permissions. Starts up the long running process and registers it to get it
+// started at next boot.
+void SetupUserLevelHelper() {
+  // Remove existing run-at-startup entry.
+  win_util::RemoveCommandFromAutoRun(HKEY_CURRENT_USER, kRunKeyName);
 
-  RegKey ie_bho_key;
-  if (!ie_bho_key.Open(HKEY_LOCAL_MACHINE, kBhoRegistryPath,
-                       KEY_READ | KEY_WRITE)) {
-    DLOG(WARNING) << "Failed to open registry key "
-                  << kBhoRegistryPath
-                  << " for write.";
-    return E_FAIL;
+  // Build the chrome_frame_helper command line.
+  FilePath module_path;
+  FilePath helper_path;
+  if (PathService::Get(base::FILE_MODULE, &module_path)) {
+    module_path = module_path.DirName();
+    helper_path = module_path.Append(kChromeFrameHelperExe);
+    if (!file_util::PathExists(helper_path)) {
+      // If we can't find the helper in the current directory, try looking
+      // one up (this is the layout in the build output folder).
+      module_path = module_path.DirName();
+      helper_path = module_path.Append(kChromeFrameHelperExe);
+      DCHECK(file_util::PathExists(helper_path)) <<
+          "Could not find chrome_frame_helper.exe.";
+    }
+  } else {
+    NOTREACHED();
   }
 
-  wchar_t bho_class_id_as_string[MAX_PATH] = {0};
-  StringFromGUID2(CLSID_ChromeFrameBHO, bho_class_id_as_string,
-                  arraysize(bho_class_id_as_string));
+  // Find window handle of existing instance.
+  HWND old_window = FindWindow(kChromeFrameHelperWindowClassName,
+                               kChromeFrameHelperWindowName);
 
-  if (!ie_bho_key.DeleteKey(bho_class_id_as_string)) {
-    DLOG(WARNING) << "Failed to delete bho registry key "
-                  << bho_class_id_as_string
-                  << " under "
-                  << kBhoRegistryPath;
-    return E_FAIL;
-  }
+  if (file_util::PathExists(helper_path)) {
+    // Add new run-at-startup entry.
+    win_util::AddCommandToAutoRun(HKEY_CURRENT_USER, kRunKeyName,
+                                  helper_path.value());
 
-  DLOG(INFO) << "Unregistered ChromeTab BHO";
-  return S_OK;
-}
+    // Start new instance.
+    bool launched = base::LaunchApp(helper_path.value(), false, true, NULL);
+    if (!launched) {
+      NOTREACHED();
+      LOG(ERROR) << "Could not launch helper process.";
+    }
 
-HRESULT CleanupCFProtocol() {
-  RegKey protocol_handlers_key;
-  if (protocol_handlers_key.Open(HKEY_LOCAL_MACHINE, kProtocolHandlers,
-                                 KEY_READ | KEY_WRITE)) {
-    RegKey cf_protocol_key;
-    if (cf_protocol_key.Open(protocol_handlers_key.Handle(), L"cf",
-                             KEY_QUERY_VALUE)) {
-      std::wstring protocol_clsid_string;
-      if (cf_protocol_key.ReadValue(L"CLSID", &protocol_clsid_string)) {
-        CLSID protocol_clsid = {0};
-        IIDFromString(protocol_clsid_string.c_str(), &protocol_clsid);
-        if (IsEqualGUID(protocol_clsid, CLSID_ChromeProtocol))
-          protocol_handlers_key.DeleteKey(L"cf");
+    // Kill old instance using window handle.
+    if (IsWindow(old_window)) {
+      BOOL result = PostMessage(old_window, WM_CLOSE, 0, 0);
+      if (!result) {
+        LOG(ERROR) << "Failed to post close message to old helper process: "
+                   << GetLastError();
       }
     }
   }
-
-  return S_OK;
 }
+
 
 // Used to determine whether the DLL can be unloaded by OLE
 STDAPI DllCanUnloadNow() {
@@ -351,28 +392,117 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv) {
   // that:
   if (g_dll_get_class_object_redir_ptr) {
     return g_dll_get_class_object_redir_ptr(rclsid, riid, ppv);
-  } else {
-    g_patch_helper.InitializeAndPatchProtocolsIfNeeded();
-    return _AtlModule.DllGetClassObject(rclsid, riid, ppv);
   }
+
+  // Enable sniffing and switching only if asked for BHO
+  // (we use BHO to get loaded in IE).
+  if (rclsid == CLSID_ChromeFrameBHO) {
+    g_patch_helper.InitializeAndPatchProtocolsIfNeeded();
+  }
+
+  return _AtlModule.DllGetClassObject(rclsid, riid, ppv);
 }
+
+enum RegistrationFlags {
+  ACTIVEX             = 0x0001,
+  ACTIVEDOC           = 0x0002,
+  GCF_PROTOCOL        = 0x0004,
+  BHO_CLSID           = 0x0008,
+  BHO_REGISTRATION    = 0x0010,
+  TYPELIB             = 0x0020,
+
+  NPAPI_PLUGIN        = 0x1000,
+
+  ALL                 = 0xFFFF
+};
+
+STDAPI CustomRegistration(UINT reg_flags, BOOL reg, bool is_system) {
+  UINT flags = reg_flags;
+
+  if (reg && (flags & (ACTIVEDOC | ACTIVEX)))
+    flags |= (TYPELIB |GCF_PROTOCOL);
+
+  HRESULT hr = S_OK;
+
+  // Set the flag that gets checked in AddCommonRGSReplacements before doing
+  // registration work.
+  _AtlModule.do_system_registration_ = is_system;
+
+  if ((hr == S_OK) && (flags & ACTIVEDOC)) {
+    // Don't fail to unregister if we can't undo the secure mime
+    // handler registration. This was observed getting hit during
+    // uninstallation.
+    if (!RegisterSecuredMimeHandler(reg ? true : false, is_system) && reg)
+      return E_FAIL;
+    hr = ChromeActiveDocument::UpdateRegistry(reg);
+  }
+
+  if ((hr == S_OK) && (flags & ACTIVEX)) {
+    // We have to call the static T::UpdateRegistry function instead of
+    // _AtlModule.UpdateRegistryFromResourceS(IDR_CHROMEFRAME_ACTIVEX, reg)
+    // because there is specific OLEMISC replacement.
+    hr = ChromeFrameActivex::UpdateRegistry(reg);
+    // TODO(amit): Move elevation policy registration from ActiveX rgs
+    // into a separate rgs.
+    RefreshElevationPolicy();
+  }
+
+  if ((hr == S_OK) && (flags & GCF_PROTOCOL)) {
+    hr = _AtlModule.UpdateRegistryFromResourceS(IDR_CHROMEPROTOCOL, reg);
+  }
+
+  if ((hr == S_OK) && (flags & BHO_CLSID)) {
+    hr = Bho::UpdateRegistry(reg);
+  }
+
+  if ((hr == S_OK) && (flags & BHO_REGISTRATION)) {
+    if (is_system) {
+      _AtlModule.UpdateRegistryFromResourceS(IDR_REGISTER_BHO, reg);
+    } else {
+      if (reg) {
+        // Setup the long running process:
+        SetupUserLevelHelper();
+      } else {
+        // Unschedule the user-level helper. Note that we don't kill it here so
+        // that during updates we don't have a time window with no running
+        // helper. Uninstalls and updates will explicitly kill the helper from
+        // within the installer. Unregister existing run-at-startup entry.
+        win_util::RemoveCommandFromAutoRun(HKEY_CURRENT_USER, kRunKeyName);
+      }
+    }
+  }
+
+  if ((hr == S_OK) && (flags & TYPELIB)) {
+    hr = (reg)?
+        UtilRegisterTypeLib(_AtlComModule.m_hInstTypeLib, NULL, !is_system) :
+        UtilUnRegisterTypeLib(_AtlComModule.m_hInstTypeLib, NULL, !is_system);
+  }
+
+  if ((hr == S_OK) && (flags & NPAPI_PLUGIN)) {
+    hr = _AtlModule.UpdateRegistryFromResourceS(IDR_CHROMEFRAME_NPAPI, reg);
+  }
+
+  if (hr == S_OK) {
+    hr = _AtlModule.UpdateRegistryAppId(reg);
+  }
+
+  return hr;
+}
+
+
 
 // DllRegisterServer - Adds entries to the system registry
 STDAPI DllRegisterServer() {
-  // registers object, typelib and all interfaces in typelib
-  HRESULT hr = _AtlModule.DllRegisterServer(TRUE);
-
-  if (SUCCEEDED(hr)) {
-    // Best effort attempt to register the BHO. At this point we silently
-    // ignore any errors during registration. There are some traces emitted
-    // to the debug log.
-    RegisterChromeTabBHO();
-    if (!RegisterSecuredMimeHandler(true))
-      hr = E_FAIL;
-  }
+  UINT flags =  ACTIVEX | ACTIVEDOC | TYPELIB | GCF_PROTOCOL |
+                BHO_CLSID | BHO_REGISTRATION;
 
   if (UtilIsPersistentNPAPIMarkerSet()) {
-    hr = _AtlModule.UpdateRegistryFromResourceS(IDR_CHROMEFRAME_NPAPI, TRUE);
+    flags |= IDR_CHROMEFRAME_NPAPI;
+  }
+
+  HRESULT hr = CustomRegistration(flags, TRUE, true);
+  if (SUCCEEDED(hr)) {
+    SetupRunOnce();
   }
 
   return hr;
@@ -380,23 +510,30 @@ STDAPI DllRegisterServer() {
 
 // DllUnregisterServer - Removes entries from the system registry
 STDAPI DllUnregisterServer() {
-  HRESULT hr = _AtlModule.DllUnregisterServer(TRUE);
+  HRESULT hr = CustomRegistration(ALL, FALSE, true);
+  return hr;
+}
 
+// DllRegisterServer - Adds entries to the HKCU hive in the registry
+STDAPI DllRegisterUserServer() {
+  UINT flags =  ACTIVEX | ACTIVEDOC | TYPELIB | GCF_PROTOCOL |
+                BHO_CLSID | BHO_REGISTRATION;
+
+  if (UtilIsPersistentNPAPIMarkerSet()) {
+    flags |= IDR_CHROMEFRAME_NPAPI;
+  }
+
+  HRESULT hr = CustomRegistration(flags, TRUE, false);
   if (SUCCEEDED(hr)) {
-    // Best effort attempt to unregister the BHO. At this point we silently
-    // ignore any errors during unregistration. There are some traces emitted
-    // to the debug log.
-    UnregisterChromeTabBHO();
-    if (!RegisterSecuredMimeHandler(false))
-      hr = E_FAIL;
+    SetupRunOnce();
   }
 
-  if (UtilIsNPAPIPluginRegistered()) {
-    hr = _AtlModule.UpdateRegistryFromResourceS(IDR_CHROMEFRAME_NPAPI, FALSE);
-  }
+  return hr;
+}
 
-  // TODO(joshia): Remove after 2 refresh releases
-  CleanupCFProtocol();
+// DllRegisterServer - Removes entries from the HKCU hive in the registry.
+STDAPI DllUnregisterUserServer() {
+  HRESULT hr = CustomRegistration(ALL, FALSE, false);
   return hr;
 }
 
@@ -540,10 +677,10 @@ struct TokenWithPrivileges {
   CSid user_;
 };
 
-static bool SetOrDeleteMimeHandlerKey(bool set) {
+static bool SetOrDeleteMimeHandlerKey(bool set, HKEY root_key) {
   std::wstring key_name = kInternetSettings;
   key_name.append(L"\\Secure Mime Handlers");
-  RegKey key(HKEY_LOCAL_MACHINE, key_name.c_str(), KEY_READ | KEY_WRITE);
+  RegKey key(root_key, key_name.c_str(), KEY_READ | KEY_WRITE);
   if (!key.Valid())
     return false;
 
@@ -559,9 +696,11 @@ static bool SetOrDeleteMimeHandlerKey(bool set) {
   return result;
 }
 
-bool RegisterSecuredMimeHandler(bool enable) {
-  if (win_util::GetWinVersion() < win_util::WINVERSION_VISTA) {
-    return SetOrDeleteMimeHandlerKey(enable);
+bool RegisterSecuredMimeHandler(bool enable, bool is_system) {
+  if (!is_system) {
+    return SetOrDeleteMimeHandlerKey(enable, HKEY_CURRENT_USER);
+  } else if (win_util::GetWinVersion() < win_util::WINVERSION_VISTA) {
+    return SetOrDeleteMimeHandlerKey(enable, HKEY_LOCAL_MACHINE);
   }
 
   std::wstring mime_key = kInternetSettings;
@@ -595,7 +734,7 @@ bool RegisterSecuredMimeHandler(bool enable) {
     sd.GetDacl(&new_dacl);
     new_dacl.AddAllowedAce(token_.GetUser(), GENERIC_WRITE | GENERIC_READ);
     if (AtlSetDacl(object_name.c_str(), SE_REGISTRY_KEY, new_dacl)) {
-      result = SetOrDeleteMimeHandlerKey(enable);
+      result = SetOrDeleteMimeHandlerKey(enable, HKEY_LOCAL_MACHINE);
     }
   }
 

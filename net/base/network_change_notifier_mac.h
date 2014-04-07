@@ -1,62 +1,54 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_BASE_NETWORK_CHANGE_NOTIFIER_MAC_H_
 #define NET_BASE_NETWORK_CHANGE_NOTIFIER_MAC_H_
+#pragma once
+
+#include <SystemConfiguration/SCDynamicStore.h>
 
 #include "base/basictypes.h"
-#include "base/observer_list.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
-#include "base/task.h"
 #include "net/base/network_change_notifier.h"
-
-class MessageLoop;
-namespace base {
-class Thread;
-}  // namespace base
+#include "net/base/network_config_watcher_mac.h"
 
 namespace net {
 
-class NetworkChangeNotifierMac : public NetworkChangeNotifier {
+class NetworkChangeNotifierMac: public NetworkChangeNotifier {
  public:
   NetworkChangeNotifierMac();
-
-  void OnIPAddressChanged() {
-    FOR_EACH_OBSERVER(Observer, observers_, OnIPAddressChanged());
-  }
-
-  // NetworkChangeNotifier methods:
-
-  virtual void AddObserver(Observer* observer) {
-    observers_.AddObserver(observer);
-  }
-
-  virtual void RemoveObserver(Observer* observer) {
-    observers_.RemoveObserver(observer);
-  }
-
- private:
-  friend class base::RefCounted<NetworkChangeNotifierMac>;
-  
   virtual ~NetworkChangeNotifierMac();
 
-  // Initializes the notifier thread.  The SystemConfiguration calls in this
-  // function can lead to contention early on, so we invoke this function later
-  // on in startup to keep it fast.
-  // See http://crbug.com/34926 for details.
-  void InitializeNotifierThread(MessageLoop* loop);
+  // NetworkChangeNotifier implementation:
+  virtual bool IsCurrentlyOffline() const;
 
-  // Receives the OS X network change notifications on this thread.
-  scoped_ptr<base::Thread> notifier_thread_;
+ private:
+  // Forwarder just exists to keep the NetworkConfigWatcherMac API out of
+  // NetworkChangeNotifierMac's public API.
+  class Forwarder : public NetworkConfigWatcherMac::Delegate {
+   public:
+    explicit Forwarder(NetworkChangeNotifierMac* net_config_watcher)
+        : net_config_watcher_(net_config_watcher) {}
 
-  // TODO(willchan): Fix the URLRequestContextGetter leaks and flip the false to
-  // true so we assert that all observers have been removed.
-  ObserverList<Observer, false> observers_;
+    // NetworkConfigWatcherMac::Delegate implementation:
+    virtual void SetDynamicStoreNotificationKeys(SCDynamicStoreRef store) {
+      net_config_watcher_->SetDynamicStoreNotificationKeys(store);
+    }
+    virtual void OnNetworkConfigChange(CFArrayRef changed_keys) {
+      net_config_watcher_->OnNetworkConfigChange(changed_keys);
+    }
 
-  // Used to initialize the notifier thread.
-  ScopedRunnableMethodFactory<NetworkChangeNotifierMac> method_factory_;
+   private:
+    NetworkChangeNotifierMac* const net_config_watcher_;
+    DISALLOW_COPY_AND_ASSIGN(Forwarder);
+  };
+
+  // NetworkConfigWatcherMac::Delegate implementation:
+  void SetDynamicStoreNotificationKeys(SCDynamicStoreRef store);
+  void OnNetworkConfigChange(CFArrayRef changed_keys);
+
+  Forwarder forwarder_;
+  const NetworkConfigWatcherMac config_watcher_;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkChangeNotifierMac);
 };

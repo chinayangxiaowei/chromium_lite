@@ -4,8 +4,10 @@
 
 #include "chrome/browser/chromeos/login/account_screen.h"
 
-#include "base/logging.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/chromeos/input_method/input_method_util.h"
 #include "chrome/browser/chromeos/login/account_creation_view.h"
 #include "chrome/browser/chromeos/login/screen_observer.h"
 #include "chrome/browser/profile_manager.h"
@@ -13,6 +15,7 @@
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "googleurl/src/gurl.h"
+#include "views/widget/widget_gtk.h"
 
 namespace chromeos {
 
@@ -85,10 +88,12 @@ bool AccountScreen::check_for_https_ = true;
 // AccountScreen, ViewScreen implementation:
 void AccountScreen::CreateView() {
   ViewScreen<AccountCreationView>::CreateView();
+  view()->SetWebPageDelegate(this);
   view()->SetAccountCreationViewDelegate(this);
 }
 
 void AccountScreen::Refresh() {
+  StartTimeoutTimer();
   GURL url(*new_account_page_url_);
   Profile* profile = ProfileManager::GetDefaultProfile();
   view()->InitDOM(profile,
@@ -107,11 +112,11 @@ void AccountScreen::LoadingStateChanged(TabContents* source) {
   std::string url = source->GetURL().spec();
   if (url == kCreateAccountDoneUrl) {
     source->Stop();
-    delegate()->GetObserver(this)->OnExit(ScreenObserver::ACCOUNT_CREATED);
+    CloseScreen(ScreenObserver::ACCOUNT_CREATED);
   } else if (url == kCreateAccountBackUrl) {
-    delegate()->GetObserver(this)->OnExit(ScreenObserver::ACCOUNT_CREATE_BACK);
+    CloseScreen(ScreenObserver::ACCOUNT_CREATE_BACK);
   } else if (check_for_https_ && !source->GetURL().SchemeIsSecure()) {
-    delegate()->GetObserver(this)->OnExit(ScreenObserver::CONNECTION_FAILED);
+    CloseScreen(ScreenObserver::CONNECTION_FAILED);
   }
 }
 
@@ -125,18 +130,49 @@ void AccountScreen::NavigationStateChanged(const TabContents* source,
   }
 }
 
-bool AccountScreen::HandleContextMenu(const ContextMenuParams& params) {
-  // Just return true because we don't want to show context menue.
-  return true;
+void AccountScreen::HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {
+  views::Widget* widget = view()->GetWidget();
+  if (widget && event.os_event && !event.skip_in_browser)
+    static_cast<views::WidgetGtk*>(widget)->HandleKeyboardEvent(event.os_event);
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// AccountScreen, WebPageDelegate implementation:
+void AccountScreen::OnPageLoaded() {
+  StopTimeoutTimer();
+  // Enable input methods (e.g. Chinese, Japanese) so that users could input
+  // their first and last names.
+  if (g_browser_process) {
+    const std::string locale = g_browser_process->GetApplicationLocale();
+    input_method::EnableInputMethods(
+        locale, input_method::kAllInputMethods, "");
+  }
+  view()->ShowPageContent();
+}
+
+void AccountScreen::OnPageLoadFailed(const std::string& url) {
+  CloseScreen(ScreenObserver::CONNECTION_FAILED);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// AccountScreen, AccountCreationViewDelegate implementation:
 void AccountScreen::OnUserCreated(const std::string& username,
                                   const std::string& password) {
   delegate()->GetObserver(this)->OnSetUserNamePassword(username, password);
 }
 
-void AccountScreen::OnPageLoadFailed(const std::string& url) {
-  delegate()->GetObserver(this)->OnExit(ScreenObserver::CONNECTION_FAILED);
+///////////////////////////////////////////////////////////////////////////////
+// AccountScreen, private:
+void AccountScreen::CloseScreen(ScreenObserver::ExitCodes code) {
+  StopTimeoutTimer();
+  // Disable input methods since they are not necessary to input username and
+  // password.
+  if (g_browser_process) {
+    const std::string locale = g_browser_process->GetApplicationLocale();
+    input_method::EnableInputMethods(
+        locale, input_method::kKeyboardLayoutsOnly, "");
+  }
+  delegate()->GetObserver(this)->OnExit(code);
 }
 
 }  // namespace chromeos

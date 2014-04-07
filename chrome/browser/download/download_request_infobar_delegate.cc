@@ -11,7 +11,7 @@
 #include "grit/theme_resources.h"
 
 DownloadRequestInfoBarDelegate::DownloadRequestInfoBarDelegate(TabContents* tab,
-    DownloadRequestManager::TabDownloadState* host)
+    DownloadRequestLimiter::TabDownloadState* host)
     : ConfirmInfoBarDelegate(tab),
       host_(host) {
   if (tab)
@@ -27,8 +27,8 @@ void DownloadRequestInfoBarDelegate::InfoBarClosed() {
   ConfirmInfoBarDelegate::InfoBarClosed();
 }
 
-std::wstring DownloadRequestInfoBarDelegate::GetMessageText() const {
-  return l10n_util::GetString(IDS_MULTI_DOWNLOAD_WARNING);
+string16 DownloadRequestInfoBarDelegate::GetMessageText() const {
+  return l10n_util::GetStringUTF16(IDS_MULTI_DOWNLOAD_WARNING);
 }
 
 SkBitmap* DownloadRequestInfoBarDelegate::GetIcon() const {
@@ -40,19 +40,20 @@ int DownloadRequestInfoBarDelegate::GetButtons() const {
   return BUTTON_OK | BUTTON_CANCEL;
 }
 
-std::wstring DownloadRequestInfoBarDelegate::GetButtonLabel(
+string16 DownloadRequestInfoBarDelegate::GetButtonLabel(
     ConfirmInfoBarDelegate::InfoBarButton button) const {
   if (button == BUTTON_OK)
-    return l10n_util::GetString(IDS_MULTI_DOWNLOAD_WARNING_ALLOW);
+    return l10n_util::GetStringUTF16(IDS_MULTI_DOWNLOAD_WARNING_ALLOW);
   else
-    return l10n_util::GetString(IDS_MULTI_DOWNLOAD_WARNING_DENY);
+    return l10n_util::GetStringUTF16(IDS_MULTI_DOWNLOAD_WARNING_DENY);
 }
 
 bool DownloadRequestInfoBarDelegate::Accept() {
   if (host_) {
+    // Accept() call will nullify host_ if no further prompts are required.
     host_->Accept();
   }
-  // Accept() call will nullify host_ if no furthur prompts are required.
+
   return !host_;
 }
 

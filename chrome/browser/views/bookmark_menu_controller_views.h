@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_VIEWS_BOOKMARK_MENU_CONTROLLER_VIEWS_H_
 #define CHROME_BROWSER_VIEWS_BOOKMARK_MENU_CONTROLLER_VIEWS_H_
+#pragma once
 
 #include <map>
 #include <set>
@@ -43,6 +44,9 @@ class BookmarkMenuController : public BaseBookmarkModelObserver,
   class Observer {
    public:
     virtual void BookmarkMenuDeleted(BookmarkMenuController* controller) = 0;
+
+   protected:
+    virtual ~Observer() {}
   };
 
   // Creates a BookmarkMenuController showing the children of |node| starting
@@ -52,8 +56,7 @@ class BookmarkMenuController : public BaseBookmarkModelObserver,
                          PageNavigator* page_navigator,
                          gfx::NativeWindow parent,
                          const BookmarkNode* node,
-                         int start_child_index,
-                         bool show_other_folder);
+                         int start_child_index);
 
   void RunMenuAt(BookmarkBarView* bookmark_bar, bool for_drop);
 
@@ -107,6 +110,7 @@ class BookmarkMenuController : public BaseBookmarkModelObserver,
       views::MenuItemView::AnchorPosition* anchor,
       bool* has_mnemonics,
       views::MenuButton** button);
+  virtual int GetMaxWidthForMenu();
 
   // BookmarkModelObserver methods.
   virtual void BookmarkModelChanged();
@@ -122,16 +126,12 @@ class BookmarkMenuController : public BaseBookmarkModelObserver,
   typedef std::map<const BookmarkNode*, int> NodeToMenuIDMap;
 
   // BookmarkMenuController deletes itself as necessary.
-  ~BookmarkMenuController();
+  virtual ~BookmarkMenuController();
 
   // Creates a menu and adds it to node_to_menu_id_map_. This uses
   // BuildMenu to recursively populate the menu.
   views::MenuItemView* CreateMenu(const BookmarkNode* parent,
                                   int start_child_index);
-
-  // Builds the menu for the other bookmarks folder. This is added as the last
-  // item to menu_.
-  void BuildOtherFolderMenu(views::MenuItemView* menu, int* next_menu_id);
 
   // Creates an entry in menu for each child node of |parent| starting at
   // |start_child_index|.
@@ -183,9 +183,6 @@ class BookmarkMenuController : public BaseBookmarkModelObserver,
 
   // Is the menu being shown for a drop?
   bool for_drop_;
-
-  // Should the other folder be shown?
-  bool show_other_folder_;
 
   // The bookmark bar. This is only non-null if we're showing a menu item
   // for a folder on the bookmark bar and not for drop.

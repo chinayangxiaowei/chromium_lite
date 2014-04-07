@@ -4,13 +4,17 @@
 
 #ifndef CHROME_BROWSER_LANGUAGE_COMBOBOX_MODEL_H_
 #define CHROME_BROWSER_LANGUAGE_COMBOBOX_MODEL_H_
+#pragma once
 
 #include <map>
 #include <string>
 #include <vector>
 
 #include "app/combobox_model.h"
-#include "chrome/browser/profile.h"
+#include "base/basictypes.h"
+#include "base/string16.h"
+
+class Profile;
 
 ///////////////////////////////////////////////////////////////////////////////
 // LanguageList
@@ -74,9 +78,8 @@ class LanguageComboboxModel : public LanguageList, public ComboboxModel {
 
   virtual ~LanguageComboboxModel() {}
 
-  virtual int GetItemCount() { return get_languages_count(); }
-
-  virtual std::wstring GetItemAt(int index) { return GetLanguageNameAt(index); }
+  virtual int GetItemCount();
+  virtual string16 GetItemAt(int index);
 
   // Returns the index of the language currently specified in the user's
   // preference file.  Note that it's possible for language A to be picked
@@ -85,7 +88,7 @@ class LanguageComboboxModel : public LanguageList, public ComboboxModel {
   // shouldn't be reflected in this combo box.  We return -1 if the value in
   // the pref doesn't map to a know language (possible if the user edited the
   // prefs file manually).
-  int GetSelectedLanguageIndex(const std::wstring& prefs);
+  int GetSelectedLanguageIndex(const std::string& prefs);
 
  private:
   // Profile.

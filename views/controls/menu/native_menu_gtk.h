@@ -4,12 +4,14 @@
 
 #ifndef VIEWS_CONTROLS_MENU_NATIVE_MENU_GTK_H_
 #define VIEWS_CONTROLS_MENU_NATIVE_MENU_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
 #include <vector>
 
 #include "app/gtk_signal.h"
+#include "base/message_loop.h"
 #include "base/task.h"
 #include "views/controls/menu/menu_wrapper.h"
 
@@ -18,6 +20,8 @@ class MenuModel;
 }
 
 namespace views {
+
+class NestedDispatcherGtk;
 
 // A Gtk implementation of MenuWrapper.
 //
@@ -28,7 +32,8 @@ namespace views {
 // then notify.
 //
 // TODO(beng): rename to MenuGtk once the old class is dead.
-class NativeMenuGtk : public MenuWrapper {
+class NativeMenuGtk : public MenuWrapper,
+                      public MessageLoopForUI::Dispatcher {
  public:
   explicit NativeMenuGtk(Menu2* menu);
   virtual ~NativeMenuGtk();
@@ -42,6 +47,10 @@ class NativeMenuGtk : public MenuWrapper {
   virtual MenuAction GetMenuAction() const;
   virtual void AddMenuListener(MenuListener* listener);
   virtual void RemoveMenuListener(MenuListener* listener);
+  virtual void SetMinimumWidth(int width);
+
+  // Overriden from MessageLoopForUI::Dispatcher:
+  virtual bool Dispatch(GdkEvent* event);
 
  private:
   CHROMEGTK_CALLBACK_0(NativeMenuGtk, void, OnMenuHidden);
@@ -55,7 +64,7 @@ class NativeMenuGtk : public MenuWrapper {
   void ResetMenu();
 
   // Updates the menu item's state.
-  void UpdateMenuItemState(GtkWidget* menu_item);
+  void UpdateMenuItemState(GtkWidget* menu_item, bool recurse);
 
   static void UpdateStateCallback(GtkWidget* menu_item, gpointer data);
 
@@ -93,7 +102,11 @@ class NativeMenuGtk : public MenuWrapper {
 
   GtkWidget* menu_;
 
-  bool menu_shown_;
+  // Has the menu been hidden?
+  // NOTE: this is maintained by us and do to the asynchronous nature of X may
+  // be out of sync with whether the window is actually hidden. None-the-less if
+  // true the menu is either truly hidden or in the process of hiding.
+  bool menu_hidden_;
 
   // A flag used to avoid misfiring ActivateAt call on the menu model.
   // This is necessary as GTK menu fires an activate signal even when the
@@ -124,6 +137,15 @@ class NativeMenuGtk : public MenuWrapper {
 
   // Vector of listeners to receive callbacks when the menu opens.
   std::vector<MenuListener*> listeners_;
+
+  // Nested dispatcher object that can outlive this object.
+  // This is to deal with the menu being deleted while the nested
+  // message loop is handled. see http://crosbug.com/7228 .
+  NestedDispatcherGtk* nested_dispatcher_;
+
+  // A flag used to detect a button release event without button press or move.
+  // see http://crosbug.com/8718.
+  bool ignore_button_release_;
 
   DISALLOW_COPY_AND_ASSIGN(NativeMenuGtk);
 };

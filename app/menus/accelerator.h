@@ -1,11 +1,12 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef APP_MENUS_ACCELERATOR_H_
 #define APP_MENUS_ACCELERATOR_H_
+#pragma once
 
-#include "base/keyboard_codes.h"
+#include "app/keyboard_codes.h"
 
 namespace menus {
 
@@ -14,12 +15,18 @@ namespace menus {
 
 class Accelerator {
  public:
-  Accelerator() : key_code_(base::VKEY_UNKNOWN), modifiers_(0) { }
-  virtual ~Accelerator() { }
+  Accelerator() : key_code_(app::VKEY_UNKNOWN), modifiers_(0) {}
+
+  Accelerator(app::KeyboardCode keycode, int modifiers)
+      : key_code_(keycode),
+        modifiers_(modifiers) {}
+
   Accelerator(const Accelerator& accelerator) {
     key_code_ = accelerator.key_code_;
     modifiers_ = accelerator.modifiers_;
   }
+
+  virtual ~Accelerator() {}
 
   Accelerator& operator=(const Accelerator& accelerator) {
     if (this != &accelerator) {
@@ -45,7 +52,7 @@ class Accelerator {
     return !(*this == rhs);
   }
 
-  base::KeyboardCode GetKeyCode() const {
+  app::KeyboardCode GetKeyCode() const {
     return key_code_;
   }
 
@@ -54,11 +61,26 @@ class Accelerator {
   }
 
  protected:
-  // The window keycode (VK_...).
-  base::KeyboardCode key_code_;
+  // The keycode (VK_...).
+  app::KeyboardCode key_code_;
 
   // The state of the Shift/Ctrl/Alt keys (platform-dependent).
   int modifiers_;
+};
+
+// Since acclerator code is one of the few things that can't be cross platform
+// in the chrome UI, separate out just the GetAcceleratorForCommandId() from
+// the menu delegates.
+class AcceleratorProvider {
+ public:
+  // Gets the accelerator for the specified command id. Returns true if the
+  // command id has a valid accelerator, false otherwise.
+  virtual bool GetAcceleratorForCommandId(
+      int command_id,
+      menus::Accelerator* accelerator) = 0;
+
+ protected:
+  virtual ~AcceleratorProvider() {}
 };
 
 }

@@ -4,6 +4,7 @@
 
 #ifndef BASE_GLOBAL_DESCRIPTORS_POSIX_H_
 #define BASE_GLOBAL_DESCRIPTORS_POSIX_H_
+#pragma once
 
 #include "build/build_config.h"
 
@@ -55,7 +56,8 @@ class GlobalDescriptors {
   }
 
  private:
-  GlobalDescriptors() { }
+  GlobalDescriptors();
+  ~GlobalDescriptors();
   friend struct DefaultSingletonTraits<GlobalDescriptors>;
 
   Mapping descriptors_;

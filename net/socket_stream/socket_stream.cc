@@ -7,23 +7,28 @@
 
 #include "net/socket_stream/socket_stream.h"
 
+#include <set>
 #include <string>
 
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
+#include "base/utf_string_conversions.h"
 #include "net/base/auth.h"
 #include "net/base/host_resolver.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
+#include "net/http/http_auth_handler_factory.h"
+#include "net/http/http_request_info.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
 #include "net/socket/client_socket_factory.h"
-#include "net/socket/ssl_client_socket.h"
 #include "net/socket/socks5_client_socket.h"
 #include "net/socket/socks_client_socket.h"
+#include "net/socket/ssl_client_socket.h"
 #include "net/socket/tcp_client_socket.h"
 #include "net/socket_stream/socket_stream_metrics.h"
 #include "net/url_request/url_request.h"
@@ -32,6 +37,9 @@ static const int kMaxPendingSendAllowed = 32768;  // 32 kilobytes.
 static const int kReadBufferSize = 4096;
 
 namespace net {
+
+SocketStream::ResponseHeaders::ResponseHeaders() : IOBuffer() {}
+SocketStream::ResponseHeaders::~ResponseHeaders() { data_ = NULL; }
 
 void SocketStream::ResponseHeaders::Realloc(size_t new_size) {
   headers_.reset(static_cast<char*>(realloc(headers_.release(), new_size)));
@@ -58,6 +66,8 @@ SocketStream::SocketStream(const GURL& url, Delegate* delegate)
       current_write_buf_(NULL),
       write_buf_offset_(0),
       write_buf_size_(0),
+      closing_(false),
+      server_closed_(false),
       metrics_(new SocketStreamMetrics(url)) {
   DCHECK(MessageLoop::current()) <<
       "The current MessageLoop must exist";
@@ -95,7 +105,7 @@ void SocketStream::set_context(URLRequestContext* context) {
       pac_request_ = NULL;
     }
 
-    net_log_.EndEvent(NetLog::TYPE_REQUEST_ALIVE);
+    net_log_.EndEvent(NetLog::TYPE_REQUEST_ALIVE, NULL);
     net_log_ = BoundNetLog();
 
     if (context) {
@@ -103,7 +113,7 @@ void SocketStream::set_context(URLRequestContext* context) {
           context->net_log(),
           NetLog::SOURCE_SOCKET_STREAM);
 
-      net_log_.BeginEvent(NetLog::TYPE_REQUEST_ALIVE);
+      net_log_.BeginEvent(NetLog::TYPE_REQUEST_ALIVE, NULL);
     }
   }
 
@@ -126,8 +136,9 @@ void SocketStream::Connect() {
   // Open a connection asynchronously, so that delegate won't be called
   // back before returning Connect().
   next_state_ = STATE_RESOLVE_PROXY;
-  net_log_.BeginEventWithString(NetLog::TYPE_SOCKET_STREAM_CONNECT,
-                                url_.possibly_invalid_spec());
+  net_log_.BeginEvent(
+      NetLog::TYPE_SOCKET_STREAM_CONNECT,
+      new NetLogStringParameter("url", url_.possibly_invalid_spec()));
   MessageLoop::current()->PostTask(
       FROM_HERE,
       NewRunnableMethod(this, &SocketStream::DoLoop, OK));
@@ -179,23 +190,38 @@ void SocketStream::Close() {
   // of AddRef() and Release() in Connect() and Finish(), respectively.
   if (next_state_ == STATE_NONE)
     return;
-  if (socket_.get() && socket_->IsConnected())
-    socket_->Disconnect();
-  next_state_ = STATE_CLOSE;
-  // Close asynchronously, so that delegate won't be called
-  // back before returning Close().
   MessageLoop::current()->PostTask(
       FROM_HERE,
-      NewRunnableMethod(this, &SocketStream::DoLoop, OK));
+      NewRunnableMethod(this, &SocketStream::DoClose));
+}
+
+void SocketStream::DoClose() {
+  closing_ = true;
+  // If next_state_ is STATE_TCP_CONNECT, it's waiting other socket establishing
+  // connection.  If next_state_ is STATE_AUTH_REQUIRED, it's waiting for
+  // restarting.  In these states, we'll close the SocketStream now.
+  if (next_state_ == STATE_TCP_CONNECT || next_state_ == STATE_AUTH_REQUIRED) {
+    DoLoop(ERR_ABORTED);
+    return;
+  }
+  // If next_state_ is STATE_READ_WRITE, we'll run DoLoop and close
+  // the SocketStream.
+  // If it's writing now, we should defer the closing after the current
+  // writing is completed.
+  if (next_state_ == STATE_READ_WRITE && !current_write_buf_)
+    DoLoop(ERR_ABORTED);
+
+  // In other next_state_, we'll wait for callback of other APIs, such as
+  // ResolveProxy().
 }
 
 void SocketStream::RestartWithAuth(
-    const std::wstring& username, const std::wstring& password) {
+    const string16& username, const string16& password) {
   DCHECK(MessageLoop::current()) <<
       "The current MessageLoop must exist";
   DCHECK_EQ(MessageLoop::TYPE_IO, MessageLoop::current()->type()) <<
       "The current MessageLoop must be TYPE_IO";
-  DCHECK(auth_handler_);
+  DCHECK(auth_handler_.get());
   if (!socket_.get()) {
     LOG(ERROR) << "Socket is closed before restarting with auth.";
     return;
@@ -218,7 +244,9 @@ void SocketStream::DetachDelegate() {
   if (!delegate_)
     return;
   delegate_ = NULL;
-  net_log_.AddEvent(NetLog::TYPE_CANCELLED);
+  net_log_.AddEvent(NetLog::TYPE_CANCELLED, NULL);
+  // We don't need to send pending data when client detach the delegate.
+  pending_write_bufs_.clear();
   Close();
 }
 
@@ -267,7 +295,7 @@ int SocketStream::DidEstablishConnection() {
   next_state_ = STATE_READ_WRITE;
   metrics_->OnConnected();
 
-  net_log_.EndEvent(NetLog::TYPE_SOCKET_STREAM_CONNECT);
+  net_log_.EndEvent(NetLog::TYPE_SOCKET_STREAM_CONNECT, NULL);
   if (delegate_)
     delegate_->OnConnected(this, max_pending_send_allowed_);
 
@@ -277,7 +305,7 @@ int SocketStream::DidEstablishConnection() {
 int SocketStream::DidReceiveData(int result) {
   DCHECK(read_buf_);
   DCHECK_GT(result, 0);
-  net_log_.AddEvent(NetLog::TYPE_SOCKET_STREAM_RECEIVED);
+  net_log_.AddEvent(NetLog::TYPE_SOCKET_STREAM_RECEIVED, NULL);
   int len = result;
   metrics_->OnRead(len);
   if (delegate_) {
@@ -290,7 +318,7 @@ int SocketStream::DidReceiveData(int result) {
 
 int SocketStream::DidSendData(int result) {
   DCHECK_GT(result, 0);
-  net_log_.AddEvent(NetLog::TYPE_SOCKET_STREAM_SENT);
+  net_log_.AddEvent(NetLog::TYPE_SOCKET_STREAM_SENT, NULL);
   int len = result;
   metrics_->OnWrite(len);
   current_write_buf_ = NULL;
@@ -321,7 +349,8 @@ void SocketStream::OnIOCompleted(int result) {
 void SocketStream::OnReadCompleted(int result) {
   if (result == 0) {
     // 0 indicates end-of-file, so socket was closed.
-    next_state_ = STATE_CLOSE;
+    // Don't close the socket if it's still writing.
+    server_closed_ = true;
   } else if (result > 0 && read_buf_) {
     result = DidReceiveData(result);
   }
@@ -362,8 +391,7 @@ void SocketStream::DoLoop(int result) {
         result = DoResolveHostComplete(result);
         break;
       case STATE_TCP_CONNECT:
-        DCHECK_EQ(OK, result);
-        result = DoTcpConnect();
+        result = DoTcpConnect(result);
         break;
       case STATE_TCP_CONNECT_COMPLETE:
         result = DoTcpConnectComplete(result);
@@ -399,12 +427,17 @@ void SocketStream::DoLoop(int result) {
       case STATE_READ_WRITE:
         result = DoReadWrite(result);
         break;
+      case STATE_AUTH_REQUIRED:
+        // It might be called when DoClose is called while waiting in
+        // STATE_AUTH_REQUIRED.
+        Finish(result);
+        return;
       case STATE_CLOSE:
         DCHECK_LE(result, OK);
         Finish(result);
         return;
       default:
-        NOTREACHED() << "bad state";
+        NOTREACHED() << "bad state " << state;
         Finish(result);
         return;
     }
@@ -412,7 +445,8 @@ void SocketStream::DoLoop(int result) {
     // close the connection.
     if (state != STATE_READ_WRITE && result < ERR_IO_PENDING) {
       DCHECK_EQ(next_state_, STATE_CLOSE);
-      net_log_.EndEventWithInteger(NetLog::TYPE_SOCKET_STREAM_CONNECT, result);
+      net_log_.EndEvent(NetLog::TYPE_SOCKET_STREAM_CONNECT,
+                        new NetLogIntegerParameter("net_error", result));
     }
   } while (result != ERR_IO_PENDING);
 }
@@ -476,27 +510,23 @@ int SocketStream::DoResolveHost() {
     proxy_mode_ = kTunnelProxy;
 
   // Determine the host and port to connect to.
-  std::string host;
-  int port;
+  HostPortPair host_port_pair;
   if (proxy_mode_ != kDirectConnection) {
-    ProxyServer proxy_server = proxy_info_.proxy_server();
-    host = proxy_server.HostNoBrackets();
-    port = proxy_server.port();
+    host_port_pair = proxy_info_.proxy_server().host_port_pair();
   } else {
-    host = url_.HostNoBrackets();
-    port = url_.EffectiveIntPort();
+    host_port_pair = HostPortPair::FromURL(url_);
   }
 
-  HostResolver::RequestInfo resolve_info(host, port);
+  HostResolver::RequestInfo resolve_info(host_port_pair);
 
-  DCHECK(host_resolver_.get());
-  resolver_.reset(new SingleRequestHostResolver(host_resolver_.get()));
+  DCHECK(host_resolver_);
+  resolver_.reset(new SingleRequestHostResolver(host_resolver_));
   return resolver_->Resolve(resolve_info, &addresses_, &io_callback_,
                             net_log_);
 }
 
 int SocketStream::DoResolveHostComplete(int result) {
-  if (result == OK) {
+  if (result == OK && delegate_) {
     next_state_ = STATE_TCP_CONNECT;
     result = delegate_->OnStartOpenConnection(this, &io_callback_);
     if (result == net::ERR_IO_PENDING)
@@ -508,12 +538,18 @@ int SocketStream::DoResolveHostComplete(int result) {
   return result;
 }
 
-int SocketStream::DoTcpConnect() {
+int SocketStream::DoTcpConnect(int result) {
+  if (result != OK) {
+    next_state_ = STATE_CLOSE;
+    return result;
+  }
   next_state_ = STATE_TCP_CONNECT_COMPLETE;
   DCHECK(factory_);
-  socket_.reset(factory_->CreateTCPClientSocket(addresses_));
+  socket_.reset(factory_->CreateTCPClientSocket(addresses_,
+                                                net_log_.net_log(),
+                                                net_log_.source()));
   metrics_->OnStartConnection();
-  return socket_->Connect(&io_callback_, net_log_);
+  return socket_->Connect(&io_callback_);
 }
 
 int SocketStream::DoTcpConnectComplete(int result) {
@@ -549,15 +585,23 @@ int SocketStream::DoWriteTunnelHeaders() {
     std::string authorization_headers;
 
     if (!auth_handler_.get()) {
-      // First attempt.  Find auth from the proxy address.
+      // Do preemptive authentication.
       HttpAuthCache::Entry* entry = auth_cache_.LookupByPath(
           ProxyAuthOrigin(), std::string());
-      if (entry && !entry->handler()->is_connection_based()) {
-        auth_identity_.source = HttpAuth::IDENT_SRC_PATH_LOOKUP;
-        auth_identity_.invalid = false;
-        auth_identity_.username = entry->username();
-        auth_identity_.password = entry->password();
-        auth_handler_ = entry->handler();
+      if (entry) {
+        scoped_ptr<HttpAuthHandler> handler_preemptive;
+        int rv_create = http_auth_handler_factory_->
+            CreatePreemptiveAuthHandlerFromString(
+                entry->auth_challenge(), HttpAuth::AUTH_PROXY,
+                ProxyAuthOrigin(), entry->IncrementNonceCount(),
+                net_log_, &handler_preemptive);
+        if (rv_create == OK) {
+          auth_identity_.source = HttpAuth::IDENT_SRC_PATH_LOOKUP;
+          auth_identity_.invalid = false;
+          auth_identity_.username = entry->username();
+          auth_identity_.password = entry->password();
+          auth_handler_.swap(handler_preemptive);
+        }
       }
     }
 
@@ -565,24 +609,24 @@ int SocketStream::DoWriteTunnelHeaders() {
     // HttpRequestInfo.
     // TODO(ukai): Add support other authentication scheme.
     if (auth_handler_.get() && auth_handler_->scheme() == "basic") {
+      HttpRequestInfo request_info;
       std::string auth_token;
       int rv = auth_handler_->GenerateAuthToken(
-          auth_identity_.username,
-          auth_identity_.password,
+          &auth_identity_.username,
+          &auth_identity_.password,
+          &request_info,
           NULL,
-          &proxy_info_,
           &auth_token);
-      // TODO(cbentzel): Should do something different if credentials
-      // can't be generated. In this case, only Basic is allowed which
-      // should only fail if Base64 encoding fails.
+      // TODO(cbentzel): Support async auth handlers.
+      DCHECK_NE(ERR_IO_PENDING, rv);
       if (rv != OK)
-        auth_token = std::string();
+        return rv;
       authorization_headers.append(
           HttpAuth::GetAuthorizationHeaderName(HttpAuth::AUTH_PROXY) +
           ": " + auth_token + "\r\n");
     }
 
-    tunnel_request_headers_->headers_ = StringPrintf(
+    tunnel_request_headers_->headers_ = base::StringPrintf(
         "CONNECT %s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "Proxy-Connection: keep-alive\r\n",
@@ -692,13 +736,13 @@ int SocketStream::DoReadTunnelHeadersComplete(int result) {
       return OK;
     case 407:  // Proxy Authentication Required.
       result = HandleAuthChallenge(headers.get());
-      if (result == ERR_PROXY_AUTH_REQUESTED &&
+      if (result == ERR_PROXY_AUTH_UNSUPPORTED &&
           auth_handler_.get() && delegate_) {
         DCHECK(!proxy_info_.is_empty());
         auth_info_ = new AuthChallengeInfo;
         auth_info_->is_proxy = true;
         auth_info_->host_and_port =
-            ASCIIToWide(proxy_info_.proxy_server().host_and_port());
+            ASCIIToWide(proxy_info_.proxy_server().host_port_pair().ToString());
         auth_info_->scheme = ASCIIToWide(auth_handler_->scheme());
         auth_info_->realm = ASCIIToWide(auth_handler_->realm());
         // Wait until RestartWithAuth or Close is called.
@@ -721,17 +765,16 @@ int SocketStream::DoSOCKSConnect() {
   next_state_ = STATE_SOCKS_CONNECT_COMPLETE;
 
   ClientSocket* s = socket_.release();
-  HostResolver::RequestInfo req_info(url_.HostNoBrackets(),
-                                     url_.EffectiveIntPort());
+  HostResolver::RequestInfo req_info(HostPortPair::FromURL(url_));
 
   DCHECK(!proxy_info_.is_empty());
   if (proxy_info_.proxy_server().scheme() == ProxyServer::SCHEME_SOCKS5)
     s = new SOCKS5ClientSocket(s, req_info);
   else
-    s = new SOCKSClientSocket(s, req_info, host_resolver_.get());
+    s = new SOCKSClientSocket(s, req_info, host_resolver_);
   socket_.reset(s);
   metrics_->OnSOCKSProxy();
-  return socket_->Connect(&io_callback_, net_log_);
+  return socket_->Connect(&io_callback_);
 }
 
 int SocketStream::DoSOCKSConnectComplete(int result) {
@@ -754,7 +797,7 @@ int SocketStream::DoSSLConnect() {
       socket_.release(), url_.HostNoBrackets(), ssl_config_));
   next_state_ = STATE_SSL_CONNECT_COMPLETE;
   metrics_->OnSSLConnection();
-  return socket_->Connect(&io_callback_, net_log_);
+  return socket_->Connect(&io_callback_);
 }
 
 int SocketStream::DoSSLConnectComplete(int result) {
@@ -811,28 +854,43 @@ int SocketStream::DoReadWrite(int result) {
     return ERR_CONNECTION_CLOSED;
   }
 
+  // If client has requested close(), and there's nothing to write, then
+  // let's close the socket.
+  // We don't care about receiving data after the socket is closed.
+  if (closing_ && !write_buf_ && pending_write_bufs_.empty()) {
+    socket_->Disconnect();
+    next_state_ = STATE_CLOSE;
+    return OK;
+  }
+
   next_state_ = STATE_READ_WRITE;
 
-  if (!read_buf_) {
-    // No read pending.
-    read_buf_ = new IOBuffer(kReadBufferSize);
-    result = socket_->Read(read_buf_, kReadBufferSize, &read_callback_);
-    if (result > 0) {
-      return DidReceiveData(result);
-    } else if (result == 0) {
-      // 0 indicates end-of-file, so socket was closed.
-      next_state_ = STATE_CLOSE;
-      return ERR_CONNECTION_CLOSED;
+  // If server already closed the socket, we don't try to read.
+  if (!server_closed_) {
+    if (!read_buf_) {
+      // No read pending and server didn't close the socket.
+      read_buf_ = new IOBuffer(kReadBufferSize);
+      result = socket_->Read(read_buf_, kReadBufferSize, &read_callback_);
+      if (result > 0) {
+        return DidReceiveData(result);
+      } else if (result == 0) {
+        // 0 indicates end-of-file, so socket was closed.
+        next_state_ = STATE_CLOSE;
+        server_closed_ = true;
+        return ERR_CONNECTION_CLOSED;
+      }
+      // If read is pending, try write as well.
+      // Otherwise, return the result and do next loop (to close the
+      // connection).
+      if (result != ERR_IO_PENDING) {
+        next_state_ = STATE_CLOSE;
+        server_closed_ = true;
+        return result;
+      }
     }
-    // If read is pending, try write as well.
-    // Otherwise, return the result and do next loop (to close the connection).
-    if (result != ERR_IO_PENDING) {
-      next_state_ = STATE_CLOSE;
-      return result;
-    }
+    // Read is pending.
+    DCHECK(read_buf_);
   }
-  // Read is pending.
-  DCHECK(read_buf_);
 
   if (write_buf_ && !current_write_buf_) {
     // No write pending.
@@ -859,7 +917,8 @@ int SocketStream::DoReadWrite(int result) {
 
 GURL SocketStream::ProxyAuthOrigin() const {
   DCHECK(!proxy_info_.is_empty());
-  return GURL("http://" + proxy_info_.proxy_server().host_and_port());
+  return GURL("http://" +
+              proxy_info_.proxy_server().host_port_pair().ToString());
 }
 
 int SocketStream::HandleAuthChallenge(const HttpResponseHeaders* headers) {
@@ -867,43 +926,44 @@ int SocketStream::HandleAuthChallenge(const HttpResponseHeaders* headers) {
 
   LOG(INFO) << "The proxy " << auth_origin << " requested auth";
 
-  // The auth we tried just failed, hence it can't be valid.
-  // Remove it from the cache so it won't be used again.
-  if (auth_handler_.get() && !auth_identity_.invalid &&
-      auth_handler_->IsFinalRound()) {
+  // TODO(cbentzel): Since SocketStream only suppports basic authentication
+  // right now, another challenge is always treated as a rejection.
+  // Ultimately this should be converted to use HttpAuthController like the
+  // HttpNetworkTransaction has.
+  if (auth_handler_.get() && !auth_identity_.invalid) {
     if (auth_identity_.source != HttpAuth::IDENT_SRC_PATH_LOOKUP)
       auth_cache_.Remove(auth_origin,
                          auth_handler_->realm(),
+                         auth_handler_->scheme(),
                          auth_identity_.username,
                          auth_identity_.password);
-    auth_handler_ = NULL;
+    auth_handler_.reset();
     auth_identity_ = HttpAuth::Identity();
   }
 
   auth_identity_.invalid = true;
+  std::set<std::string> disabled_schemes;
   HttpAuth::ChooseBestChallenge(http_auth_handler_factory_, headers,
                                 HttpAuth::AUTH_PROXY,
-                                auth_origin, &auth_handler_);
-  if (!auth_handler_) {
+                                auth_origin, disabled_schemes,
+                                net_log_, &auth_handler_);
+  if (!auth_handler_.get()) {
     LOG(ERROR) << "Can't perform auth to the proxy " << auth_origin;
     return ERR_TUNNEL_CONNECTION_FAILED;
   }
   if (auth_handler_->NeedsIdentity()) {
-    HttpAuthCache::Entry* entry = auth_cache_.LookupByRealm(
-        auth_origin, auth_handler_->realm());
+    // We only support basic authentication scheme now.
+    // TODO(ukai): Support other authentication scheme.
+    HttpAuthCache::Entry* entry =
+      auth_cache_.Lookup(auth_origin, auth_handler_->realm(), "basic");
     if (entry) {
-      if (entry->handler()->scheme() != "basic") {
-        // We only support basic authentication scheme now.
-        // TODO(ukai): Support other authentication scheme.
-        return ERR_TUNNEL_CONNECTION_FAILED;
-      }
       auth_identity_.source = HttpAuth::IDENT_SRC_REALM_LOOKUP;
       auth_identity_.invalid = false;
       auth_identity_.username = entry->username();
       auth_identity_.password = entry->password();
       // Restart with auth info.
     }
-    return ERR_PROXY_AUTH_REQUESTED;
+    return ERR_PROXY_AUTH_UNSUPPORTED;
   } else {
     auth_identity_.invalid = false;
   }
@@ -919,8 +979,12 @@ void SocketStream::DoAuthRequired() {
 
 void SocketStream::DoRestartWithAuth() {
   DCHECK_EQ(next_state_, STATE_AUTH_REQUIRED);
-  auth_cache_.Add(ProxyAuthOrigin(), auth_handler_,
-                  auth_identity_.username, auth_identity_.password,
+  auth_cache_.Add(ProxyAuthOrigin(),
+                  auth_handler_->realm(),
+                  auth_handler_->scheme(),
+                  auth_handler_->challenge(),
+                  auth_identity_.username,
+                  auth_identity_.password,
                   std::string());
 
   tunnel_request_headers_ = NULL;

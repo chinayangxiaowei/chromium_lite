@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_BALLOON_HOST_H_
 #define CHROME_BROWSER_NOTIFICATIONS_BALLOON_HOST_H_
+#pragma once
 
 #include <string>
 
@@ -13,6 +14,7 @@
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/tab_contents/render_view_host_delegate_helper.h"
+#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/renderer_preferences.h"
 #include "webkit/glue/webpreferences.h"
 
@@ -40,10 +42,11 @@ class BalloonHost : public RenderViewHostDelegate,
     // TODO(aa): Should this return the native view of the BalloonView*?
     return NULL;
   }
+  virtual TabContents* associated_tab_contents() const { return NULL; }
 
   RenderViewHost* render_view_host() const { return render_view_host_; }
 
-  std::wstring GetSource() const {
+  const string16& GetSource() const {
     return balloon_->notification().display_source();
   }
 
@@ -62,29 +65,33 @@ class BalloonHost : public RenderViewHostDelegate,
   virtual void RenderViewGone(RenderViewHost* render_view_host);
   virtual void UpdateTitle(RenderViewHost* render_view_host,
                            int32 page_id, const std::wstring& title) {}
-  virtual int GetBrowserWindowID() const { return -1; }
+  virtual int GetBrowserWindowID() const {
+    return extension_misc::kUnknownWindowId;
+  }
   virtual ViewType::Type GetRenderViewType() const {
     return ViewType::NOTIFICATION;
   }
   virtual RenderViewHostDelegate::View* GetViewDelegate() {
     return this;
   }
-  virtual void ProcessDOMUIMessage(const std::string& message,
-                                   const Value* content,
-                                   const GURL& source_url,
-                                   int request_id,
-                                   bool has_callback);
+  virtual void ProcessDOMUIMessage(const ViewHostMsg_DomMessage_Params& params);
 
   // RenderViewHostDelegate::View methods. Only the ones for opening new
   // windows are currently implemented.
-  virtual void CreateNewWindow(int route_id);
+  virtual void CreateNewWindow(
+      int route_id,
+      WindowContainerType window_container_type,
+      const string16& frame_name);
   virtual void CreateNewWidget(int route_id, WebKit::WebPopupType popup_type) {}
+  virtual void CreateNewFullscreenWidget(
+      int route_id, WebKit::WebPopupType popup_type) {}
   virtual void ShowCreatedWindow(int route_id,
                                  WindowOpenDisposition disposition,
                                  const gfx::Rect& initial_pos,
                                  bool user_gesture);
   virtual void ShowCreatedWidget(int route_id,
                                  const gfx::Rect& initial_pos) {}
+  virtual void ShowCreatedFullscreenWidget(int route_id) {}
   virtual void ShowContextMenu(const ContextMenuParams& params) {}
   virtual void StartDragging(const WebDropData& drop_data,
                              WebKit::WebDragOperationsMask allowed_ops) {}
@@ -95,27 +102,33 @@ class BalloonHost : public RenderViewHostDelegate,
   virtual void UpdateDragCursor(WebKit::WebDragOperation operation) {}
   virtual void GotFocus() {}
   virtual void TakeFocus(bool reverse) {}
+  virtual void LostCapture() {}
+  virtual void Activate() {}
+  virtual void Deactivate() {}
   virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
                                       bool* is_keyboard_shortcut) {
     return false;
   }
   virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {}
-  virtual void HandleMouseEvent() {}
+  virtual void HandleMouseMove() {}
+  virtual void HandleMouseDown();
   virtual void HandleMouseLeave() {}
+  virtual void HandleMouseUp() {}
+  virtual void HandleMouseActivate() {}
   virtual void UpdatePreferredSize(const gfx::Size& pref_size);
-  virtual RendererPreferences GetRendererPrefs(Profile* profile) const {
-    return RendererPreferences();
-  }
+  virtual RendererPreferences GetRendererPrefs(Profile* profile) const;
+
+  // Enable DOM UI. This has to be called before renderer is created.
+  void EnableDOMUI();
 
  protected:
+  virtual ~BalloonHost() {}
   // Must override in platform specific implementations.
   virtual void InitRenderWidgetHostView() = 0;
   virtual RenderWidgetHostView* render_widget_host_view() const = 0;
 
   // Owned pointer to the host for the renderer process.
   RenderViewHost* render_view_host_;
-
-  const Balloon* balloon() const { return balloon_; }
 
  private:
   // Called to send an event that the balloon has been disconnected from
@@ -142,6 +155,9 @@ class BalloonHost : public RenderViewHostDelegate,
   // Handles requests to extension APIs. Will only be non-NULL if we are
   // rendering a page from an extension.
   scoped_ptr<ExtensionFunctionDispatcher> extension_function_dispatcher_;
+
+  // A flag to enable DOM UI.
+  bool enable_dom_ui_;
 };
 
 #endif  // CHROME_BROWSER_NOTIFICATIONS_BALLOON_HOST_H_

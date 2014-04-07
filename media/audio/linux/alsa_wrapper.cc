@@ -51,6 +51,12 @@ snd_pcm_sframes_t AlsaWrapper::PcmWritei(snd_pcm_t* handle,
   return snd_pcm_writei(handle, buffer, size);
 }
 
+snd_pcm_sframes_t AlsaWrapper::PcmReadi(snd_pcm_t* handle,
+                                        void* buffer,
+                                        snd_pcm_uframes_t size) {
+  return snd_pcm_readi(handle, buffer, size);
+}
+
 int AlsaWrapper::PcmRecover(snd_pcm_t* handle, int err, int silent) {
   return snd_pcm_recover(handle, err, silent);
 }
@@ -67,6 +73,11 @@ int AlsaWrapper::PcmSetParams(snd_pcm_t* handle, snd_pcm_format_t format,
                             soft_resample, latency);
 }
 
+int AlsaWrapper::PcmGetParams(snd_pcm_t* handle, snd_pcm_uframes_t* buffer_size,
+                              snd_pcm_uframes_t* period_size) {
+  return snd_pcm_get_params(handle, buffer_size, period_size);
+}
+
 snd_pcm_sframes_t AlsaWrapper::PcmAvailUpdate(snd_pcm_t* handle) {
   return snd_pcm_avail_update(handle);
 }
@@ -78,3 +89,8 @@ snd_pcm_state_t AlsaWrapper::PcmState(snd_pcm_t* handle) {
 const char* AlsaWrapper::StrError(int errnum) {
   return snd_strerror(errnum);
 }
+
+int AlsaWrapper::PcmStart(snd_pcm_t* handle) {
+  return snd_pcm_start(handle);
+}
+

@@ -4,19 +4,21 @@
 
 #ifndef CHROME_BROWSER_GTK_TABS_TAB_STRIP_GTK_H_
 #define CHROME_BROWSER_GTK_TABS_TAB_STRIP_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 #include <vector>
 
+#include "app/gtk_signal.h"
 #include "base/basictypes.h"
 #include "base/task.h"
 #include "base/message_loop.h"
+#include "chrome/browser/gtk/owned_widget_gtk.h"
 #include "chrome/browser/gtk/tabstrip_origin_provider.h"
 #include "chrome/browser/gtk/tabs/tab_gtk.h"
 #include "chrome/browser/gtk/view_id_util.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/common/notification_observer.h"
-#include "chrome/common/owned_widget_gtk.h"
 #include "gfx/rect.h"
 
 class BrowserWindowGtk;
@@ -171,13 +173,12 @@ class TabStripGtk : public TabStripModelObserver,
   class DropInfo {
    public:
     DropInfo(int index, bool drop_before, bool point_down);
-    ~DropInfo();
+    virtual ~DropInfo();
 
     // TODO(jhawkins): Factor out this code into a TransparentContainer class.
 
     // expose-event handler that redraws the drop indicator.
-    static gboolean OnExposeEvent(GtkWidget* widget, GdkEventExpose* event,
-                                  DropInfo* drop_info);
+    CHROMEGTK_CALLBACK_1(DropInfo, gboolean, OnExposeEvent, GdkEventExpose*);
 
     // Sets the color map of the container window to allow the window to be
     // transparent.
@@ -222,41 +223,32 @@ class TabStripGtk : public TabStripModelObserver,
   };
 
   // expose-event handler that redraws the tabstrip
-  static gboolean OnExpose(GtkWidget* widget, GdkEventExpose* e,
-                           TabStripGtk* tabstrip);
+  CHROMEGTK_CALLBACK_1(TabStripGtk, gboolean, OnExpose, GdkEventExpose*);
 
   // size-allocate handler that gets the new bounds of the tabstrip.
-  static void OnSizeAllocate(GtkWidget* widget, GtkAllocation* allocation,
-                             TabStripGtk* tabstrip);
+  CHROMEGTK_CALLBACK_1(TabStripGtk, void, OnSizeAllocate, GtkAllocation*);
 
   // drag-motion handler that is signaled when the user performs a drag in the
   // tabstrip bounds.
-  static gboolean OnDragMotion(GtkWidget* widget, GdkDragContext* context,
-                               gint x, gint y, guint time,
-                               TabStripGtk* tabstrip);
+  CHROMEGTK_CALLBACK_4(TabStripGtk, gboolean, OnDragMotion, GdkDragContext*,
+                       gint, gint, guint);
 
   // drag-drop handler that is notified when the user finishes a drag.
-  static gboolean OnDragDrop(GtkWidget* widget, GdkDragContext* context,
-                             gint x, gint y, guint time,
-                             TabStripGtk* tabstrip);
+  CHROMEGTK_CALLBACK_4(TabStripGtk, gboolean, OnDragDrop, GdkDragContext*,
+                       gint, gint, guint);
 
   // drag-leave handler that is signaled when the mouse leaves the tabstrip
   // during a drag.
-  static gboolean OnDragLeave(GtkWidget* widget, GdkDragContext* context,
-                              guint time, TabStripGtk* tabstrip);
-
-  // drag-failed handler that is signaled when the drag fails or is canceled.
-  static gboolean OnDragFailed(GtkWidget* widget, GdkDragContext* context,
-                               GtkDragResult result, TabStripGtk* tabstrip);
+  CHROMEGTK_CALLBACK_2(TabStripGtk, gboolean, OnDragLeave, GdkDragContext*,
+                       guint);
 
   // drag-data-received handler that receives the data associated with the drag.
-  static gboolean OnDragDataReceived(GtkWidget* widget, GdkDragContext* context,
-                                     gint x, gint y, GtkSelectionData* data,
-                                     guint info, guint time,
-                                     TabStripGtk* tabstrip);
+  CHROMEGTK_CALLBACK_6(TabStripGtk, gboolean, OnDragDataReceived,
+                       GdkDragContext*, gint, gint, GtkSelectionData*,
+                       guint, guint);
 
   // Handles the clicked signal from the new tab button.
-  static void OnNewTabClicked(GtkWidget* widget, TabStripGtk* tabstrip);
+  CHROMEGTK_CALLBACK_0(TabStripGtk, void, OnNewTabClicked);
 
   // Sets the bounds of the tab and moves the tab widget to those bounds.
   void SetTabBounds(TabGtk* tab, const gfx::Rect& bounds);
@@ -315,8 +307,9 @@ class TabStripGtk : public TabStripModelObserver,
   // Returns the x-coordinate tabs start from.
   int tab_start_x() const;
 
-  // Perform an animated resize-relayout of the TabStrip immediately.
-  void ResizeLayoutTabs();
+  // Perform an animated resize-relayout of the TabStrip immediately. The
+  // value returned indicates whether a resize actually took place.
+  bool ResizeLayoutTabs();
 
   // Returns whether or not the cursor is currently in the "tab strip zone"
   // which is defined as the region above the TabStrip and a bit below it.

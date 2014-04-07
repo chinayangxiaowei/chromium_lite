@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_GTK_OPTIONS_URL_PICKER_DIALOG_GTK_H_
 #define CHROME_BROWSER_GTK_OPTIONS_URL_PICKER_DIALOG_GTK_H_
+#pragma once
 
 #include <string>
 
@@ -54,8 +55,8 @@ class UrlPickerDialogGtk : public gtk_tree::TableAdapter::Delegate {
   CHROMEGTK_CALLBACK_0(UrlPickerDialogGtk, void, OnWindowDestroy);
 
   // Callback for user selecting rows in recent history list.
-  static void OnHistorySelectionChanged(GtkTreeSelection* selection,
-                                        UrlPickerDialogGtk* window);
+  CHROMEG_CALLBACK_0(UrlPickerDialogGtk, void, OnHistorySelectionChanged,
+                     GtkTreeSelection*)
 
   // The dialog window.
   GtkWidget* dialog_;

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_AUTOFILL_FIELD_TYPES_H_
 #define CHROME_BROWSER_AUTOFILL_FIELD_TYPES_H_
+#pragma once
 
 #include <set>
 
@@ -15,8 +16,8 @@ typedef enum _AddressType {
 
 // NOTE: This list MUST not be modified.  The server aggregates and stores these
 // types over several versions, so we must remain fully compatible with the
-// autofill server, which is itself backward-compatible.  The list must be kept
-// up to date with the autofill server list.
+// AutoFill server, which is itself backward-compatible.  The list must be kept
+// up to date with the AutoFill server list.
 //
 // This is the list of all valid field types.
 typedef enum _FieldType {

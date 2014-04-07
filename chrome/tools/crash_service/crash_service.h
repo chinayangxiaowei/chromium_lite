@@ -1,9 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TOOLS_CRASH_SERVICE_CRASH_SERVICE_H_
 #define CHROME_TOOLS_CRASH_SERVICE_CRASH_SERVICE_H_
+#pragma once
 
 #include <string>
 
@@ -113,7 +114,7 @@ class CrashService {
   volatile long clients_terminated_;
   Lock sending_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(CrashService);
+  DISALLOW_COPY_AND_ASSIGN(CrashService);
 };
 
 #endif  // CHROME_TOOLS_CRASH_SERVICE_CRASH_SERVICE_H_

@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_WINDOW_SIZER_H_
 #define CHROME_BROWSER_WINDOW_SIZER_H_
+#pragma once
 
 #include <vector>
 
@@ -117,7 +118,7 @@ class WindowSizer {
   // |window_bounds| is calculated by calling GetLastActiveWindowState(). To
   // explicitly specify a particular window to base the bounds on, pass in a
   // non-NULL value for |browser|.
-  static void GetBrowserWindowBounds(const std::wstring& app_name,
+  static void GetBrowserWindowBounds(const std::string& app_name,
                                      const gfx::Rect& specified_bounds,
                                      Browser* browser,
                                      gfx::Rect* window_bounds,
@@ -134,7 +135,7 @@ class WindowSizer {
   // The edge of the screen to check for out-of-bounds.
   enum Edge { TOP, LEFT, BOTTOM, RIGHT };
 
-  explicit WindowSizer(const std::wstring& app_name);
+  explicit WindowSizer(const std::string& app_name);
 
   void Init(StateProvider* state_provider,
             MonitorInfoProvider* monitor_info_provider);
@@ -176,7 +177,7 @@ class WindowSizer {
   StateProvider* state_provider_;
   MonitorInfoProvider* monitor_info_provider_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(WindowSizer);
+  DISALLOW_COPY_AND_ASSIGN(WindowSizer);
 };
 
 #endif  // CHROME_BROWSER_WINDOW_SIZER_H_

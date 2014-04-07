@@ -121,7 +121,6 @@ LRESULT CALLBACK WebWidgetHost::WndProc(HWND hwnd, UINT message, WPARAM wparam,
       case WM_SYSKEYUP:
       case WM_CHAR:
       case WM_SYSCHAR:
-      case WM_IME_CHAR:
         host->KeyEvent(message, wparam, lparam);
         break;
 
@@ -174,6 +173,15 @@ void WebWidgetHost::DidScrollRect(int dx, int dy, const gfx::Rect& clip_rect) {
   scroll_dy_ = dy;
 
   RECT r = clip_rect.ToRECT();
+  InvalidateRect(view_, &r, FALSE);
+}
+
+void WebWidgetHost::ScheduleComposite() {
+  if (!webwidget_)
+    return;
+  WebSize size = webwidget_->size();
+  gfx::Rect rect(0, 0, size.width, size.height);
+  RECT r = rect.ToRECT();
   InvalidateRect(view_, &r, FALSE);
 }
 

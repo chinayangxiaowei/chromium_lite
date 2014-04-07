@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,16 @@
 
 #include <windows.h>
 
+#include <string>
+
 #include "base/file_path.h"
 #include "base/message_loop.h"
 #include "base/task.h"
 #include "base/thread.h"
 #include "base/utf_string_conversions.h"
-#include "base/win_util.h"
 #include "chrome/browser/bookmarks/bookmark_drag_data.h"
 #include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/download/download_util.h"
 #include "chrome/browser/download/drag_download_file.h"
 #include "chrome/browser/download/drag_download_util.h"
 #include "chrome/browser/profile.h"
@@ -24,6 +26,7 @@
 #include "chrome/browser/views/tab_contents/tab_contents_view_win.h"
 #include "chrome/common/url_constants.h"
 #include "net/base/net_util.h"
+#include "views/drag_utils.h"
 #include "webkit/glue/webdropdata.h"
 
 using WebKit::WebDragOperationsMask;
@@ -102,13 +105,15 @@ TabContentsDragWin::TabContentsDragWin(TabContentsViewWin* view)
 }
 
 TabContentsDragWin::~TabContentsDragWin() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(!drag_drop_thread_.get());
 }
 
 void TabContentsDragWin::StartDragging(const WebDropData& drop_data,
-                                       WebDragOperationsMask ops) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+                                       WebDragOperationsMask ops,
+                                       const SkBitmap& image,
+                                       const gfx::Point& image_offset) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   drag_source_ = new WebDragSource(view_->GetNativeView(),
                                    view_->tab_contents());
@@ -118,7 +123,7 @@ void TabContentsDragWin::StartDragging(const WebDropData& drop_data,
 
   // If it is not drag-out, do the drag-and-drop in the current UI thread.
   if (drop_data.download_metadata.empty()) {
-    DoDragging(drop_data, ops, page_url, page_encoding);
+    DoDragging(drop_data, ops, page_url, page_encoding, image, image_offset);
     EndDragging(false);
     return;
   }
@@ -140,7 +145,9 @@ void TabContentsDragWin::StartDragging(const WebDropData& drop_data,
                           drop_data,
                           ops,
                           page_url,
-                          page_encoding));
+                          page_encoding,
+                          image,
+                          image_offset));
   }
 
   // Install a hook procedure to monitor the messages so that we can forward
@@ -162,12 +169,14 @@ void TabContentsDragWin::StartBackgroundDragging(
     const WebDropData& drop_data,
     WebDragOperationsMask ops,
     const GURL& page_url,
-    const std::string& page_encoding) {
+    const std::string& page_encoding,
+    const SkBitmap& image,
+    const gfx::Point& image_offset) {
   drag_drop_thread_id_ = PlatformThread::CurrentId();
 
-  DoDragging(drop_data, ops, page_url, page_encoding);
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  DoDragging(drop_data, ops, page_url, page_encoding, image, image_offset);
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &TabContentsDragWin::EndDragging, true));
 }
 
@@ -190,11 +199,11 @@ void TabContentsDragWin::PrepareDragForDownload(
   std::string content_disposition =
       "attachment; filename=" + UTF16ToUTF8(file_name.value());
   FilePath generated_file_name;
-  DownloadManager::GenerateFileName(download_url,
-                                    content_disposition,
-                                    std::string(),
-                                    UTF16ToUTF8(mime_type),
-                                    &generated_file_name);
+  download_util::GenerateFileName(download_url,
+                                  content_disposition,
+                                  std::string(),
+                                  UTF16ToUTF8(mime_type),
+                                  &generated_file_name);
 
   // Provide the data as file (CF_HDROP). A temporary download file with the
   // Zone.Identifier ADS (Alternate Data Stream) attached will be created.
@@ -259,10 +268,10 @@ void TabContentsDragWin::PrepareDragForUrl(const WebDropData& drop_data,
 void TabContentsDragWin::DoDragging(const WebDropData& drop_data,
                                     WebDragOperationsMask ops,
                                     const GURL& page_url,
-                                    const std::string& page_encoding) {
+                                    const std::string& page_encoding,
+                                    const SkBitmap& image,
+                                    const gfx::Point& image_offset) {
   OSExchangeData data;
-
-  // TODO(tc): Generate an appropriate drag image.
 
   if (!drop_data.download_metadata.empty()) {
     PrepareDragForDownload(drop_data, &data, page_url, page_encoding);
@@ -277,10 +286,18 @@ void TabContentsDragWin::DoDragging(const WebDropData& drop_data,
       PrepareDragForFileContents(drop_data, &data);
     if (!drop_data.text_html.empty())
       data.SetHtml(drop_data.text_html, drop_data.html_base_url);
-    if (drop_data.url.is_valid())
-      PrepareDragForUrl(drop_data, &data);
+    // We set the text contents before the URL because the URL also sets text
+    // content.
     if (!drop_data.plain_text.empty())
       data.SetString(drop_data.plain_text);
+    if (drop_data.url.is_valid())
+      PrepareDragForUrl(drop_data, &data);
+  }
+
+  // Set drag image.
+  if (!image.isNull()) {
+    drag_utils::SetDragImageOnDataObject(
+        image, gfx::Size(image.width(), image.height()), image_offset, &data);
   }
 
   // We need to enable recursive tasks on the message loop so we can get
@@ -298,7 +315,7 @@ void TabContentsDragWin::DoDragging(const WebDropData& drop_data,
 }
 
 void TabContentsDragWin::EndDragging(bool restore_suspended_state) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   if (drag_ended_)
     return;
@@ -317,13 +334,13 @@ void TabContentsDragWin::EndDragging(bool restore_suspended_state) {
 }
 
 void TabContentsDragWin::CancelDrag() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   drag_source_->CancelDrag();
 }
 
 void TabContentsDragWin::CloseThread() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   drag_drop_thread_.reset();
 }
@@ -334,8 +351,8 @@ void TabContentsDragWin::OnWaitForData() {
   // When the left button is release and we start to wait for the data, end
   // the dragging before DoDragDrop returns. This makes the page leave the drag
   // mode so that it can start to process the normal input events.
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &TabContentsDragWin::EndDragging, true));
 }
 
@@ -344,7 +361,7 @@ void TabContentsDragWin::OnDataObjectDisposed() {
 
   // The drag-and-drop thread is only closed after OLE is done with
   // DataObjectImpl.
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &TabContentsDragWin::CloseThread));
 }

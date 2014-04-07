@@ -4,11 +4,21 @@
 
 #include "chrome/browser/in_process_webkit/browser_webkitclient_impl.h"
 
+#include "base/file_util.h"
 #include "base/logging.h"
 #include "chrome/browser/in_process_webkit/dom_storage_dispatcher_host.h"
+#include "chrome/browser/in_process_webkit/indexed_db_key_utility_client.h"
+#include "chrome/common/indexed_db_key.h"
+#include "chrome/common/serialized_script_value.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebData.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSerializedScriptValue.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
+#include "webkit/glue/webkit_glue.h"
+
+BrowserWebKitClientImpl::BrowserWebKitClientImpl() {
+  file_utilities_.set_sandbox_enabled(false);
+}
 
 WebKit::WebClipboard* BrowserWebKitClientImpl::clipboard() {
   NOTREACHED();
@@ -18,6 +28,10 @@ WebKit::WebClipboard* BrowserWebKitClientImpl::clipboard() {
 WebKit::WebMimeRegistry* BrowserWebKitClientImpl::mimeRegistry() {
   NOTREACHED();
   return NULL;
+}
+
+WebKit::WebFileUtilities* BrowserWebKitClientImpl::fileUtilities() {
+  return &file_utilities_;
 }
 
 WebKit::WebSandboxSupport* BrowserWebKitClientImpl::sandboxSupport() {
@@ -80,7 +94,8 @@ WebKit::WebURLLoader* BrowserWebKitClientImpl::createURLLoader() {
   return NULL;
 }
 
-WebKit::WebSocketStreamHandle* BrowserWebKitClientImpl::createSocketStreamHandle() {
+WebKit::WebSocketStreamHandle*
+    BrowserWebKitClientImpl::createSocketStreamHandle() {
   NOTREACHED();
   return NULL;
 }
@@ -121,4 +136,35 @@ WebKit::WebSharedWorkerRepository*
 BrowserWebKitClientImpl::sharedWorkerRepository() {
     NOTREACHED();
     return NULL;
+}
+
+int BrowserWebKitClientImpl::databaseDeleteFile(
+    const WebKit::WebString& vfs_file_name, bool sync_dir) {
+  const FilePath path = webkit_glue::WebStringToFilePath(vfs_file_name);
+  return file_util::Delete(path, false) ? 0 : 1;
+}
+
+void BrowserWebKitClientImpl::createIDBKeysFromSerializedValuesAndKeyPath(
+    const WebKit::WebVector<WebKit::WebSerializedScriptValue>& values,
+    const WebKit::WebString& keyPath,
+    WebKit::WebVector<WebKit::WebIDBKey>& keys) {
+  // TODO(bulach): we need to figure out a way to keep the utility process
+  // running for longer, and shut it down when no longer used.
+  scoped_refptr<IndexedDBKeyUtilityClient> indexed_db_key_utility_client =
+      new IndexedDBKeyUtilityClient();
+  indexed_db_key_utility_client->StartUtilityProcess();
+
+  std::vector<SerializedScriptValue> std_values;
+  size_t size = values.size();
+  std_values.reserve(size);
+  for (size_t i = 0; i < size; ++i)
+    std_values.push_back(SerializedScriptValue(values[i]));
+
+  std::vector<IndexedDBKey> std_keys;
+  indexed_db_key_utility_client->CreateIDBKeysFromSerializedValuesAndKeyPath(
+      std_values, keyPath, &std_keys);
+
+  indexed_db_key_utility_client->EndUtilityProcess();
+
+  keys = std_keys;
 }

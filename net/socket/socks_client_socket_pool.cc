@@ -5,6 +5,7 @@
 #include "net/socket/socks_client_socket_pool.h"
 
 #include "base/time.h"
+#include "base/values.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_errors.h"
 #include "net/socket/client_socket_factory.h"
@@ -12,8 +13,27 @@
 #include "net/socket/client_socket_pool_base.h"
 #include "net/socket/socks5_client_socket.h"
 #include "net/socket/socks_client_socket.h"
+#include "net/socket/tcp_client_socket_pool.h"
 
 namespace net {
+
+SOCKSSocketParams::SOCKSSocketParams(
+    const scoped_refptr<TCPSocketParams>& proxy_server,
+    bool socks_v5,
+    const HostPortPair& host_port_pair,
+    RequestPriority priority,
+    const GURL& referrer)
+    : tcp_params_(proxy_server),
+      destination_(host_port_pair),
+      socks_v5_(socks_v5) {
+  // The referrer is used by the DNS prefetch system to correlate resolutions
+  // with the page that triggered them. It doesn't impact the actual addresses
+  // that we resolve to.
+  destination_.set_referrer(referrer);
+  destination_.set_priority(priority);
+}
+
+SOCKSSocketParams::~SOCKSSocketParams() {}
 
 // SOCKSConnectJobs will time out after this many seconds.  Note this is on
 // top of the timeout for the transport socket.
@@ -21,18 +41,20 @@ static const int kSOCKSConnectJobTimeoutInSeconds = 30;
 
 SOCKSConnectJob::SOCKSConnectJob(
     const std::string& group_name,
-    const SOCKSSocketParams& socks_params,
+    const scoped_refptr<SOCKSSocketParams>& socks_params,
     const base::TimeDelta& timeout_duration,
-    const scoped_refptr<TCPClientSocketPool>& tcp_pool,
-    const scoped_refptr<HostResolver>& host_resolver,
+    TCPClientSocketPool* tcp_pool,
+    HostResolver* host_resolver,
     Delegate* delegate,
-    const BoundNetLog& net_log)
-    : ConnectJob(group_name, timeout_duration, delegate, net_log),
+    NetLog* net_log)
+    : ConnectJob(group_name, timeout_duration, delegate,
+                 BoundNetLog::Make(net_log, NetLog::SOURCE_CONNECT_JOB)),
       socks_params_(socks_params),
       tcp_pool_(tcp_pool),
       resolver_(host_resolver),
       ALLOW_THIS_IN_INITIALIZER_LIST(
-          callback_(this, &SOCKSConnectJob::OnIOComplete)) {}
+          callback_(this, &SOCKSConnectJob::OnIOComplete)) {
+}
 
 SOCKSConnectJob::~SOCKSConnectJob() {
   // We don't worry about cancelling the tcp socket since the destructor in
@@ -41,11 +63,11 @@ SOCKSConnectJob::~SOCKSConnectJob() {
 
 LoadState SOCKSConnectJob::GetLoadState() const {
   switch (next_state_) {
-    case kStateTCPConnect:
-    case kStateTCPConnectComplete:
+    case STATE_TCP_CONNECT:
+    case STATE_TCP_CONNECT_COMPLETE:
       return tcp_socket_handle_->GetLoadState();
-    case kStateSOCKSConnect:
-    case kStateSOCKSConnectComplete:
+    case STATE_SOCKS_CONNECT:
+    case STATE_SOCKS_CONNECT_COMPLETE:
       return LOAD_STATE_CONNECTING;
     default:
       NOTREACHED();
@@ -54,7 +76,7 @@ LoadState SOCKSConnectJob::GetLoadState() const {
 }
 
 int SOCKSConnectJob::ConnectInternal() {
-  next_state_ = kStateTCPConnect;
+  next_state_ = STATE_TCP_CONNECT;
   return DoLoop(OK);
 }
 
@@ -65,25 +87,25 @@ void SOCKSConnectJob::OnIOComplete(int result) {
 }
 
 int SOCKSConnectJob::DoLoop(int result) {
-  DCHECK_NE(next_state_, kStateNone);
+  DCHECK_NE(next_state_, STATE_NONE);
 
   int rv = result;
   do {
     State state = next_state_;
-    next_state_ = kStateNone;
+    next_state_ = STATE_NONE;
     switch (state) {
-      case kStateTCPConnect:
+      case STATE_TCP_CONNECT:
         DCHECK_EQ(OK, rv);
         rv = DoTCPConnect();
         break;
-      case kStateTCPConnectComplete:
+      case STATE_TCP_CONNECT_COMPLETE:
         rv = DoTCPConnectComplete(rv);
         break;
-      case kStateSOCKSConnect:
+      case STATE_SOCKS_CONNECT:
         DCHECK_EQ(OK, rv);
         rv = DoSOCKSConnect();
         break;
-      case kStateSOCKSConnectComplete:
+      case STATE_SOCKS_CONNECT_COMPLETE:
         rv = DoSOCKSConnectComplete(rv);
         break;
       default:
@@ -91,44 +113,44 @@ int SOCKSConnectJob::DoLoop(int result) {
         rv = ERR_FAILED;
         break;
     }
-  } while (rv != ERR_IO_PENDING && next_state_ != kStateNone);
+  } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE);
 
   return rv;
 }
 
 int SOCKSConnectJob::DoTCPConnect() {
-  next_state_ = kStateTCPConnectComplete;
+  next_state_ = STATE_TCP_CONNECT_COMPLETE;
   tcp_socket_handle_.reset(new ClientSocketHandle());
-  return tcp_socket_handle_->Init(group_name(), socks_params_.tcp_params(),
-                                  socks_params_.destination().priority(),
+  return tcp_socket_handle_->Init(group_name(), socks_params_->tcp_params(),
+                                  socks_params_->destination().priority(),
                                   &callback_, tcp_pool_, net_log());
 }
 
 int SOCKSConnectJob::DoTCPConnectComplete(int result) {
   if (result != OK)
-    return result;
+    return ERR_PROXY_CONNECTION_FAILED;
 
   // Reset the timer to just the length of time allowed for SOCKS handshake
   // so that a fast TCP connection plus a slow SOCKS failure doesn't take
   // longer to timeout than it should.
   ResetTimer(base::TimeDelta::FromSeconds(kSOCKSConnectJobTimeoutInSeconds));
-  next_state_ = kStateSOCKSConnect;
+  next_state_ = STATE_SOCKS_CONNECT;
   return result;
 }
 
 int SOCKSConnectJob::DoSOCKSConnect() {
-  next_state_ = kStateSOCKSConnectComplete;
+  next_state_ = STATE_SOCKS_CONNECT_COMPLETE;
 
   // Add a SOCKS connection on top of the tcp socket.
-  if (socks_params_.is_socks_v5()) {
+  if (socks_params_->is_socks_v5()) {
     socket_.reset(new SOCKS5ClientSocket(tcp_socket_handle_.release(),
-                                         socks_params_.destination()));
+                                         socks_params_->destination()));
   } else {
     socket_.reset(new SOCKSClientSocket(tcp_socket_handle_.release(),
-                                        socks_params_.destination(),
+                                        socks_params_->destination(),
                                         resolver_));
   }
-  return socket_->Connect(&callback_, net_log());
+  return socket_->Connect(&callback_);
 }
 
 int SOCKSConnectJob::DoSOCKSConnectComplete(int result) {
@@ -144,10 +166,9 @@ int SOCKSConnectJob::DoSOCKSConnectComplete(int result) {
 ConnectJob* SOCKSClientSocketPool::SOCKSConnectJobFactory::NewConnectJob(
     const std::string& group_name,
     const PoolBase::Request& request,
-    ConnectJob::Delegate* delegate,
-    const BoundNetLog& net_log) const {
+    ConnectJob::Delegate* delegate) const {
   return new SOCKSConnectJob(group_name, request.params(), ConnectionTimeout(),
-                             tcp_pool_, host_resolver_, delegate, net_log);
+                             tcp_pool_, host_resolver_, delegate, net_log_);
 }
 
 base::TimeDelta
@@ -159,42 +180,45 @@ SOCKSClientSocketPool::SOCKSConnectJobFactory::ConnectionTimeout() const {
 SOCKSClientSocketPool::SOCKSClientSocketPool(
     int max_sockets,
     int max_sockets_per_group,
-    const std::string& name,
-    const scoped_refptr<HostResolver>& host_resolver,
-    const scoped_refptr<TCPClientSocketPool>& tcp_pool,
-    NetworkChangeNotifier* network_change_notifier)
-    : base_(max_sockets, max_sockets_per_group, name,
-            base::TimeDelta::FromSeconds(kUnusedIdleSocketTimeout),
+    ClientSocketPoolHistograms* histograms,
+    HostResolver* host_resolver,
+    TCPClientSocketPool* tcp_pool,
+    NetLog* net_log)
+    : tcp_pool_(tcp_pool),
+      base_(max_sockets, max_sockets_per_group, histograms,
+            base::TimeDelta::FromSeconds(
+                ClientSocketPool::unused_idle_socket_timeout()),
             base::TimeDelta::FromSeconds(kUsedIdleSocketTimeout),
-            new SOCKSConnectJobFactory(tcp_pool, host_resolver),
-            network_change_notifier) {}
+            new SOCKSConnectJobFactory(tcp_pool, host_resolver, net_log)) {
+}
 
 SOCKSClientSocketPool::~SOCKSClientSocketPool() {}
 
-int SOCKSClientSocketPool::RequestSocket(
-    const std::string& group_name,
-    const void* socket_params,
-    RequestPriority priority,
-    ClientSocketHandle* handle,
-    CompletionCallback* callback,
-    const BoundNetLog& net_log) {
-  const SOCKSSocketParams* casted_socket_params =
-      static_cast<const SOCKSSocketParams*>(socket_params);
+int SOCKSClientSocketPool::RequestSocket(const std::string& group_name,
+                                         const void* socket_params,
+                                         RequestPriority priority,
+                                         ClientSocketHandle* handle,
+                                         CompletionCallback* callback,
+                                         const BoundNetLog& net_log) {
+  const scoped_refptr<SOCKSSocketParams>* casted_socket_params =
+      static_cast<const scoped_refptr<SOCKSSocketParams>*>(socket_params);
 
   return base_.RequestSocket(group_name, *casted_socket_params, priority,
                              handle, callback, net_log);
 }
 
-void SOCKSClientSocketPool::CancelRequest(
-    const std::string& group_name,
-    const ClientSocketHandle* handle) {
+void SOCKSClientSocketPool::CancelRequest(const std::string& group_name,
+                                          ClientSocketHandle* handle) {
   base_.CancelRequest(group_name, handle);
 }
 
-void SOCKSClientSocketPool::ReleaseSocket(
-    const std::string& group_name,
-    ClientSocket* socket) {
-  base_.ReleaseSocket(group_name, socket);
+void SOCKSClientSocketPool::ReleaseSocket(const std::string& group_name,
+                                          ClientSocket* socket, int id) {
+  base_.ReleaseSocket(group_name, socket, id);
+}
+
+void SOCKSClientSocketPool::Flush() {
+  base_.Flush();
 }
 
 void SOCKSClientSocketPool::CloseIdleSockets() {
@@ -209,6 +233,21 @@ int SOCKSClientSocketPool::IdleSocketCountInGroup(
 LoadState SOCKSClientSocketPool::GetLoadState(
     const std::string& group_name, const ClientSocketHandle* handle) const {
   return base_.GetLoadState(group_name, handle);
+}
+
+DictionaryValue* SOCKSClientSocketPool::GetInfoAsValue(
+    const std::string& name,
+    const std::string& type,
+    bool include_nested_pools) const {
+  DictionaryValue* dict = base_.GetInfoAsValue(name, type);
+  if (include_nested_pools) {
+    ListValue* list = new ListValue();
+    list->Append(tcp_pool_->GetInfoAsValue("tcp_socket_pool",
+                                           "tcp_socket_pool",
+                                           false));
+    dict->Set("nested_pools", list);
+  }
+  return dict;
 }
 
 }  // namespace net

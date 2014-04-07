@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,12 @@
 #include <sys/utsname.h>
 #endif
 
-#include "base/file_version_info.h"
 #include "base/logging.h"
+#include "base/scoped_ptr.h"
 #include "base/singleton.h"
 #include "base/string_piece.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/sys_info.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
@@ -41,9 +42,8 @@
 #include "third_party/WebKit/WebKit/chromium/public/win/WebInputEventFactory.h"
 #endif
 #include "webkit/glue/glue_serialize.h"
+#include "webkit/glue/user_agent.h"
 #include "v8/include/v8.h"
-
-#include "webkit_version.h"  // Generated
 
 using WebKit::WebCanvas;
 using WebKit::WebData;
@@ -65,7 +65,6 @@ static const char kDataUrlPattern[] = "data:";
 static const std::string::size_type kDataUrlPatternSize =
     arraysize(kDataUrlPattern) - 1;
 static const char kFileTestPrefix[] = "(file test):";
-static const char kChrome1ProductString[] = "Chrome/1.0.154.53";
 
 //------------------------------------------------------------------------------
 // webkit_glue impl:
@@ -75,11 +74,9 @@ namespace webkit_glue {
 // Global variable used by the plugin quirk "die after unload".
 bool g_forcefully_terminate_plugin_process = false;
 
-void SetJavaScriptFlags(const std::wstring& str) {
+void SetJavaScriptFlags(const std::string& str) {
 #if WEBKIT_USING_V8
-  std::string utf8_str = WideToUTF8(str);
-  v8::V8::SetFlagsFromString(
-      utf8_str.data(), static_cast<int>(utf8_str.size()));
+  v8::V8::SetFlagsFromString(str.data(), static_cast<int>(str.size()));
 #endif
 }
 
@@ -147,7 +144,8 @@ int PageNumberForElementById(WebFrame* web_frame,
 int NumberOfPages(WebFrame* web_frame,
                   float page_width_in_pixels,
                   float page_height_in_pixels) {
-  WebSize size(page_width_in_pixels, page_height_in_pixels);
+  WebSize size(static_cast<int>(page_width_in_pixels),
+               static_cast<int>(page_height_in_pixels));
   int number_of_pages = web_frame->printBegin(size);
   web_frame->printEnd();
   return number_of_pages;
@@ -245,7 +243,7 @@ void ResetBeforeTestRun(WebView* view) {
   // Reset the main frame name since tests always expect it to be empty.  It
   // is normally not reset between page loads (even in IE and FF).
   if (web_frame)
-    web_frame->clearName();
+    web_frame->setName(WebString());
 
 #if defined(OS_WIN)
   // Reset the last click information so the clicks generated from previous
@@ -257,8 +255,9 @@ void ResetBeforeTestRun(WebView* view) {
 #ifndef NDEBUG
 // The log macro was having problems due to collisions with WTF, so we just
 // code here what that would have inlined.
-void DumpLeakedObject(const char* file, int line, const char* object, int count) {
-  std::string msg = StringPrintf("%s LEAKED %d TIMES", object, count);
+void DumpLeakedObject(const char* file, int line, const char* object,
+                      int count) {
+  std::string msg = base::StringPrintf("%s LEAKED %d TIMES", object, count);
   AppendToLog(file, line, msg.c_str());
 }
 #endif
@@ -314,8 +313,30 @@ WebString FilePathToWebString(const FilePath& file_path) {
   return FilePathStringToWebString(file_path.value());
 }
 
-std::string GetWebKitVersion() {
-  return StringPrintf("%d.%d", WEBKIT_VERSION_MAJOR, WEBKIT_VERSION_MINOR);
+WebKit::WebFileError PlatformFileErrorToWebFileError(
+    base::PlatformFileError error_code) {
+  switch (error_code) {
+    case base::PLATFORM_FILE_ERROR_NOT_FOUND:
+      return WebKit::WebFileErrorNotFound;
+    case base::PLATFORM_FILE_ERROR_INVALID_OPERATION:
+    case base::PLATFORM_FILE_ERROR_EXISTS:
+    case base::PLATFORM_FILE_ERROR_NOT_A_DIRECTORY:
+    case base::PLATFORM_FILE_ERROR_NOT_A_FILE:
+    case base::PLATFORM_FILE_ERROR_NOT_EMPTY:
+      return WebKit::WebFileErrorInvalidModification;
+    case base::PLATFORM_FILE_ERROR_ACCESS_DENIED:
+      return WebKit::WebFileErrorNoModificationAllowed;
+    case base::PLATFORM_FILE_ERROR_FAILED:
+      return WebKit::WebFileErrorInvalidState;
+    case base::PLATFORM_FILE_ERROR_ABORT:
+      return WebKit::WebFileErrorAbort;
+    case base::PLATFORM_FILE_ERROR_SECURITY:
+      return WebKit::WebFileErrorSecurity;
+    case base::PLATFORM_FILE_ERROR_NO_SPACE:
+      return WebKit::WebFileErrorQuotaExceeded;
+    default:
+      return WebKit::WebFileErrorInvalidModification;
+  }
 }
 
 namespace {
@@ -328,9 +349,6 @@ struct UserAgentState {
 
   std::string user_agent;
 
-  // The UA string when we're pretending to be Chrome 1.
-  std::string mimic_chrome1_user_agent;
-
   // The UA string when we're pretending to be Windows Chrome.
   std::string mimic_windows_user_agent;
 
@@ -340,118 +358,8 @@ struct UserAgentState {
 
 Singleton<UserAgentState> g_user_agent;
 
-std::string BuildOSCpuInfo() {
-  std::string os_cpu;
-
-#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_CHROMEOS)
-  int32 os_major_version = 0;
-  int32 os_minor_version = 0;
-  int32 os_bugfix_version = 0;
-  base::SysInfo::OperatingSystemVersionNumbers(&os_major_version,
-                                               &os_minor_version,
-                                               &os_bugfix_version);
-#endif
-#if defined(OS_POSIX) && !defined(OS_MACOSX)
-  // Should work on any Posix system.
-  struct utsname unixinfo;
-  uname(&unixinfo);
-
-  std::string cputype;
-  // special case for biarch systems
-  if (strcmp(unixinfo.machine, "x86_64") == 0 &&
-      sizeof(void*) == sizeof(int32)) {
-    cputype.assign("i686 (x86_64)");
-  } else {
-    cputype.assign(unixinfo.machine);
-  }
-#endif
-
-  StringAppendF(
-      &os_cpu,
-#if defined(OS_WIN)
-      "Windows NT %d.%d",
-      os_major_version,
-      os_minor_version
-#elif defined(OS_MACOSX)
-      "Intel Mac OS X %d_%d_%d",
-      os_major_version,
-      os_minor_version,
-      os_bugfix_version
-#elif defined(OS_CHROMEOS)
-      "CrOS %s %d.%d.%d",
-      cputype.c_str(),  // e.g. i686
-      os_major_version,
-      os_minor_version,
-      os_bugfix_version
-#else
-      "%s %s",
-      unixinfo.sysname, // e.g. Linux
-      cputype.c_str()   // e.g. i686
-#endif
-  );
-
-  return os_cpu;
-}
-
-// Construct the User-Agent header, filling in |result|.
-// The other parameters are workarounds for broken websites:
-// - If mimic_chrome1 is true, produce a fake Chrome 1 string.
-// - If mimic_windows is true, produce a fake Windows Chrome string.
-void BuildUserAgent(bool mimic_chrome1, bool mimic_windows,
-                    std::string* result) {
-  const char kUserAgentPlatform[] =
-#if defined(OS_WIN)
-      "Windows";
-#elif defined(OS_MACOSX)
-      "Macintosh";
-#elif defined(USE_X11)
-      "X11";              // strange, but that's what Firefox uses
-#else
-      "?";
-#endif
-
-  const char kUserAgentSecurity = 'U'; // "US" strength encryption
-
-  // TODO(port): figure out correct locale
-  const char kUserAgentLocale[] = "en-US";
-
-  // Get the product name and version, and replace Safari's Version/X string
-  // with it.  This is done to expose our product name in a manner that is
-  // maximally compatible with Safari, we hope!!
-  std::string product;
-
-  if (mimic_chrome1) {
-    product = kChrome1ProductString;
-  } else {
-    scoped_ptr<FileVersionInfo> version_info(
-        FileVersionInfo::CreateFileVersionInfoForCurrentModule());
-    if (version_info.get()) {
-      product = "Chrome/" + WideToASCII(version_info->product_version());
-    } else {
-      DLOG(WARNING) << "Unknown product version";
-      product = "Chrome/0.0.0.0";
-    }
-  }
-
-  // Derived from Safari's UA string.
-  StringAppendF(
-      result,
-      "Mozilla/5.0 (%s; %c; %s; %s) AppleWebKit/%d.%d"
-      " (KHTML, like Gecko) %s Safari/%d.%d",
-      mimic_windows ? "Windows" : kUserAgentPlatform,
-      kUserAgentSecurity,
-      ((mimic_windows ? "Windows " : "") + BuildOSCpuInfo()).c_str(),
-      kUserAgentLocale,
-      WEBKIT_VERSION_MAJOR,
-      WEBKIT_VERSION_MINOR,
-      product.c_str(),
-      WEBKIT_VERSION_MAJOR,
-      WEBKIT_VERSION_MINOR
-      );
-}
-
 void SetUserAgentToDefault() {
-  BuildUserAgent(false, false, &g_user_agent->user_agent);
+  BuildUserAgent(false, &g_user_agent->user_agent);
 }
 
 }  // namespace
@@ -472,23 +380,13 @@ const std::string& GetUserAgent(const GURL& url) {
   g_user_agent->user_agent_requested = true;
   if (!g_user_agent->user_agent_is_overridden) {
     // Workarounds for sites that use misguided UA sniffing.
-    if (MatchPatternASCII(url.host(), "*.pointroll.com")) {
-      // For cnn.com, which uses pointroll.com to serve their front door promo,
-      // we must spoof Chrome 1.0 in order to avoid a blank page.
-      // http://crbug.com/25934
-      // TODO(dglazkov): Remove this once CNN's front door promo is
-      // over or when pointroll fixes their sniffing.
-      if (g_user_agent->mimic_chrome1_user_agent.empty())
-        BuildUserAgent(true, false, &g_user_agent->mimic_chrome1_user_agent);
-      return g_user_agent->mimic_chrome1_user_agent;
-    }
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
-    else if (MatchPatternASCII(url.host(), "*.mail.yahoo.com")) {
+    if (MatchPattern(url.host(), "*.mail.yahoo.com")) {
       // mail.yahoo.com is ok with Windows Chrome but not Linux Chrome.
       // http://bugs.chromium.org/11136
       // TODO(evanm): remove this if Yahoo fixes their sniffing.
       if (g_user_agent->mimic_windows_user_agent.empty())
-        BuildUserAgent(false, true, &g_user_agent->mimic_windows_user_agent);
+        BuildUserAgent(true, &g_user_agent->mimic_windows_user_agent);
       return g_user_agent->mimic_windows_user_agent;
     }
 #endif

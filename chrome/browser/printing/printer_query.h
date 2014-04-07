@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_PRINTING_PRINTER_QUERY_H_
 #define CHROME_BROWSER_PRINTING_PRINTER_QUERY_H_
+#pragma once
 
 #include "base/scoped_ptr.h"
 #include "chrome/browser/printing/print_job_worker_owner.h"
@@ -43,11 +44,11 @@ class PrinterQuery : public PrintJobWorkerOwner {
   virtual int cookie() const { return cookie_; }
 
   // Initializes the printing context. It is fine to call this function multiple
-  // times to reinitialize the settings. |parent_window| parameter will be the
-  // owner of the print setting dialog box. It is unused when
+  // times to reinitialize the settings. |parent_view| parameter's window will
+  // be the owner of the print setting dialog box. It is unused when
   // |ask_for_user_settings| is DEFAULTS.
   void GetSettings(GetSettingsAskParam ask_user_for_settings,
-                   gfx::NativeWindow parent_window,
+                   gfx::NativeView parent_view,
                    int expected_page_count,
                    bool has_selection,
                    bool use_overlays,

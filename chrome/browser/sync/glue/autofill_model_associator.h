@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_AUTOFILL_MODEL_ASSOCIATOR_H_
 #define CHROME_BROWSER_SYNC_GLUE_AUTOFILL_MODEL_ASSOCIATOR_H_
+#pragma once
 
 #include <map>
 #include <set>
@@ -12,7 +13,7 @@
 
 #include "base/basictypes.h"
 #include "base/lock.h"
-#include "base/scoped_ptr.h"
+#include "base/ref_counted.h"
 #include "chrome/browser/autofill/personal_data_manager.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/sync/engine/syncapi.h"
@@ -48,8 +49,7 @@ class AutofillModelAssociator
   static syncable::ModelType model_type() { return syncable::AUTOFILL; }
   AutofillModelAssociator(ProfileSyncService* sync_service,
                           WebDatabase* web_database,
-                          PersonalDataManager* data_manager,
-                          UnrecoverableErrorHandler* error_handler);
+                          PersonalDataManager* data_manager);
   virtual ~AutofillModelAssociator();
 
   // A task used by this class and the change processor to inform the
@@ -58,11 +58,11 @@ class AutofillModelAssociator
    public:
     explicit DoOptimisticRefreshTask(PersonalDataManager* pdm) : pdm_(pdm) {}
     virtual void Run() {
-      DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+      DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
       pdm_->Refresh();
     }
    private:
-    PersonalDataManager* pdm_;
+    scoped_refptr<PersonalDataManager> pdm_;
   };
 
   // PerDataTypeAssociatorInterface implementation.
@@ -76,10 +76,6 @@ class AutofillModelAssociator
   // The has_nodes out param is true if the sync model has nodes other
   // than the permanent tagged nodes.
   virtual bool SyncModelHasUserCreatedNodes(bool* has_nodes);
-
-  // The has_nodes out param is true if the autofill model has any
-  // user-defined autofill entries.
-  virtual bool ChromeModelHasUserCreatedNodes(bool* has_nodes);
 
   // See ModelAssociator interface.
   virtual void AbortAssociation();
@@ -119,10 +115,20 @@ class AutofillModelAssociator
       AutoFillProfile* merge_into,
       const sync_pb::AutofillProfileSpecifics& specifics);
 
+  // TODO(georgey) : add the same processing for CC info (already in protocol
+  // buffers).
+
   // Returns sync service instance.
   ProfileSyncService* sync_service() { return sync_service_; }
 
-  static string16 MakeUniqueLabel(const string16& non_unique_label,
+  // Compute and apply suffix to a label so that the resulting label is
+  // unique in the sync database.
+  // |new_non_unique_label| is the colliding label which is to be uniquified.
+  // |existing_unique_label| is the current label of the object, if any; this
+  // is treated as a unique label even if colliding.  If no such label is
+  // available, |existing_unique_label| may be empty.
+  static string16 MakeUniqueLabel(const string16& new_non_unique_label,
+                                  const string16& existing_unique_label,
                                   sync_api::BaseTransaction* trans);
 
  private:
@@ -200,7 +206,6 @@ class AutofillModelAssociator
   ProfileSyncService* sync_service_;
   WebDatabase* web_database_;
   PersonalDataManager* personal_data_;
-  UnrecoverableErrorHandler* error_handler_;
   int64 autofill_node_id_;
 
   AutofillToSyncIdMap id_map_;

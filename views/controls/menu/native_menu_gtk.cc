@@ -8,10 +8,11 @@
 #include <map>
 #include <string>
 
+#include "app/keyboard_code_conversion_gtk.h"
+#include "app/keyboard_codes.h"
 #include "app/menus/menu_model.h"
+#include "base/gtk_util.h"
 #include "base/i18n/rtl.h"
-#include "base/keyboard_code_conversion_gtk.h"
-#include "base/keyboard_codes.h"
 #include "base/message_loop.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
@@ -20,11 +21,16 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "views/accelerator.h"
 #include "views/controls/menu/menu_2.h"
+#include "views/controls/menu/nested_dispatcher_gtk.h"
 
 namespace {
 
 const char kPositionString[] = "position";
 const char kAccelGroupString[] = "accel_group";
+
+// Key for the property set on the gtk menu that gives the handle to the hosting
+// NativeMenuGtk.
+const char kNativeMenuGtkString[] = "native_menu_gtk";
 
 // Data passed to the MenuPositionFunc from gtk_menu_popup
 struct Position {
@@ -34,30 +40,18 @@ struct Position {
   views::Menu2::Alignment alignment;
 };
 
-std::string ConvertAcceleratorsFromWindowsStyle(const std::string& label) {
-  std::string ret;
-  ret.reserve(label.length());
-  for (size_t i = 0; i < label.length(); ++i) {
-    if ('&' == label[i]) {
-      if (i + 1 < label.length() && '&' == label[i + 1]) {
-        ret.push_back(label[i]);
-        ++i;
-      } else {
-        ret.push_back('_');
-      }
-    } else {
-      ret.push_back(label[i]);
-    }
-  }
-
-  return ret;
-}
-
 // Returns true if the menu item type specified can be executed as a command.
 bool MenuTypeCanExecute(menus::MenuModel::ItemType type) {
   return type == menus::MenuModel::TYPE_COMMAND ||
       type == menus::MenuModel::TYPE_CHECK ||
       type == menus::MenuModel::TYPE_RADIO;
+}
+
+// A callback to gtk_container_foreach to remove all children.
+// See |NativeMenuGtk::ResetMenu| for the usage.
+void RemoveChildWidget(GtkWidget* widget, gpointer data) {
+  GtkWidget* parent = gtk_widget_get_parent(widget);
+  gtk_container_remove(GTK_CONTAINER(parent), widget);
 }
 
 }  // namespace
@@ -71,16 +65,23 @@ NativeMenuGtk::NativeMenuGtk(Menu2* menu)
     : parent_(NULL),
       model_(menu->model()),
       menu_(NULL),
-      menu_shown_(false),
+      menu_hidden_(true),
       suppress_activate_signal_(false),
       activated_menu_(NULL),
       activated_index_(-1),
       activate_factory_(this),
       host_menu_(menu),
-      menu_action_(MENU_ACTION_NONE) {
+      menu_action_(MENU_ACTION_NONE),
+      nested_dispatcher_(NULL),
+      ignore_button_release_(true) {
 }
 
 NativeMenuGtk::~NativeMenuGtk() {
+  if (nested_dispatcher_) {
+    // Menu is destroyed while its in message loop.
+    // Let nested dispatcher know the creator is deleted.
+    nested_dispatcher_->CreatorDestroyed();
+  }
   if (menu_) {
     // Don't call MenuDestroyed because menu2 has already been destroyed.
     g_signal_handler_disconnect(menu_, destroy_handler_id_);
@@ -95,15 +96,16 @@ void NativeMenuGtk::RunMenuAt(const gfx::Point& point, int alignment) {
   activated_menu_ = NULL;
   activated_index_ = -1;
   menu_action_ = MENU_ACTION_NONE;
+  // ignore button release event unless mouse is pressed or moved.
+  ignore_button_release_ = true;
 
   UpdateStates();
   Position position = { point, static_cast<Menu2::Alignment>(alignment) };
   // TODO(beng): value of '1' will not work for context menus!
   gtk_menu_popup(GTK_MENU(menu_), NULL, NULL, MenuPositionFunc, &position, 1,
                  gtk_get_current_event_time());
-
-  DCHECK(!menu_shown_);
-  menu_shown_ = true;
+  DCHECK(menu_hidden_);
+  menu_hidden_ = false;
 
   for (unsigned int i = 0; i < listeners_.size(); ++i) {
     listeners_[i]->OnMenuOpened();
@@ -119,11 +121,23 @@ void NativeMenuGtk::RunMenuAt(const gfx::Point& point, int alignment) {
                        G_CALLBACK(OnMenuMoveCurrentThunk), this);
 
   // Block until menu is no longer shown by running a nested message loop.
-  MessageLoopForUI::current()->Run(NULL);
+  nested_dispatcher_ = new NestedDispatcherGtk(this, false);
+  bool deleted = nested_dispatcher_->RunAndSelfDestruct();
+  if (deleted) {
+    // The menu was destryed while menu is shown, so return immediately.
+    // Don't touch the instance which is already deleted.
+    return;
+  }
+  nested_dispatcher_ = NULL;
+  if (!menu_hidden_) {
+    // If this happens it means we haven't yet gotten the hide signal and
+    // someone else quit the message loop on us.
+    NOTREACHED();
+    menu_hidden_ = true;
+  }
 
   g_signal_handler_disconnect(G_OBJECT(menu_), hide_handle_id);
   g_signal_handler_disconnect(G_OBJECT(menu_), move_handle_id);
-  menu_shown_ = false;
 
   if (activated_menu_) {
     MessageLoop::current()->PostTask(FROM_HERE,
@@ -205,17 +219,75 @@ void NativeMenuGtk::RemoveMenuListener(MenuListener* listener) {
   }
 }
 
+void NativeMenuGtk::SetMinimumWidth(int width) {
+  gtk_widget_set_size_request(menu_, width, -1);
+}
+
+bool NativeMenuGtk::Dispatch(GdkEvent* event) {
+  if (menu_hidden_) {
+    // The menu has been closed but the message loop is still nested. Don't
+    // dispatch a message, otherwise we might spawn another message loop.
+    return false;  // Exits the nested message loop.
+  }
+  switch (event->type) {
+    case GDK_BUTTON_PRESS:
+    case GDK_2BUTTON_PRESS:
+    case GDK_3BUTTON_PRESS: {
+      ignore_button_release_ = false;
+      gpointer data = NULL;
+      gdk_window_get_user_data(((GdkEventAny*)event)->window, &data);
+      GtkWidget* widget = reinterpret_cast<GtkWidget*>(data);
+      if (widget) {
+        GtkWidget* root = gtk_widget_get_toplevel(widget);
+        if (!g_object_get_data(G_OBJECT(root), kNativeMenuGtkString)) {
+          // The button event is not targeted at a menu, hide the menu and eat
+          // the event. If we didn't do this the button press is dispatched from
+          // the nested message loop and bad things can happen (like trying to
+          // spawn another menu.
+          gtk_menu_popdown(GTK_MENU(menu_));
+          // In some cases we may not have gotten the hide event, but the menu
+          // will be in the process of hiding so set menu_hidden_ anyway.
+          menu_hidden_ = true;
+          return false;  // Exits the nested message loop.
+        }
+      }
+      break;
+    }
+    case GDK_MOTION_NOTIFY: {
+      ignore_button_release_ = false;
+      break;
+    }
+    case GDK_BUTTON_RELEASE: {
+      if (ignore_button_release_) {
+        // Ignore if a release event happened without press event.
+        // Normally, release event is eaten by gtk when menu is opened
+        // in response to mouse press event. Since the renderer opens
+        // the context menu asyncrhonous after press event is handled,
+        // gtk sometimes does not eat it, which causes the menu to be
+        // closed.
+        return true;
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  gtk_main_do_event(event);
+  return true;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // NativeMenuGtk, private:
 
 void NativeMenuGtk::OnMenuHidden(GtkWidget* widget) {
-  if (!menu_shown_) {
-    // This indicates we don't have a menu open, and should never happen.
-    NOTREACHED();
+  if (menu_hidden_) {
+    // The menu has been already hidden by us and we're in the process of
+    // quiting the message loop..
     return;
   }
   // Quit the nested message loop we spawned in RunMenuAt.
   MessageLoop::current()->Quit();
+  menu_hidden_ = true;
 }
 
 void NativeMenuGtk::OnMenuMoveCurrent(GtkWidget* menu_widget,
@@ -226,7 +298,6 @@ void NativeMenuGtk::OnMenuMoveCurrent(GtkWidget* menu_widget,
   if (menu_item) {
     submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(menu_item));
   }
-
   if (focus_direction == GTK_MENU_DIR_CHILD && submenu == NULL) {
     GetAncestor()->menu_action_ = MENU_ACTION_NEXT;
     gtk_menu_popdown(GTK_MENU(menu_widget));
@@ -246,7 +317,7 @@ GtkWidget* NativeMenuGtk::AddMenuItemAt(int index,
                                         GtkRadioMenuItem* radio_group,
                                         GtkAccelGroup* accel_group) {
   GtkWidget* menu_item = NULL;
-  std::string label = ConvertAcceleratorsFromWindowsStyle(UTF16ToUTF8(
+  std::string label = gtk_util::ConvertAcceleratorsFromWindowsStyle(UTF16ToUTF8(
       model_->GetLabelAt(index)));
 
   menus::MenuModel::ItemType type = model_->GetTypeAt(index);
@@ -273,6 +344,12 @@ GtkWidget* NativeMenuGtk::AddMenuItemAt(int index,
         gtk_image_menu_item_set_image(GTK_IMAGE_MENU_ITEM(menu_item),
                                       gtk_image_new_from_pixbuf(pixbuf));
         g_object_unref(pixbuf);
+
+#if GTK_CHECK_VERSION(2,16,0)
+        // Show the image even if the "gtk-menu-images" setting is turned off.
+        gtk_image_menu_item_set_always_show_image(
+            GTK_IMAGE_MENU_ITEM(menu_item), TRUE);
+#endif
       } else {
         menu_item = gtk_menu_item_new_with_mnemonic(label.c_str());
       }
@@ -289,8 +366,9 @@ GtkWidget* NativeMenuGtk::AddMenuItemAt(int index,
     // The label item is the first child of the menu item.
     GtkWidget* label_widget = GTK_BIN(menu_item)->child;
     DCHECK(label_widget && GTK_IS_LABEL(label_widget));
-    gtk_widget_modify_font(label_widget,
-                           gfx::Font::PangoFontFromGfxFont(*font));
+    PangoFontDescription* pfd = font->GetNativeFont();
+    gtk_widget_modify_font(label_widget, pfd);
+    pango_font_description_free(pfd);
   }
 
   if (type == menus::MenuModel::TYPE_SUBMENU) {
@@ -301,7 +379,7 @@ GtkWidget* NativeMenuGtk::AddMenuItemAt(int index,
                               submenu->GetNativeMenu());
   }
 
-  views::Accelerator accelerator(base::VKEY_UNKNOWN, false, false, false);
+  views::Accelerator accelerator(app::VKEY_UNKNOWN, false, false, false);
   if (accel_group && model_->GetAcceleratorAt(index, &accelerator)) {
     int gdk_modifiers = 0;
     if (accelerator.IsShiftDown())
@@ -311,13 +389,14 @@ GtkWidget* NativeMenuGtk::AddMenuItemAt(int index,
     if (accelerator.IsAltDown())
       gdk_modifiers |= GDK_MOD1_MASK;
     gtk_widget_add_accelerator(menu_item, "activate", accel_group,
-        base::GdkKeyCodeForWindowsKeyCode(accelerator.GetKeyCode(), false),
+        app::GdkKeyCodeForWindowsKeyCode(accelerator.GetKeyCode(), false),
         static_cast<GdkModifierType>(gdk_modifiers), GTK_ACCEL_VISIBLE);
   }
 
   g_object_set_data(G_OBJECT(menu_item), kPositionString,
                              reinterpret_cast<void*>(index));
   g_signal_connect(menu_item, "activate", G_CALLBACK(CallActivate), this);
+  UpdateMenuItemState(menu_item, false);
   gtk_widget_show(menu_item);
   gtk_menu_append(menu_, menu_item);
 
@@ -325,16 +404,18 @@ GtkWidget* NativeMenuGtk::AddMenuItemAt(int index,
 }
 
 void NativeMenuGtk::ResetMenu() {
-  if (menu_) {
-    g_signal_handler_disconnect(menu_, destroy_handler_id_);
-    gtk_widget_destroy(menu_);
+  if (!menu_) {
+    menu_ = gtk_menu_new();
+    g_object_set_data(
+        G_OBJECT(GTK_MENU(menu_)->toplevel), kNativeMenuGtkString, this);
+    destroy_handler_id_ = g_signal_connect(
+        menu_, "destroy", G_CALLBACK(NativeMenuGtk::MenuDestroyed), host_menu_);
+  } else {
+    gtk_container_foreach(GTK_CONTAINER(menu_), RemoveChildWidget, NULL);
   }
-  menu_ = gtk_menu_new();
-  destroy_handler_id_ = g_signal_connect(
-      menu_, "destroy", G_CALLBACK(NativeMenuGtk::MenuDestroyed), host_menu_);
 }
 
-void NativeMenuGtk::UpdateMenuItemState(GtkWidget* menu_item) {
+void NativeMenuGtk::UpdateMenuItemState(GtkWidget* menu_item, bool recurse) {
   int index = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(menu_item),
                                                 kPositionString));
 
@@ -345,8 +426,9 @@ void NativeMenuGtk::UpdateMenuItemState(GtkWidget* menu_item) {
                                    model_->IsItemCheckedAt(index));
     suppress_activate_signal_ = false;
   }
-  // Recurse into submenus, too.
-  if (GTK_IS_MENU_ITEM(menu_item)) {
+
+  if (recurse && GTK_IS_MENU_ITEM(menu_item)) {
+    // Recurse into submenus.
     if (gtk_menu_item_get_submenu(GTK_MENU_ITEM(menu_item))) {
       Menu2* submenu =
           reinterpret_cast<Menu2*>(g_object_get_data(G_OBJECT(menu_item),
@@ -360,7 +442,7 @@ void NativeMenuGtk::UpdateMenuItemState(GtkWidget* menu_item) {
 // static
 void NativeMenuGtk::UpdateStateCallback(GtkWidget* menu_item, gpointer data) {
   NativeMenuGtk* menu = reinterpret_cast<NativeMenuGtk*>(data);
-  menu->UpdateMenuItemState(menu_item);
+  menu->UpdateMenuItemState(menu_item, true);
 }
 
 // static
@@ -464,9 +546,13 @@ void NativeMenuGtk::MenuDestroyed(GtkWidget* widget, Menu2* menu2) {
 ////////////////////////////////////////////////////////////////////////////////
 // MenuWrapper, public:
 
+#if !defined(OS_CHROMEOS)
+
 // static
 MenuWrapper* MenuWrapper::CreateWrapper(Menu2* menu) {
   return new NativeMenuGtk(menu);
 }
+
+#endif  // OS_CHROMEOS
 
 }  // namespace views

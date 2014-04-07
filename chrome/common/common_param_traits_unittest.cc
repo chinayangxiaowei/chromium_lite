@@ -8,11 +8,24 @@
 #include "base/scoped_ptr.h"
 #include "base/values.h"
 #include "chrome/common/common_param_traits.h"
+#include "chrome/common/geoposition.h"
+#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_utils.h"
+#include "printing/native_metafile.h"
+#include "printing/page_range.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+
+#if defined(OS_WIN)
+#ifndef NDEBUG
+namespace {
+void IgnoreAssertHandler(const std::string& str) {
+}
+}  // namespace
+#endif  // NDEBUG
+#endif // defined(OS_WIN)
 
 // Tests that serialize/deserialize correctly understand each other
 TEST(IPCMessageTest, Serialize) {
@@ -135,21 +148,21 @@ TEST(IPCMessageTest, ListValue) {
 
 TEST(IPCMessageTest, DictionaryValue) {
   DictionaryValue input;
-  input.Set(L"null", Value::CreateNullValue());
-  input.Set(L"bool", Value::CreateBooleanValue(true));
-  input.Set(L"int", Value::CreateIntegerValue(42));
+  input.Set("null", Value::CreateNullValue());
+  input.Set("bool", Value::CreateBooleanValue(true));
+  input.Set("int", Value::CreateIntegerValue(42));
 
   scoped_ptr<DictionaryValue> subdict(new DictionaryValue());
-  subdict->Set(L"str", Value::CreateStringValue("forty two"));
-  subdict->Set(L"bool", Value::CreateBooleanValue(false));
+  subdict->Set("str", Value::CreateStringValue("forty two"));
+  subdict->Set("bool", Value::CreateBooleanValue(false));
 
   scoped_ptr<ListValue> sublist(new ListValue());
   sublist->Set(0, Value::CreateRealValue(42.42));
   sublist->Set(1, Value::CreateStringValue("forty"));
   sublist->Set(2, Value::CreateStringValue("two"));
-  subdict->Set(L"list", sublist.release());
+  subdict->Set("list", sublist.release());
 
-  input.Set(L"dict", subdict.release());
+  input.Set("dict", subdict.release());
 
   IPC::Message msg(1, 2, IPC::Message::PRIORITY_NORMAL);
   IPC::WriteParam(&msg, input);
@@ -178,7 +191,7 @@ TEST(IPCMessageTest, Geoposition) {
   input.heading = 120;
   input.timestamp = base::Time::FromInternalValue(1977);
   input.error_code = Geoposition::ERROR_CODE_POSITION_UNAVAILABLE;
-  input.error_message = L"unittest error message for geoposition";
+  input.error_message = "unittest error message for geoposition";
 
   IPC::Message msg(1, 2, IPC::Message::PRIORITY_NORMAL);
   IPC::WriteParam(&msg, input);
@@ -196,12 +209,74 @@ TEST(IPCMessageTest, Geoposition) {
   EXPECT_EQ(input.error_code, output.error_code);
   EXPECT_EQ(input.error_message, output.error_message);
 
-  std::wstring log_message;
+  std::string log_message;
   IPC::LogParam(output, &log_message);
-  EXPECT_STREQ(L"<Geoposition>"
-               L"0.100000 51.300000 13.700000 42.240000 "
-               L"9.300000 55.000000 120.000000 "
-               L"1977 unittest error message for geoposition"
-               L"<Geoposition::ErrorCode>2",
+  EXPECT_STREQ("<Geoposition>"
+               "0.100000 51.300000 13.700000 42.240000 "
+               "9.300000 55.000000 120.000000 "
+               "1977 unittest error message for geoposition"
+               "<Geoposition::ErrorCode>2",
                log_message.c_str());
 }
+
+// Tests printing::PageRange serialization
+TEST(IPCMessageTest, PageRange) {
+  printing::PageRange input;
+  input.from = 2;
+  input.to = 45;
+  IPC::Message msg(1, 2, IPC::Message::PRIORITY_NORMAL);
+  IPC::ParamTraits<printing::PageRange>::Write(&msg, input);
+
+  printing::PageRange output;
+  void* iter = NULL;
+  EXPECT_TRUE(IPC::ParamTraits<printing::PageRange>::Read(
+      &msg, &iter, &output));
+  EXPECT_TRUE(input == output);
+}
+
+// Enabling this test breaks assert handling for test suite. Bug 55177.
+// Tests printing::NativeMetafile serialization.
+TEST(IPCMessageTest, DISABLED_Metafile) {
+  // TODO(sanjeevr): Make this test meaningful for non-Windows platforms. We
+  // need to initialize the metafile using alternate means on the other OSes.
+#if defined(OS_WIN)
+  printing::NativeMetafile metafile;
+  RECT test_rect = {0, 0, 100, 100};
+  // Create a metsfile using the screen DC as a reference.
+  metafile.CreateDc(NULL, NULL);
+  metafile.CloseDc();
+
+  IPC::Message msg(1, 2, IPC::Message::PRIORITY_NORMAL);
+  IPC::ParamTraits<printing::NativeMetafile>::Write(&msg, metafile);
+
+  printing::NativeMetafile output;
+  void* iter = NULL;
+  EXPECT_TRUE(IPC::ParamTraits<printing::NativeMetafile>::Read(
+      &msg, &iter, &output));
+
+  EXPECT_EQ(metafile.GetDataSize(), output.GetDataSize());
+  EXPECT_EQ(metafile.GetBounds(), output.GetBounds());
+  EXPECT_EQ(::GetDeviceCaps(metafile.hdc(), LOGPIXELSX),
+      ::GetDeviceCaps(output.hdc(), LOGPIXELSX));
+
+  // Also test the corrupt case.
+  IPC::Message bad_msg(1, 2, IPC::Message::PRIORITY_NORMAL);
+  // Write some bogus metafile data.
+  const size_t bogus_data_size = metafile.GetDataSize() * 2;
+  scoped_array<char> bogus_data(new char[bogus_data_size]);
+  memset(bogus_data.get(), 'B', bogus_data_size);
+  bad_msg.WriteData(bogus_data.get(), bogus_data_size);
+  // Make sure we don't read out the metafile!
+  printing::NativeMetafile bad_output;
+  iter = NULL;
+  // The Emf code on Windows DCHECKs if it cannot create the metafile.
+#ifndef NDEBUG
+  logging::SetLogAssertHandler(IgnoreAssertHandler);
+#endif  // NDEBUG
+  EXPECT_FALSE(IPC::ParamTraits<printing::NativeMetafile>::Read(
+      &bad_msg, &iter, &bad_output));
+#else  // defined(OS_WIN)
+  NOTIMPLEMENTED();
+#endif  // defined(OS_WIN)
+}
+

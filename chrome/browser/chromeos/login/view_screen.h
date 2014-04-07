@@ -4,19 +4,27 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_VIEW_SCREEN_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_VIEW_SCREEN_H_
+#pragma once
 
-#include "chrome/browser/chromeos/login/login_manager_view.h"
+#include "base/message_loop.h"
+#include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/wizard_screen.h"
+#include "gfx/size.h"
 
 template <class V>
 class ViewScreen : public WizardScreen {
  public:
+  // Create screen with default size.
   explicit ViewScreen(WizardScreenDelegate* delegate);
+
+  // Create screen with the specified size.
+  ViewScreen(WizardScreenDelegate* delegate, int width, int height);
   virtual ~ViewScreen();
 
   // Overridden from WizardScreen:
   virtual void Show();
   virtual void Hide();
+  virtual gfx::Size GetScreenSize() const { return size_; }
 
   V* view() { return view_; }
 
@@ -35,6 +43,9 @@ class ViewScreen : public WizardScreen {
 
   V* view_;
 
+  // Size of the screen.
+  gfx::Size size_;
+
   DISALLOW_COPY_AND_ASSIGN(ViewScreen);
 };
 
@@ -42,7 +53,9 @@ template <class V>
 class DefaultViewScreen : public ViewScreen<V> {
  public:
   explicit DefaultViewScreen(WizardScreenDelegate* delegate)
-      : ViewScreen<V>(delegate) {}
+        : ViewScreen<V>(delegate) {}
+  DefaultViewScreen(WizardScreenDelegate* delegate, int width, int height)
+      : ViewScreen<V>(delegate, width, height) {}
   V* AllocateView() {
     return new V(ViewScreen<V>::delegate()->GetObserver(this));
   }
@@ -53,7 +66,16 @@ class DefaultViewScreen : public ViewScreen<V> {
 template <class V>
 ViewScreen<V>::ViewScreen(WizardScreenDelegate* delegate)
     : WizardScreen(delegate),
-      view_(NULL) {
+      view_(NULL),
+      size_(chromeos::login::kWizardScreenWidth,
+            chromeos::login::kWizardScreenHeight) {
+}
+
+template <class V>
+ViewScreen<V>::ViewScreen(WizardScreenDelegate* delegate, int width, int height)
+    : WizardScreen(delegate),
+      view_(NULL),
+      size_(width, height) {
 }
 
 template <class V>
@@ -100,7 +122,5 @@ void ViewScreen<V>::CreateView() {
   view_->Init();
   view_->SetVisible(false);
 }
-
-typedef DefaultViewScreen<chromeos::LoginManagerView> LoginScreen;
 
 #endif  // CHROME_BROWSER_CHROMEOS_LOGIN_VIEW_SCREEN_H_

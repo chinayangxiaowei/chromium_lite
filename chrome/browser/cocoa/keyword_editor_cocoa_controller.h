@@ -7,10 +7,11 @@
 #include "app/table_model_observer.h"
 #import "base/cocoa_protocols_mac.h"
 #include "base/scoped_ptr.h"
+#include "base/string16.h"
 #include "chrome/browser/cocoa/table_row_nsimage_cache.h"
 #include "chrome/browser/search_engines/edit_search_engine_controller.h"
 #include "chrome/browser/search_engines/keyword_editor_controller.h"
-#include "chrome/browser/search_engines/template_url_model.h"
+#include "chrome/browser/search_engines/template_url_model_observer.h"
 
 class EditSearchEngineControllerDelegate;
 @class KeywordEditorCocoaController;
@@ -35,9 +36,9 @@ class KeywordEditorModelObserver : public TemplateURLModelObserver,
   // indicates a new TemplateURL should be created rather than modifying an
   // existing TemplateURL.
   virtual void OnEditedKeyword(const TemplateURL* template_url,
-                               const std::wstring& title,
-                               const std::wstring& keyword,
-                               const std::wstring& url);
+                               const string16& title,
+                               const string16& keyword,
+                               const std::string& url);
 
   // TableModelObserver overrides. Invalidate icon cache.
   virtual void OnModelChanged();
@@ -81,7 +82,7 @@ class KeywordEditorModelObserver : public TemplateURLModelObserver,
 
   scoped_nsobject<WindowSizeAutosaver> sizeSaver_;
 }
-@property (readonly) KeywordEditorController* controller;
+@property (nonatomic, readonly) KeywordEditorController* controller;
 
 // Show the keyword editor associated with the given profile (or the
 // original profile if this is an incognito profile).  If no keyword

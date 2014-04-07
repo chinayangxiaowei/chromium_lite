@@ -4,6 +4,7 @@
 
 #ifndef APP_TEST_ANIMATION_DELEGATE_H_
 #define APP_TEST_ANIMATION_DELEGATE_H_
+#pragma once
 
 #include "app/animation.h"
 #include "base/message_loop.h"
@@ -13,9 +14,6 @@
 class TestAnimationDelegate : public AnimationDelegate {
  public:
   TestAnimationDelegate() : canceled_(false), finished_(false) {
-  }
-
-  virtual void AnimationStarted(const Animation* animation) {
   }
 
   virtual void AnimationEnded(const Animation* animation) {

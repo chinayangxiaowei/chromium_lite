@@ -3,12 +3,15 @@
 # found in the LICENSE file.
 
 {
-  # Suppose this file is put at WebKit/WebKit/chromium/webkit/support/.
   'includes': [
-    '../../features.gypi',
     '../appcache/webkit_appcache.gypi',
+    '../blob/webkit_blob.gypi',
+    '../fileapi/webkit_fileapi.gypi',
     '../database/webkit_database.gypi',
     '../glue/webkit_glue.gypi',
+    # TODO(tkent): Merge npapi_layout_test_plugin into TestNetscapePlugIn
+    # of WebKit.
+    '../tools/npapi_layout_test_plugin/npapi_layout_test_plugin.gypi',
     'webkit_support.gypi',
   ],
 }

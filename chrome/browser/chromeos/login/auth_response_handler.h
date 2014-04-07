@@ -4,10 +4,11 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_AUTH_RESPONSE_HANDLER_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_AUTH_RESPONSE_HANDLER_H_
+#pragma once
 
 #include <string>
 
-#include "chrome/browser/net/url_fetcher.h"
+#include "chrome/common/net/url_fetcher.h"
 
 class GURL;
 

@@ -4,13 +4,11 @@
 
 #include "chrome/browser/views/constrained_window_win.h"
 
-#include "app/l10n_util.h"
 #include "app/resource_bundle.h"
-#include "app/text_elider.h"
 #include "app/win_util.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_contents_view.h"
@@ -34,6 +32,7 @@
 #include "views/window/client_view.h"
 #include "views/window/non_client_view.h"
 #include "views/window/window_resources.h"
+#include "views/window/window_shape.h"
 
 using base::TimeDelta;
 
@@ -45,11 +44,6 @@ class ClientView;
 enum {
   FRAME_PART_BITMAP_FIRST = 0,  // Must be first.
 
-  // Window Controls.
-  FRAME_CLOSE_BUTTON_ICON,
-  FRAME_CLOSE_BUTTON_ICON_H,
-  FRAME_CLOSE_BUTTON_ICON_P,
-
   // Window Frame Border.
   FRAME_BOTTOM_EDGE,
   FRAME_BOTTOM_LEFT_CORNER,
@@ -60,33 +54,22 @@ enum {
   FRAME_TOP_LEFT_CORNER,
   FRAME_TOP_RIGHT_CORNER,
 
-  FRAME_WINDOW,
-  FRAME_WINDOW_INACTIVE,
-  FRAME_WINDOW_INCOGNITO,
-  FRAME_WINDOW_INCOGNITO_INACTIVE,
-
   FRAME_PART_BITMAP_COUNT  // Must be last.
 };
 
 static const int kXPFramePartIDs[] = {
     0,
-    IDR_CLOSE_SA, IDR_CLOSE_SA_H, IDR_CLOSE_SA_P,
     IDR_WINDOW_BOTTOM_CENTER, IDR_WINDOW_BOTTOM_LEFT_CORNER,
     IDR_WINDOW_BOTTOM_RIGHT_CORNER, IDR_WINDOW_LEFT_SIDE,
     IDR_WINDOW_RIGHT_SIDE, IDR_WINDOW_TOP_CENTER,
     IDR_WINDOW_TOP_LEFT_CORNER, IDR_WINDOW_TOP_RIGHT_CORNER,
-    IDR_THEME_FRAME, IDR_THEME_FRAME_INACTIVE, IDR_THEME_FRAME_INCOGNITO,
-    IDR_THEME_FRAME_INCOGNITO_INACTIVE,
     0 };
 static const int kVistaFramePartIDs[] = {
     0,
-    IDR_CLOSE_SA, IDR_CLOSE_SA_H, IDR_CLOSE_SA_P,
     IDR_CONSTRAINED_BOTTOM_CENTER_V, IDR_CONSTRAINED_BOTTOM_LEFT_CORNER_V,
     IDR_CONSTRAINED_BOTTOM_RIGHT_CORNER_V, IDR_CONSTRAINED_LEFT_SIDE_V,
     IDR_CONSTRAINED_RIGHT_SIDE_V, IDR_CONSTRAINED_TOP_CENTER_V,
     IDR_CONSTRAINED_TOP_LEFT_CORNER_V, IDR_CONSTRAINED_TOP_RIGHT_CORNER_V,
-    IDR_THEME_FRAME, IDR_THEME_FRAME_INACTIVE, IDR_THEME_FRAME_INCOGNITO,
-    IDR_THEME_FRAME_INCOGNITO_INACTIVE,
     0 };
 
 class XPWindowResources : public views::WindowResources {
@@ -116,7 +99,7 @@ class XPWindowResources : public views::WindowResources {
 
   static SkBitmap* bitmaps_[FRAME_PART_BITMAP_COUNT];
 
-  DISALLOW_EVIL_CONSTRUCTORS(XPWindowResources);
+  DISALLOW_COPY_AND_ASSIGN(XPWindowResources);
 };
 
 class VistaWindowResources : public views::WindowResources {
@@ -146,7 +129,7 @@ class VistaWindowResources : public views::WindowResources {
 
   static SkBitmap* bitmaps_[FRAME_PART_BITMAP_COUNT];
 
-  DISALLOW_EVIL_CONSTRUCTORS(VistaWindowResources);
+  DISALLOW_COPY_AND_ASSIGN(VistaWindowResources);
 };
 
 SkBitmap* XPWindowResources::bitmaps_[];
@@ -177,7 +160,7 @@ class ConstrainedWindowFrameView
   // Overridden from views::View:
   virtual void Paint(gfx::Canvas* canvas);
   virtual void Layout();
-  virtual void ThemeChanged();
+  virtual void OnThemeChanged();
 
   // Overridden from views::ButtonListener:
   virtual void ButtonPressed(views::Button* sender, const views::Event& event);
@@ -237,7 +220,7 @@ class ConstrainedWindowFrameView
   // The font to be used to render the titlebar text.
   static gfx::Font* title_font_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(ConstrainedWindowFrameView);
+  DISALLOW_COPY_AND_ASSIGN(ConstrainedWindowFrameView);
 };
 
 gfx::Font* ConstrainedWindowFrameView::title_font_ = NULL;
@@ -278,12 +261,13 @@ ConstrainedWindowFrameView::ConstrainedWindowFrameView(
   InitClass();
   InitWindowResources();
 
+  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
   close_button_->SetImage(views::CustomButton::BS_NORMAL,
-                          resources_->GetPartBitmap(FRAME_CLOSE_BUTTON_ICON));
+                          rb.GetBitmapNamed(IDR_CLOSE_SA));
   close_button_->SetImage(views::CustomButton::BS_HOT,
-                          resources_->GetPartBitmap(FRAME_CLOSE_BUTTON_ICON_H));
+                          rb.GetBitmapNamed(IDR_CLOSE_SA_H));
   close_button_->SetImage(views::CustomButton::BS_PUSHED,
-                          resources_->GetPartBitmap(FRAME_CLOSE_BUTTON_ICON_P));
+                          rb.GetBitmapNamed(IDR_CLOSE_SA_P));
   close_button_->SetImageAlignment(views::ImageButton::ALIGN_CENTER,
                                    views::ImageButton::ALIGN_MIDDLE);
   AddChildView(close_button_);
@@ -349,24 +333,7 @@ int ConstrainedWindowFrameView::NonClientHitTest(const gfx::Point& point) {
 void ConstrainedWindowFrameView::GetWindowMask(const gfx::Size& size,
                                                gfx::Path* window_mask) {
   DCHECK(window_mask);
-
-  // Redefine the window visible region for the new size.
-  window_mask->moveTo(0, 3);
-  window_mask->lineTo(1, 2);
-  window_mask->lineTo(1, 1);
-  window_mask->lineTo(2, 1);
-  window_mask->lineTo(3, 0);
-
-  window_mask->lineTo(SkIntToScalar(size.width() - 3), 0);
-  window_mask->lineTo(SkIntToScalar(size.width() - 2), 1);
-  window_mask->lineTo(SkIntToScalar(size.width() - 1), 1);
-  window_mask->lineTo(SkIntToScalar(size.width() - 1), 2);
-  window_mask->lineTo(SkIntToScalar(size.width()), 3);
-
-  window_mask->lineTo(SkIntToScalar(size.width()),
-                      SkIntToScalar(size.height()));
-  window_mask->lineTo(0, SkIntToScalar(size.height()));
-  window_mask->close();
+  views::GetDefaultWindowMask(size, window_mask);
 }
 
 void ConstrainedWindowFrameView::EnableClose(bool enable) {
@@ -388,7 +355,7 @@ void ConstrainedWindowFrameView::Layout() {
   client_view_bounds_ = CalculateClientAreaBounds(width(), height());
 }
 
-void ConstrainedWindowFrameView::ThemeChanged() {
+void ConstrainedWindowFrameView::OnThemeChanged() {
   InitWindowResources();
 }
 
@@ -545,7 +512,7 @@ void ConstrainedWindowFrameView::LayoutTitleBar() {
   // there is no icon in constrained windows.
   gfx::Rect icon_bounds(IconBounds());
   int title_x = icon_bounds.x();
-  int title_height = title_font_->height();
+  int title_height = title_font_->GetHeight();
   // We bias the title position so that when the difference between the icon and
   // title heights is odd, the extra pixel of the title is above the vertical
   // midline rather than below.  This compensates for how the icon is already
@@ -596,14 +563,19 @@ views::NonClientFrameView* ConstrainedWindowWin::CreateFrameViewForWindow() {
 }
 
 void ConstrainedWindowWin::FocusConstrainedWindow() {
-  focused_view_->RequestFocus();
+  if ((!owner_->delegate() ||
+       owner_->delegate()->ShouldFocusConstrainedWindow(owner_)) &&
+      GetDelegate() && GetDelegate()->GetInitiallyFocusedView()) {
+    GetDelegate()->GetInitiallyFocusedView()->RequestFocus();
+  }
 }
 
 void ConstrainedWindowWin::ShowConstrainedWindow() {
+  if (owner_->delegate())
+    owner_->delegate()->WillShowConstrainedWindow(owner_);
   ActivateConstrainedWindow();
   FocusConstrainedWindow();
 }
-
 
 void ConstrainedWindowWin::CloseConstrainedWindow() {
   // Broadcast to all observers of NOTIFY_CWINDOW_CLOSED.
@@ -644,9 +616,6 @@ ConstrainedWindowWin::ConstrainedWindowWin(
   set_focus_on_creation(false);
 
   WindowWin::Init(owner_->GetNativeView(), gfx::Rect());
-
-  focused_view_ = window_delegate->GetContentsView();
-  DCHECK(focused_view_);
 }
 
 void ConstrainedWindowWin::ActivateConstrainedWindow() {

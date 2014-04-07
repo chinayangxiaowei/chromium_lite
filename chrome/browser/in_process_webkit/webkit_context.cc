@@ -4,13 +4,18 @@
 
 #include "chrome/browser/in_process_webkit/webkit_context.h"
 
+#include "base/command_line.h"
 #include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/profile.h"
+#include "chrome/common/chrome_switches.h"
 
-WebKitContext::WebKitContext(const FilePath& data_path, bool is_incognito)
-    : data_path_(data_path),
-      is_incognito_(is_incognito),
+WebKitContext::WebKitContext(Profile* profile)
+    : data_path_(profile->IsOffTheRecord() ? FilePath() : profile->GetPath()),
+      is_incognito_(profile->IsOffTheRecord()),
       ALLOW_THIS_IN_INITIALIZER_LIST(
-          dom_storage_context_(new DOMStorageContext(this))) {
+          dom_storage_context_(new DOMStorageContext(this))),
+      ALLOW_THIS_IN_INITIALIZER_LIST(
+          indexed_db_context_(new IndexedDBContext(this))) {
 }
 
 WebKitContext::~WebKitContext() {
@@ -18,18 +23,24 @@ WebKitContext::~WebKitContext() {
   // will just get deleted if the WebKit thread isn't created (which only
   // happens during testing).
   DOMStorageContext* dom_storage_context = dom_storage_context_.release();
-  if (!ChromeThread::DeleteSoon(
-          ChromeThread::WEBKIT, FROM_HERE, dom_storage_context)) {
+  if (!BrowserThread::DeleteSoon(
+          BrowserThread::WEBKIT, FROM_HERE, dom_storage_context)) {
     // The WebKit thread wasn't created, and the task got deleted without
     // freeing the DOMStorageContext, so delete it manually.
     delete dom_storage_context;
   }
+
+  IndexedDBContext* indexed_db_context = indexed_db_context_.release();
+  if (!BrowserThread::DeleteSoon(
+          BrowserThread::WEBKIT, FROM_HERE, indexed_db_context)) {
+    delete indexed_db_context;
+  }
 }
 
 void WebKitContext::PurgeMemory() {
-  if (!ChromeThread::CurrentlyOn(ChromeThread::WEBKIT)) {
-    bool result = ChromeThread::PostTask(
-        ChromeThread::WEBKIT, FROM_HERE,
+  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT)) {
+    bool result = BrowserThread::PostTask(
+        BrowserThread::WEBKIT, FROM_HERE,
         NewRunnableMethod(this, &WebKitContext::PurgeMemory));
     DCHECK(result);
     return;
@@ -40,26 +51,27 @@ void WebKitContext::PurgeMemory() {
 
 void WebKitContext::DeleteDataModifiedSince(
     const base::Time& cutoff,
-    const char* url_scheme_to_be_skipped) {
-  if (!ChromeThread::CurrentlyOn(ChromeThread::WEBKIT)) {
-    bool result = ChromeThread::PostTask(
-        ChromeThread::WEBKIT, FROM_HERE,
+    const char* url_scheme_to_be_skipped,
+    const std::vector<string16>& protected_origins) {
+  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT)) {
+    bool result = BrowserThread::PostTask(
+        BrowserThread::WEBKIT, FROM_HERE,
         NewRunnableMethod(this, &WebKitContext::DeleteDataModifiedSince,
-                          cutoff, url_scheme_to_be_skipped));
+                          cutoff, url_scheme_to_be_skipped, protected_origins));
     DCHECK(result);
     return;
   }
 
-  dom_storage_context_->DeleteDataModifiedSince(cutoff,
-                                                url_scheme_to_be_skipped);
+  dom_storage_context_->DeleteDataModifiedSince(
+      cutoff, url_scheme_to_be_skipped, protected_origins);
 }
 
 
 void WebKitContext::DeleteSessionStorageNamespace(
     int64 session_storage_namespace_id) {
-  if (!ChromeThread::CurrentlyOn(ChromeThread::WEBKIT)) {
-    ChromeThread::PostTask(
-        ChromeThread::WEBKIT, FROM_HERE,
+  if (!BrowserThread::CurrentlyOn(BrowserThread::WEBKIT)) {
+    BrowserThread::PostTask(
+        BrowserThread::WEBKIT, FROM_HERE,
         NewRunnableMethod(this, &WebKitContext::DeleteSessionStorageNamespace,
                           session_storage_namespace_id));
     return;

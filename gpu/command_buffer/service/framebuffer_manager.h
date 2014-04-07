@@ -7,7 +7,6 @@
 
 #include <map>
 #include "base/basictypes.h"
-#include "base/logging.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "gpu/command_buffer/service/gl_utils.h"
@@ -25,21 +24,25 @@ class FramebufferManager {
    public:
     typedef scoped_refptr<FramebufferInfo> Ref;
 
-    explicit FramebufferInfo(GLuint framebuffer_id)
-        : framebuffer_id_(framebuffer_id) {
+    explicit FramebufferInfo(GLuint service_id)
+        : service_id_(service_id) {
     }
 
-    GLuint framebuffer_id() const {
-      return framebuffer_id_;
+    GLuint service_id() const {
+      return service_id_;
     }
+
+    bool HasUnclearedAttachment(GLenum attachment) const;
 
     // Attaches a renderbuffer to a particlar attachment.
     // Pass null to detach.
     void AttachRenderbuffer(
         GLenum attachment, RenderbufferManager::RenderbufferInfo* renderbuffer);
 
+    void MarkAttachedRenderbuffersAsCleared();
+
     bool IsDeleted() {
-      return framebuffer_id_ == 0;
+      return service_id_ == 0;
     }
 
    private:
@@ -49,12 +52,12 @@ class FramebufferManager {
     ~FramebufferInfo() { }
 
     void MarkAsDeleted() {
-      framebuffer_id_ = 0;
+      service_id_ = 0;
       renderbuffers_.clear();
     }
 
     // Service side framebuffer id.
-    GLuint framebuffer_id_;
+    GLuint service_id_;
 
     // A map of attachments to renderbuffers.
     typedef std::map<GLenum, RenderbufferManager::RenderbufferInfo::Ref>
@@ -63,15 +66,22 @@ class FramebufferManager {
   };
 
   FramebufferManager() { }
+  ~FramebufferManager();
+
+  // Must call before destruction.
+  void Destroy(bool have_context);
 
   // Creates a FramebufferInfo for the given framebuffer.
-  void CreateFramebufferInfo(GLuint framebuffer_id);
+  void CreateFramebufferInfo(GLuint client_id, GLuint service_id);
 
   // Gets the framebuffer info for the given framebuffer.
-  FramebufferInfo* GetFramebufferInfo(GLuint framebuffer_id);
+  FramebufferInfo* GetFramebufferInfo(GLuint client_id);
 
   // Removes a framebuffer info for the given framebuffer.
-  void RemoveFramebufferInfo(GLuint framebuffer_id);
+  void RemoveFramebufferInfo(GLuint client_id);
+
+  // Gets a client id for a given service id.
+  bool GetClientId(GLuint service_id, GLuint* client_id) const;
 
  private:
   // Info for each framebuffer in the system.
@@ -86,5 +96,3 @@ class FramebufferManager {
 }  // namespace gpu
 
 #endif  // GPU_COMMAND_BUFFER_SERVICE_FRAMEBUFFER_MANAGER_H_
-
-

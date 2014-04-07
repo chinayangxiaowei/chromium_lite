@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include "base/file_util.h"
 #include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/plugins/plugin_host.h"
@@ -263,7 +263,7 @@ int PluginInstance::NPP_WriteReady(NPStream *stream) {
   if (npp_functions_->writeready != 0) {
     return npp_functions_->writeready(npp_, stream);
   }
-  return NULL;
+  return 0;
 }
 
 int PluginInstance::NPP_Write(NPStream *stream,
@@ -275,7 +275,7 @@ int PluginInstance::NPP_Write(NPStream *stream,
   if (npp_functions_->write != 0) {
     return npp_functions_->write(npp_, stream, offset, len, buffer);
   }
-  return NULL;
+  return 0;
 }
 
 void PluginInstance::NPP_StreamAsFile(NPStream *stream, const char *fname) {
@@ -420,7 +420,7 @@ uint32 PluginInstance::ScheduleTimer(uint32 interval,
   // Record timer interval and repeat.
   TimerInfo info;
   info.interval = interval;
-  info.repeat = repeat;
+  info.repeat = repeat ? true : false;
   timers_[timer_id] = info;
 
   // Schedule the callback.
@@ -489,13 +489,13 @@ void PluginInstance::RequestRead(NPStream* stream, NPByteRange* range_list) {
   std::string range_info = "bytes=";
 
   while (range_list) {
-    range_info += IntToString(range_list->offset);
-    range_info += "-";
-    range_info += IntToString(range_list->offset + range_list->length - 1);
+    range_info += base::IntToString(range_list->offset);
+    range_info.push_back('-');
+    range_info +=
+        base::IntToString(range_list->offset + range_list->length - 1);
     range_list = range_list->next;
-    if (range_list) {
-      range_info += ",";
-    }
+    if (range_list)
+      range_info.push_back(',');
   }
 
   if (plugin_data_stream_) {

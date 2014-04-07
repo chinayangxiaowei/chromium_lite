@@ -17,12 +17,27 @@ var chrome = chrome || {};
   native function GetRenderViewId();
   native function GetPopupParentWindow();
   native function GetPopupView();
-  native function SetExtensionActionIcon();
+  native function SetIconCommon();
+  native function IsExtensionProcess();
+  native function IsIncognitoProcess();
+
+  var chromeHidden = GetChromeHidden();
+
+  // These bindings are for the extension process only. Since a chrome-extension
+  // URL can be loaded in an iframe of a regular renderer, we check here to
+  // ensure we don't expose the APIs in that case.
+  if (!IsExtensionProcess()) {
+    chromeHidden.onLoad.addListener(function (extensionId) {
+      if (!extensionId) {
+        return;
+      }
+      chrome.initExtension(extensionId, false);
+    });
+    return;
+  }
 
   if (!chrome)
     chrome = {};
-
-  var chromeHidden = GetChromeHidden();
 
   // Validate arguments.
   chromeHidden.validationTypes = [];
@@ -148,16 +163,9 @@ var chrome = chrome || {};
       --argCount;
     }
 
-    // Calls with one argument expect singular argument. Calls with multiple
-    // expect a list.
-    if (argCount == 1) {
-      request.args = args[0];
-    }
-    if (argCount > 1) {
-      request.args = [];
-      for (var k = 0; k < argCount; k++) {
-        request.args[k] = args[k];
-      }
+    request.args = [];
+    for (var k = 0; k < argCount; k++) {
+      request.args[k] = args[k];
     }
 
     return request;
@@ -191,42 +199,27 @@ var chrome = chrome || {};
                           request.callback ? true : false);
   }
 
-  function bind(obj, func) {
-    return function() {
-      return func.apply(obj, arguments);
-    };
-  }
-
   // Helper function for positioning pop-up windows relative to DOM objects.
   // Returns the absolute position of the given element relative to the hosting
   // browser frame.
   function findAbsolutePosition(domElement) {
-    var curleft = curtop = 0;
-    var parentNode = domElement.parentNode
+    var left = domElement.offsetLeft;
+    var top = domElement.offsetTop;
 
     // Ascend through the parent hierarchy, taking into account object nesting
     // and scoll positions.
-    if (domElement.offsetParent) {
-      do {
-        if (domElement.offsetLeft) curleft += domElement.offsetLeft;
-        if (domElement.offsetTop) curtop += domElement.offsetTop;
+    for (var parentElement = domElement.offsetParent; parentElement;
+         parentElement = parentElement.offsetParent) {
+      left += parentElement.offsetLeft;
+      top += parentElement.offsetTop;
 
-        if (domElement.scrollLeft) curleft -= domElement.scrollLeft;
-        if (domElement.scrollTop) curtop -= domElement.scrollTop;
-
-        if (parentNode != domElement.offsetParent) {
-          while(parentNode != null && parentNode != domElement.offsetParent) {
-            if (parentNode.scrollLeft) curleft -= parentNode.scrollLeft;
-            if (parentNode.scrollTop) curtop -= parentNode.scrollTop;
-            parentNode = parentNode.parentNode;
-          }
-        }
-      } while ((domElement = domElement.offsetParent) != null);
+      left -= parentElement.scrollLeft;
+      top -= parentElement.scrollTop;
     }
 
     return {
-      top: curtop,
-      left: curleft
+      top: top,
+      left: left
     };
   }
 
@@ -251,18 +244,6 @@ var chrome = chrome || {};
       // Setup events for each extension_id/page_action_id string we find.
       chrome.pageActions[pageActions[i]] = new chrome.Event(oldStyleEventName);
     }
-
-    // Note this is singular.
-    var eventName = "pageAction/" + extensionId;
-    chrome.pageAction = chrome.pageAction || {};
-    chrome.pageAction.onClicked = new chrome.Event(eventName);
-  }
-
-  // Browser action events send {windowpId}.
-  function setupBrowserActionEvent(extensionId) {
-    var eventName = "browserAction/" + extensionId;
-    chrome.browserAction = chrome.browserAction || {};
-    chrome.browserAction.onClicked = new chrome.Event(eventName);
   }
 
   function setupToolstripEvents(renderViewId) {
@@ -280,26 +261,43 @@ var chrome = chrome || {};
   }
 
   function setupHiddenContextMenuEvent(extensionId) {
-    var eventName = "contextMenu/" + extensionId;
-    chromeHidden.contextMenuEvent = new chrome.Event(eventName);
-    chromeHidden.contextMenuHandlers = {};
-    chromeHidden.contextMenuEvent.addListener(function() {
-      var menuItemId = arguments[0].menuItemId;
-      var onclick = chromeHidden.contextMenuHandlers[menuItemId];
-      if (onclick) {
-        onclick.apply(onclick, arguments);
+    chromeHidden.contextMenus = {};
+    chromeHidden.contextMenus.nextId = 1;
+    chromeHidden.contextMenus.handlers = {};
+    var eventName = "contextMenus/" + extensionId;
+    chromeHidden.contextMenus.event = new chrome.Event(eventName);
+    chromeHidden.contextMenus.ensureListenerSetup = function() {
+      if (chromeHidden.contextMenus.listening) {
+        return;
       }
+      chromeHidden.contextMenus.listening = true;
+      chromeHidden.contextMenus.event.addListener(function() {
+        // An extension context menu item has been clicked on - fire the onclick
+        // if there is one.
+        var id = arguments[0].menuItemId;
+        var onclick = chromeHidden.contextMenus.handlers[id];
+        if (onclick) {
+          onclick.apply(null, arguments);
+        }
+      });
+    };
+  }
 
-      var parentMenuItemId = arguments[0].parentMenuItemId;
-      var parentOnclick = chromeHidden.contextMenuHandlers[parentMenuItemId];
-      if (parentOnclick) {
-        parentOnclick.apply(parentOnclick, arguments);
+  function setupOmniboxEvents(extensionId) {
+    chrome.experimental.omnibox.onInputChanged.dispatch =
+        function(text, requestId) {
+      var suggestCallback = function(suggestions) {
+        chrome.experimental.omnibox.sendSuggestions(requestId, suggestions);
       }
-    });
+      chrome.Event.prototype.dispatch.apply(this, [text, suggestCallback]);
+    };
   }
 
   chromeHidden.onLoad.addListener(function (extensionId) {
-    chrome.initExtension(extensionId, false);
+    if (!extensionId) {
+      return;
+    }
+    chrome.initExtension(extensionId, false, IsIncognitoProcess());
 
     // |apiFunctions| is a hash of name -> object that stores the
     // name & definition of the apiFunction. Custom handling of api functions
@@ -342,7 +340,7 @@ var chrome = chrome || {};
           apiFunction.name = apiDef.namespace + "." + functionDef.name;
           apiFunctions[apiFunction.name] = apiFunction;
 
-          module[functionDef.name] = bind(apiFunction, function() {
+          module[functionDef.name] = (function() {
             var args = arguments;
             if (this.updateArguments) {
               // Functions whose signature has changed can define an
@@ -371,7 +369,7 @@ var chrome = chrome || {};
               chromeHidden.validate([retval], [this.definition.returns]);
             }
             return retval;
-          });
+          }).bind(apiFunction);
         });
       }
 
@@ -384,11 +382,35 @@ var chrome = chrome || {};
             return;
 
           var eventName = apiDef.namespace + "." + eventDef.name;
+          if (eventDef.perExtensionEvent)
+            eventName = eventName + "/" + extensionId;
           module[eventDef.name] = new chrome.Event(eventName,
               eventDef.parameters);
         });
       }
 
+
+      // Parse any values defined for properties.
+      if (apiDef.properties) {
+        for (var prop in apiDef.properties) {
+          if (!apiDef.properties.hasOwnProperty(prop))
+            continue;
+
+          var property = apiDef.properties[prop];
+          if (property.value) {
+            var value = property.value;
+            if (property.type === 'integer') {
+              value = parseInt(value);
+            } else if (property.type === 'boolean') {
+              value = value === "true";
+            } else if (property.type !== 'string') {
+              throw "NOT IMPLEMENTED (extension_api.json error): Cannot " +
+                  "parse values for type \"" + property.type + "\"";
+            }
+            module[prop] = value;
+          }
+        }
+      }
 
       // getTabContentses is retained for backwards compatibility
       // See http://crbug.com/21433
@@ -514,9 +536,8 @@ var chrome = chrome || {};
     };
 
     var canvas;
-    function setIconCommon(details, name, parameters, actionType) {
-      var EXTENSION_ACTION_ICON_SIZE = 19;
-
+    function setIconCommon(details, name, parameters, actionType, iconSize,
+                           nativeFunction) {
       if ("iconIndex" in details) {
         sendRequest(name, [details], parameters);
       } else if ("imageData" in details) {
@@ -533,14 +554,14 @@ var chrome = chrome || {};
               "The imageData property must contain an ImageData object.");
         }
 
-        if (details.imageData.width > EXTENSION_ACTION_ICON_SIZE ||
-            details.imageData.height > EXTENSION_ACTION_ICON_SIZE) {
+        if (details.imageData.width > iconSize ||
+            details.imageData.height > iconSize) {
           throw new Error(
               "The imageData property must contain an ImageData object that " +
-              "is no larger than 19 pixels square.");
+              "is no larger than " + iconSize + " pixels square.");
         }
 
-        sendCustomRequest(SetExtensionActionIcon, name, [details], parameters);
+        sendCustomRequest(nativeFunction, name, [details], parameters);
       } else if ("path" in details) {
         var img = new Image();
         img.onerror = function() {
@@ -549,10 +570,8 @@ var chrome = chrome || {};
         }
         img.onload = function() {
           var canvas = document.createElement("canvas");
-          canvas.width = img.width > EXTENSION_ACTION_ICON_SIZE ?
-              EXTENSION_ACTION_ICON_SIZE : img.width;
-          canvas.height = img.height > EXTENSION_ACTION_ICON_SIZE ?
-              EXTENSION_ACTION_ICON_SIZE : img.height;
+          canvas.width = img.width > iconSize ? iconSize : img.width;
+          canvas.height = img.height > iconSize ? iconSize : img.height;
 
           var canvas_context = canvas.getContext('2d');
           canvas_context.clearRect(0, 0, canvas.width, canvas.height);
@@ -560,7 +579,7 @@ var chrome = chrome || {};
           delete details.path;
           details.imageData = canvas_context.getImageData(0, 0, canvas.width,
                                                           canvas.height);
-          sendCustomRequest(SetExtensionActionIcon, name, [details], parameters);
+          sendCustomRequest(nativeFunction, name, [details], parameters);
         }
         img.src = details.path;
       } else {
@@ -569,36 +588,83 @@ var chrome = chrome || {};
       }
     }
 
+    function setExtensionActionIconCommon(details, name, parameters,
+                                          actionType) {
+      var EXTENSION_ACTION_ICON_SIZE = 19;
+      setIconCommon(details, name, parameters, actionType,
+                    EXTENSION_ACTION_ICON_SIZE, SetIconCommon);
+    }
+
     apiFunctions["browserAction.setIcon"].handleRequest = function(details) {
-      setIconCommon(
+      setExtensionActionIconCommon(
           details, this.name, this.definition.parameters, "browser action");
     };
 
     apiFunctions["pageAction.setIcon"].handleRequest = function(details) {
-      setIconCommon(
+      setExtensionActionIconCommon(
           details, this.name, this.definition.parameters, "page action");
     };
 
-    apiFunctions["experimental.contextMenu.create"].customCallback =
+    apiFunctions["experimental.sidebar.setIcon"].handleRequest =
+        function(details) {
+      var SIDEBAR_ICON_SIZE = 16;
+      setIconCommon(
+          details, this.name, this.definition.parameters, "sidebar",
+          SIDEBAR_ICON_SIZE, SetIconCommon);
+    };
+
+    apiFunctions["contextMenus.create"].handleRequest =
+        function() {
+      var args = arguments;
+      var id = chromeHidden.contextMenus.nextId++;
+      args[0].generatedId = id;
+      sendRequest(this.name, args, this.definition.parameters,
+                  this.customCallback);
+      return id;
+    };
+
+    apiFunctions["contextMenus.create"].customCallback =
         function(name, request, response) {
-      if (chrome.extension.lastError || !response) {
+      if (chrome.extension.lastError) {
         return;
       }
 
+      var id = request.args[0].generatedId;
+
       // Set up the onclick handler if we were passed one in the request.
-      if (request.args.onclick) {
-        var menuItemId = chromeHidden.JSON.parse(response);
-        chromeHidden.contextMenuHandlers[menuItemId] = request.args.onclick;
+      var onclick = request.args.length ? request.args[0].onclick : null;
+      if (onclick) {
+        chromeHidden.contextMenus.ensureListenerSetup();
+        chromeHidden.contextMenus.handlers[id] = onclick;
       }
     };
 
-    apiFunctions["experimental.contextMenu.remove"].customCallback =
+    apiFunctions["contextMenus.remove"].customCallback =
         function(name, request, response) {
-      // Remove any onclick handler we had registered for this menu item.
-      if (request.args.length > 0) {
-        var menuItemId = request.args[0];
-        delete chromeHidden.contextMenuHandlers[menuItemId];
+      if (chrome.extension.lastError) {
+        return;
       }
+      var id = request.args[0];
+      delete chromeHidden.contextMenus.handlers[id];
+    };
+
+    apiFunctions["contextMenus.update"].customCallback =
+        function(name, request, response) {
+      if (chrome.extension.lastError) {
+        return;
+      }
+      var id = request.args[0];
+      if (request.args[1].onclick) {
+        chromeHidden.contextMenus.handlers[id] = request.args[1].onclick;
+      }
+    };
+
+    apiFunctions["contextMenus.removeAll"].customCallback =
+        function(name, request, response) {
+      if (chrome.extension.lastError) {
+        return;
+      }
+      chromeHidden.contextMenus.handlers = {};
     };
 
     apiFunctions["tabs.captureVisibleTab"].updateArguments = function() {
@@ -620,15 +686,32 @@ var chrome = chrome || {};
       return newArgs;
     };
 
+    apiFunctions["experimental.omnibox.styleNone"].handleRequest =
+        function(offset) {
+      return {type: "none", offset: offset};
+    }
+    apiFunctions["experimental.omnibox.styleUrl"].handleRequest =
+        function(offset) {
+      return {type: "url", offset: offset};
+    }
+    apiFunctions["experimental.omnibox.styleMatch"].handleRequest =
+        function(offset) {
+      return {type: "match", offset: offset};
+    }
+    apiFunctions["experimental.omnibox.styleDim"].handleRequest =
+        function(offset) {
+      return {type: "dim", offset: offset};
+    }
+
     if (chrome.test) {
       chrome.test.getApiDefinitions = GetExtensionAPIDefinition;
     }
 
-    setupBrowserActionEvent(extensionId);
     setupPageActionEvents(extensionId);
     setupToolstripEvents(GetRenderViewId());
     setupPopupEvents(GetRenderViewId());
     setupHiddenContextMenuEvent(extensionId);
+    setupOmniboxEvents(extensionId);
   });
 
   if (!chrome.experimental)
@@ -636,4 +719,7 @@ var chrome = chrome || {};
 
   if (!chrome.experimental.accessibility)
     chrome.experimental.accessibility = {};
+
+  if (!chrome.experimental.tts)
+    chrome.experimental.tts = {};
 })();

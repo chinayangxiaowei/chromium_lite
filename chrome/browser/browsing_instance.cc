@@ -5,6 +5,7 @@
 #include "chrome/browser/browsing_instance.h"
 
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/common/chrome_switches.h"
@@ -13,6 +14,10 @@
 /*static*/
 BrowsingInstance::ProfileSiteInstanceMap
     BrowsingInstance::profile_site_instance_map_;
+
+BrowsingInstance::BrowsingInstance(Profile* profile)
+    : profile_(profile) {
+}
 
 bool BrowsingInstance::ShouldUseProcessPerSite(const GURL& url) {
   // Returns true if we should use the process-per-site model.  This will be
@@ -23,6 +28,12 @@ bool BrowsingInstance::ShouldUseProcessPerSite(const GURL& url) {
   if (command_line.HasSwitch(switches::kProcessPerSite))
     return true;
 
+  if (url.SchemeIs(chrome::kExtensionScheme)) {
+    // Always consolidate extensions regardless of the command line, because
+    // they will break if split into multiple processes.
+    return true;
+  }
+
   if (!command_line.HasSwitch(switches::kProcessPerTab)) {
     // We are not in process-per-site or process-per-tab, so we must be in the
     // default (process-per-site-instance).  Only use the process-per-site
@@ -30,10 +41,9 @@ bool BrowsingInstance::ShouldUseProcessPerSite(const GURL& url) {
     // Note that --single-process may have been specified, but that affects the
     // process creation logic in RenderProcessHost, so we do not need to worry
     // about it here.
-    if (url.SchemeIs(chrome::kChromeUIScheme) ||
-        url.SchemeIs(chrome::kExtensionScheme))
+    if (url.SchemeIs(chrome::kChromeUIScheme))
       // Always consolidate instances of the new tab page (and instances of any
-      // other internal resource urls), as well as extensions.
+      // other internal resource urls.
       return true;
 
     // TODO(creis): List any other special cases that we want to limit to a
@@ -46,7 +56,7 @@ bool BrowsingInstance::ShouldUseProcessPerSite(const GURL& url) {
 
 BrowsingInstance::SiteInstanceMap* BrowsingInstance::GetSiteInstanceMap(
     Profile* profile, const GURL& url) {
-  if (!ShouldUseProcessPerSite(url)) {
+  if (!ShouldUseProcessPerSite(SiteInstance::GetEffectiveURL(profile, url))) {
     // Not using process-per-site, so use a map specific to this instance.
     return &site_instance_map_;
   }
@@ -59,7 +69,8 @@ BrowsingInstance::SiteInstanceMap* BrowsingInstance::GetSiteInstanceMap(
 }
 
 bool BrowsingInstance::HasSiteInstance(const GURL& url) {
-  std::string site = SiteInstance::GetSiteForURL(url).possibly_invalid_spec();
+  std::string site =
+      SiteInstance::GetSiteForURL(profile_, url).possibly_invalid_spec();
 
   SiteInstanceMap* map = GetSiteInstanceMap(profile_, url);
   SiteInstanceMap::iterator i = map->find(site);
@@ -67,7 +78,8 @@ bool BrowsingInstance::HasSiteInstance(const GURL& url) {
 }
 
 SiteInstance* BrowsingInstance::GetSiteInstanceForURL(const GURL& url) {
-  std::string site = SiteInstance::GetSiteForURL(url).possibly_invalid_spec();
+  std::string site =
+      SiteInstance::GetSiteForURL(profile_, url).possibly_invalid_spec();
 
   SiteInstanceMap* map = GetSiteInstanceMap(profile_, url);
   SiteInstanceMap::iterator i = map->find(site);
@@ -115,4 +127,10 @@ void BrowsingInstance::UnregisterSiteInstance(SiteInstance* site_instance) {
     // Matches, so erase it.
     map->erase(i);
   }
+}
+
+BrowsingInstance::~BrowsingInstance() {
+  // We should only be deleted when all of the SiteInstances that refer to
+  // us are gone.
+  DCHECK(site_instance_map_.empty());
 }

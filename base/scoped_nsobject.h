@@ -4,9 +4,11 @@
 
 #ifndef BASE_SCOPED_NSOBJECT_H_
 #define BASE_SCOPED_NSOBJECT_H_
+#pragma once
 
 #import <Foundation/Foundation.h>
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 
 // scoped_nsobject<> is patterned after scoped_ptr<>, but maintains ownership
 // of an NSObject subclass object.  Style deviations here are solely for
@@ -47,13 +49,8 @@ class scoped_nsobject {
     object_ = object;
   }
 
-  bool operator==(NST* that) const {
-    return object_ == that;
-  }
-
-  bool operator!=(NST* that) const {
-    return object_ != that;
-  }
+  bool operator==(NST* that) const { return object_ == that; }
+  bool operator!=(NST* that) const { return object_ != that; }
 
   operator NST*() const {
     return object_;
@@ -72,7 +69,7 @@ class scoped_nsobject {
   // scoped_nsobject<>::release() is like scoped_ptr<>::release.  It is NOT
   // a wrapper for [object_ release].  To force a scoped_nsobject<> object to
   // call [object_ release], use scoped_nsobject<>::reset().
-  NST* release() {
+  NST* release() WARN_UNUSED_RESULT {
     NST* temp = object_;
     object_ = nil;
     return temp;
@@ -83,6 +80,23 @@ class scoped_nsobject {
 
   DISALLOW_COPY_AND_ASSIGN(scoped_nsobject);
 };
+
+// Free functions
+template <class C>
+void swap(scoped_nsobject<C>& p1, scoped_nsobject<C>& p2) {
+  p1.swap(p2);
+}
+
+template <class C>
+bool operator==(C* p1, const scoped_nsobject<C>& p2) {
+  return p1 == p2.get();
+}
+
+template <class C>
+bool operator!=(C* p1, const scoped_nsobject<C>& p2) {
+  return p1 != p2.get();
+}
+
 
 // Specialization to make scoped_nsobject<id> work.
 template<>
@@ -108,13 +122,8 @@ class scoped_nsobject<id> {
     object_ = object;
   }
 
-  bool operator==(id that) const {
-    return object_ == that;
-  }
-
-  bool operator!=(id that) const {
-    return object_ != that;
-  }
+  bool operator==(id that) const { return object_ == that; }
+  bool operator!=(id that) const { return object_ != that; }
 
   operator id() const {
     return object_;
@@ -133,7 +142,7 @@ class scoped_nsobject<id> {
   // scoped_nsobject<>::release() is like scoped_ptr<>::release.  It is NOT
   // a wrapper for [object_ release].  To force a scoped_nsobject<> object to
   // call [object_ release], use scoped_nsobject<>::reset().
-  id release() {
+  id release() WARN_UNUSED_RESULT {
     id temp = object_;
     object_ = nil;
     return temp;

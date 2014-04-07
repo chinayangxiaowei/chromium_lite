@@ -4,16 +4,29 @@
 
 #ifndef CHROME_WORKER_WORKER_WEBKITCLIENT_IMPL_H_
 #define CHROME_WORKER_WORKER_WEBKITCLIENT_IMPL_H_
+#pragma once
 
+#include "base/scoped_ptr.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebMimeRegistry.h"
 #include "webkit/glue/webkitclient_impl.h"
+
+class WebFileSystemImpl;
+
+namespace WebKit {
+class WebFileUtilities;
+}
 
 class WorkerWebKitClientImpl : public webkit_glue::WebKitClientImpl,
                                public WebKit::WebMimeRegistry {
  public:
+  WorkerWebKitClientImpl();
+  virtual ~WorkerWebKitClientImpl();
+
   // WebKitClient methods:
   virtual WebKit::WebClipboard* clipboard();
   virtual WebKit::WebMimeRegistry* mimeRegistry();
+  virtual WebKit::WebFileSystem* fileSystem();
+  virtual WebKit::WebFileUtilities* fileUtilities();
   virtual WebKit::WebSandboxSupport* sandboxSupport();
   virtual bool sandboxEnabled();
   virtual unsigned long long visitedLinkHash(const char* canonicalURL,
@@ -27,7 +40,6 @@ class WorkerWebKitClientImpl : public webkit_glue::WebKitClientImpl,
       const WebKit::WebURL& url,
       const WebKit::WebURL& first_party_for_cookies);
   virtual void prefetchHostName(const WebKit::WebString&);
-  virtual bool getFileSize(const WebKit::WebString& path, long long& result);
   virtual WebKit::WebString defaultLocale();
   virtual WebKit::WebStorageNamespace* createLocalStorageNamespace(
       const WebKit::WebString& path, unsigned quota);
@@ -38,14 +50,15 @@ class WorkerWebKitClientImpl : public webkit_glue::WebKitClientImpl,
   virtual WebKit::WebSharedWorkerRepository* sharedWorkerRepository();
 
   virtual WebKit::WebKitClient::FileHandle databaseOpenFile(
-      const WebKit::WebString& vfs_file_name, int desired_flags,
-      WebKit::WebKitClient::FileHandle* dir_handle);
+      const WebKit::WebString& vfs_file_name, int desired_flags);
   virtual int databaseDeleteFile(const WebKit::WebString& vfs_file_name,
                                  bool sync_dir);
   virtual long databaseGetFileAttributes(
       const WebKit::WebString& vfs_file_name);
   virtual long long databaseGetFileSize(
       const WebKit::WebString& vfs_file_name);
+
+  virtual WebKit::WebBlobRegistry* blobRegistry();
 
   // WebMimeRegistry methods:
   virtual WebKit::WebMimeRegistry::SupportsType supportsMIMEType(
@@ -62,6 +75,15 @@ class WorkerWebKitClientImpl : public webkit_glue::WebKitClientImpl,
   virtual WebKit::WebString mimeTypeFromFile(const WebKit::WebString&);
   virtual WebKit::WebString preferredExtensionForMIMEType(
       const WebKit::WebString&);
+
+ private:
+
+  class FileUtilities;
+  scoped_ptr<FileUtilities> file_utilities_;
+
+  scoped_ptr<WebKit::WebBlobRegistry> blob_registry_;
+
+  scoped_ptr<WebFileSystemImpl> web_file_system_;
 };
 
 #endif  // CHROME_WORKER_WORKER_WEBKITCLIENT_IMPL_H_

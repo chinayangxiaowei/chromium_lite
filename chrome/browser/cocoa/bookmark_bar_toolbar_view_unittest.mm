@@ -6,10 +6,10 @@
 
 #include "app/theme_provider.h"
 #include "base/scoped_nsobject.h"
-#include "chrome/browser/browser_theme_provider.h"
 #import "chrome/browser/cocoa/bookmark_bar_controller.h"
 #import "chrome/browser/cocoa/bookmark_bar_toolbar_view.h"
 #import "chrome/browser/cocoa/cocoa_test_helper.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 #include "grit/theme_resources.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -61,9 +61,9 @@ class MockThemeProvider : public ThemeProvider {
   ThemeProvider* themeProvider_;
   bookmarks::VisualState visualState_;
 }
-@property(assign) int currentTabContentsHeight;
-@property(assign) ThemeProvider* themeProvider;
-@property(assign) bookmarks::VisualState visualState;
+@property (nonatomic, assign) int currentTabContentsHeight;
+@property (nonatomic, assign) ThemeProvider* themeProvider;
+@property (nonatomic, assign) bookmarks::VisualState visualState;
 
 // |BookmarkBarState| protocol:
 - (BOOL)isVisible;

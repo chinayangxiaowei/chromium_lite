@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 
 #include "base/basictypes.h"
 #include "base/file_util.h"
+#include "base/string_number_conversions.h"
+#include "base/utf_string_conversions.h"
 
 // url for "self".  The %22%22 is to make a statement for javascript to
 // evaluate and return.
@@ -155,13 +157,20 @@ NPError PluginGetURLTest::NewStream(NPMIMEType type, NPStream* stream,
           break;
         }
 
+        // TODO(evanm): use the net:: functions to convert file:// URLs to
+        // on-disk file paths.  But it probably doesn't actually matter in
+        // this test.
+
 #if defined(OS_WIN)
         filename = filename.substr(8);  // remove "file:///"
+        // Assume an ASCII path on Windows.
+        FilePath path = FilePath(ASCIIToWide(filename));
 #else
         filename = filename.substr(7);  // remove "file://"
+        FilePath path = FilePath(filename);
 #endif
 
-        test_file_ = file_util::OpenFile(filename, "r");
+        test_file_ = file_util::OpenFile(path, "r");
         if (!test_file_) {
           SetError("Could not open source file");
         }
@@ -350,7 +359,7 @@ void PluginGetURLTest::URLNotify(const char* url, NPReason reason, void* data) {
     case BOGUS_URL_STREAM_ID:
       if (reason != NPRES_NETWORK_ERR) {
         std::string err = "BOGUS_URL received unexpected URLNotify status: ";
-        err.append(IntToString(reason));
+        err.append(base::IntToString(reason));
         SetError(err);
       }
       tests_in_progress_--;

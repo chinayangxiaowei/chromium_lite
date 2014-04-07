@@ -9,6 +9,7 @@
 #include "base/i18n/rtl.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
+#include "base/ref_counted_memory.h"
 #include "base/singleton.h"
 #include "base/string_util.h"
 #include "base/thread.h"
@@ -18,9 +19,11 @@
 #endif
 #include "chrome/browser/appcache/view_appcache_internals_job_factory.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/browser_thread.h"
+#include "chrome/browser/dom_ui/shared_resources_data_source.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
-#include "chrome/browser/net/view_net_internals_job_factory.h"
+#include "chrome/browser/net/view_blob_internals_job_factory.h"
+#include "chrome/browser/net/view_http_cache_job_factory.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/ref_counted_util.h"
 #include "chrome/common/url_constants.h"
@@ -77,7 +80,7 @@ class URLRequestChromeJob : public URLRequestJob {
   int pending_buf_size_;
   std::string mime_type_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(URLRequestChromeJob);
+  DISALLOW_COPY_AND_ASSIGN(URLRequestChromeJob);
 };
 
 // URLRequestChromeFileJob is a URLRequestJob that acts like a file:// URL
@@ -88,7 +91,7 @@ class URLRequestChromeFileJob : public URLRequestFileJob {
  private:
   virtual ~URLRequestChromeFileJob();
 
-  DISALLOW_EVIL_CONSTRUCTORS(URLRequestChromeFileJob);
+  DISALLOW_COPY_AND_ASSIGN(URLRequestChromeFileJob);
 };
 
 void RegisterURLRequestChromeJob() {
@@ -98,9 +101,8 @@ void RegisterURLRequestChromeJob() {
         chrome::kChromeUIDevToolsHost, inspector_dir);
   }
 
+  SharedResourcesDataSource::Register();
   URLRequest::RegisterProtocolFactory(chrome::kChromeUIScheme,
-                                      &ChromeURLDataManager::Factory);
-  URLRequest::RegisterProtocolFactory(chrome::kPrintScheme,
                                       &ChromeURLDataManager::Factory);
 }
 
@@ -116,8 +118,7 @@ void UnregisterURLRequestChromeJob() {
 void ChromeURLDataManager::URLToRequest(const GURL& url,
                                         std::string* source_name,
                                         std::string* path) {
-  DCHECK(url.SchemeIs(chrome::kChromeUIScheme) ||
-         url.SchemeIs(chrome::kPrintScheme));
+  DCHECK(url.SchemeIs(chrome::kChromeUIScheme));
 
   if (!url.is_valid()) {
     NOTREACHED();
@@ -126,19 +127,13 @@ void ChromeURLDataManager::URLToRequest(const GURL& url,
 
   // Our input looks like: chrome://source_name/extra_bits?foo .
   // So the url's "host" is our source, and everything after the host is
-  // the path. For print:url schemes, we assume its always print.
-  if (url.SchemeIs(chrome::kPrintScheme))
-    source_name->assign(chrome::kPrintScheme);
-  else
-    source_name->assign(url.host());
+  // the path.
+  source_name->assign(url.host());
 
   const std::string& spec = url.possibly_invalid_spec();
   const url_parse::Parsed& parsed = url.parsed_for_possibly_invalid_spec();
-  int offset = parsed.CountCharactersBefore(url_parse::Parsed::PATH, false);
-
-  // We need to skip the slash at the beginning of the path for non print urls.
-  if (!url.SchemeIs(chrome::kPrintScheme))
-    ++offset;
+  // + 1 to skip the slash at the beginning of the path.
+  int offset = parsed.CountCharactersBefore(url_parse::Parsed::PATH, false) + 1;
 
   if (offset < static_cast<int>(spec.size()))
     path->assign(spec.substr(offset));
@@ -163,6 +158,13 @@ bool ChromeURLDataManager::URLToFilePath(const GURL& url,
   FileSourceMap::const_iterator i(
       Singleton<ChromeURLDataManager>()->file_sources_.find(source_name));
   if (i == Singleton<ChromeURLDataManager>()->file_sources_.end())
+    return false;
+
+  // Check that |relative_path| is not an absolute path (otherwise AppendASCII()
+  // will DCHECK). The awkward use of StringType is because on some systems
+  // FilePath expects a std::string, but on others a std::wstring.
+  FilePath p(FilePath::StringType(relative_path.begin(), relative_path.end()));
+  if (p.IsAbsolute())
     return false;
 
   *file_path = i->second.AppendASCII(relative_path);
@@ -270,11 +272,19 @@ void ChromeURLDataManager::DataAvailable(
   }
 }
 
+ChromeURLDataManager::DataSource::DataSource(const std::string& source_name,
+                                             MessageLoop* message_loop)
+    : source_name_(source_name), message_loop_(message_loop) {
+}
+
+ChromeURLDataManager::DataSource::~DataSource() {
+}
+
 void ChromeURLDataManager::DataSource::SendResponse(
     RequestID request_id,
     RefCountedMemory* bytes) {
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(Singleton<ChromeURLDataManager>::get(),
                         &ChromeURLDataManager::DataAvailable,
                         request_id, scoped_refptr<RefCountedMemory>(bytes)));
@@ -288,8 +298,8 @@ MessageLoop* ChromeURLDataManager::DataSource::MessageLoopForRequestPath(
 // static
 void ChromeURLDataManager::DataSource::SetFontAndTextDirection(
     DictionaryValue* localized_strings) {
-  localized_strings->SetString(L"fontfamily",
-      l10n_util::GetString(IDS_WEB_FONT_FAMILY));
+  localized_strings->SetString("fontfamily",
+      l10n_util::GetStringUTF16(IDS_WEB_FONT_FAMILY));
 
   int web_font_size_id = IDS_WEB_FONT_SIZE;
 #if defined(OS_WIN)
@@ -298,11 +308,11 @@ void ChromeURLDataManager::DataSource::SetFontAndTextDirection(
   if (win_util::GetWinVersion() < win_util::WINVERSION_VISTA)
     web_font_size_id = IDS_WEB_FONT_SIZE_XP;
 #endif
-  localized_strings->SetString(L"fontsize",
-      l10n_util::GetString(web_font_size_id));
+  localized_strings->SetString("fontsize",
+      l10n_util::GetStringUTF16(web_font_size_id));
 
-  localized_strings->SetString(L"textdirection",
-      base::i18n::IsRTL() ? L"rtl" : L"ltr");
+  localized_strings->SetString("textdirection",
+      base::i18n::IsRTL() ? "rtl" : "ltr");
 }
 
 URLRequestJob* ChromeURLDataManager::Factory(URLRequest* request,
@@ -312,13 +322,17 @@ URLRequestJob* ChromeURLDataManager::Factory(URLRequest* request,
   if (ChromeURLDataManager::URLToFilePath(request->url(), &path))
     return new URLRequestChromeFileJob(request, path);
 
-  // Next check for chrome://net-internals/, which uses its own job type.
-  if (ViewNetInternalsJobFactory::IsSupportedURL(request->url()))
-    return ViewNetInternalsJobFactory::CreateJobForRequest(request);
+  // Next check for chrome://view-http-cache/*, which uses its own job type.
+  if (ViewHttpCacheJobFactory::IsSupportedURL(request->url()))
+    return ViewHttpCacheJobFactory::CreateJobForRequest(request);
 
   // Next check for chrome://appcache-internals/, which uses its own job type.
   if (ViewAppCacheInternalsJobFactory::IsSupportedURL(request->url()))
     return ViewAppCacheInternalsJobFactory::CreateJobForRequest(request);
+
+  // Next check for chrome://blob-internals/, which uses its own job type.
+  if (ViewBlobInternalsJobFactory::IsSupportedURL(request->url()))
+    return ViewBlobInternalsJobFactory::CreateJobForRequest(request);
 
   // Fall back to using a custom handler
   return new URLRequestChromeJob(request);
@@ -366,7 +380,7 @@ void URLRequestChromeJob::DataAvailable(RefCountedMemory* bytes) {
     }
   } else {
     // The request failed.
-    NotifyDone(URLRequestStatus(URLRequestStatus::FAILED, 0));
+    NotifyDone(URLRequestStatus(URLRequestStatus::FAILED, net::ERR_FAILED));
   }
 }
 

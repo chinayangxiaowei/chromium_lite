@@ -1,6 +1,6 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved. Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "views/controls/combobox/native_combobox_gtk.h"
 
@@ -9,7 +9,6 @@
 #include <algorithm>
 
 #include "app/combobox_model.h"
-#include "base/logging.h"
 #include "base/utf_string_conversions.h"
 #include "views/controls/combobox/combobox.h"
 
@@ -44,7 +43,7 @@ void NativeComboboxGtk::UpdateFromModel() {
   while (count-- > 0) {
     gtk_list_store_prepend(store, &iter);
     gtk_list_store_set(store, &iter,
-                       0, WideToUTF8(model->GetItemAt(count)).c_str(),
+                       0, UTF16ToUTF8(model->GetItemAt(count)).c_str(),
                        -1);
   }
 }
@@ -113,7 +112,7 @@ void NativeComboboxGtk::CreateNativeControl() {
   gtk_cell_layout_set_attributes(
       GTK_CELL_LAYOUT(widget), cell, "text", 0, NULL);
   g_signal_connect(widget, "changed",
-                   G_CALLBACK(CallChanged), this);
+                   G_CALLBACK(CallChangedThunk), this);
 
   NativeControlCreated(widget);
 }
@@ -132,10 +131,8 @@ void NativeComboboxGtk::SelectionChanged() {
   combobox_->SelectionChanged();
 }
 
-// static
-void NativeComboboxGtk::CallChanged(GtkWidget* widget,
-                                    NativeComboboxGtk* combo) {
-  combo->SelectionChanged();
+void NativeComboboxGtk::CallChanged(GtkWidget* widget) {
+  SelectionChanged();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

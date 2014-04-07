@@ -23,6 +23,7 @@ const wchar_t kRegLastCheckedField[] = L"LastChecked";
 const wchar_t kRegMetricsId[] = L"metricsid";
 const wchar_t kRegMSIField[] = L"msi";
 const wchar_t kRegNameField[] = L"name";
+const wchar_t kRegOopcrashesField[] = L"oopcrashes";
 const wchar_t kRegOldVersionField[] = L"opv";
 const wchar_t kRegRenameCmdField[] = L"cmd";
 const wchar_t kRegRLZBrandField[] = L"brand";
@@ -30,9 +31,6 @@ const wchar_t kRegUsageStatsField[] = L"usagestats";
 const wchar_t kRegVersionField[] = L"pv";
 const wchar_t kRegReferralField[] = L"referral";
 const wchar_t kRegEULAAceptedField[] = L"eulaaccepted";
-const wchar_t kEnvProductVersionKey[] = L"CHROME_VERSION";
 const wchar_t kRegLastRunTimeField[] = L"lastrun";
-
-const int kUpdateCheckInvervalHours = 6;
 
 }  // namespace google_update

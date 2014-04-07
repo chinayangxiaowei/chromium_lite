@@ -7,6 +7,7 @@
 
 #ifndef CHROME_INSTALLER_UTIL_CHROME_FRAME_DISTRIBUTION_H_
 #define CHROME_INSTALLER_UTIL_CHROME_FRAME_DISTRIBUTION_H_
+#pragma once
 
 #include <string>
 
@@ -42,6 +43,8 @@ class ChromeFrameDistribution : public BrowserDistribution {
   virtual std::wstring GetUninstallRegPath();
 
   virtual std::wstring GetVersionKey();
+
+  virtual std::wstring GetEnvVersionKey();
 
   virtual bool CanSetAsDefault();
 

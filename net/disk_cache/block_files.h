@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,24 @@
 
 #ifndef NET_DISK_CACHE_BLOCK_FILES_H__
 #define NET_DISK_CACHE_BLOCK_FILES_H__
+#pragma once
 
 #include <vector>
 
 #include "base/file_path.h"
+#include "base/gtest_prod_util.h"
+#include "base/scoped_ptr.h"
 #include "net/disk_cache/addr.h"
 #include "net/disk_cache/mapped_file.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
+
+class ThreadChecker;
 
 namespace disk_cache {
-
-class EntryImpl;
 
 // This class handles the set of block-files open by the disk cache.
 class BlockFiles {
  public:
-  explicit BlockFiles(const FilePath& path)
-      : init_(false), zero_buffer_(NULL), path_(path) {}
+  explicit BlockFiles(const FilePath& path);
   ~BlockFiles();
 
   // Performs the object initialization. create_files indicates if the backing
@@ -45,6 +46,13 @@ class BlockFiles {
   // Close all the files and set the internal state to be initializad again. The
   // cache is being purged.
   void CloseFiles();
+
+  // Sends UMA stats.
+  void ReportStats();
+
+  // Returns true if the blocks pointed by a given address are currently used.
+  // This method is only intended for debugging.
+  bool IsValid(Addr address);
 
  private:
   // Set force to true to overwrite the file if it exists.
@@ -69,6 +77,9 @@ class BlockFiles {
   // Restores the header of a potentially inconsistent file.
   bool FixBlockFileHeader(MappedFile* file);
 
+  // Retrieves stats for the given file index.
+  void GetFileStats(int index, int* used_count, int* load);
+
   // Returns the filename for a given file index.
   FilePath Name(int index);
 
@@ -76,11 +87,13 @@ class BlockFiles {
   char* zero_buffer_;  // Buffer to speed-up cleaning deleted entries.
   FilePath path_;  // Path to the backing folder.
   std::vector<MappedFile*> block_files_;  // The actual files.
+  scoped_ptr<ThreadChecker> thread_checker_;
 
-  FRIEND_TEST(DiskCacheTest, BlockFiles_ZeroSizeFile);
-  FRIEND_TEST(DiskCacheTest, BlockFiles_InvalidFile);
+  FRIEND_TEST_ALL_PREFIXES(DiskCacheTest, BlockFiles_ZeroSizeFile);
+  FRIEND_TEST_ALL_PREFIXES(DiskCacheTest, BlockFiles_InvalidFile);
+  FRIEND_TEST_ALL_PREFIXES(DiskCacheTest, BlockFiles_Stats);
 
-  DISALLOW_EVIL_CONSTRUCTORS(BlockFiles);
+  DISALLOW_COPY_AND_ASSIGN(BlockFiles);
 };
 
 }  // namespace disk_cache

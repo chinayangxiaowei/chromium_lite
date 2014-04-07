@@ -1,14 +1,16 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_CERT_STORE_H_
 #define CHROME_BROWSER_CERT_STORE_H_
+#pragma once
 
 #include <map>
 
 #include "base/lock.h"
 #include "base/singleton.h"
+#include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "net/base/x509_certificate.h"
 
@@ -34,9 +36,9 @@ class CertStore : public NotificationObserver {
   // Note: ids starts at 1.
   int StoreCert(net::X509Certificate* cert, int render_process_host_id);
 
-  // Retrieves the previously stored cert associated with the specified
-  // |cert_id| and set it in |cert|.  Returns false if no cert was found for
-  // that id.
+  // Tries to retrieve the previously stored cert associated with the specified
+  // |cert_id|.  Returns whether the cert could be found, and, if |cert| is
+  // non-NULL, copies it in.
   bool RetrieveCert(int cert_id, scoped_refptr<net::X509Certificate>* cert);
 
   // NotificationObserver implementation.

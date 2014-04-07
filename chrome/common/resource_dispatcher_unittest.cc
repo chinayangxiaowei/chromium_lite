@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,17 @@
 #include "base/process.h"
 #include "base/process_util.h"
 #include "base/scoped_ptr.h"
-#include "chrome/common/filter_policy.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "chrome/common/resource_dispatcher.h"
+#include "chrome/common/resource_response.h"
+#include "net/base/upload_data.h"
+#include "net/http/http_response_headers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "webkit/appcache/appcache_interfaces.h"
 
 using webkit_glue::ResourceLoaderBridge;
+using webkit_glue::ResourceResponseInfo;
 
 static const char test_page_url[] = "http://www.google.com/";
 static const char test_page_headers[] =
@@ -33,9 +37,12 @@ class TestRequestCallback : public ResourceLoaderBridge::Peer {
   TestRequestCallback() : complete_(false) {
   }
 
+  virtual void OnUploadProgress(uint64 position, uint64 size) {
+  }
+
   virtual bool OnReceivedRedirect(
       const GURL& new_url,
-      const ResourceLoaderBridge::ResponseInfo& info,
+      const ResourceResponseInfo& info,
       bool* has_new_first_party_for_cookies,
       GURL* new_first_party_for_cookies) {
     *has_new_first_party_for_cookies = false;
@@ -43,8 +50,11 @@ class TestRequestCallback : public ResourceLoaderBridge::Peer {
   }
 
   virtual void OnReceivedResponse(
-      const ResourceLoaderBridge::ResponseInfo& info,
+      const ResourceResponseInfo& info,
       bool content_filtered) {
+  }
+
+  virtual void OnDownloadedData(int len) {
   }
 
   virtual void OnReceivedData(const char* data, int len) {
@@ -52,11 +62,9 @@ class TestRequestCallback : public ResourceLoaderBridge::Peer {
     data_.append(data, len);
   }
 
-  virtual void OnUploadProgress(uint64 position, uint64 size) {
-  }
-
   virtual void OnCompletedRequest(const URLRequestStatus& status,
-                                  const std::string& security_info) {
+                                  const std::string& security_info,
+                                  const base::Time& completion_time) {
     EXPECT_FALSE(complete_);
     complete_ = true;
   }
@@ -109,13 +117,12 @@ class ResourceDispatcherTest : public testing::Test,
       response.headers = new net::HttpResponseHeaders(raw_headers);
       response.mime_type = test_page_mime_type;
       response.charset = test_page_charset;
-      response.filter_policy = FilterPolicy::DONT_FILTER;
       dispatcher_->OnReceivedResponse(request_id, response);
 
       // received data message with the test contents
       base::SharedMemory shared_mem;
-      EXPECT_TRUE(shared_mem.Create(std::wstring(),
-          false, false, test_page_contents_len));
+      EXPECT_TRUE(shared_mem.Create(std::string(), false, false,
+                                    test_page_contents_len));
       EXPECT_TRUE(shared_mem.Map(test_page_contents_len));
       char* put_data_here = static_cast<char*>(shared_mem.memory());
       memcpy(put_data_here, test_page_contents, test_page_contents_len);
@@ -254,20 +261,26 @@ class DeferredResourceLoadingTest : public ResourceDispatcherTest,
   }
 
   // ResourceLoaderBridge::Peer methods.
+  virtual void OnUploadProgress(uint64 position, uint64 size) {
+  }
+
+  virtual bool OnReceivedRedirect(
+      const GURL& new_url,
+      const ResourceResponseInfo& info,
+      bool* has_new_first_party_for_cookies,
+      GURL* new_first_party_for_cookies) {
+    *has_new_first_party_for_cookies = false;
+    return true;
+  }
+
   virtual void OnReceivedResponse(
-      const ResourceLoaderBridge::ResponseInfo& info,
+      const ResourceResponseInfo& info,
       bool content_filtered) {
     EXPECT_EQ(defer_loading_, false);
     set_defer_loading(true);
   }
 
-  virtual bool OnReceivedRedirect(
-      const GURL& new_url,
-      const ResourceLoaderBridge::ResponseInfo& info,
-      bool* has_new_first_party_for_cookies,
-      GURL* new_first_party_for_cookies) {
-    *has_new_first_party_for_cookies = false;
-    return true;
+  virtual void OnDownloadedData(int len) {
   }
 
   virtual void OnReceivedData(const char* data, int len) {
@@ -275,11 +288,9 @@ class DeferredResourceLoadingTest : public ResourceDispatcherTest,
     set_defer_loading(false);
   }
 
-  virtual void OnUploadProgress(uint64 position, uint64 size) {
-  }
-
   virtual void OnCompletedRequest(const URLRequestStatus& status,
-                                  const std::string& security_info) {
+                                  const std::string& security_info,
+                                  const base::Time& completion_time) {
   }
 
   virtual GURL GetURLForDebugging() const {
@@ -288,7 +299,7 @@ class DeferredResourceLoadingTest : public ResourceDispatcherTest,
 
  protected:
   virtual void SetUp() {
-    EXPECT_EQ(true, shared_handle_.Create(L"DeferredResourceLoaderTest", false,
+    EXPECT_EQ(true, shared_handle_.Create("DeferredResourceLoaderTest", false,
                                           false, 100));
     ResourceDispatcherTest::SetUp();
   }

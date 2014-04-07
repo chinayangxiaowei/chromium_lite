@@ -1,16 +1,16 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_RENDERER_HOST_RESOURCE_DISPATCHER_HOST_REQUEST_INFO_H_
 #define CHROME_BROWSER_RENDERER_HOST_RESOURCE_DISPATCHER_HOST_REQUEST_INFO_H_
+#pragma once
 
 #include <string>
 
 #include "base/basictypes.h"
 #include "base/time.h"
 #include "chrome/common/child_process_info.h"
-#include "chrome/common/filter_policy.h"
 #include "net/base/load_states.h"
 #include "net/url_request/url_request.h"
 #include "webkit/glue/resource_type.h"
@@ -20,6 +20,10 @@ class LoginHandler;
 class ResourceDispatcherHost;
 class ResourceHandler;
 class SSLClientAuthHandler;
+
+namespace webkit_blob {
+class BlobData;
+}
 
 // Holds the data ResourceDispatcherHost associates with each request.
 // Retrieve this data by calling ResourceDispatcherHost::InfoForRequest.
@@ -56,20 +60,14 @@ class ResourceDispatcherHostRequestInfo : public URLRequest::UserData {
   }
 
   // Pointer to the login handler, or NULL if there is none for this request.
-  // This is a NON-OWNING pointer, and the caller is responsible for the
-  // pointer after calling set.
-  LoginHandler* login_handler() const { return login_handler_; }
-  void set_login_handler(LoginHandler* lh) { login_handler_ = lh; }
+  LoginHandler* login_handler() const { return login_handler_.get(); }
+  void set_login_handler(LoginHandler* lh);
 
   // Pointer to the SSL auth, or NULL if there is none for this request.
-  // This is a NON-OWNING pointer, and the caller is resounsible for the
-  // pointer after calling set.
   SSLClientAuthHandler* ssl_client_auth_handler() const {
-    return ssl_client_auth_handler_;
+    return ssl_client_auth_handler_.get();
   }
-  void set_ssl_client_auth_handler(SSLClientAuthHandler* s) {
-    ssl_client_auth_handler_ = s;
-  }
+  void set_ssl_client_auth_handler(SSLClientAuthHandler* s);
 
   // Identifies the type of process (renderer, plugin, etc.) making the request.
   ChildProcessInfo::ProcessType process_type() const {
@@ -115,12 +113,15 @@ class ResourceDispatcherHostRequestInfo : public URLRequest::UserData {
   // Identifies the type of resource, such as subframe, media, etc.
   ResourceType::Type resource_type() const { return resource_type_; }
 
-  // Whether the content for this request should be filtered (on the renderer
-  // side) to make it more secure: images are stamped, frame content is
-  // replaced with an error message and all other resources are entirely
-  // filtered out.
-  FilterPolicy::Type filter_policy() const { return filter_policy_; }
-  void set_filter_policy(FilterPolicy::Type policy) { filter_policy_ = policy; }
+  // Whether we should apply a filter to this resource that replaces
+  // localization templates with the appropriate localized strings.  This is set
+  // for CSS resources used by extensions.
+  bool replace_extension_localization_templates() const {
+    return replace_extension_localization_templates_;
+  }
+  void set_replace_extension_localization_templates() {
+    replace_extension_localization_templates_ = true;
+  }
 
   // Returns the last updated state of the load. This is updated periodically
   // by the ResourceDispatcherHost and tracked here so we don't send out
@@ -131,6 +132,7 @@ class ResourceDispatcherHostRequestInfo : public URLRequest::UserData {
   // When there is upload data, this is the byte count of that data. When there
   // is no upload, this will be 0.
   uint64 upload_size() const { return upload_size_; }
+  void set_upload_size(uint64 upload_size) { upload_size_ = upload_size; }
 
   // When we're uploading data, this is the the byte offset into the uploaded
   // data that we've uploaded that we've send an upload progress update about.
@@ -161,6 +163,13 @@ class ResourceDispatcherHostRequestInfo : public URLRequest::UserData {
 
   int host_renderer_id() const { return host_renderer_id_; }
   int host_render_view_id() const { return host_render_view_id_; }
+
+  // We hold a reference to the requested blob data to ensure it doesn't
+  // get finally released prior to the URLRequestJob being started.
+  webkit_blob::BlobData* requested_blob_data() const {
+    return requested_blob_data_.get();
+  }
+  void set_requested_blob_data(webkit_blob::BlobData* data);
 
  private:
   friend class ResourceDispatcherHost;
@@ -196,8 +205,8 @@ class ResourceDispatcherHostRequestInfo : public URLRequest::UserData {
 
   scoped_refptr<ResourceHandler> resource_handler_;
   CrossSiteResourceHandler* cross_site_handler_;  // Non-owning, may be NULL.
-  LoginHandler* login_handler_;  // Non-owning, may be NULL.
-  SSLClientAuthHandler* ssl_client_auth_handler_;  // Non-owning, may be NULL.
+  scoped_refptr<LoginHandler> login_handler_;
+  scoped_refptr<SSLClientAuthHandler> ssl_client_auth_handler_;
   ChildProcessInfo::ProcessType process_type_;
   int child_id_;
   int route_id_;
@@ -209,13 +218,14 @@ class ResourceDispatcherHostRequestInfo : public URLRequest::UserData {
   std::string frame_origin_;
   std::string main_frame_origin_;
   ResourceType::Type resource_type_;
-  FilterPolicy::Type filter_policy_;
+  bool replace_extension_localization_templates_;
   net::LoadState last_load_state_;
   uint64 upload_size_;
   uint64 last_upload_position_;
   base::TimeTicks last_upload_ticks_;
   bool waiting_for_upload_progress_ack_;
   int memory_cost_;
+  scoped_refptr<webkit_blob::BlobData> requested_blob_data_;
 
   // "Private" data accessible only to ResourceDispatcherHost (use the
   // accessors above for consistency).

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_AUTOFILL_ADDRESS_H_
 #define CHROME_BROWSER_AUTOFILL_ADDRESS_H_
+#pragma once
 
 #include <vector>
 
@@ -13,13 +14,14 @@
 // A form group that stores address information.
 class Address : public FormGroup {
  public:
-  Address() {}
-  virtual ~Address() {}
+  Address();
+  virtual ~Address();
 
   // FormGroup implementation:
   virtual FormGroup* Clone() const = 0;
   virtual void GetPossibleFieldTypes(const string16& text,
                                      FieldTypeSet* possible_types) const;
+  virtual void GetAvailableFieldTypes(FieldTypeSet* available_types) const;
   virtual void FindInfoMatches(const AutoFillType& type,
                                const string16& info,
                                std::vector<string16>* matched_text) const;

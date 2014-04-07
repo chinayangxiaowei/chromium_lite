@@ -4,23 +4,17 @@
 
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
-#include <windows.h>
-#include <cryptuiapi.h>
-#pragma comment(lib, "cryptui.lib")
-#endif
-
-#include "app/resource_bundle.h"
 #include "app/l10n_util.h"
 #include "base/compiler_specific.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/cert_store.h"
+#include "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/page_info_model.h"
 #include "chrome/browser/page_info_window.h"
+#include "chrome/browser/views/window.h"
 #include "chrome/common/pref_names.h"
 #include "grit/locale_settings.h"
 #include "grit/generated_resources.h"
-#include "grit/theme_resources.h"
 #include "net/base/x509_certificate.h"
 #include "views/background.h"
 #include "views/grid_layout.h"
@@ -35,8 +29,6 @@
 
 #if defined(OS_WIN)
 #include "app/win_util.h"
-#elif defined(OS_LINUX)
-#include "chrome/browser/gtk/certificate_viewer.h"
 #endif
 
 namespace {
@@ -89,7 +81,7 @@ class PageInfoWindowView : public views::View,
   virtual void ModelChanged();
 
  private:
- // This retreives the sections from the model and lay them out.
+  // This retrieves the sections from the model and lays them out.
   void LayoutSections();
 
   // Offsets the specified rectangle so it is showing on the screen and shifted
@@ -115,9 +107,9 @@ class PageInfoWindowView : public views::View,
 class Section : public views::View {
  public:
   Section(const string16& title,
-          bool state,
           const string16& head_line,
-          const string16& description);
+          const string16& description,
+          const SkBitmap* icon);
   virtual ~Section();
 
   virtual int GetHeightForWidth(int w);
@@ -127,17 +119,11 @@ class Section : public views::View {
   // The text placed on top of the section (on the left of the separator bar).
   string16 title_;
 
-  // Whether to show the good/bad icon.
-  bool state_;
-
   // The first line of the description, show in bold.
   string16 head_line_;
 
   // The description, displayed below the head line.
   string16 description_;
-
-  static SkBitmap* good_state_icon_;
-  static SkBitmap* bad_state_icon_;
 
   views::Label* title_label_;
   views::Separator* separator_;
@@ -149,8 +135,6 @@ class Section : public views::View {
 };
 
 // static
-SkBitmap* Section::good_state_icon_ = NULL;
-SkBitmap* Section::bad_state_icon_ = NULL;
 int PageInfoWindowView::opened_window_count_ = 0;
 
 }  // namespace
@@ -196,7 +180,7 @@ void PageInfoWindowView::Init(gfx::NativeWindow parent) {
     }
   }
 
-  views::Window::CreateChromeWindow(parent, gfx::Rect(), this);
+  browser::CreateViewsWindow(parent, gfx::Rect(), this);
 }
 
 gfx::Size PageInfoWindowView::GetPreferredSize() {
@@ -224,8 +208,8 @@ void PageInfoWindowView::LayoutSections() {
   for (int i = 0; i < model_.GetSectionCount(); ++i) {
     PageInfoModel::SectionInfo info = model_.GetSectionInfo(i);
     layout->StartRow(0, 0);
-    layout->AddView(new Section(info.title, info.state, info.head_line,
-                                info.description));
+    layout->AddView(new Section(info.title, info.headline, info.description,
+        model_.GetIconImage(info.icon_id)));
     layout->AddPaddingRow(0, kVerticalPadding);
   }
   layout->AddPaddingRow(1, kVerticalPadding);
@@ -247,7 +231,7 @@ std::wstring PageInfoWindowView::GetWindowTitle() const {
 }
 
 std::wstring PageInfoWindowView::GetWindowName() const {
-  return prefs::kPageInfoWindowPlacement;
+  return UTF8ToWide(prefs::kPageInfoWindowPlacement);
 }
 
 views::View* PageInfoWindowView::GetContentsView() {
@@ -333,55 +317,19 @@ void PageInfoWindowView::CalculateWindowBounds(gfx::Rect* bounds) {
 }
 
 void PageInfoWindowView::ShowCertDialog(int cert_id) {
-#if defined(OS_WIN)
-  scoped_refptr<net::X509Certificate> cert;
-  CertStore::GetSharedInstance()->RetrieveCert(cert_id, &cert);
-  if (!cert.get()) {
-    // The certificate was not found. Could be that the renderer crashed before
-    // we displayed the page info.
-    return;
-  }
-
-  CRYPTUI_VIEWCERTIFICATE_STRUCT view_info = { 0 };
-  view_info.dwSize = sizeof(view_info);
-  // We set our parent to the tab window. This makes the cert dialog created
-  // in CryptUIDlgViewCertificate modal to the browser.
-  view_info.hwndParent = window()->GetNativeWindow();
-  view_info.dwFlags = CRYPTUI_DISABLE_EDITPROPERTIES |
-                      CRYPTUI_DISABLE_ADDTOSTORE;
-  view_info.pCertContext = cert->os_cert_handle();
-  // Search the cert store that 'cert' is in when building the cert chain.
-  HCERTSTORE cert_store = view_info.pCertContext->hCertStore;
-  view_info.cStores = 1;
-  view_info.rghStores = &cert_store;
-  BOOL properties_changed;
-
-  // This next call blocks but keeps processing windows messages, making it
-  // modal to the browser window.
-  BOOL rv = ::CryptUIDlgViewCertificate(&view_info, &properties_changed);
-#elif defined(OS_LINUX)
-  ShowCertificateViewer(window()->GetNativeWindow(), cert_id);
-#else
-  NOTIMPLEMENTED();
-#endif
+  ShowCertificateViewerByID(window()->GetNativeWindow(), cert_id);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Section
 
 Section::Section(const string16& title,
-                 bool state,
                  const string16& head_line,
-                 const string16& description)
+                 const string16& description,
+                 const SkBitmap* icon)
     : title_(title),
-      state_(state),
       head_line_(head_line),
       description_(description) {
-  if (!good_state_icon_) {
-    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    good_state_icon_ = rb.GetBitmapNamed(IDR_PAGEINFO_GOOD);
-    bad_state_icon_ = rb.GetBitmapNamed(IDR_PAGEINFO_BAD);
-  }
   title_label_ = new views::Label(UTF16ToWideHack(title));
   title_label_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
   AddChildView(title_label_);
@@ -394,7 +342,7 @@ Section::Section(const string16& title,
 #endif
 
   status_image_ = new views::ImageView();
-  status_image_->SetImage(state ? good_state_icon_ : bad_state_icon_);
+  status_image_->SetImage(*icon);
   AddChildView(status_image_);
 
   head_line_label_ = new views::Label(UTF16ToWideHack(head_line));

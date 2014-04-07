@@ -4,17 +4,31 @@
 
 #include "base/tracked.h"
 
-#include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/tracked_objects.h"
 
-using base::Time;
+using base::TimeTicks;
 
 namespace tracked_objects {
 
 //------------------------------------------------------------------------------
+
+Location::Location(const char* function_name, const char* file_name,
+                   int line_number)
+    : function_name_(function_name),
+      file_name_(file_name),
+      line_number_(line_number) {
+}
+
+Location::Location()
+    : function_name_("Unknown"),
+      file_name_("Unknown"),
+      line_number_(-1) {
+}
+
 void Location::Write(bool display_filename, bool display_function_name,
                      std::string* output) const {
-  StringAppendF(output, "%s[%d] ",
+  base::StringAppendF(output, "%s[%d] ",
       display_filename ? file_name_ : "line",
       line_number_);
 
@@ -51,12 +65,18 @@ void Location::WriteFunctionName(std::string* output) const {
 Tracked::Tracked() {}
 Tracked::~Tracked() {}
 void Tracked::SetBirthPlace(const Location& from_here) {}
+const Location Tracked::GetBirthPlace() const {
+  static Location kNone("NoFunctionName", "NeedToSetBirthPlace", -1);
+  return kNone;
+}
 bool Tracked::MissingBirthplace() const { return false; }
 void Tracked::ResetBirthTime() {}
 
 #else
 
-Tracked::Tracked() : tracked_births_(NULL), tracked_birth_time_(Time::Now()) {
+Tracked::Tracked()
+    : tracked_births_(NULL),
+      tracked_birth_time_(TimeTicks::Now()) {
   if (!ThreadData::IsActive())
     return;
   SetBirthPlace(Location("NoFunctionName", "NeedToSetBirthPlace", -1));
@@ -66,7 +86,7 @@ Tracked::~Tracked() {
   if (!ThreadData::IsActive() || !tracked_births_)
     return;
   ThreadData::current()->TallyADeath(*tracked_births_,
-                                     Time::Now() - tracked_birth_time_);
+                                     TimeTicks::Now() - tracked_birth_time_);
 }
 
 void Tracked::SetBirthPlace(const Location& from_here) {
@@ -80,8 +100,12 @@ void Tracked::SetBirthPlace(const Location& from_here) {
   tracked_births_ = current_thread_data->TallyABirth(from_here);
 }
 
+const Location Tracked::GetBirthPlace() const {
+  return tracked_births_->location();
+}
+
 void Tracked::ResetBirthTime() {
-  tracked_birth_time_ = Time::Now();
+  tracked_birth_time_ = TimeTicks::Now();
 }
 
 bool Tracked::MissingBirthplace() const {

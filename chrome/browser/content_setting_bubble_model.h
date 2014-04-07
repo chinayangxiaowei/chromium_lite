@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_CONTENT_SETTING_BUBBLE_MODEL_H_
 #define CHROME_BROWSER_CONTENT_SETTING_BUBBLE_MODEL_H_
+#pragma once
 
 #include <set>
 #include <string>
@@ -45,7 +46,6 @@ class ContentSettingBubbleModel : public NotificationObserver {
     std::string title;
     RadioItems radio_items;
     int default_item;
-    bool is_mutable;
   };
 
   struct DomainList {
@@ -58,8 +58,12 @@ class ContentSettingBubbleModel : public NotificationObserver {
     PopupItems popup_items;
     RadioGroup radio_group;
     std::vector<DomainList> domain_lists;
+    std::set<std::string> resource_identifiers;
     std::string manage_link;
     std::string clear_link;
+    std::string info_link;
+    std::string load_plugins_link_title;
+    bool load_plugins_link_enabled;
   };
 
   const BubbleContent& bubble_content() const { return bubble_content_; }
@@ -73,6 +77,8 @@ class ContentSettingBubbleModel : public NotificationObserver {
   virtual void OnPopupClicked(int index) {}
   virtual void OnManageLinkClicked() {}
   virtual void OnClearLinkClicked() {}
+  virtual void OnInfoLinkClicked() {}
+  virtual void OnLoadPluginsLinkClicked() {}
 
  protected:
   ContentSettingBubbleModel(TabContents* tab_contents, Profile* profile,
@@ -97,6 +103,16 @@ class ContentSettingBubbleModel : public NotificationObserver {
   void set_clear_link(const std::string& link) {
     bubble_content_.clear_link = link;
   }
+  void set_info_link(const std::string& link) {
+    bubble_content_.info_link = link;
+  }
+  void set_load_plugins_link_title(const std::string& title) {
+    bubble_content_.load_plugins_link_title = title;
+  }
+  void set_load_plugins_link_enabled(bool enabled) {
+    bubble_content_.load_plugins_link_enabled = enabled;
+  }
+  void AddBlockedResource(const std::string& resource_identifier);
 
  private:
   TabContents* tab_contents_;

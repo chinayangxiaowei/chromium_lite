@@ -5,8 +5,6 @@
 #import <Cocoa/Cocoa.h>
 
 #include "base/cocoa_protocols_mac.h"
-#include "base/scoped_nsobject.h"
-#include "base/scoped_ptr.h"
 #include "net/base/cookie_monster.h"
 
 @class CocoaCookieTreeNode;
@@ -28,7 +26,7 @@
   IBOutlet GTMUILocalizerAndLayoutTweaker* tweaker_;
 }
 
-@property (readonly) BOOL hasExpiration;
+@property (nonatomic, readonly) BOOL hasExpiration;
 
 - (id)init;
 

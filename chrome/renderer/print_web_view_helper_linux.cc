@@ -7,43 +7,15 @@
 #include "base/file_descriptor_posix.h"
 #include "base/logging.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
 #include "printing/native_metafile.h"
 #include "skia/ext/vector_canvas.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSize.h"
 
+using printing::NativeMetafile;
 using WebKit::WebFrame;
-
-void PrintWebViewHelper::Print(WebFrame* frame, bool script_initiated) {
-  // If still not finished with earlier print request simply ignore.
-  if (IsPrinting())
-    return;
-
-  // TODO(myhuang): Get printing parameters via IPC.
-  // For testing purpose, we hard-coded printing parameters here.
-
-  // The paper size is US Letter (8.5 in. by 11 in.).
-  // Using default margins:
-  //   Left = 0.25 in.
-  //   Right = 0.25 in.
-  //   Top = 0.25 in.
-  //   Bottom = 0.56 in.
-  const int kDPI = 72;
-  const int kWidth = static_cast<int>((8.5-0.25-0.25) * kDPI);
-  const int kHeight = static_cast<int>((11-0.25-0.56) * kDPI);
-  ViewMsg_Print_Params default_settings;
-  default_settings.printable_size = gfx::Size(kWidth, kHeight);
-  default_settings.dpi = kDPI;
-  default_settings.min_shrink = 1.25;
-  default_settings.max_shrink = 2.0;
-  default_settings.desired_dpi = kDPI;
-  default_settings.document_cookie = 0;
-  default_settings.selection_only = false;
-
-  ViewMsg_PrintPages_Params print_settings;
-  print_settings.params = default_settings;
-
-  PrintPages(print_settings, frame);
-}
+using WebKit::WebSize;
 
 void PrintWebViewHelper::PrintPages(const ViewMsg_PrintPages_Params& params,
                                     WebFrame* frame) {
@@ -103,8 +75,29 @@ void PrintWebViewHelper::PrintPage(const ViewMsg_PrintPage_Params& params,
                                    const gfx::Size& canvas_size,
                                    WebFrame* frame,
                                    printing::NativeMetafile* metafile) {
+  double content_width_in_points;
+  double content_height_in_points;
+  double margin_top_in_points;
+  double margin_right_in_points;
+  double margin_bottom_in_points;
+  double margin_left_in_points;
+  GetPageSizeAndMarginsInPoints(frame,
+                                params.page_number,
+                                params.params,
+                                &content_width_in_points,
+                                &content_height_in_points,
+                                &margin_top_in_points,
+                                &margin_right_in_points,
+                                &margin_bottom_in_points,
+                                &margin_left_in_points);
+
   cairo_t* cairo_context =
-      metafile->StartPage(canvas_size.width(), canvas_size.height());
+      metafile->StartPage(content_width_in_points,
+                          content_height_in_points,
+                          margin_top_in_points,
+                          margin_right_in_points,
+                          margin_bottom_in_points,
+                          margin_left_in_points);
   if (!cairo_context)
     return;
 

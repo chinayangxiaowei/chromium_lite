@@ -1,10 +1,17 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <windows.h>
 #include <shlwapi.h>
 
+#include "base/command_line.h"
+#include "base/environment.h"
+#include "base/file_util.h"
+#include "base/trace_event.h"
+#include "base/logging.h"
+#include "base/scoped_ptr.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/app/breakpad_win.h"
 #include "chrome/app/client_util.h"
 #include "chrome/common/chrome_switches.h"
@@ -17,6 +24,8 @@
 namespace {
 // The entry point signature of chrome.dll.
 typedef int (*DLL_MAIN)(HINSTANCE, sandbox::SandboxInterfaceInfo*, wchar_t*);
+
+typedef void (*RelaunchChromeBrowserWithNewCommandLineIfNeededFunc)();
 
 // Not generic, we only handle strings up to 128 chars.
 bool ReadRegistryStr(HKEY key, const wchar_t* name, std::wstring* value) {
@@ -84,8 +93,8 @@ bool EnvQueryStr(const wchar_t* key_name, std::wstring* value) {
 // value not being null to dermine if this path contains a valid dll.
 HMODULE LoadChromeWithDirectory(std::wstring* dir) {
   ::SetCurrentDirectoryW(dir->c_str());
-#ifdef _WIN64
   const CommandLine& cmd_line = *CommandLine::ForCurrentProcess();
+#ifdef _WIN64
   if ((cmd_line.GetSwitchValueASCII(switches::kProcessType) ==
       switches::kNaClBrokerProcess) ||
       (cmd_line.GetSwitchValueASCII(switches::kProcessType) ==
@@ -100,6 +109,45 @@ HMODULE LoadChromeWithDirectory(std::wstring* dir) {
 #else
   dir->append(installer_util::kChromeDll);
 #endif
+
+#ifdef NDEBUG
+  // Experimental pre-reading optimization
+  // The idea is to pre read significant portion of chrome.dll in advance
+  // so that subsequent hard page faults are avoided.
+  if (!cmd_line.HasSwitch(switches::kProcessType)) {
+    // The kernel brings in 8 pages for the code section at a time and 4 pages
+    // for other sections. We can skip over these pages to avoid a soft page
+    // fault which may not occur during code execution. However skipping 4K at
+    // a time still has better performance over 32K and 16K according to data.
+    // TODO(ananta)
+    // Investigate this and tune.
+    const size_t kStepSize = 4 * 1024;
+
+    DWORD pre_read_size = 0;
+    DWORD pre_read_step_size = kStepSize;
+    DWORD pre_read = 1;
+
+    HKEY key = NULL;
+    if (::RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\Google\\ChromeFrame",
+                       0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS) {
+      DWORD unused = sizeof(pre_read_size);
+      RegQueryValueEx(key, L"PreReadSize", NULL, NULL,
+                      reinterpret_cast<LPBYTE>(&pre_read_size), &unused);
+      RegQueryValueEx(key, L"PreReadStepSize", NULL, NULL,
+                      reinterpret_cast<LPBYTE>(&pre_read_step_size), &unused);
+      RegQueryValueEx(key, L"PreRead", NULL, NULL,
+                      reinterpret_cast<LPBYTE>(&pre_read), &unused);
+      RegCloseKey(key);
+      key = NULL;
+    }
+    if (pre_read) {
+      TRACE_EVENT_BEGIN("PreReadImage", 0, "");
+      file_util::PreReadImage(dir->c_str(), pre_read_size, pre_read_step_size);
+      TRACE_EVENT_END("PreReadImage", 0, "");
+    }
+  }
+#endif  // NDEBUG
+
   return ::LoadLibraryExW(dir->c_str(), NULL,
                           LOAD_WITH_ALTERED_SEARCH_PATH);
 }
@@ -158,7 +206,9 @@ HMODULE MainDllLoader::Load(std::wstring* version, std::wstring* file) {
   if (dll)
     return dll;
 
-  if (!EnvQueryStr(google_update::kEnvProductVersionKey, version)) {
+  if (!EnvQueryStr(
+          BrowserDistribution::GetDistribution()->GetEnvVersionKey().c_str(),
+          version)) {
     std::wstring reg_path(GetRegistryPath());
     // Look into the registry to find the latest version.
     if (!GetVersion(dir.c_str(), reg_path.c_str(), version))
@@ -181,8 +231,10 @@ int MainDllLoader::Launch(HINSTANCE instance,
   if (!dll_)
     return ResultCodes::MISSING_DATA;
 
-  ::SetEnvironmentVariableW(google_update::kEnvProductVersionKey,
-                            version.c_str());
+  scoped_ptr<base::Environment> env(base::Environment::Create());
+  env->SetVar(WideToUTF8(
+      BrowserDistribution::GetDistribution()->GetEnvVersionKey()).c_str(),
+      WideToUTF8(version));
 
   InitCrashReporterWithDllPath(file);
   OnBeforeLaunch(version);
@@ -194,6 +246,19 @@ int MainDllLoader::Launch(HINSTANCE instance,
 
   int rc = entry_point(instance, sbox_info, ::GetCommandLineW());
   return OnBeforeExit(rc);
+}
+
+void MainDllLoader::RelaunchChromeBrowserWithNewCommandLineIfNeeded() {
+  RelaunchChromeBrowserWithNewCommandLineIfNeededFunc relaunch_function =
+      reinterpret_cast<RelaunchChromeBrowserWithNewCommandLineIfNeededFunc>(
+          ::GetProcAddress(dll_,
+                           "RelaunchChromeBrowserWithNewCommandLineIfNeeded"));
+  if (!relaunch_function) {
+    LOG(ERROR) << "Could not find exported function "
+               << "RelaunchChromeBrowserWithNewCommandLineIfNeeded";
+  } else {
+    relaunch_function();
+  }
 }
 
 //=============================================================================

@@ -6,10 +6,13 @@
 
 #include <string>
 
+#include "base/hash_tables.h"
 #include "base/message_loop.h"
 #include "base/ref_counted.h"
 #include "base/singleton.h"
+#include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "net/base/io_buffer.h"
 #include "net/base/sys_addrinfo.h"
 #include "net/socket_stream/socket_stream.h"
@@ -22,23 +25,24 @@ static std::string AddrinfoToHashkey(const struct addrinfo* addrinfo) {
     case AF_INET: {
       const struct sockaddr_in* const addr =
           reinterpret_cast<const sockaddr_in*>(addrinfo->ai_addr);
-      return StringPrintf("%d:%s",
-                          addrinfo->ai_family,
-                          HexEncode(&addr->sin_addr, 4).c_str());
+      return base::StringPrintf("%d:%s",
+                                addrinfo->ai_family,
+                                base::HexEncode(&addr->sin_addr, 4).c_str());
       }
     case AF_INET6: {
       const struct sockaddr_in6* const addr6 =
           reinterpret_cast<const sockaddr_in6*>(addrinfo->ai_addr);
-      return StringPrintf("%d:%s",
-                          addrinfo->ai_family,
-                          HexEncode(&addr6->sin6_addr,
-                                    sizeof(addr6->sin6_addr)).c_str());
+      return base::StringPrintf(
+          "%d:%s",
+          addrinfo->ai_family,
+          base::HexEncode(&addr6->sin6_addr,
+                          sizeof(addr6->sin6_addr)).c_str());
       }
     default:
-      return StringPrintf("%d:%s",
-                          addrinfo->ai_family,
-                          HexEncode(addrinfo->ai_addr,
-                                    addrinfo->ai_addrlen).c_str());
+      return base::StringPrintf("%d:%s",
+                                addrinfo->ai_family,
+                                base::HexEncode(addrinfo->ai_addr,
+                                                addrinfo->ai_addrlen).c_str());
   }
 }
 
@@ -53,10 +57,17 @@ WebSocketThrottle::~WebSocketThrottle() {
 void WebSocketThrottle::PutInQueue(WebSocketJob* job) {
   queue_.push_back(job);
   const AddressList& address_list = job->address_list();
+  base::hash_set<std::string> address_set;
   for (const struct addrinfo* addrinfo = address_list.head();
        addrinfo != NULL;
        addrinfo = addrinfo->ai_next) {
     std::string addrkey = AddrinfoToHashkey(addrinfo);
+
+    // If |addrkey| is already processed, don't do it again.
+    if (address_set.find(addrkey) != address_set.end())
+      continue;
+    address_set.insert(addrkey);
+
     ConnectingAddressMap::iterator iter = addr_map_.find(addrkey);
     if (iter == addr_map_.end()) {
       ConnectingQueue* queue = new ConnectingQueue();
@@ -65,6 +76,7 @@ void WebSocketThrottle::PutInQueue(WebSocketJob* job) {
     } else {
       iter->second->push_back(job);
       job->SetWaiting();
+      DLOG(INFO) << "Waiting on " << addrkey;
     }
   }
 }
@@ -83,12 +95,19 @@ void WebSocketThrottle::RemoveFromQueue(WebSocketJob* job) {
   if (!in_queue)
     return;
   const AddressList& address_list = job->address_list();
+  base::hash_set<std::string> address_set;
   for (const struct addrinfo* addrinfo = address_list.head();
        addrinfo != NULL;
        addrinfo = addrinfo->ai_next) {
     std::string addrkey = AddrinfoToHashkey(addrinfo);
+    // If |addrkey| is already processed, don't do it again.
+    if (address_set.find(addrkey) != address_set.end())
+      continue;
+    address_set.insert(addrkey);
+
     ConnectingAddressMap::iterator iter = addr_map_.find(addrkey);
     DCHECK(iter != addr_map_.end());
+
     ConnectingQueue* queue = iter->second;
     // Job may not be front of queue when job is closed early while waiting.
     for (ConnectingQueue::iterator iter = queue->begin();

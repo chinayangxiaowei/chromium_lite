@@ -1,20 +1,37 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/bug_report_util.h"
 
+#include <sstream>
+#include <string>
+
 #include "app/l10n_util.h"
+#include "base/command_line.h"
 #include "base/file_version_info.h"
+#include "base/file_util.h"
+#include "base/singleton.h"
+#include "base/string_util.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process_impl.h"
-#include "chrome/browser/net/url_fetcher.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/chrome_version_info.h"
+#include "chrome/common/chrome_switches.h"
+#include "chrome/common/net/url_fetcher.h"
 #include "googleurl/src/gurl.h"
+#include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
+#include "grit/theme_resources.h"
+#include "net/url_request/url_request_status.h"
 #include "unicode/locid.h"
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/notifications/system_notification.h"
+#endif
 
 namespace {
 
@@ -24,16 +41,52 @@ const char kReportPhishingUrl[] =
     "http://www.google.com/safebrowsing/report_phish/";
 
 // URL to post bug reports to.
-const char* const kBugReportPostUrl =
-    "http://web-bug.appspot.com/bugreport";
+static char const kBugReportPostUrl[] =
+    "https://www.google.com/tools/feedback/chrome/__submit";
+
+static char const kProtBufMimeType[] = "application/x-protobuf";
+static char const kPngMimeType[] = "image/png";
+
+// Tags we use in product specific data
+static char const kPageTitleTag[] = "PAGE TITLE";
+static char const kProblemTypeIdTag[] = "PROBLEM TYPE ID";
+static char const kProblemTypeTag[] = "PROBLEM TYPE";
+static char const kChromeVersionTag[] = "CHROME VERSION";
+static char const kOsVersionTag[] = "OS VERSION";
+
+static char const kNotificationId[] = "feedback.chromeos";
+
+static int const kHttpPostSuccessNoContent = 204;
+static int const kHttpPostFailNoConnection = -1;
+static int const kHttpPostFailClientError = 400;
+static int const kHttpPostFailServerError = 500;
+
+#if defined(OS_CHROMEOS)
+static char const kBZip2MimeType[] = "application/x-bzip2";
+static char const kLogsAttachmentName[] = "system_logs.bz2";
+// Maximum number of lines in system info log chunk to be still included
+// in product specific data.
+const size_t kMaxLineCount       = 10;
+// Maximum number of bytes in system info log chunk to be still included
+// in product specific data.
+const size_t kMaxSystemLogLength = 1024;
+#endif
+
+const int64 kInitialRetryDelay = 900000; // 15 minutes
+const int64 kRetryDelayIncreaseFactor = 2;
+const int64 kRetryDelayLimit = 14400000; // 4 hours
+
 
 }  // namespace
+
 
 // Simple URLFetcher::Delegate to clean up URLFetcher on completion.
 class BugReportUtil::PostCleanup : public URLFetcher::Delegate {
  public:
-  PostCleanup();
-
+  PostCleanup(Profile* profile, std::string* post_body,
+              int64 previous_delay) : profile_(profile),
+                                      post_body_(post_body),
+                                      previous_delay_(previous_delay) { }
   // Overridden from URLFetcher::Delegate.
   virtual void OnURLFetchComplete(const URLFetcher* source,
                                   const GURL& url,
@@ -41,13 +94,21 @@ class BugReportUtil::PostCleanup : public URLFetcher::Delegate {
                                   int response_code,
                                   const ResponseCookies& cookies,
                                   const std::string& data);
+
+ protected:
+  virtual ~PostCleanup() {}
+
  private:
+  Profile* profile_;
+  std::string* post_body_;
+  int64 previous_delay_;
+
   DISALLOW_COPY_AND_ASSIGN(PostCleanup);
 };
 
-BugReportUtil::PostCleanup::PostCleanup() {
-}
-
+// Don't use the data parameter, instead use the pointer we pass into every
+// post cleanup object - that pointer will be deleted and deleted only on a
+// successful post to the feedback server.
 void BugReportUtil::PostCleanup::OnURLFetchComplete(
     const URLFetcher* source,
     const GURL& url,
@@ -55,6 +116,39 @@ void BugReportUtil::PostCleanup::OnURLFetchComplete(
     int response_code,
     const ResponseCookies& cookies,
     const std::string& data) {
+
+  std::stringstream error_stream;
+  if (response_code == kHttpPostSuccessNoContent) {
+    // We've sent our report, delete the report data
+    delete post_body_;
+
+    error_stream << "Success";
+  } else {
+    // Uh oh, feedback failed, send it off to retry
+    if (previous_delay_) {
+      if (previous_delay_ < kRetryDelayLimit)
+        previous_delay_ *= kRetryDelayIncreaseFactor;
+    } else {
+      previous_delay_ = kInitialRetryDelay;
+    }
+    BugReportUtil::DispatchFeedback(profile_, post_body_, previous_delay_);
+
+    // Process the error for debug output
+    if (response_code == kHttpPostFailNoConnection) {
+        error_stream << "No connection to server.";
+    } else if ((response_code > kHttpPostFailClientError) &&
+      (response_code < kHttpPostFailServerError)) {
+        error_stream << "Client error: HTTP response code " << response_code;
+    } else if (response_code > kHttpPostFailServerError) {
+        error_stream << "Server error: HTTP response code " << response_code;
+    } else {
+        error_stream << "Unknown error: HTTP response code " << response_code;
+    }
+  }
+
+  LOG(WARNING) << "FEEDBACK: Submission to feedback server (" << url <<
+      ") status: " << error_stream.str() << std::endl;
+
   // Delete the URLFetcher.
   delete source;
   // And then delete ourselves.
@@ -88,142 +182,209 @@ void BugReportUtil::SetOSVersion(std::string *os_version) {
 #endif
 }
 
-// Create a MIME boundary marker (27 '-' characters followed by 16 hex digits).
-void BugReportUtil::CreateMimeBoundary(std::string *out) {
-  int r1 = rand();
-  int r2 = rand();
-  SStringPrintf(out, "---------------------------%08X%08X", r1, r2);
+// static
+std::string BugReportUtil::feedback_server_("");
+
+// static
+void BugReportUtil::SetFeedbackServer(const std::string& server) {
+  feedback_server_ = server;
 }
 
 // static
-void BugReportUtil::SendReport(Profile* profile,
-    std::string page_title_text,
-    int problem_type,
-    std::string page_url_text,
-    std::string description,
-    const char* png_data,
-    int png_data_length) {
-  GURL post_url(kBugReportPostUrl);
-  std::string mime_boundary;
-  CreateMimeBoundary(&mime_boundary);
+void BugReportUtil::DispatchFeedback(Profile* profile,
+                                     std::string* post_body,
+                                     int64 delay) {
+  DCHECK(post_body);
 
-  // Create a request body and add the mandatory parameters.
-  std::string post_body;
+  MessageLoop::current()->PostDelayedTask(FROM_HERE, NewRunnableFunction(
+      &BugReportUtil::SendFeedback, profile, post_body, delay), delay);
+}
 
-  // Add the protocol version:
-  post_body.append("--" + mime_boundary + "\r\n");
-  post_body.append("Content-Disposition: form-data; "
-                   "name=\"data_version\"\r\n\r\n");
-  post_body.append(StringPrintf("%d\r\n", kBugReportVersion));
+// static
+void BugReportUtil::SendFeedback(Profile* profile,
+                                 std::string* post_body,
+                                 int64 previous_delay) {
+  DCHECK(post_body);
 
-  // Add the page title.
-  post_body.append("--" + mime_boundary + "\r\n");
-  post_body.append(page_title_text + "\r\n");
-
-  // Add the problem type.
-  post_body.append("--" + mime_boundary + "\r\n");
-  post_body.append("Content-Disposition: form-data; "
-                   "name=\"problem\"\r\n\r\n");
-  post_body.append(StringPrintf("%d\r\n", problem_type));
-
-  // Add in the URL, if we have one.
-  post_body.append("--" + mime_boundary + "\r\n");
-  post_body.append("Content-Disposition: form-data; "
-                   "name=\"url\"\r\n\r\n");
-
-  // Convert URL to UTF8.
-  if (page_url_text.empty())
-    post_body.append("n/a\r\n");
+  GURL post_url;
+  if (CommandLine::ForCurrentProcess()->
+      HasSwitch(switches::kFeedbackServer))
+    post_url = GURL(CommandLine::ForCurrentProcess()->
+        GetSwitchValueASCII(switches::kFeedbackServer));
   else
-    post_body.append(page_url_text + "\r\n");
+    post_url = GURL(kBugReportPostUrl);
 
-  // Add Chrome version.
-  post_body.append("--" + mime_boundary + "\r\n");
-  post_body.append("Content-Disposition: form-data; "
-                   "name=\"chrome_version\"\r\n\r\n");
-
-  std::string chrome_version;
-  scoped_ptr<FileVersionInfo> version_info(
-      FileVersionInfo::CreateFileVersionInfoForCurrentModule());
-  if (version_info.get()) {
-    chrome_version = WideToUTF8(version_info->product_name()) + " - " +
-        WideToUTF8(version_info->file_version()) +
-        " (" + WideToUTF8(version_info->last_change()) + ")";
-  }
-
-  if (chrome_version.empty())
-    post_body.append("n/a\r\n");
-  else
-    post_body.append(chrome_version + "\r\n");
-
-  // Add OS version (eg, for WinXP SP2: "5.1.2600 Service Pack 2").
-  std::string os_version = "";
-  post_body.append("--" + mime_boundary + "\r\n");
-  post_body.append("Content-Disposition: form-data; "
-                   "name=\"os_version\"\r\n\r\n");
-  SetOSVersion(&os_version);
-  post_body.append(os_version + "\r\n");
-
-  // Add locale.
-#if defined(OS_MACOSX)
-  std::string chrome_locale = g_browser_process->GetApplicationLocale();
-#else
-  icu::Locale locale = icu::Locale::getDefault();
-  const char *lang = locale.getLanguage();
-  std::string chrome_locale = (lang)? lang:"en";
-#endif
-
-  post_body.append("--" + mime_boundary + "\r\n");
-  post_body.append("Content-Disposition: form-data; "
-                   "name=\"chrome_locale\"\r\n\r\n");
-  post_body.append(chrome_locale + "\r\n");
-
-  // Add a description if we have one.
-  post_body.append("--" + mime_boundary + "\r\n");
-  post_body.append("Content-Disposition: form-data; "
-                   "name=\"description\"\r\n\r\n");
-
-  if (description.empty())
-    post_body.append("n/a\r\n");
-  else
-    post_body.append(description + "\r\n");
-
-  // Include the page image if we have one.
-  if (png_data != NULL && png_data_length > 0) {
-    post_body.append("--" + mime_boundary + "\r\n");
-    post_body.append("Content-Disposition: form-data; name=\"screenshot\"; "
-                      "filename=\"screenshot.png\"\r\n");
-    post_body.append("Content-Type: application/octet-stream\r\n");
-    post_body.append(StringPrintf("Content-Length: %d\r\n\r\n",
-                     png_data_length));
-    post_body.append(png_data, png_data_length);
-    post_body.append("\r\n");
-  }
-
-  // TODO(awalker): include the page source if we can get it.
-  // if (include_page_source_checkbox_->checked()) {
-  // }
-
-  // Terminate the body.
-  post_body.append("--" + mime_boundary + "--\r\n");
-
-  // We have the body of our POST, so send it off to the server.
   URLFetcher* fetcher = new URLFetcher(post_url, URLFetcher::POST,
-                                       new BugReportUtil::PostCleanup);
+                            new BugReportUtil::PostCleanup(profile,
+                                                           post_body,
+                                                           previous_delay));
   fetcher->set_request_context(profile->GetRequestContext());
-  std::string mime_type("multipart/form-data; boundary=");
-  mime_type += mime_boundary;
-  fetcher->set_upload_data(mime_type, post_body);
+
+  fetcher->set_upload_data(std::string(kProtBufMimeType), *post_body);
   fetcher->Start();
 }
 
+
 // static
-std::string BugReportUtil::GetMimeType() {
-  std::string mime_type("multipart/form-data; boundary=");
-  std::string mime_boundary;
-  CreateMimeBoundary(&mime_boundary);
-  mime_type += mime_boundary;
-  return mime_type;
+void BugReportUtil::AddFeedbackData(
+    userfeedback::ExternalExtensionSubmit* feedback_data,
+    const std::string& key, const std::string& value) {
+  // Don't bother with empty keys or values
+  if (key=="" || value == "") return;
+  // Create log_value object and add it to the web_data object
+  userfeedback::ProductSpecificData log_value;
+  log_value.set_key(key);
+  log_value.set_value(value);
+  userfeedback::WebData* web_data = feedback_data->mutable_web_data();
+  *(web_data->add_product_specific_data()) = log_value;
+}
+
+#if defined(OS_CHROMEOS)
+bool BugReportUtil::ValidFeedbackSize(const std::string& content) {
+  if (content.length() > kMaxSystemLogLength)
+    return false;
+  size_t line_count = 0;
+  const char* text = content.c_str();
+  for (size_t i = 0; i < content.length(); i++) {
+    if (*(text + i) == '\n') {
+      line_count++;
+      if (line_count > kMaxLineCount)
+        return false;
+    }
+  }
+  return true;
+}
+#endif
+
+// static
+void BugReportUtil::SendReport(Profile* profile,
+    const std::string& page_title_text,
+    int problem_type,
+    const std::string& page_url_text,
+    const std::string& description,
+    const char* png_data,
+    int png_data_length,
+    int png_width,
+#if defined(OS_CHROMEOS)
+    int png_height,
+    const std::string& user_email_text,
+    const char* zipped_logs_data,
+    int zipped_logs_length,
+    const chromeos::LogDictionaryType* const sys_info) {
+#else
+    int png_height) {
+#endif
+  // Create google feedback protocol buffer objects
+  userfeedback::ExternalExtensionSubmit feedback_data;
+  // type id set to 0, unused field but needs to be initialized to 0
+  feedback_data.set_type_id(0);
+
+  userfeedback::CommonData* common_data = feedback_data.mutable_common_data();
+  userfeedback::WebData* web_data = feedback_data.mutable_web_data();
+
+  // Set GAIA id to 0. We're not using gaia id's for recording
+  // use feedback - we're using the e-mail field, allows users to
+  // submit feedback from incognito mode and specify any mail id
+  // they wish
+  common_data->set_gaia_id(0);
+
+  // Add the page title.
+  AddFeedbackData(&feedback_data, std::string(kPageTitleTag),
+                  page_title_text);
+
+#if defined(OS_CHROMEOS)
+  // Add the user e-mail to the feedback object
+  common_data->set_user_email(user_email_text);
+#endif
+
+  // Add the description to the feedback object
+  common_data->set_description(description);
+
+  // Add the language
+  std::string chrome_locale = g_browser_process->GetApplicationLocale();
+  common_data->set_source_description_language(chrome_locale);
+
+  // Set the url
+  web_data->set_url(page_url_text);
+
+  // Add the Chrome version
+  chrome::VersionInfo version_info;
+  if (version_info.is_valid()) {
+    std::string chrome_version = version_info.Name() + " - " +
+        version_info.Version() +
+        " (" + version_info.LastChange() + ")";
+    AddFeedbackData(&feedback_data, std::string(kChromeVersionTag),
+                    chrome_version);
+  }
+
+  // Add OS version (eg, for WinXP SP2: "5.1.2600 Service Pack 2").
+  std::string os_version = "";
+  SetOSVersion(&os_version);
+  AddFeedbackData(&feedback_data, std::string(kOsVersionTag), os_version);
+
+  // Include the page image if we have one.
+  if (png_data) {
+    userfeedback::PostedScreenshot screenshot;
+    screenshot.set_mime_type(kPngMimeType);
+    // Set the dimensions of the screenshot
+    userfeedback::Dimensions dimensions;
+    dimensions.set_width(static_cast<float>(png_width));
+    dimensions.set_height(static_cast<float>(png_height));
+    *(screenshot.mutable_dimensions()) = dimensions;
+    screenshot.set_binary_content(std::string(png_data, png_data_length));
+
+    // Set the screenshot object in feedback
+    *(feedback_data.mutable_screenshot()) = screenshot;
+  }
+
+#if defined(OS_CHROMEOS)
+  if (sys_info) {
+    // Add the product specific data
+    for (chromeos::LogDictionaryType::const_iterator i = sys_info->begin();
+         i != sys_info->end(); ++i)
+      if (!CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kCompressSystemFeedback) || ValidFeedbackSize(i->second)) {
+        AddFeedbackData(&feedback_data, i->first, i->second);
+      }
+
+    // If we have zipped logs, add them here
+    if (zipped_logs_data && CommandLine::ForCurrentProcess()->HasSwitch(
+        switches::kCompressSystemFeedback)) {
+      userfeedback::ProductSpecificBinaryData attachment;
+      attachment.set_mime_type(kBZip2MimeType);
+      attachment.set_name(kLogsAttachmentName);
+      attachment.set_data(std::string(zipped_logs_data, zipped_logs_length));
+      *(feedback_data.add_product_specific_binary_data()) = attachment;
+    }
+  }
+#endif
+
+  // Set our Chrome specific data
+  userfeedback::ChromeData chrome_data;
+#if defined(OS_CHROMEOS)
+  chrome_data.set_chrome_platform(
+      userfeedback::ChromeData_ChromePlatform_CHROME_OS);
+  userfeedback::ChromeOsData chrome_os_data;
+  chrome_os_data.set_category(
+      (userfeedback::ChromeOsData_ChromeOsCategory) problem_type);
+  *(chrome_data.mutable_chrome_os_data()) = chrome_os_data;
+#else
+  chrome_data.set_chrome_platform(
+      userfeedback::ChromeData_ChromePlatform_CHROME_BROWSER);
+  userfeedback::ChromeBrowserData chrome_browser_data;
+  chrome_browser_data.set_category(
+      (userfeedback::ChromeBrowserData_ChromeBrowserCategory) problem_type);
+  *(chrome_data.mutable_chrome_browser_data()) = chrome_browser_data;
+#endif
+
+  *(feedback_data.mutable_chrome_data()) = chrome_data;
+
+  // Serialize our report to a string pointer we can pass around
+  std::string* post_body = new std::string;
+  feedback_data.SerializeToString(post_body);
+
+  // We have the body of our POST, so send it off to the server with 0 delay
+  DispatchFeedback(profile, post_body, 0);
 }
 
 // static
@@ -235,4 +396,3 @@ void BugReportUtil::ReportPhishing(TabContents* currentTab,
       GURL(),
       PageTransition::LINK);
 }
-

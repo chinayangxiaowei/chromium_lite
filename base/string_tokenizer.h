@@ -1,11 +1,15 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_STRING_TOKENIZER_H_
 #define BASE_STRING_TOKENIZER_H_
+#pragma once
 
+#include <algorithm>
 #include <string>
+
+#include "base/string_piece.h"
 
 // StringTokenizerT is a simple string tokenizer class.  It works like an
 // iterator that with each step (see the Advance method) updates members that
@@ -121,24 +125,10 @@ class StringTokenizerT {
   // returns false if the tokenizer is complete.  This method must be called
   // before calling any of the token* methods.
   bool GetNext() {
-    AdvanceState state;
-    token_is_delim_ = false;
-    for (;;) {
-      token_begin_ = token_end_;
-      if (token_end_ == end_)
-        return false;
-      ++token_end_;
-      if (AdvanceOne(&state, *token_begin_))
-        break;
-      if (options_ & RETURN_DELIMS) {
-        token_is_delim_ = true;
-        return true;
-      }
-      // else skip over delim
-    }
-    while (token_end_ != end_ && AdvanceOne(&state, *token_end_))
-      ++token_end_;
-    return true;
+    if (quotes_.empty() && options_ == 0)
+      return QuickGetNext();
+    else
+      return FullGetNext();
   }
 
   // Start iterating through tokens from the beginning of the string.
@@ -156,16 +146,63 @@ class StringTokenizerT {
   const_iterator token_begin() const { return token_begin_; }
   const_iterator token_end() const { return token_end_; }
   str token() const { return str(token_begin_, token_end_); }
+  base::StringPiece token_piece() const {
+    return base::StringPiece(&*token_begin_,
+                             std::distance(token_begin_, token_end_));
+  }
 
  private:
   void Init(const_iterator string_begin,
             const_iterator string_end,
             const str& delims) {
     start_pos_ = string_begin;
+    token_begin_ = string_begin;
     token_end_ = string_begin;
     end_ = string_end;
     delims_ = delims;
     options_ = 0;
+    token_is_delim_ = false;
+  }
+
+  // Implementation of GetNext() for when we have no quote characters. We have
+  // two separate implementations because AdvanceOne() is a hot spot in large
+  // text files with large tokens.
+  bool QuickGetNext() {
+    token_is_delim_ = false;
+    for (;;) {
+      token_begin_ = token_end_;
+      if (token_end_ == end_)
+        return false;
+      ++token_end_;
+      if (delims_.find(*token_begin_) == str::npos)
+        break;
+      // else skip over delimiter.
+    }
+    while (token_end_ != end_ && delims_.find(*token_end_) == str::npos)
+      ++token_end_;
+    return true;
+  }
+
+  // Implementation of GetNext() for when we have to take quotes into account.
+  bool FullGetNext() {
+    AdvanceState state;
+    token_is_delim_ = false;
+    for (;;) {
+      token_begin_ = token_end_;
+      if (token_end_ == end_)
+        return false;
+      ++token_end_;
+      if (AdvanceOne(&state, *token_begin_))
+        break;
+      if (options_ & RETURN_DELIMS) {
+        token_is_delim_ = true;
+        return true;
+      }
+      // else skip over delimiter.
+    }
+    while (token_end_ != end_ && AdvanceOne(&state, *token_end_))
+      ++token_end_;
+    return true;
   }
 
   bool IsDelim(char_type c) const {

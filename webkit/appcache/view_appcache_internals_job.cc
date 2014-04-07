@@ -109,7 +109,7 @@ void AddHTMLFromAppCacheToOutput(
     out->append("<ul>");
 
     AddLiTag(kSize,
-             WideToUTF8(FormatBytes(
+             UTF16ToUTF8(FormatBytes(
                  info->size, GetByteDisplayUnits(info->size), true)),
              out);
     AddLiTag(kCreationTime,
@@ -134,7 +134,8 @@ std::string GetAppCacheManifestToRemove(const std::string& query) {
     return std::string();
   }
   std::string manifest_str = query.substr(strlen("remove="));
-  return UnescapeURLComponent(manifest_str, UnescapeRule::NORMAL);
+  return UnescapeURLComponent(
+      manifest_str, UnescapeRule::NORMAL | UnescapeRule::URL_SPECIAL_CHARS);
 }
 
 struct ManifestURLComparator {

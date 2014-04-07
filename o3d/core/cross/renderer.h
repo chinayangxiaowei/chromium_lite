@@ -210,9 +210,8 @@ class Renderer {
     need_to_render_ = need_to_render;
   }
 
-  // We only respect max_fps in RENDERMODE_ON_DEMAND.
-  // When max_fps is set to positive value in RENDERMODE_ON_DEMAND,
-  // we render on every new texture without exceeding max_fps.
+  // When max_fps is set to positive value, we render on every new texture as
+  // long as not exceeding max_fps.
 
   // Get max_fps
   int max_fps() const {
@@ -299,10 +298,10 @@ class Renderer {
                      ParamCache* param_cache);
 
   // Pushes rendering states.
-  void PushRenderStates(State *state);
+  virtual void PushRenderStates(State *state);
 
   // Pops rendering states to back to their previous settings.
-  void PopRenderStates();
+  virtual void PopRenderStates();
 
   // Binds the passed surfaces to the color and depth buffers of the
   // renderer.

@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_MENU_MENU_DELEGATE_H_
 #define VIEWS_CONTROLS_MENU_MENU_DELEGATE_H_
+#pragma once
 
 #include <set>
 #include <string>
@@ -43,8 +44,8 @@ class MenuDelegate : Controller {
     DROP_ON
   };
 
-  // Whether or not an item should be shown as checked.
-  // TODO(sky): need checked support.
+  // Whether or not an item should be shown as checked. This is invoked for
+  // radio buttons and check buttons.
   virtual bool IsItemChecked(int id) const {
     return false;
   }
@@ -53,6 +54,12 @@ class MenuDelegate : Controller {
   // added with an empty label.
   virtual std::wstring GetLabel(int id) const {
     return std::wstring();
+  }
+
+  // If there is an accelerator for the menu item with id |id| it is set in
+  // |accelerator| and true is returned.
+  virtual bool GetAccelerator(int id, Accelerator* accelerator) {
+    return false;
   }
 
   // Shows the context menu with the specified id. This is invoked when the
@@ -201,6 +208,13 @@ class MenuDelegate : Controller {
                                        bool* has_mnemonics,
                                        MenuButton** button) {
       return NULL;
+  }
+
+  // Returns the max width menus can grow to be.
+  virtual int GetMaxWidthForMenu() {
+    // NOTE: this needs to be large enough to accommodate the wrench menu with
+    // big fonts.
+    return 800;
   }
 };
 

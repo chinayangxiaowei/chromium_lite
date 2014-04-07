@@ -1205,7 +1205,13 @@ Renderer::InitStatus  RendererGLES2::InitPlatformSpecific(
     return INITIALIZATION_ERROR;
   }
 
-  EGLContext egl_context = eglCreateContext(egl_display, config, NULL, NULL);
+  static const EGLint egl_context_attributes[] = {
+    EGL_CONTEXT_CLIENT_VERSION, 2,
+    EGL_NONE
+  };
+
+  EGLContext egl_context = eglCreateContext(egl_display, config, NULL,
+                                            egl_context_attributes);
   if (!egl_context) {
     DLOG(ERROR) << "eglCreateContext failed.";
     eglDestroySurface(egl_display, egl_surface);
@@ -1343,9 +1349,45 @@ void RendererGLES2::UpdateHelperConstant(float width, float height) {
   // If render-targets are active, pass -1 to invert the Y axis.  OpenGLES2 uses
   // a different viewport orientation than DX.  Without the inversion, the
   // output of render-target rendering will be upside down.
-  // TODO(piman): actually implement this.
+  CHECK_GL_ERROR();
+
+  if (RenderSurfaceActive()) {
+    dx_clipping_[0] = 1.f / width;
+    dx_clipping_[1] = -1.f / height;
+    dx_clipping_[2] = 2.f;
+    dx_clipping_[3] = -1.f;
+  } else {
+    dx_clipping_[0] = (1.0f + 2.0f * (-dest_x_offset())) / width;
+    dx_clipping_[1] = (-1.0f + 2.0f * dest_y_offset()) / height;
+    dx_clipping_[2] = 2.0f;
+    dx_clipping_[3] = 1.0f;
+  }
+}
+
+// Programs the helper constants into the hardware.
+void RendererGLES2::UpdateDxClippingUniform(GLint location) {
+  // For some reason, if location is -1 an error is signalled, despite the spec
+  // saying it is OK.
+  if (location != -1)
+    glUniform4fv(location, 1, dx_clipping_);
   CHECK_GL_ERROR();
 }
+
+#if defined(OS_MACOSX) && defined(GLES2_BACKEND_DESKTOP_GL)
+void RendererGLES2::set_mac_cgl_context(CGLContextObj obj) {
+  bool changed = (mac_cgl_context_ != obj);
+  mac_cgl_context_ = obj;
+  if (changed) {
+    // We need to reset all of the OpenGL state when the context changes.
+    alpha_function_ref_changed_ = true;
+    alpha_blend_settings_changed_ = true;
+    stencil_settings_changed_ = true;
+    polygon_offset_changed_ = true;
+    // TODO(kbr): properly wire up full-screen support in this configuration.
+    // must_reset_context_ = true;
+  }
+}
+#endif
 
 void RendererGLES2::SetViewportInPixels(int left,
                                         int top,

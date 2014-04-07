@@ -4,15 +4,16 @@
 
 #ifndef CHROME_BROWSER_GTK_INFOBAR_GTK_H_
 #define CHROME_BROWSER_GTK_INFOBAR_GTK_H_
+#pragma once
 
 #include "app/gtk_signal.h"
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
+#include "chrome/browser/gtk/owned_widget_gtk.h"
 #include "chrome/browser/gtk/slide_animator_gtk.h"
 #include "chrome/browser/tab_contents/infobar_delegate.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
-#include "chrome/common/owned_widget_gtk.h"
 
 class CustomDrawButton;
 class GtkThemeProvider;
@@ -62,22 +63,6 @@ class InfoBar : public SlideAnimatorGtk::Delegate,
                        const NotificationSource& source,
                        const NotificationDetails& details);
 
- protected:
-  // Removes our associated InfoBarDelegate from the associated TabContents.
-  // (Will lead to this InfoBar being closed).
-  void RemoveInfoBar() const;
-
-  // Adds |display_text| to the infobar. If |link_text| is not empty, it is
-  // rendered as a hyperlink and inserted into |display_text| at |link_offset|,
-  // or right aligned in the infobar if |link_offset| is |npos|. |link_padding|
-  // pixels are inserted around the link (pass 0 for not padding). If a link
-  // is supplied, |link_callback| must not be null. It will be invoked on click.
-  void AddLabelAndLink(const std::wstring& display_text,
-                       const std::wstring& link,
-                       size_t link_offset,
-                       guint link_padding,
-                       GCallback link_callback);
-
   // Retrieves the component colors for the infobar's background
   // gradient. (This varies by infobars and can be animated to change).
   virtual void GetTopColor(InfoBarDelegate::Type type,
@@ -85,6 +70,28 @@ class InfoBar : public SlideAnimatorGtk::Delegate,
   virtual void GetBottomColor(InfoBarDelegate::Type type,
                               double* r, double* g, double *b);
 
+  // The total height of the info bar.
+  static const int kInfoBarHeight;
+
+ protected:
+  // Removes our associated InfoBarDelegate from the associated TabContents.
+  // (Will lead to this InfoBar being closed).
+  void RemoveInfoBar() const;
+
+  // Adds |display_text| to the infobar. If |link_text| is not empty, it is
+  // rendered as a hyperlink and inserted into |display_text| at |link_offset|,
+  // or right aligned in the infobar if |link_offset| is |npos|. If a link is
+  // supplied, |link_callback| must not be null. It will be invoked on click.
+  void AddLabelWithInlineLink(const string16& display_text,
+                              const string16& link_text,
+                              size_t link_offset,
+                              GCallback callback);
+
+  // Adds |display_text| to the infobar. If |link_text| is not empty, it is
+  // right aligned in the infobar.
+  void AddLabelAndLink(const string16& display_text,
+                       const string16& link_text,
+                       GCallback callback);
   // The top level widget of the infobar.
   scoped_ptr<SlideAnimatorGtk> slide_widget_;
 

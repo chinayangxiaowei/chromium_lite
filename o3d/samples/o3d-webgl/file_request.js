@@ -35,29 +35,31 @@
  * to be loaded.  Its use parallels that of XMLHttpRequest; you create one, call
  * open, set the onreadystatechange callback, and call send.
  * Note that unlike XMLHttpRequests, FileRequests cannot be reused.
- * 
+ *
  * For RawData loads, on success the RawData will be stored in the data field
  * on the FileRequest itself. It is only valid until the FileRequest is freed by
  * calling pack.removeObject(request).
- * 
+ *
  * var request = pack.createFileRequest("RAWDATA");
  * request.open("GET", url, true);
  * request.onreadystatechange = function() {
  *   if (request.done) {
  *     if (request.success) {
  *       var rawData = request.data;
- *       
+ *
  *       ...
  *     } else {
  *       dump('Load of rawdata returned failure.');
  *     }
- *     
+ *
  *     pack.removeObject(request);
  *   }
  * };
  * request.send();
  */
 o3d.FileRequest = function() {
+  this.method_ = "";
+  this.async_ = true;
   this.request_ = new XMLHttpRequest();
   var fileRequest = this;
   this.request_.onreadystatechange = function() {
@@ -187,16 +189,8 @@ o3d.FileRequest.prototype.imageLoaded_ = function() {
 o3d.FileRequest.prototype.open =
     function(method, uri, async) {
   this.uri = uri;
-  if (this.isImageUrl_(uri)) {
-    this.image_ = new Image();
-    var that = this;
-    this.image_.onload = function() {
-      that.imageLoaded_.call(that);
-    }
-    this.image_.src = uri;
-  } else {
-    this.request_.open(method, uri, async);
-  }
+  this.method_ = method;
+  this.async_ = async;
 };
 
 
@@ -206,7 +200,16 @@ o3d.FileRequest.prototype.open =
  * matter what, with success or failure.
  */
 o3d.FileRequest.prototype.send = function() {
-  // This function left blank for compatability with o3djs.io.
+  if (this.isImageUrl_(this.uri)) {
+    this.image_ = new Image();
+    var that = this;
+    this.image_.onload = function() {
+      that.imageLoaded_.call(that);
+    }
+    this.image_.src = this.uri;
+  } else {
+    this.request_.open(this.method_, this.uri, this.async_);
+  }
 };
 
 

@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_UI_MANAGER_H_
 #define CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_UI_MANAGER_H_
+#pragma once
 
 #include <deque>
 
@@ -11,6 +12,8 @@
 #include "base/scoped_ptr.h"
 #include "chrome/browser/notifications/balloon.h"
 #include "chrome/browser/notifications/balloon_collection.h"
+#include "chrome/common/notification_observer.h"
+#include "chrome/common/notification_registrar.h"
 
 class Notification;
 class Profile;
@@ -20,7 +23,8 @@ class SiteInstance;
 // The notification manager manages use of the desktop for notifications.
 // It maintains a queue of pending notifications when space becomes constrained.
 class NotificationUIManager
-    : public BalloonCollection::BalloonSpaceChangeListener {
+    : public BalloonCollection::BalloonSpaceChangeListener,
+      public NotificationObserver {
  public:
   NotificationUIManager();
   virtual ~NotificationUIManager();
@@ -45,10 +49,19 @@ class NotificationUIManager
   // Removes a notification.
   virtual bool Cancel(const Notification& notification);
 
+  // Cancels all pending notifications and closes anything currently showing.
+  // Used when the app is terminating.
+  void CancelAll();
+
   // Returns balloon collection.
   BalloonCollection* balloon_collection() {
     return balloon_collection_.get();
   }
+
+  // NotificationObserver interface (the event signaling kind of notifications)
+  virtual void Observe(NotificationType type,
+                       const NotificationSource& source,
+                       const NotificationDetails& details);
 
  private:
   // Attempts to display notifications from the show_queue if the user
@@ -61,12 +74,19 @@ class NotificationUIManager
   // BalloonCollectionObserver implementation.
   virtual void OnBalloonSpaceChanged();
 
+  // Replace an existing notification with this one if applicable;
+  // returns true if the replacement happened.
+  bool TryReplacement(const Notification& notification);
+
   // An owned pointer to the collection of active balloons.
   scoped_ptr<BalloonCollection> balloon_collection_;
 
   // A queue of notifications which are waiting to be shown.
   typedef std::deque<QueuedNotification*> NotificationDeque;
   NotificationDeque show_queue_;
+
+  // Registrar for the other kind of notifications (event signaling).
+  NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(NotificationUIManager);
 };

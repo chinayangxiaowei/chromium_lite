@@ -1,14 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef VIEWS_CONTROLS_NATIVE_HOST_VIEW_GTK_H_
-#define VIEWS_CONTROLS_NATIVE_HOST_VIEW_GTK_H_
+#ifndef VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_GTK_H_
+#define VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 #include <string>
 
-#include "base/logging.h"
+#include "base/basictypes.h"
 #include "gfx/rect.h"
 #include "views/controls/native/native_view_host_wrapper.h"
 
@@ -59,9 +60,9 @@ class NativeViewHostGtk : public NativeViewHostWrapper {
   static void CallDestroy(GtkObject* object, NativeViewHostGtk* host);
 
   // Invoked from the 'focus-in-event' signal.
-  static void CallFocusIn(GtkWidget* widget,
-                          GdkEventFocus* event,
-                          NativeViewHostGtk* button);
+  static gboolean CallFocusIn(GtkWidget* widget,
+                              GdkEventFocus* event,
+                              NativeViewHostGtk* button);
 
   // Our associated NativeViewHost.
   NativeViewHost* host_;
@@ -89,4 +90,4 @@ class NativeViewHostGtk : public NativeViewHostWrapper {
 
 }  // namespace views
 
-#endif  // VIEWS_CONTROLS_NATIVE_HOST_VIEW_GTK_H_
+#endif  // VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_GTK_H_

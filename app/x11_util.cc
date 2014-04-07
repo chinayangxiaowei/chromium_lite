@@ -20,8 +20,11 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
+#include "base/stringprintf.h"
+#include "base/string_number_conversions.h"
 #include "base/thread.h"
 #include "app/x11_util_internal.h"
+#include "gfx/rect.h"
 #include "gfx/size.h"
 
 namespace x11_util {
@@ -51,6 +54,17 @@ CachedPictFormats* get_cached_pict_formats() {
 
 // Maximum number of CachedPictFormats we keep around.
 const size_t kMaxCacheSize = 5;
+
+int DefaultX11ErrorHandler(Display* d, XErrorEvent* e) {
+  LOG(FATAL) << GetErrorEventDescription(d, e);
+  return 0;
+}
+
+int DefaultX11IOErrorHandler(Display* d) {
+  // If there's an IO error it likely means the X server has gone away
+  LOG(ERROR) << "X IO Error detected";
+  _exit(1);
+}
 
 }  // namespace
 
@@ -141,6 +155,10 @@ XID GetX11RootWindow() {
   return GDK_WINDOW_XID(gdk_get_default_root_window());
 }
 
+bool GetCurrentDesktop(int* desktop) {
+  return GetIntProperty(GetX11RootWindow(), "_NET_CURRENT_DESKTOP", desktop);
+}
+
 XID GetX11WindowFromGtkWidget(GtkWidget* widget) {
   return GDK_WINDOW_XID(widget->window);
 }
@@ -174,7 +192,15 @@ int BitsPerPixelForPixmapDepth(Display* dpy, int depth) {
 bool IsWindowVisible(XID window) {
   XWindowAttributes win_attributes;
   XGetWindowAttributes(GetXDisplay(), window, &win_attributes);
-  return (win_attributes.map_state == IsViewable);
+  if (win_attributes.map_state != IsViewable)
+    return false;
+  // Some compositing window managers (notably kwin) do not actually unmap
+  // windows on desktop switch, so we also must check the current desktop.
+  int window_desktop, current_desktop;
+  return (!GetWindowDesktop(window, &window_desktop) ||
+          !GetCurrentDesktop(&current_desktop) ||
+          window_desktop == kAllDesktops ||
+          window_desktop == current_desktop);
 }
 
 bool GetWindowRect(XID window, gfx::Rect* rect) {
@@ -226,6 +252,44 @@ bool GetIntProperty(XID window, const std::string& property_name, int* value) {
 
   *value = *(reinterpret_cast<int*>(property));
   XFree(property);
+  return true;
+}
+
+bool GetIntArrayProperty(XID window,
+                         const std::string& property_name,
+                         std::vector<int>* value) {
+  Atom property_atom = gdk_x11_get_xatom_by_name_for_display(
+      gdk_display_get_default(), property_name.c_str());
+
+  Atom type = None;
+  int format = 0;  // size in bits of each item in 'property'
+  long unsigned int num_items = 0, remaining_bytes = 0;
+  unsigned char* properties = NULL;
+
+  int result = XGetWindowProperty(GetXDisplay(),
+                                  window,
+                                  property_atom,
+                                  0,      // offset into property data to read
+                                  (~0L),  // max length to get (all of them)
+                                  False,  // deleted
+                                  AnyPropertyType,
+                                  &type,
+                                  &format,
+                                  &num_items,
+                                  &remaining_bytes,
+                                  &properties);
+  if (result != Success)
+    return false;
+
+  if (format != 32) {
+    XFree(properties);
+    return false;
+  }
+
+  int* int_properties = reinterpret_cast<int*>(properties);
+  value->clear();
+  value->insert(value->begin(), int_properties, int_properties + num_items);
+  XFree(properties);
   return true;
 }
 
@@ -284,6 +348,10 @@ XID GetHighestAncestorWindow(XID window, XID root) {
       return window;
     window = parent;
   }
+}
+
+bool GetWindowDesktop(XID window, int* desktop) {
+  return GetIntProperty(window, "_NET_WM_DESKTOP", desktop);
 }
 
 // Returns true if |window| is a named window.
@@ -386,79 +454,6 @@ void RestackWindow(XID window, XID sibling, bool above) {
   changes.sibling = sibling;
   changes.stack_mode = above ? Above : Below;
   XConfigureWindow(GetXDisplay(), window, CWSibling | CWStackMode, &changes);
-}
-
-XRenderPictFormat* GetRenderVisualFormat(Display* dpy, Visual* visual) {
-  DCHECK(QueryRenderSupport(dpy));
-
-  CachedPictFormats* formats = get_cached_pict_formats();
-
-  for (CachedPictFormats::const_iterator i = formats->begin();
-       i != formats->end(); ++i) {
-    if (i->equals(dpy, visual))
-      return i->format;
-  }
-
-  // Not cached, look up the value.
-  XRenderPictFormat* pictformat = XRenderFindVisualFormat(dpy, visual);
-  CHECK(pictformat) << "XRENDER does not support default visual";
-
-  // And store it in the cache.
-  CachedPictFormat cached_value;
-  cached_value.visual = visual;
-  cached_value.display = dpy;
-  cached_value.format = pictformat;
-  formats->push_front(cached_value);
-
-  if (formats->size() == kMaxCacheSize) {
-    formats->pop_back();
-    // We should really only have at most 2 display/visual combinations:
-    // one for normal browser windows, and possibly another for an argb window
-    // created to display a menu.
-    //
-    // If we get here it's not fatal, we just need to make sure we aren't
-    // always blowing away the cache. If we are, then we should figure out why
-    // and make it bigger.
-    NOTREACHED();
-  }
-
-  return pictformat;
-}
-
-XRenderPictFormat* GetRenderARGB32Format(Display* dpy) {
-  static XRenderPictFormat* pictformat = NULL;
-  if (pictformat)
-    return pictformat;
-
-  // First look for a 32-bit format which ignores the alpha value
-  XRenderPictFormat templ;
-  templ.depth = 32;
-  templ.type = PictTypeDirect;
-  templ.direct.red = 16;
-  templ.direct.green = 8;
-  templ.direct.blue = 0;
-  templ.direct.redMask = 0xff;
-  templ.direct.greenMask = 0xff;
-  templ.direct.blueMask = 0xff;
-  templ.direct.alphaMask = 0;
-
-  static const unsigned long kMask =
-    PictFormatType | PictFormatDepth |
-    PictFormatRed | PictFormatRedMask |
-    PictFormatGreen | PictFormatGreenMask |
-    PictFormatBlue | PictFormatBlueMask |
-    PictFormatAlphaMask;
-
-  pictformat = XRenderFindFormat(dpy, kMask, &templ, 0 /* first result */);
-
-  if (!pictformat) {
-    // Not all X servers support xRGB32 formats. However, the XRENDER spec says
-    // that they must support an ARGB32 format, so we can always return that.
-    pictformat = XRenderFindStandardFormat(dpy, PictStandardARGB32);
-    CHECK(pictformat) << "XRENDER ARGB32 not supported.";
-  }
-
-  return pictformat;
 }
 
 XSharedMemoryId AttachSharedMemory(Display* display, int shared_memory_key) {
@@ -586,9 +581,9 @@ void PutARGBImage(Display* display, void* visual, int depth, XID pixmap,
               width, height);
     free(orig_bitmap16);
   } else {
-    CHECK(false) << "Sorry, we don't support your visual depth without "
-                    "Xrender support (depth:" << depth
-                 << " bpp:" << pixmap_bpp << ")";
+    LOG(FATAL) << "Sorry, we don't support your visual depth without "
+                  "Xrender support (depth:" << depth
+               << " bpp:" << pixmap_bpp << ")";
   }
 }
 
@@ -698,7 +693,7 @@ void GrabWindowSnapshot(GtkWindow* gtk_window,
   Display* display = GDK_WINDOW_XDISPLAY(gdk_window);
   XID win = GDK_WINDOW_XID(gdk_window);
   XWindowAttributes attr;
-  if (XGetWindowAttributes(display, win, &attr) != 0) {
+  if (XGetWindowAttributes(display, win, &attr) == 0) {
     LOG(ERROR) << "Couldn't get window attributes";
     return;
   }
@@ -731,7 +726,12 @@ void GrabWindowSnapshot(GtkWindow* gtk_window,
 
 bool ChangeWindowDesktop(XID window, XID destination) {
   int desktop;
-  if (!GetIntProperty(destination, "_NET_WM_DESKTOP", &desktop))
+  if (!GetWindowDesktop(destination, &desktop))
+    return false;
+
+  // If |window| is sticky, use the current desktop.
+  if (desktop == kAllDesktops &&
+      !GetCurrentDesktop(&desktop))
     return false;
 
   XEvent event;
@@ -747,5 +747,134 @@ bool ChangeWindowDesktop(XID window, XID destination) {
                           SubstructureNotifyMask, &event);
   return result == Success;
 }
+
+void SetDefaultX11ErrorHandlers() {
+  SetX11ErrorHandlers(NULL, NULL);
+}
+
+// ----------------------------------------------------------------------------
+// These functions are declared in x11_util_internal.h because they require
+// XLib.h to be included, and it conflicts with many other headers.
+XRenderPictFormat* GetRenderARGB32Format(Display* dpy) {
+  static XRenderPictFormat* pictformat = NULL;
+  if (pictformat)
+    return pictformat;
+
+  // First look for a 32-bit format which ignores the alpha value
+  XRenderPictFormat templ;
+  templ.depth = 32;
+  templ.type = PictTypeDirect;
+  templ.direct.red = 16;
+  templ.direct.green = 8;
+  templ.direct.blue = 0;
+  templ.direct.redMask = 0xff;
+  templ.direct.greenMask = 0xff;
+  templ.direct.blueMask = 0xff;
+  templ.direct.alphaMask = 0;
+
+  static const unsigned long kMask =
+    PictFormatType | PictFormatDepth |
+    PictFormatRed | PictFormatRedMask |
+    PictFormatGreen | PictFormatGreenMask |
+    PictFormatBlue | PictFormatBlueMask |
+    PictFormatAlphaMask;
+
+  pictformat = XRenderFindFormat(dpy, kMask, &templ, 0 /* first result */);
+
+  if (!pictformat) {
+    // Not all X servers support xRGB32 formats. However, the XRENDER spec says
+    // that they must support an ARGB32 format, so we can always return that.
+    pictformat = XRenderFindStandardFormat(dpy, PictStandardARGB32);
+    CHECK(pictformat) << "XRENDER ARGB32 not supported.";
+  }
+
+  return pictformat;
+}
+
+XRenderPictFormat* GetRenderVisualFormat(Display* dpy, Visual* visual) {
+  DCHECK(QueryRenderSupport(dpy));
+
+  CachedPictFormats* formats = get_cached_pict_formats();
+
+  for (CachedPictFormats::const_iterator i = formats->begin();
+       i != formats->end(); ++i) {
+    if (i->equals(dpy, visual))
+      return i->format;
+  }
+
+  // Not cached, look up the value.
+  XRenderPictFormat* pictformat = XRenderFindVisualFormat(dpy, visual);
+  CHECK(pictformat) << "XRENDER does not support default visual";
+
+  // And store it in the cache.
+  CachedPictFormat cached_value;
+  cached_value.visual = visual;
+  cached_value.display = dpy;
+  cached_value.format = pictformat;
+  formats->push_front(cached_value);
+
+  if (formats->size() == kMaxCacheSize) {
+    formats->pop_back();
+    // We should really only have at most 2 display/visual combinations:
+    // one for normal browser windows, and possibly another for an argb window
+    // created to display a menu.
+    //
+    // If we get here it's not fatal, we just need to make sure we aren't
+    // always blowing away the cache. If we are, then we should figure out why
+    // and make it bigger.
+    NOTREACHED();
+  }
+
+  return pictformat;
+}
+
+void SetX11ErrorHandlers(XErrorHandler error_handler,
+                         XIOErrorHandler io_error_handler) {
+  XSetErrorHandler(error_handler ? error_handler : DefaultX11ErrorHandler);
+  XSetIOErrorHandler(
+      io_error_handler ? io_error_handler : DefaultX11IOErrorHandler);
+}
+
+std::string GetErrorEventDescription(Display *dpy,
+                                     XErrorEvent *error_event) {
+  char error_str[256];
+  char request_str[256];
+
+  XGetErrorText(dpy, error_event->error_code, error_str, sizeof(error_str));
+
+  strncpy(request_str, "Unknown", sizeof(request_str));
+  if (error_event->request_code < 128) {
+    std::string num = base::UintToString(error_event->request_code);
+    XGetErrorDatabaseText(
+        dpy, "XRequest", num.c_str(), "Unknown", request_str,
+        sizeof(request_str));
+  }  else {
+    int num_ext;
+    char **ext_list = XListExtensions(dpy, &num_ext);
+
+    for (int i = 0; i < num_ext; i++) {
+      int ext_code, first_event, first_error;
+      XQueryExtension(dpy, ext_list[i], &ext_code, &first_event, &first_error);
+      if (error_event->request_code == ext_code) {
+        std::string msg = StringPrintf(
+            "%s.%d", ext_list[i], error_event->minor_code);
+        XGetErrorDatabaseText(
+            dpy, "XRequest", msg.c_str(), "Unknown", request_str,
+            sizeof(request_str));
+        break;
+      }
+    }
+    XFreeExtensionList(ext_list);
+  }
+
+  return base::StringPrintf(
+      "X Error detected: serial %lu, error_code %u (%s), "
+      "request_code %u minor_code %u (%s)",
+      error_event->serial, error_event->error_code, error_str,
+      error_event->request_code, error_event->minor_code, request_str);
+}
+// ----------------------------------------------------------------------------
+// End of x11_util_internal.h
+
 
 }  // namespace x11_util

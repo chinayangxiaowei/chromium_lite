@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_BUTTON_BUTTON_DROPDOWN_H_
 #define VIEWS_CONTROLS_BUTTON_BUTTON_DROPDOWN_H_
+#pragma once
 
 #include "base/task.h"
 #include "views/controls/button/image_button.h"
@@ -25,9 +26,9 @@ class ButtonDropDown : public ImageButton {
   virtual ~ButtonDropDown();
 
   // Accessibility accessors, overridden from View.
-  virtual bool GetAccessibleDefaultAction(std::wstring* action);
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual bool GetAccessibleState(AccessibilityTypes::State* state);
+  virtual std::wstring GetAccessibleDefaultAction();
+  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual AccessibilityTypes::State GetAccessibleState();
 
  private:
   // Overridden from CustomButton

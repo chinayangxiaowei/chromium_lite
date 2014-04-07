@@ -1,16 +1,16 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_FAV_ICON_HELPER_H__
 #define CHROME_BROWSER_FAV_ICON_HELPER_H__
+#pragma once
 
 #include <map>
-#include <vector>
 
 #include "base/basictypes.h"
 #include "base/callback.h"
-#include "base/scoped_ptr.h"
+#include "base/ref_counted.h"
 #include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/favicon_service.h"
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
@@ -183,7 +183,7 @@ class FavIconHelper : public RenderViewHostDelegate::FavIcon {
   typedef std::map<int, DownloadRequest> DownloadRequests;
   DownloadRequests download_requests_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(FavIconHelper);
+  DISALLOW_COPY_AND_ASSIGN(FavIconHelper);
 };
 
 #endif  // CHROME_BROWSER_FAV_ICON_HELPER_H__

@@ -12,6 +12,7 @@
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "gfx/codec/png_codec.h"
 #include "skia/ext/vector_canvas.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -924,6 +925,7 @@ TEST_F(VectorCanvasTest, ClippingClean) {
   }
 }
 
+// See http://crbug.com/26938
 TEST_F(VectorCanvasTest, DISABLED_Matrix) {
   SkBitmap bitmap;
   LoadPngFileToSkBitmap(test_file(L"..\\bitmaps\\bitmap_opaque.png"), &bitmap,

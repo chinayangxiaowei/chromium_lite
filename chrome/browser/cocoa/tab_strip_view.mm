@@ -1,13 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/cocoa/tab_strip_view.h"
 
+#include "base/logging.h"
 #include "base/mac_util.h"
 #import "chrome/browser/cocoa/browser_window_controller.h"
 #import "chrome/browser/cocoa/tab_strip_controller.h"
-#include "base/logging.h"
+#import "chrome/browser/cocoa/view_id_util.h"
+#include "chrome/browser/themes/browser_theme_provider.h"
 
 @implementation TabStripView
 
@@ -28,13 +30,37 @@
   return self;
 }
 
+// Draw bottom border (a dark border and light highlight). Each tab is
+// responsible for mimicking this bottom border, unless it's the selected
+// tab.
+- (void)drawBorder:(NSRect)bounds {
+  NSRect borderRect, contentRect;
+
+  borderRect = bounds;
+  borderRect.origin.y = 1;
+  borderRect.size.height = 1;
+  [[NSColor colorWithCalibratedWhite:0.0 alpha:0.2] set];
+  NSRectFillUsingOperation(borderRect, NSCompositeSourceOver);
+  NSDivideRect(bounds, &borderRect, &contentRect, 1, NSMinYEdge);
+
+  BrowserThemeProvider* themeProvider =
+      static_cast<BrowserThemeProvider*>([[self window] themeProvider]);
+  if (!themeProvider)
+    return;
+
+  NSColor* bezelColor = themeProvider->GetNSColor(
+      themeProvider->UsingDefaultTheme() ?
+          BrowserThemeProvider::COLOR_TOOLBAR_BEZEL :
+          BrowserThemeProvider::COLOR_TOOLBAR, true);
+  [bezelColor set];
+  NSRectFill(borderRect);
+  NSRectFillUsingOperation(borderRect, NSCompositeSourceOver);
+}
+
 - (void)drawRect:(NSRect)rect {
   NSRect boundsRect = [self bounds];
-  NSRect borderRect, contentRect;
-  NSDivideRect(boundsRect, &borderRect, &contentRect, 1, NSMinYEdge);
-  [[NSColor colorWithCalibratedWhite:0.0 alpha:0.2] set];
 
-  NSRectFillUsingOperation(borderRect, NSCompositeSourceOver);
+  [self drawBorder:boundsRect];
 
   // Draw drop-indicator arrow (if appropriate).
   // TODO(viettrungluu): this is all a stop-gap measure.
@@ -62,7 +88,7 @@
 
     // Height we have to work with (insetting on the top).
     CGFloat availableHeight =
-        NSMaxY([self bounds]) - arrowTipPos.y - kArrowTopInset;
+        NSMaxY(boundsRect) - arrowTipPos.y - kArrowTopInset;
     DCHECK(availableHeight >= 5);
 
     // Based on the knobs above, calculate actual dimensions which we'll need
@@ -96,6 +122,12 @@
   }
 }
 
+// YES if a double-click in the background of the tab strip minimizes the
+// window.
+- (BOOL)doubleClickMinimizesWindow {
+  return YES;
+}
+
 // We accept first mouse so clicks onto close/zoom/miniaturize buttons and
 // title bar double-clicks are properly detected even when the window is in the
 // background.
@@ -105,6 +137,12 @@
 
 // Trap double-clicks and make them miniaturize the browser window.
 - (void)mouseUp:(NSEvent*)event {
+  // Bail early if double-clicks are disabled.
+  if (![self doubleClickMinimizesWindow]) {
+    [super mouseUp:event];
+    return;
+  }
+
   NSInteger clickCount = [event clickCount];
   NSTimeInterval timestamp = [event timestamp];
 
@@ -164,6 +202,10 @@
     return NSAccessibilityGroupRole;
 
   return [super accessibilityAttributeValue:attribute];
+}
+
+- (ViewID)viewID {
+  return VIEW_ID_TAB_STRIP;
 }
 
 @end

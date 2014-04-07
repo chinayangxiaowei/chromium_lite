@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_CONTROLS_TEXTFIELD_NATIVE_TEXTFIELD_GTK_H_
 #define VIEWS_CONTROLS_TEXTFIELD_NATIVE_TEXTFIELD_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
@@ -24,6 +25,7 @@ class NativeTextfieldGtk : public NativeControlGtk,
 
   // Returns the inner border of the entry.
   static gfx::Insets GetEntryInnerBorder(GtkEntry* entry);
+  static gfx::Insets GetTextViewInnerBorder(GtkTextView* text_view);
 
   // Overridden from NativeTextfieldWrapper:
   virtual string16 GetText() const;
@@ -39,8 +41,10 @@ class NativeTextfieldGtk : public NativeControlGtk,
   virtual void UpdateFont();
   virtual void UpdateIsPassword();
   virtual void UpdateEnabled();
+  virtual bool IsPassword();
   virtual gfx::Insets CalculateInsets();
-  virtual void SetHorizontalMargins(int left, int right);
+  virtual void UpdateHorizontalMargins();
+  virtual void UpdateVerticalMargins();
   virtual void SetFocus();
   virtual View* GetView();
   virtual gfx::NativeView GetTestingHandle() const;

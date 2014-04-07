@@ -29,8 +29,6 @@ using base::Time;
 
 namespace net {
 
-namespace {
-
 // Certificates for test data. They're obtained with:
 //
 // $ openssl s_client -connect [host]:443 -showcerts > /tmp/host.pem < /dev/null
@@ -76,6 +74,93 @@ unsigned char unosoft_hu_fingerprint[] = {
   0x25, 0x66, 0xf2, 0xec, 0x8b, 0x0f, 0xbf, 0xd8
 };
 
+// The fingerprint of the Google certificate used in the parsing tests,
+// which is newer than the one included in the x509_certificate_data.h
+unsigned char google_parse_fingerprint[] = {
+  0x40, 0x50, 0x62, 0xe5, 0xbe, 0xfd, 0xe4, 0xaf, 0x97, 0xe9, 0x38, 0x2a,
+  0xf1, 0x6c, 0xc8, 0x7c, 0x8f, 0xb7, 0xc4, 0xe2
+};
+
+// The fingerprint for the Thawte SGC certificate
+unsigned char thawte_parse_fingerprint[] = {
+  0xec, 0x07, 0x10, 0x03, 0xd8, 0xf5, 0xa3, 0x7f, 0x42, 0xc4, 0x55, 0x7f,
+  0x65, 0x6a, 0xae, 0x86, 0x65, 0xfa, 0x4b, 0x02
+};
+
+// Dec 18 00:00:00 2009 GMT
+const double kGoogleParseValidFrom = 1261094400;
+// Dec 18 23:59:59 2011 GMT
+const double kGoogleParseValidTo = 1324252799;
+
+struct CertificateFormatTestData {
+  const char* file_name;
+  X509Certificate::Format format;
+  unsigned char* chain_fingerprints[3];
+};
+
+const CertificateFormatTestData FormatTestData[] = {
+  // DER Parsing - single certificate, DER encoded
+  { "google.single.der", X509Certificate::FORMAT_SINGLE_CERTIFICATE,
+    { google_parse_fingerprint,
+      NULL, } },
+  // DER parsing - single certificate, PEM encoded
+  { "google.single.pem", X509Certificate::FORMAT_SINGLE_CERTIFICATE,
+    { google_parse_fingerprint,
+      NULL, } },
+  // PEM parsing - single certificate, PEM encoded with a PEB of
+  // "CERTIFICATE"
+  { "google.single.pem", X509Certificate::FORMAT_PEM_CERT_SEQUENCE,
+    { google_parse_fingerprint,
+      NULL, } },
+  // PEM parsing - sequence of certificates, PEM encoded with a PEB of
+  // "CERTIFICATE"
+  { "google.chain.pem", X509Certificate::FORMAT_PEM_CERT_SEQUENCE,
+    { google_parse_fingerprint,
+      thawte_parse_fingerprint,
+      NULL, } },
+  // PKCS#7 parsing - "degenerate" SignedData collection of certificates, DER
+  // encoding
+  { "google.binary.p7b", X509Certificate::FORMAT_PKCS7,
+    { google_parse_fingerprint,
+      thawte_parse_fingerprint,
+      NULL, } },
+  // PKCS#7 parsing - "degenerate" SignedData collection of certificates, PEM
+  // encoded with a PEM PEB of "CERTIFICATE"
+  { "google.pem_cert.p7b", X509Certificate::FORMAT_PKCS7,
+    { google_parse_fingerprint,
+      thawte_parse_fingerprint,
+      NULL, } },
+  // PKCS#7 parsing - "degenerate" SignedData collection of certificates, PEM
+  // encoded with a PEM PEB of "PKCS7"
+  { "google.pem_pkcs7.p7b", X509Certificate::FORMAT_PKCS7,
+    { google_parse_fingerprint,
+      thawte_parse_fingerprint,
+      NULL, } },
+  // All of the above, this time using auto-detection
+  { "google.single.der", X509Certificate::FORMAT_AUTO,
+    { google_parse_fingerprint,
+      NULL, } },
+  { "google.single.pem", X509Certificate::FORMAT_AUTO,
+    { google_parse_fingerprint,
+      NULL, } },
+  { "google.chain.pem", X509Certificate::FORMAT_AUTO,
+    { google_parse_fingerprint,
+      thawte_parse_fingerprint,
+      NULL, } },
+  { "google.binary.p7b", X509Certificate::FORMAT_AUTO,
+    { google_parse_fingerprint,
+      thawte_parse_fingerprint,
+      NULL, } },
+  { "google.pem_cert.p7b", X509Certificate::FORMAT_AUTO,
+    { google_parse_fingerprint,
+      thawte_parse_fingerprint,
+      NULL, } },
+  { "google.pem_pkcs7.p7b", X509Certificate::FORMAT_AUTO,
+    { google_parse_fingerprint,
+      thawte_parse_fingerprint,
+      NULL, } },
+};
+
 // Returns a FilePath object representing the src/net/data/ssl/certificates
 // directory in the source tree.
 FilePath GetTestCertsDirectory() {
@@ -100,50 +185,60 @@ X509Certificate* ImportCertFromFile(const FilePath& certs_dir,
   return X509Certificate::CreateFromBytes(cert_data.data(), cert_data.size());
 }
 
-}  // namespace
+CertificateList CreateCertificateListFromFile(
+    const FilePath& certs_dir,
+    const std::string& cert_file,
+    int format) {
+  FilePath cert_path = certs_dir.AppendASCII(cert_file);
+  std::string cert_data;
+  if (!file_util::ReadFileToString(cert_path, &cert_data))
+    return CertificateList();
+  return X509Certificate::CreateCertificateListFromBytes(cert_data.data(),
+                                                         cert_data.size(),
+                                                         format);
+}
 
-TEST(X509CertificateTest, GoogleCertParsing) {
-  scoped_refptr<X509Certificate> google_cert = X509Certificate::CreateFromBytes(
-      reinterpret_cast<const char*>(google_der), sizeof(google_der));
-
+void CheckGoogleCert(const scoped_refptr<X509Certificate>& google_cert,
+                     unsigned char* expected_fingerprint,
+                     double valid_from, double valid_to) {
   ASSERT_NE(static_cast<X509Certificate*>(NULL), google_cert);
 
-  const X509Certificate::Principal& subject = google_cert->subject();
+  const CertPrincipal& subject = google_cert->subject();
   EXPECT_EQ("www.google.com", subject.common_name);
   EXPECT_EQ("Mountain View", subject.locality_name);
   EXPECT_EQ("California", subject.state_or_province_name);
   EXPECT_EQ("US", subject.country_name);
   EXPECT_EQ(0U, subject.street_addresses.size());
-  EXPECT_EQ(1U, subject.organization_names.size());
+  ASSERT_EQ(1U, subject.organization_names.size());
   EXPECT_EQ("Google Inc", subject.organization_names[0]);
   EXPECT_EQ(0U, subject.organization_unit_names.size());
   EXPECT_EQ(0U, subject.domain_components.size());
 
-  const X509Certificate::Principal& issuer = google_cert->issuer();
+  const CertPrincipal& issuer = google_cert->issuer();
   EXPECT_EQ("Thawte SGC CA", issuer.common_name);
   EXPECT_EQ("", issuer.locality_name);
   EXPECT_EQ("", issuer.state_or_province_name);
   EXPECT_EQ("ZA", issuer.country_name);
   EXPECT_EQ(0U, issuer.street_addresses.size());
-  EXPECT_EQ(1U, issuer.organization_names.size());
+  ASSERT_EQ(1U, issuer.organization_names.size());
   EXPECT_EQ("Thawte Consulting (Pty) Ltd.", issuer.organization_names[0]);
   EXPECT_EQ(0U, issuer.organization_unit_names.size());
   EXPECT_EQ(0U, issuer.domain_components.size());
 
   // Use DoubleT because its epoch is the same on all platforms
   const Time& valid_start = google_cert->valid_start();
-  EXPECT_EQ(1238192407, valid_start.ToDoubleT());  // Mar 27 22:20:07 2009 GMT
+  EXPECT_EQ(valid_from, valid_start.ToDoubleT());
 
   const Time& valid_expiry = google_cert->valid_expiry();
-  EXPECT_EQ(1269728407, valid_expiry.ToDoubleT());  // Mar 27 22:20:07 2010 GMT
+  EXPECT_EQ(valid_to, valid_expiry.ToDoubleT());
 
-  const X509Certificate::Fingerprint& fingerprint = google_cert->fingerprint();
+  const SHA1Fingerprint& fingerprint = google_cert->fingerprint();
   for (size_t i = 0; i < 20; ++i)
-    EXPECT_EQ(google_fingerprint[i], fingerprint.data[i]);
+    EXPECT_EQ(expected_fingerprint[i], fingerprint.data[i]);
 
   std::vector<std::string> dns_names;
   google_cert->GetDNSNames(&dns_names);
-  EXPECT_EQ(1U, dns_names.size());
+  ASSERT_EQ(1U, dns_names.size());
   EXPECT_EQ("www.google.com", dns_names[0]);
 
 #if TEST_EV
@@ -156,32 +251,42 @@ TEST(X509CertificateTest, GoogleCertParsing) {
 #endif
 }
 
+TEST(X509CertificateTest, GoogleCertParsing) {
+  scoped_refptr<X509Certificate> google_cert =
+      X509Certificate::CreateFromBytes(
+          reinterpret_cast<const char*>(google_der), sizeof(google_der));
+
+  CheckGoogleCert(google_cert, google_fingerprint,
+                  1238192407,   // Mar 27 22:20:07 2009 GMT
+                  1269728407);  // Mar 27 22:20:07 2010 GMT
+}
+
 TEST(X509CertificateTest, WebkitCertParsing) {
   scoped_refptr<X509Certificate> webkit_cert = X509Certificate::CreateFromBytes(
       reinterpret_cast<const char*>(webkit_der), sizeof(webkit_der));
 
   ASSERT_NE(static_cast<X509Certificate*>(NULL), webkit_cert);
 
-  const X509Certificate::Principal& subject = webkit_cert->subject();
+  const CertPrincipal& subject = webkit_cert->subject();
   EXPECT_EQ("Cupertino", subject.locality_name);
   EXPECT_EQ("California", subject.state_or_province_name);
   EXPECT_EQ("US", subject.country_name);
   EXPECT_EQ(0U, subject.street_addresses.size());
-  EXPECT_EQ(1U, subject.organization_names.size());
+  ASSERT_EQ(1U, subject.organization_names.size());
   EXPECT_EQ("Apple Inc.", subject.organization_names[0]);
-  EXPECT_EQ(1U, subject.organization_unit_names.size());
+  ASSERT_EQ(1U, subject.organization_unit_names.size());
   EXPECT_EQ("Mac OS Forge", subject.organization_unit_names[0]);
   EXPECT_EQ(0U, subject.domain_components.size());
 
-  const X509Certificate::Principal& issuer = webkit_cert->issuer();
+  const CertPrincipal& issuer = webkit_cert->issuer();
   EXPECT_EQ("Go Daddy Secure Certification Authority", issuer.common_name);
   EXPECT_EQ("Scottsdale", issuer.locality_name);
   EXPECT_EQ("Arizona", issuer.state_or_province_name);
   EXPECT_EQ("US", issuer.country_name);
   EXPECT_EQ(0U, issuer.street_addresses.size());
-  EXPECT_EQ(1U, issuer.organization_names.size());
+  ASSERT_EQ(1U, issuer.organization_names.size());
   EXPECT_EQ("GoDaddy.com, Inc.", issuer.organization_names[0]);
-  EXPECT_EQ(1U, issuer.organization_unit_names.size());
+  ASSERT_EQ(1U, issuer.organization_unit_names.size());
   EXPECT_EQ("http://certificates.godaddy.com/repository",
       issuer.organization_unit_names[0]);
   EXPECT_EQ(0U, issuer.domain_components.size());
@@ -193,13 +298,13 @@ TEST(X509CertificateTest, WebkitCertParsing) {
   const Time& valid_expiry = webkit_cert->valid_expiry();
   EXPECT_EQ(1300491319, valid_expiry.ToDoubleT());  // Mar 18 23:35:19 2011 GMT
 
-  const X509Certificate::Fingerprint& fingerprint = webkit_cert->fingerprint();
+  const SHA1Fingerprint& fingerprint = webkit_cert->fingerprint();
   for (size_t i = 0; i < 20; ++i)
     EXPECT_EQ(webkit_fingerprint[i], fingerprint.data[i]);
 
   std::vector<std::string> dns_names;
   webkit_cert->GetDNSNames(&dns_names);
-  EXPECT_EQ(2U, dns_names.size());
+  ASSERT_EQ(2U, dns_names.size());
   EXPECT_EQ("*.webkit.org", dns_names[0]);
   EXPECT_EQ("webkit.org", dns_names[1]);
 
@@ -218,26 +323,26 @@ TEST(X509CertificateTest, ThawteCertParsing) {
 
   ASSERT_NE(static_cast<X509Certificate*>(NULL), thawte_cert);
 
-  const X509Certificate::Principal& subject = thawte_cert->subject();
+  const CertPrincipal& subject = thawte_cert->subject();
   EXPECT_EQ("www.thawte.com", subject.common_name);
   EXPECT_EQ("Mountain View", subject.locality_name);
   EXPECT_EQ("California", subject.state_or_province_name);
   EXPECT_EQ("US", subject.country_name);
   EXPECT_EQ(0U, subject.street_addresses.size());
-  EXPECT_EQ(1U, subject.organization_names.size());
+  ASSERT_EQ(1U, subject.organization_names.size());
   EXPECT_EQ("Thawte Inc", subject.organization_names[0]);
   EXPECT_EQ(0U, subject.organization_unit_names.size());
   EXPECT_EQ(0U, subject.domain_components.size());
 
-  const X509Certificate::Principal& issuer = thawte_cert->issuer();
+  const CertPrincipal& issuer = thawte_cert->issuer();
   EXPECT_EQ("thawte Extended Validation SSL CA", issuer.common_name);
   EXPECT_EQ("", issuer.locality_name);
   EXPECT_EQ("", issuer.state_or_province_name);
   EXPECT_EQ("US", issuer.country_name);
   EXPECT_EQ(0U, issuer.street_addresses.size());
-  EXPECT_EQ(1U, issuer.organization_names.size());
+  ASSERT_EQ(1U, issuer.organization_names.size());
   EXPECT_EQ("thawte, Inc.", issuer.organization_names[0]);
-  EXPECT_EQ(1U, issuer.organization_unit_names.size());
+  ASSERT_EQ(1U, issuer.organization_unit_names.size());
   EXPECT_EQ("Terms of use at https://www.thawte.com/cps (c)06",
             issuer.organization_unit_names[0]);
   EXPECT_EQ(0U, issuer.domain_components.size());
@@ -249,13 +354,13 @@ TEST(X509CertificateTest, ThawteCertParsing) {
   const Time& valid_expiry = thawte_cert->valid_expiry();
   EXPECT_EQ(1263772799, valid_expiry.ToDoubleT());  // Jan 17 23:59:59 2010 GMT
 
-  const X509Certificate::Fingerprint& fingerprint = thawte_cert->fingerprint();
+  const SHA1Fingerprint& fingerprint = thawte_cert->fingerprint();
   for (size_t i = 0; i < 20; ++i)
     EXPECT_EQ(thawte_fingerprint[i], fingerprint.data[i]);
 
   std::vector<std::string> dns_names;
   thawte_cert->GetDNSNames(&dns_names);
-  EXPECT_EQ(1U, dns_names.size());
+  ASSERT_EQ(1U, dns_names.size());
   EXPECT_EQ("www.thawte.com", dns_names[0]);
 
 #if TEST_EV
@@ -281,7 +386,7 @@ TEST(X509CertificateTest, PaypalNullCertParsing) {
 
   ASSERT_NE(static_cast<X509Certificate*>(NULL), paypal_null_cert);
 
-  const X509Certificate::Fingerprint& fingerprint =
+  const SHA1Fingerprint& fingerprint =
       paypal_null_cert->fingerprint();
   for (size_t i = 0; i < 20; ++i)
     EXPECT_EQ(paypal_null_fingerprint[i], fingerprint.data[i]);
@@ -294,7 +399,7 @@ TEST(X509CertificateTest, PaypalNullCertParsing) {
   // Either the system crypto library should correctly report a certificate
   // name mismatch, or our certificate blacklist should cause us to report an
   // invalid certificate.
-#if defined(OS_LINUX) || defined(OS_WIN)
+#if !defined(OS_MACOSX) && !defined(USE_OPENSSL)
   EXPECT_NE(0, verify_result.cert_status &
             (CERT_STATUS_COMMON_NAME_INVALID | CERT_STATUS_INVALID));
 #endif
@@ -309,7 +414,7 @@ TEST(X509CertificateTest, UnoSoftCertParsing) {
 
   ASSERT_NE(static_cast<X509Certificate*>(NULL), unosoft_hu_cert);
 
-  const X509Certificate::Fingerprint& fingerprint =
+  const SHA1Fingerprint& fingerprint =
       unosoft_hu_cert->fingerprint();
   for (size_t i = 0; i < 20; ++i)
     EXPECT_EQ(unosoft_hu_fingerprint[i], fingerprint.data[i]);
@@ -322,7 +427,7 @@ TEST(X509CertificateTest, UnoSoftCertParsing) {
   EXPECT_NE(0, verify_result.cert_status & CERT_STATUS_AUTHORITY_INVALID);
 }
 
-#if defined(USE_NSS)
+#if defined(USE_NSS) || defined(USE_OPENSSL)
 // A regression test for http://crbug.com/31497.
 // This certificate will expire on 2012-04-08.
 // TODO(wtc): we can't run this test on Mac because MacTrustedCertificates
@@ -347,9 +452,16 @@ TEST(X509CertificateTest, IntermediateCARequireExplicitPolicy) {
       LoadTemporaryRootCert(root_cert_path);
   ASSERT_NE(static_cast<X509Certificate*>(NULL), root_cert);
 
+  X509Certificate::OSCertHandles intermediates;
+  intermediates.push_back(intermediate_cert->os_cert_handle());
+  scoped_refptr<X509Certificate> cert_chain =
+      X509Certificate::CreateFromHandle(server_cert->os_cert_handle(),
+                                        X509Certificate::SOURCE_FROM_NETWORK,
+                                        intermediates);
+
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = server_cert->Verify("www.us.army.mil", flags, &verify_result);
+  int error = cert_chain->Verify("www.us.army.mil", flags, &verify_result);
   EXPECT_EQ(OK, error);
   EXPECT_EQ(0, verify_result.cert_status);
 }
@@ -372,6 +484,7 @@ TEST(X509CertificateTest, Cache) {
   scoped_refptr<X509Certificate> cert1 = X509Certificate::CreateFromHandle(
       google_cert_handle, X509Certificate::SOURCE_LONE_CERT_IMPORT,
       X509Certificate::OSCertHandles());
+  X509Certificate::FreeOSCertHandle(google_cert_handle);
 
   // Add a certificate from the same source (SOURCE_LONE_CERT_IMPORT).  This
   // should return the cached certificate (cert1).
@@ -380,6 +493,7 @@ TEST(X509CertificateTest, Cache) {
   scoped_refptr<X509Certificate> cert2 = X509Certificate::CreateFromHandle(
       google_cert_handle, X509Certificate::SOURCE_LONE_CERT_IMPORT,
       X509Certificate::OSCertHandles());
+  X509Certificate::FreeOSCertHandle(google_cert_handle);
 
   EXPECT_EQ(cert1, cert2);
 
@@ -390,6 +504,7 @@ TEST(X509CertificateTest, Cache) {
   scoped_refptr<X509Certificate> cert3 = X509Certificate::CreateFromHandle(
       google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK,
       X509Certificate::OSCertHandles());
+  X509Certificate::FreeOSCertHandle(google_cert_handle);
 
   EXPECT_NE(cert1, cert3);
 
@@ -400,6 +515,7 @@ TEST(X509CertificateTest, Cache) {
   scoped_refptr<X509Certificate> cert4 = X509Certificate::CreateFromHandle(
       google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK,
       X509Certificate::OSCertHandles());
+  X509Certificate::FreeOSCertHandle(google_cert_handle);
 
   EXPECT_EQ(cert3, cert4);
 
@@ -408,6 +524,7 @@ TEST(X509CertificateTest, Cache) {
   scoped_refptr<X509Certificate> cert5 = X509Certificate::CreateFromHandle(
       google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK,
       X509Certificate::OSCertHandles());
+  X509Certificate::FreeOSCertHandle(google_cert_handle);
 
   EXPECT_EQ(cert3, cert5);
 }
@@ -433,90 +550,189 @@ TEST(X509CertificateTest, Policy) {
   scoped_refptr<X509Certificate> webkit_cert = X509Certificate::CreateFromBytes(
       reinterpret_cast<const char*>(webkit_der), sizeof(webkit_der));
 
-  X509Certificate::Policy policy;
+  CertPolicy policy;
 
-  EXPECT_EQ(policy.Check(google_cert.get()), X509Certificate::Policy::UNKNOWN);
-  EXPECT_EQ(policy.Check(webkit_cert.get()), X509Certificate::Policy::UNKNOWN);
+  EXPECT_EQ(policy.Check(google_cert.get()), CertPolicy::UNKNOWN);
+  EXPECT_EQ(policy.Check(webkit_cert.get()), CertPolicy::UNKNOWN);
   EXPECT_FALSE(policy.HasAllowedCert());
   EXPECT_FALSE(policy.HasDeniedCert());
 
   policy.Allow(google_cert.get());
 
-  EXPECT_EQ(policy.Check(google_cert.get()), X509Certificate::Policy::ALLOWED);
-  EXPECT_EQ(policy.Check(webkit_cert.get()), X509Certificate::Policy::UNKNOWN);
+  EXPECT_EQ(policy.Check(google_cert.get()), CertPolicy::ALLOWED);
+  EXPECT_EQ(policy.Check(webkit_cert.get()), CertPolicy::UNKNOWN);
   EXPECT_TRUE(policy.HasAllowedCert());
   EXPECT_FALSE(policy.HasDeniedCert());
 
   policy.Deny(google_cert.get());
 
-  EXPECT_EQ(policy.Check(google_cert.get()), X509Certificate::Policy::DENIED);
-  EXPECT_EQ(policy.Check(webkit_cert.get()), X509Certificate::Policy::UNKNOWN);
+  EXPECT_EQ(policy.Check(google_cert.get()), CertPolicy::DENIED);
+  EXPECT_EQ(policy.Check(webkit_cert.get()), CertPolicy::UNKNOWN);
   EXPECT_FALSE(policy.HasAllowedCert());
   EXPECT_TRUE(policy.HasDeniedCert());
 
   policy.Allow(webkit_cert.get());
 
-  EXPECT_EQ(policy.Check(google_cert.get()), X509Certificate::Policy::DENIED);
-  EXPECT_EQ(policy.Check(webkit_cert.get()), X509Certificate::Policy::ALLOWED);
+  EXPECT_EQ(policy.Check(google_cert.get()), CertPolicy::DENIED);
+  EXPECT_EQ(policy.Check(webkit_cert.get()), CertPolicy::ALLOWED);
   EXPECT_TRUE(policy.HasAllowedCert());
   EXPECT_TRUE(policy.HasDeniedCert());
 }
 
 #if defined(OS_MACOSX) || defined(OS_WIN)
 TEST(X509CertificateTest, IntermediateCertificates) {
-  X509Certificate::OSCertHandle handle1, handle2, handle3, handle4;
+  scoped_refptr<X509Certificate> webkit_cert =
+      X509Certificate::CreateFromBytes(
+          reinterpret_cast<const char*>(webkit_der), sizeof(webkit_der));
 
+  scoped_refptr<X509Certificate> thawte_cert =
+      X509Certificate::CreateFromBytes(
+          reinterpret_cast<const char*>(thawte_der), sizeof(thawte_der));
+
+  scoped_refptr<X509Certificate> paypal_cert =
+      X509Certificate::CreateFromBytes(
+          reinterpret_cast<const char*>(paypal_null_der),
+          sizeof(paypal_null_der));
+
+  X509Certificate::OSCertHandle google_handle;
   // Create object with no intermediates:
-  handle1 = X509Certificate::CreateOSCertHandleFromBytes(
+  google_handle = X509Certificate::CreateOSCertHandleFromBytes(
       reinterpret_cast<const char*>(google_der), sizeof(google_der));
   X509Certificate::OSCertHandles intermediates1;
   scoped_refptr<X509Certificate> cert1;
-  cert1 = X509Certificate::CreateFromHandle(handle1,
-      X509Certificate::SOURCE_FROM_NETWORK,
-      intermediates1);
+  cert1 = X509Certificate::CreateFromHandle(
+      google_handle, X509Certificate::SOURCE_FROM_NETWORK, intermediates1);
   EXPECT_TRUE(cert1->HasIntermediateCertificates(intermediates1));
-  handle2 = X509Certificate::CreateOSCertHandleFromBytes(
-      reinterpret_cast<const char*>(webkit_der), sizeof(webkit_der));
-  EXPECT_FALSE(cert1->HasIntermediateCertificate(handle2));
+  EXPECT_FALSE(cert1->HasIntermediateCertificate(
+      webkit_cert->os_cert_handle()));
 
   // Create object with 2 intermediates:
-  handle1 = X509Certificate::CreateOSCertHandleFromBytes(
-      reinterpret_cast<const char*>(google_der), sizeof(google_der));
   X509Certificate::OSCertHandles intermediates2;
-  handle3 = X509Certificate::CreateOSCertHandleFromBytes(
-      reinterpret_cast<const char*>(thawte_der), sizeof(thawte_der));
-  intermediates2.push_back(handle2);
-  intermediates2.push_back(handle3);
+  intermediates2.push_back(webkit_cert->os_cert_handle());
+  intermediates2.push_back(thawte_cert->os_cert_handle());
   scoped_refptr<X509Certificate> cert2;
   cert2 = X509Certificate::CreateFromHandle(
-      X509Certificate::DupOSCertHandle(handle1),
-      X509Certificate::SOURCE_FROM_NETWORK,
-      intermediates2);
+      google_handle, X509Certificate::SOURCE_FROM_NETWORK, intermediates2);
 
   // The cache should have stored cert2 'cause it has more intermediates:
   EXPECT_NE(cert1, cert2);
 
   // Verify it has all the intermediates:
-  EXPECT_TRUE(cert2->HasIntermediateCertificate(handle2));
-  EXPECT_TRUE(cert2->HasIntermediateCertificate(handle3));
-  handle4 = X509Certificate::CreateOSCertHandleFromBytes(
-      reinterpret_cast<const char*>(paypal_null_der), sizeof(paypal_null_der));
-  EXPECT_FALSE(cert2->HasIntermediateCertificate(handle4));
+  EXPECT_TRUE(cert2->HasIntermediateCertificate(
+      webkit_cert->os_cert_handle()));
+  EXPECT_TRUE(cert2->HasIntermediateCertificate(
+      thawte_cert->os_cert_handle()));
+  EXPECT_FALSE(cert2->HasIntermediateCertificate(
+      paypal_cert->os_cert_handle()));
 
   // Create object with 1 intermediate:
-  handle3 = X509Certificate::CreateOSCertHandleFromBytes(
-      reinterpret_cast<const char*>(thawte_der), sizeof(thawte_der));
   X509Certificate::OSCertHandles intermediates3;
-  intermediates2.push_back(handle3);
+  intermediates2.push_back(thawte_cert->os_cert_handle());
   scoped_refptr<X509Certificate> cert3;
   cert3 = X509Certificate::CreateFromHandle(
-      X509Certificate::DupOSCertHandle(handle1),
-      X509Certificate::SOURCE_FROM_NETWORK,
-      intermediates3);
+      google_handle, X509Certificate::SOURCE_FROM_NETWORK, intermediates3);
 
   // The cache should have returned cert2 'cause it has more intermediates:
   EXPECT_EQ(cert3, cert2);
+
+  // Cleanup
+  X509Certificate::FreeOSCertHandle(google_handle);
 }
 #endif
+
+#if defined(OS_MACOSX)
+TEST(X509CertificateTest, IsIssuedBy) {
+  FilePath certs_dir = GetTestCertsDirectory();
+
+  // Test a client certificate from MIT.
+  scoped_refptr<X509Certificate> mit_davidben_cert =
+      ImportCertFromFile(certs_dir, "mit.davidben.der");
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), mit_davidben_cert);
+
+  CertPrincipal mit_issuer;
+  mit_issuer.country_name = "US";
+  mit_issuer.state_or_province_name = "Massachusetts";
+  mit_issuer.organization_names.push_back(
+      "Massachusetts Institute of Technology");
+  mit_issuer.organization_unit_names.push_back("Client CA v1");
+
+  // IsIssuedBy should return true even if it cannot build a chain
+  // with that principal.
+  std::vector<CertPrincipal> mit_issuers(1, mit_issuer);
+  EXPECT_TRUE(mit_davidben_cert->IsIssuedBy(mit_issuers));
+
+  // Test a client certificate from FOAF.ME.
+  scoped_refptr<X509Certificate> foaf_me_chromium_test_cert =
+      ImportCertFromFile(certs_dir, "foaf.me.chromium-test-cert.der");
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), foaf_me_chromium_test_cert);
+
+  CertPrincipal foaf_issuer;
+  foaf_issuer.common_name = "FOAF.ME";
+  foaf_issuer.locality_name = "Wimbledon";
+  foaf_issuer.state_or_province_name = "LONDON";
+  foaf_issuer.country_name = "GB";
+  foaf_issuer.organization_names.push_back("FOAF.ME");
+
+  std::vector<CertPrincipal> foaf_issuers(1, foaf_issuer);
+  EXPECT_TRUE(foaf_me_chromium_test_cert->IsIssuedBy(foaf_issuers));
+
+  // And test some combinations and mismatches.
+  std::vector<CertPrincipal> both_issuers;
+  both_issuers.push_back(mit_issuer);
+  both_issuers.push_back(foaf_issuer);
+  EXPECT_TRUE(foaf_me_chromium_test_cert->IsIssuedBy(both_issuers));
+  EXPECT_TRUE(mit_davidben_cert->IsIssuedBy(both_issuers));
+  EXPECT_FALSE(foaf_me_chromium_test_cert->IsIssuedBy(mit_issuers));
+  EXPECT_FALSE(mit_davidben_cert->IsIssuedBy(foaf_issuers));
+}
+#endif  // defined(OS_MACOSX)
+
+class X509CertificateParseTest
+    : public testing::TestWithParam<CertificateFormatTestData> {
+ public:
+  virtual ~X509CertificateParseTest() {}
+  virtual void SetUp() {
+    test_data_ = GetParam();
+  }
+  virtual void TearDown() {}
+
+ protected:
+  CertificateFormatTestData test_data_;
+};
+
+TEST_P(X509CertificateParseTest, CanParseFormat) {
+  FilePath certs_dir = GetTestCertsDirectory();
+  CertificateList certs = CreateCertificateListFromFile(
+      certs_dir, test_data_.file_name, test_data_.format);
+  ASSERT_FALSE(certs.empty());
+  ASSERT_LE(certs.size(), arraysize(test_data_.chain_fingerprints));
+  CheckGoogleCert(certs.front(), google_parse_fingerprint,
+                  kGoogleParseValidFrom, kGoogleParseValidTo);
+
+  size_t i;
+  for (i = 0; i < arraysize(test_data_.chain_fingerprints); ++i) {
+    if (test_data_.chain_fingerprints[i] == NULL) {
+      // No more test certificates expected - make sure no more were
+      // returned before marking this test a success.
+      EXPECT_EQ(i, certs.size());
+      break;
+    }
+
+    // A cert is expected - make sure that one was parsed.
+    ASSERT_LT(i, certs.size());
+
+    // Compare the parsed certificate with the expected certificate, by
+    // comparing fingerprints.
+    const X509Certificate* cert = certs[i];
+    const SHA1Fingerprint& actual_fingerprint = cert->fingerprint();
+    unsigned char* expected_fingerprint = test_data_.chain_fingerprints[i];
+
+    for (size_t j = 0; j < 20; ++j)
+      EXPECT_EQ(expected_fingerprint[j], actual_fingerprint.data[j]);
+  }
+}
+
+INSTANTIATE_TEST_CASE_P(, X509CertificateParseTest,
+                        testing::ValuesIn(FormatTestData));
 
 }  // namespace net

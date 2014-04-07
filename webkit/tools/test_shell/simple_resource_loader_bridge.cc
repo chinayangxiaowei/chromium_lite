@@ -32,37 +32,86 @@
 
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 
+#include "base/file_path.h"
+#include "base/file_util.h"
+#include "base/logging.h"
 #include "base/message_loop.h"
+#include "base/message_loop_proxy.h"
+#if defined(OS_MACOSX) || defined(OS_WIN)
+#include "base/nss_util.h"
+#endif
 #include "base/ref_counted.h"
 #include "base/time.h"
 #include "base/timer.h"
 #include "base/thread.h"
 #include "base/waitable_event.h"
+#include "net/base/cookie_store.h"
+#include "net/base/file_stream.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
 #include "net/base/static_cookie_policy.h"
 #include "net/base/upload_data.h"
+#include "net/http/http_cache.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/proxy/proxy_service.h"
+#if defined(OS_WIN)
+#include "net/socket/ssl_client_socket_nss_factory.h"
+#endif
 #include "net/url_request/url_request.h"
+#include "net/url_request/url_request_job.h"
 #include "webkit/appcache/appcache_interfaces.h"
+#include "webkit/blob/blob_storage_controller.h"
+#include "webkit/blob/blob_url_request_job.h"
+#include "webkit/blob/deletable_file_reference.h"
 #include "webkit/glue/resource_loader_bridge.h"
 #include "webkit/tools/test_shell/simple_appcache_system.h"
 #include "webkit/tools/test_shell/simple_socket_stream_bridge.h"
 #include "webkit/tools/test_shell/test_shell_request_context.h"
+#include "webkit/tools/test_shell/test_shell_webblobregistry_impl.h"
 
 using webkit_glue::ResourceLoaderBridge;
+using webkit_glue::ResourceResponseInfo;
 using net::StaticCookiePolicy;
 using net::HttpResponseHeaders;
+using webkit_blob::DeletableFileReference;
 
 namespace {
 
-//-----------------------------------------------------------------------------
+struct TestShellRequestContextParams {
+  TestShellRequestContextParams(
+      const FilePath& in_cache_path,
+      net::HttpCache::Mode in_cache_mode,
+      bool in_no_proxy)
+      : cache_path(in_cache_path),
+        cache_mode(in_cache_mode),
+        no_proxy(in_no_proxy),
+        accept_all_cookies(false) {}
 
-URLRequestContext* request_context = NULL;
-base::Thread* io_thread = NULL;
+  FilePath cache_path;
+  net::HttpCache::Mode cache_mode;
+  bool no_proxy;
+  bool accept_all_cookies;
+};
+
+static URLRequestJob* BlobURLRequestJobFactory(URLRequest* request,
+                                               const std::string& scheme) {
+  webkit_blob::BlobStorageController* blob_storage_controller =
+      static_cast<TestShellRequestContext*>(request->context())->
+          blob_storage_controller();
+  return new webkit_blob::BlobURLRequestJob(
+      request,
+      blob_storage_controller->GetBlobDataFromUrl(request->url()),
+      NULL);
+}
+
+TestShellRequestContextParams* g_request_context_params = NULL;
+URLRequestContext* g_request_context = NULL;
+base::Thread* g_cache_thread = NULL;
+
+//-----------------------------------------------------------------------------
 
 class IOThread : public base::Thread {
  public:
@@ -76,18 +125,49 @@ class IOThread : public base::Thread {
   }
 
   virtual void Init() {
-    SimpleAppCacheSystem::InitializeOnIOThread(request_context);
-    SimpleSocketStreamBridge::InitializeOnIOThread(request_context);
+    if (g_request_context_params) {
+      g_request_context = new TestShellRequestContext(
+          g_request_context_params->cache_path,
+          g_request_context_params->cache_mode,
+          g_request_context_params->no_proxy);
+      SetAcceptAllCookies(g_request_context_params->accept_all_cookies);
+      delete g_request_context_params;
+      g_request_context_params = NULL;
+    } else {
+      g_request_context = new TestShellRequestContext();
+      SetAcceptAllCookies(false);
+    }
+
+    g_request_context->AddRef();
+
+    SimpleAppCacheSystem::InitializeOnIOThread(g_request_context);
+    SimpleSocketStreamBridge::InitializeOnIOThread(g_request_context);
+
+    TestShellWebBlobRegistryImpl::InitializeOnIOThread(
+        static_cast<TestShellRequestContext*>(g_request_context)->
+            blob_storage_controller());
+    URLRequest::RegisterProtocolFactory("blob", &BlobURLRequestJobFactory);
   }
 
   virtual void CleanUp() {
     SimpleSocketStreamBridge::Cleanup();
-    if (request_context) {
-      request_context->Release();
-      request_context = NULL;
+    TestShellWebBlobRegistryImpl::Cleanup();
+    if (g_request_context) {
+      g_request_context->Release();
+      g_request_context = NULL;
     }
   }
+
+  void SetAcceptAllCookies(bool accept_all_cookies) {
+    StaticCookiePolicy::Type policy_type = accept_all_cookies ?
+        StaticCookiePolicy::ALLOW_ALL_COOKIES :
+        StaticCookiePolicy::BLOCK_THIRD_PARTY_COOKIES;
+    static_cast<StaticCookiePolicy*>(g_request_context->cookie_policy())->
+        set_type(policy_type);
+  }
 };
+
+IOThread* g_io_thread = NULL;
 
 //-----------------------------------------------------------------------------
 
@@ -100,6 +180,7 @@ struct RequestParams {
   int load_flags;
   ResourceType::Type request_type;
   int appcache_host_id;
+  bool download_to_file;
   scoped_refptr<net::UploadData> upload;
 };
 
@@ -114,7 +195,8 @@ class RequestProxy : public URLRequest::Delegate,
  public:
   // Takes ownership of the params.
   RequestProxy()
-      : buf_(new net::IOBuffer(kDataSize)),
+      : download_to_file_(false),
+        buf_(new net::IOBuffer(kDataSize)),
         last_upload_position_(0) {
   }
 
@@ -127,13 +209,13 @@ class RequestProxy : public URLRequest::Delegate,
     owner_loop_ = MessageLoop::current();
 
     // proxy over to the io thread
-    io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+    g_io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
         this, &RequestProxy::AsyncStart, params));
   }
 
   void Cancel() {
     // proxy over to the io thread
-    io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+    g_io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
         this, &RequestProxy::AsyncCancel));
   }
 
@@ -143,7 +225,7 @@ class RequestProxy : public URLRequest::Delegate,
   virtual ~RequestProxy() {
     // If we have a request, then we'd better be on the io thread!
     DCHECK(!request_.get() ||
-           MessageLoop::current() == io_thread->message_loop());
+           MessageLoop::current() == g_io_thread->message_loop());
   }
 
   // --------------------------------------------------------------------------
@@ -152,13 +234,13 @@ class RequestProxy : public URLRequest::Delegate,
   // these methods asynchronously.
 
   void NotifyReceivedRedirect(const GURL& new_url,
-                              const ResourceLoaderBridge::ResponseInfo& info) {
+                              const ResourceResponseInfo& info) {
     bool has_new_first_party_for_cookies = false;
     GURL new_first_party_for_cookies;
     if (peer_ && peer_->OnReceivedRedirect(new_url, info,
                                            &has_new_first_party_for_cookies,
                                            &new_first_party_for_cookies)) {
-      io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+      g_io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
           this, &RequestProxy::AsyncFollowDeferredRedirect,
           has_new_first_party_for_cookies, new_first_party_for_cookies));
     } else {
@@ -166,7 +248,7 @@ class RequestProxy : public URLRequest::Delegate,
     }
   }
 
-  void NotifyReceivedResponse(const ResourceLoaderBridge::ResponseInfo& info,
+  void NotifyReceivedResponse(const ResourceResponseInfo& info,
                               bool content_filtered) {
     if (peer_)
       peer_->OnReceivedResponse(info, content_filtered);
@@ -187,16 +269,28 @@ class RequestProxy : public URLRequest::Delegate,
     // peer could generate new requests in reponse to the received data, which
     // when run on the io thread, could race against this function in doing
     // another InvokeLater.  See bug 769249.
-    io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+    g_io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
         this, &RequestProxy::AsyncReadData));
 
     peer_->OnReceivedData(buf_copy.get(), bytes_read);
   }
 
+  void NotifyDownloadedData(int bytes_read) {
+    if (!peer_)
+      return;
+
+    // Continue reading more data, see the comment in NotifyReceivedData.
+    g_io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+        this, &RequestProxy::AsyncReadData));
+
+    peer_->OnDownloadedData(bytes_read);
+  }
+
   void NotifyCompletedRequest(const URLRequestStatus& status,
-                              const std::string& security_info) {
+                              const std::string& security_info,
+                              const base::Time& complete_time) {
     if (peer_) {
-      peer_->OnCompletedRequest(status, security_info);
+      peer_->OnCompletedRequest(status, security_info, complete_time);
       DropPeer();  // ensure no further notifications
     }
   }
@@ -211,16 +305,36 @@ class RequestProxy : public URLRequest::Delegate,
   // actions performed on the owner's thread.
 
   void AsyncStart(RequestParams* params) {
+    // Might need to resolve the blob references in the upload data.
+    if (params->upload) {
+      static_cast<TestShellRequestContext*>(g_request_context)->
+          blob_storage_controller()->ResolveBlobReferencesInUploadData(
+              params->upload.get());
+    }
+
     request_.reset(new URLRequest(params->url, this));
     request_->set_method(params->method);
     request_->set_first_party_for_cookies(params->first_party_for_cookies);
     request_->set_referrer(params->referrer.spec());
-    request_->SetExtraRequestHeaders(params->headers);
+    net::HttpRequestHeaders headers;
+    headers.AddHeadersFromString(params->headers);
+    request_->SetExtraRequestHeaders(headers);
     request_->set_load_flags(params->load_flags);
     request_->set_upload(params->upload.get());
-    request_->set_context(request_context);
+    request_->set_context(g_request_context);
     SimpleAppCacheSystem::SetExtraRequestInfo(
         request_.get(), params->appcache_host_id, params->request_type);
+
+    download_to_file_ = params->download_to_file;
+    if (download_to_file_) {
+      FilePath path;
+      if (file_util::CreateTemporaryFile(&path)) {
+        downloaded_file_ = DeletableFileReference::GetOrCreate(
+            path, base::MessageLoopProxy::CreateForCurrentThread());
+        file_stream_.Open(
+            path, base::PLATFORM_FILE_OPEN | base::PLATFORM_FILE_WRITE);
+      }
+    }
 
     request_->Start();
 
@@ -278,7 +392,7 @@ class RequestProxy : public URLRequest::Delegate,
 
   virtual void OnReceivedRedirect(
       const GURL& new_url,
-      const ResourceLoaderBridge::ResponseInfo& info,
+      const ResourceResponseInfo& info,
       bool* defer_redirect) {
     *defer_redirect = true;  // See AsyncFollowDeferredRedirect
     owner_loop_->PostTask(FROM_HERE, NewRunnableMethod(
@@ -286,21 +400,35 @@ class RequestProxy : public URLRequest::Delegate,
   }
 
   virtual void OnReceivedResponse(
-      const ResourceLoaderBridge::ResponseInfo& info,
+      const ResourceResponseInfo& info,
       bool content_filtered) {
     owner_loop_->PostTask(FROM_HERE, NewRunnableMethod(
         this, &RequestProxy::NotifyReceivedResponse, info, content_filtered));
   }
 
   virtual void OnReceivedData(int bytes_read) {
+    if (download_to_file_) {
+      file_stream_.Write(buf_->data(), bytes_read, NULL);
+      owner_loop_->PostTask(FROM_HERE, NewRunnableMethod(
+          this, &RequestProxy::NotifyDownloadedData, bytes_read));
+      return;
+    }
+
     owner_loop_->PostTask(FROM_HERE, NewRunnableMethod(
         this, &RequestProxy::NotifyReceivedData, bytes_read));
   }
 
   virtual void OnCompletedRequest(const URLRequestStatus& status,
-                                  const std::string& security_info) {
+                                  const std::string& security_info,
+                                  const base::Time& complete_time) {
+    if (download_to_file_)
+      file_stream_.Close();
     owner_loop_->PostTask(FROM_HERE, NewRunnableMethod(
-        this, &RequestProxy::NotifyCompletedRequest, status, security_info));
+        this,
+        &RequestProxy::NotifyCompletedRequest,
+        status,
+        security_info,
+        complete_time));
   }
 
   // --------------------------------------------------------------------------
@@ -310,14 +438,14 @@ class RequestProxy : public URLRequest::Delegate,
                                   const GURL& new_url,
                                   bool* defer_redirect) {
     DCHECK(request->status().is_success());
-    ResourceLoaderBridge::ResponseInfo info;
+    ResourceResponseInfo info;
     PopulateResponseInfo(request, &info);
     OnReceivedRedirect(new_url, info, defer_redirect);
   }
 
   virtual void OnResponseStarted(URLRequest* request) {
     if (request->status().is_success()) {
-      ResourceLoaderBridge::ResponseInfo info;
+      ResourceResponseInfo info;
       PopulateResponseInfo(request, &info);
       OnReceivedResponse(info, false);
       AsyncReadData();  // start reading
@@ -350,7 +478,7 @@ class RequestProxy : public URLRequest::Delegate,
       upload_progress_timer_.Stop();
     }
     DCHECK(request_.get());
-    OnCompletedRequest(request_->status(), std::string());
+    OnCompletedRequest(request_->status(), std::string(), base::Time());
     request_.reset();  // destroy on the io thread
   }
 
@@ -390,13 +518,15 @@ class RequestProxy : public URLRequest::Delegate,
   }
 
   void PopulateResponseInfo(URLRequest* request,
-                            ResourceLoaderBridge::ResponseInfo* info) const {
+                            ResourceResponseInfo* info) const {
     info->request_time = request->request_time();
     info->response_time = request->response_time();
     info->headers = request->response_headers();
     request->GetMimeType(&info->mime_type);
     request->GetCharset(&info->charset);
     info->content_length = request->GetExpectedContentSize();
+    if (downloaded_file_)
+      info->download_file_path = downloaded_file_->path();
     SimpleAppCacheSystem::GetExtraResponseInfo(
         request,
         &info->appcache_id,
@@ -404,6 +534,11 @@ class RequestProxy : public URLRequest::Delegate,
   }
 
   scoped_ptr<URLRequest> request_;
+
+  // Support for request.download_to_file behavior.
+  bool download_to_file_;
+  net::FileStream file_stream_;
+  scoped_refptr<DeletableFileReference> downloaded_file_;
 
   // Size of our async IO data buffers
   static const int kDataSize = 16*1024;
@@ -444,7 +579,7 @@ class SyncRequestProxy : public RequestProxy {
 
   virtual void OnReceivedRedirect(
       const GURL& new_url,
-      const ResourceLoaderBridge::ResponseInfo& info,
+      const ResourceResponseInfo& info,
       bool* defer_redirect) {
     // TODO(darin): It would be much better if this could live in WebCore, but
     // doing so requires API changes at all levels.  Similar code exists in
@@ -458,18 +593,24 @@ class SyncRequestProxy : public RequestProxy {
   }
 
   virtual void OnReceivedResponse(
-      const ResourceLoaderBridge::ResponseInfo& info,
+      const ResourceResponseInfo& info,
       bool content_filtered) {
-    *static_cast<ResourceLoaderBridge::ResponseInfo*>(result_) = info;
+    *static_cast<ResourceResponseInfo*>(result_) = info;
   }
 
   virtual void OnReceivedData(int bytes_read) {
-    result_->data.append(buf_->data(), bytes_read);
+    if (download_to_file_)
+      file_stream_.Write(buf_->data(), bytes_read, NULL);
+    else
+      result_->data.append(buf_->data(), bytes_read);
     AsyncReadData();  // read more (may recurse)
   }
 
   virtual void OnCompletedRequest(const URLRequestStatus& status,
-                                  const std::string& security_info) {
+                                  const std::string& security_info,
+                                  const base::Time& complete_time) {
+    if (download_to_file_)
+      file_stream_.Close();
     result_->status = status;
     event_.Signal();
   }
@@ -495,13 +636,14 @@ class ResourceLoaderBridgeImpl : public ResourceLoaderBridge {
     params_->load_flags = request_info.load_flags;
     params_->request_type = request_info.request_type;
     params_->appcache_host_id = request_info.appcache_host_id;
+    params_->download_to_file = request_info.download_to_file;
   }
 
   virtual ~ResourceLoaderBridgeImpl() {
     if (proxy_) {
       proxy_->DropPeer();
       // Let the proxy die on the IO thread
-      io_thread->message_loop()->ReleaseSoon(FROM_HERE, proxy_);
+      g_io_thread->message_loop()->ReleaseSoon(FROM_HERE, proxy_);
     }
   }
 
@@ -525,6 +667,13 @@ class ResourceLoaderBridgeImpl : public ResourceLoaderBridge {
       params_->upload = new net::UploadData();
     params_->upload->AppendFileRange(file_path, offset, length,
                                      expected_modification_time);
+  }
+
+  virtual void AppendBlobToUpload(const GURL& blob_url) {
+    DCHECK(params_.get());
+    if (!params_->upload)
+      params_->upload = new net::UploadData();
+    params_->upload->AppendBlob(blob_url);
   }
 
   virtual void SetUploadIdentifier(int64 identifier) {
@@ -588,8 +737,8 @@ class ResourceLoaderBridgeImpl : public ResourceLoaderBridge {
 class CookieSetter : public base::RefCountedThreadSafe<CookieSetter> {
  public:
   void Set(const GURL& url, const std::string& cookie) {
-    DCHECK(MessageLoop::current() == io_thread->message_loop());
-    request_context->cookie_store()->SetCookie(url, cookie);
+    DCHECK(MessageLoop::current() == g_io_thread->message_loop());
+    g_request_context->cookie_store()->SetCookie(url, cookie);
   }
 
  private:
@@ -604,7 +753,7 @@ class CookieGetter : public base::RefCountedThreadSafe<CookieGetter> {
   }
 
   void Get(const GURL& url) {
-    result_ = request_context->cookie_store()->GetCookies(url);
+    result_ = g_request_context->cookie_store()->GetCookies(url);
     event_.Signal();
   }
 
@@ -638,14 +787,15 @@ ResourceLoaderBridge* ResourceLoaderBridge::Create(
 // Issue the proxy resolve request on the io thread, and wait
 // for the result.
 bool FindProxyForUrl(const GURL& url, std::string* proxy_list) {
-  DCHECK(request_context);
+  DCHECK(g_request_context);
 
   scoped_refptr<net::SyncProxyServiceHelper> sync_proxy_service(
-      new net::SyncProxyServiceHelper(io_thread->message_loop(),
-      request_context->proxy_service()));
+      new net::SyncProxyServiceHelper(g_io_thread->message_loop(),
+      g_request_context->proxy_service()));
 
   net::ProxyInfo proxy_info;
-  int rv = sync_proxy_service->ResolveProxy(url, &proxy_info, NULL);
+  int rv = sync_proxy_service->ResolveProxy(url, &proxy_info,
+                                            net::BoundNetLog());
   if (rv == net::OK) {
     *proxy_list = proxy_info.ToPacString();
   }
@@ -658,27 +808,36 @@ bool FindProxyForUrl(const GURL& url, std::string* proxy_list) {
 //-----------------------------------------------------------------------------
 
 // static
-void SimpleResourceLoaderBridge::Init(TestShellRequestContext* context) {
+void SimpleResourceLoaderBridge::Init(
+    const FilePath& cache_path,
+    net::HttpCache::Mode cache_mode,
+    bool no_proxy) {
   // Make sure to stop any existing IO thread since it may be using the
   // current request context.
   Shutdown();
 
-  if (context) {
-    request_context = context;
-  } else {
-    request_context = new TestShellRequestContext();
-  }
-  request_context->AddRef();
-  SimpleResourceLoaderBridge::SetAcceptAllCookies(false);
+  DCHECK(!g_request_context_params);
+  DCHECK(!g_request_context);
+  DCHECK(!g_io_thread);
+
+  g_request_context_params = new TestShellRequestContextParams(
+      cache_path, cache_mode, no_proxy);
 }
 
 // static
 void SimpleResourceLoaderBridge::Shutdown() {
-  if (io_thread) {
-    delete io_thread;
-    io_thread = NULL;
+  if (g_io_thread) {
+    delete g_io_thread;
+    g_io_thread = NULL;
 
-    DCHECK(!request_context) << "should have been nulled by thread dtor";
+    DCHECK(g_cache_thread);
+    delete g_cache_thread;
+    g_cache_thread = NULL;
+
+    DCHECK(!g_request_context) << "should have been nulled by thread dtor";
+  } else {
+    delete g_request_context_params;
+    g_request_context_params = NULL;
   }
 }
 
@@ -694,7 +853,7 @@ void SimpleResourceLoaderBridge::SetCookie(const GURL& url,
   }
 
   scoped_refptr<CookieSetter> cookie_setter = new CookieSetter();
-  io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+  g_io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
       cookie_setter.get(), &CookieSetter::Set, url, cookie));
 }
 
@@ -710,7 +869,7 @@ std::string SimpleResourceLoaderBridge::GetCookies(
 
   scoped_refptr<CookieGetter> getter = new CookieGetter();
 
-  io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
+  g_io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
       getter.get(), &CookieGetter::Get, url));
 
   return getter->GetResult();
@@ -718,23 +877,56 @@ std::string SimpleResourceLoaderBridge::GetCookies(
 
 // static
 bool SimpleResourceLoaderBridge::EnsureIOThread() {
-  if (io_thread)
+  if (g_io_thread)
     return true;
 
-  if (!request_context)
-    SimpleResourceLoaderBridge::Init(NULL);
+#if defined(OS_WIN)
+  // Use NSS for SSL on Windows.  TODO(wtc): this should eventually be hidden
+  // inside DefaultClientSocketFactory::CreateSSLClientSocket.
+  net::ClientSocketFactory::SetSSLClientSocketFactory(
+      net::SSLClientSocketNSSFactory);
+#endif
+#if defined(OS_MACOSX) || defined(OS_WIN)
+  // We want to be sure to init NSPR on the main thread.
+  base::EnsureNSPRInit();
+#endif
 
-  io_thread = new IOThread();
+  // Create the cache thread. We want the cache thread to outlive the IO thread,
+  // so its lifetime is bonded to the IO thread lifetime.
+  DCHECK(!g_cache_thread);
+  g_cache_thread = new base::Thread("cache");
+  CHECK(g_cache_thread->StartWithOptions(
+      base::Thread::Options(MessageLoop::TYPE_IO, 0)));
+
+  g_io_thread = new IOThread();
   base::Thread::Options options;
   options.message_loop_type = MessageLoop::TYPE_IO;
-  return io_thread->StartWithOptions(options);
+  return g_io_thread->StartWithOptions(options);
 }
 
 // static
 void SimpleResourceLoaderBridge::SetAcceptAllCookies(bool accept_all_cookies) {
-  StaticCookiePolicy::Type policy_type = accept_all_cookies ?
-      StaticCookiePolicy::ALLOW_ALL_COOKIES :
-      StaticCookiePolicy::BLOCK_THIRD_PARTY_COOKIES;
-  static_cast<StaticCookiePolicy*>(request_context->cookie_policy())->
-      set_type(policy_type);
+  if (g_request_context_params) {
+    g_request_context_params->accept_all_cookies = accept_all_cookies;
+    DCHECK(!g_request_context);
+    DCHECK(!g_io_thread);
+  } else {
+    g_io_thread->SetAcceptAllCookies(accept_all_cookies);
+  }
+}
+
+// static
+scoped_refptr<base::MessageLoopProxy>
+    SimpleResourceLoaderBridge::GetCacheThread() {
+  return g_cache_thread->message_loop_proxy();
+}
+
+// static
+scoped_refptr<base::MessageLoopProxy>
+    SimpleResourceLoaderBridge::GetIoThread() {
+  if (!EnsureIOThread()) {
+    LOG(DFATAL) << "Failed to create IO thread.";
+    return NULL;
+  }
+  return g_io_thread->message_loop_proxy();
 }

@@ -1,13 +1,13 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_AUTOFILL_AUTOFILL_TYPE_H_
 #define CHROME_BROWSER_AUTOFILL_AUTOFILL_TYPE_H_
+#pragma once
 
 #include <map>
 #include <set>
-#include <string>
 
 #include "base/string16.h"
 #include "chrome/browser/autofill/field_types.h"
@@ -46,32 +46,20 @@ class AutoFillType {
   };
 
   struct AutoFillTypeDefinition {
-    AutoFillFieldType field_type;
     FieldTypeGroup group;
     FieldTypeSubGroup subgroup;
-    std::string name;
   };
 
-  AutoFillType() {}
-  explicit AutoFillType(AutoFillTypeDefinition* definition);
   explicit AutoFillType(AutoFillFieldType field_type);
+  AutoFillType(const AutoFillType& autofill_type);
+  AutoFillType& operator=(const AutoFillType& autofill_type);
 
-  AutoFillFieldType field_type() const {
-    return autofill_type_definition_->field_type;
-  }
-  FieldTypeGroup group() const { return autofill_type_definition_->group; }
-  FieldTypeSubGroup subgroup() const {
-    return autofill_type_definition_->subgroup;
-  }
+  AutoFillFieldType field_type() const;
+  FieldTypeGroup group() const;
+  FieldTypeSubGroup subgroup() const;
 
  private:
-  static void StaticInitialize();
-  static void InitializeFieldTypeMap();
-
-  static bool initialized_;
-  static AutoFillType types_[MAX_VALID_FIELD_TYPE + 1];
-
-  const AutoFillTypeDefinition* autofill_type_definition_;
+  AutoFillFieldType field_type_;
 };
 
 typedef AutoFillType::FieldTypeGroup FieldTypeGroup;

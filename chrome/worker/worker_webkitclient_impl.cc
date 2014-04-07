@@ -5,14 +5,25 @@
 #include "chrome/worker/worker_webkitclient_impl.h"
 
 #include "base/logging.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/database_util.h"
+#include "chrome/common/file_system/webfilesystem_impl.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/common/render_messages_params.h"
+#include "chrome/common/webblobregistry_impl.h"
 #include "chrome/common/webmessageportchannel_impl.h"
 #include "chrome/worker/worker_thread.h"
+#include "ipc/ipc_sync_message_filter.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebBlobRegistry.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
+#include "webkit/glue/webfileutilities_impl.h"
+#include "webkit/glue/webkit_glue.h"
 
+using WebKit::WebBlobRegistry;
 using WebKit::WebClipboard;
+using WebKit::WebFileSystem;
+using WebKit::WebFileUtilities;
 using WebKit::WebKitClient;
 using WebKit::WebMessagePortChannel;
 using WebKit::WebMimeRegistry;
@@ -22,6 +33,60 @@ using WebKit::WebStorageNamespace;
 using WebKit::WebString;
 using WebKit::WebURL;
 
+// TODO(kinuko): Probably this could be consolidated into
+// RendererWebKitClientImpl::FileUtilities.
+class WorkerWebKitClientImpl::FileUtilities
+    : public webkit_glue::WebFileUtilitiesImpl {
+ public:
+  virtual bool getFileSize(const WebKit::WebString& path, long long& result);
+  virtual bool getFileModificationTime(const WebKit::WebString& path,
+                                       double& result);
+};
+
+static bool SendSyncMessageFromAnyThread(IPC::SyncMessage* msg) {
+  WorkerThread* worker_thread = WorkerThread::current();
+  if (worker_thread)
+    return worker_thread->Send(msg);
+
+  scoped_refptr<IPC::SyncMessageFilter> sync_msg_filter =
+      ChildThread::current()->sync_message_filter();
+  return sync_msg_filter->Send(msg);
+}
+
+bool WorkerWebKitClientImpl::FileUtilities::getFileSize(const WebString& path,
+                                                        long long& result) {
+  if (SendSyncMessageFromAnyThread(new ViewHostMsg_GetFileSize(
+          webkit_glue::WebStringToFilePath(path),
+          reinterpret_cast<int64*>(&result)))) {
+    return result >= 0;
+  }
+
+  result = -1;
+  return false;
+}
+
+bool WorkerWebKitClientImpl::FileUtilities::getFileModificationTime(
+    const WebString& path,
+    double& result) {
+  base::Time time;
+  if (SendSyncMessageFromAnyThread(new ViewHostMsg_GetFileModificationTime(
+          webkit_glue::WebStringToFilePath(path), &time))) {
+    result = time.ToDoubleT();
+    return !time.is_null();
+  }
+
+  result = 0;
+  return false;
+}
+
+//------------------------------------------------------------------------------
+
+WorkerWebKitClientImpl::WorkerWebKitClientImpl() {
+}
+
+WorkerWebKitClientImpl::~WorkerWebKitClientImpl() {
+}
+
 WebClipboard* WorkerWebKitClientImpl::clipboard() {
   NOTREACHED();
   return NULL;
@@ -29,6 +94,20 @@ WebClipboard* WorkerWebKitClientImpl::clipboard() {
 
 WebMimeRegistry* WorkerWebKitClientImpl::mimeRegistry() {
   return this;
+}
+
+WebFileSystem* WorkerWebKitClientImpl::fileSystem() {
+  if (!web_file_system_.get())
+    web_file_system_.reset(new WebFileSystemImpl());
+  return web_file_system_.get();
+}
+
+WebFileUtilities* WorkerWebKitClientImpl::fileUtilities() {
+  if (!file_utilities_.get()) {
+    file_utilities_.reset(new FileUtilities);
+    file_utilities_->set_sandbox_enabled(sandboxEnabled());
+  }
+  return file_utilities_.get();
 }
 
 WebSandboxSupport* WorkerWebKitClientImpl::sandboxSupport() {
@@ -75,12 +154,6 @@ void WorkerWebKitClientImpl::prefetchHostName(const WebString&) {
   NOTREACHED();
 }
 
-bool WorkerWebKitClientImpl::getFileSize(const WebString& path,
-                                         long long& result) {
-  NOTREACHED();
-  return false;
-}
-
 WebString WorkerWebKitClientImpl::defaultLocale() {
   NOTREACHED();
   return WebString();
@@ -104,10 +177,8 @@ WebSharedWorkerRepository* WorkerWebKitClientImpl::sharedWorkerRepository() {
 }
 
 WebKitClient::FileHandle WorkerWebKitClientImpl::databaseOpenFile(
-    const WebString& vfs_file_name, int desired_flags,
-    WebKitClient::FileHandle* dir_handle) {
-  return DatabaseUtil::databaseOpenFile(vfs_file_name, desired_flags,
-      dir_handle);
+    const WebString& vfs_file_name, int desired_flags) {
+  return DatabaseUtil::databaseOpenFile(vfs_file_name, desired_flags);
 }
 
 int WorkerWebKitClientImpl::databaseDeleteFile(
@@ -136,8 +207,8 @@ WebMimeRegistry::SupportsType WorkerWebKitClientImpl::supportsImageMIMEType(
   return WebMimeRegistry::IsSupported;
 }
 
-WebMimeRegistry::SupportsType WorkerWebKitClientImpl::supportsJavaScriptMIMEType(
-    const WebString&) {
+WebMimeRegistry::SupportsType
+WorkerWebKitClientImpl::supportsJavaScriptMIMEType(const WebString&) {
   NOTREACHED();
   return WebMimeRegistry::IsSupported;
 }
@@ -154,18 +225,34 @@ WebMimeRegistry::SupportsType WorkerWebKitClientImpl::supportsNonImageMIMEType(
   return WebMimeRegistry::IsSupported;
 }
 
-WebString WorkerWebKitClientImpl::mimeTypeForExtension(const WebString&) {
-  NOTREACHED();
-  return WebString();
+WebString WorkerWebKitClientImpl::mimeTypeForExtension(
+    const WebString& file_extension) {
+  std::string mime_type;
+  SendSyncMessageFromAnyThread(new ViewHostMsg_GetMimeTypeFromExtension(
+      webkit_glue::WebStringToFilePathString(file_extension), &mime_type));
+  return ASCIIToUTF16(mime_type);
 }
 
-WebString WorkerWebKitClientImpl::mimeTypeFromFile(const WebString&) {
-  NOTREACHED();
-  return WebString();
+WebString WorkerWebKitClientImpl::mimeTypeFromFile(
+    const WebString& file_path) {
+  std::string mime_type;
+  SendSyncMessageFromAnyThread(new ViewHostMsg_GetMimeTypeFromFile(
+      FilePath(webkit_glue::WebStringToFilePathString(file_path)),
+      &mime_type));
+  return ASCIIToUTF16(mime_type);
 }
 
 WebString WorkerWebKitClientImpl::preferredExtensionForMIMEType(
-    const WebString&) {
-  NOTREACHED();
-  return WebString();
+    const WebString& mime_type) {
+  FilePath::StringType file_extension;
+  SendSyncMessageFromAnyThread(
+      new ViewHostMsg_GetPreferredExtensionForMimeType(UTF16ToASCII(mime_type),
+          &file_extension));
+  return webkit_glue::FilePathStringToWebString(file_extension);
+}
+
+WebBlobRegistry* WorkerWebKitClientImpl::blobRegistry() {
+  if (!blob_registry_.get())
+    blob_registry_.reset(new WebBlobRegistryImpl(WorkerThread::current()));
+  return blob_registry_.get();
 }

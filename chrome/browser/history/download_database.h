@@ -1,13 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_HISTORY_DOWNLOAD_DATABASE_H_
 #define CHROME_BROWSER_HISTORY_DOWNLOAD_DATABASE_H_
+#pragma once
 
 #include "chrome/browser/history/history_types.h"
 
 struct DownloadCreateInfo;
+class FilePath;
 
 namespace sql {
 class Connection;
@@ -29,7 +31,13 @@ class DownloadDatabase {
   bool UpdateDownload(int64 received_bytes, int32 state, DownloadID db_handle);
 
   // Update the path of one download. Returns true if successful.
-  bool UpdateDownloadPath(const std::wstring& path, DownloadID db_handle);
+  bool UpdateDownloadPath(const FilePath& path, DownloadID db_handle);
+
+  // Fixes state of the download entries. Sometimes entries with IN_PROGRESS
+  // state are not updated during browser shutdown (particularly when crashing).
+  // On the next start such entries are considered canceled. This functions
+  // fixes such entries.
+  bool CleanUpInProgressEntries();
 
   // Create a new database entry for one download and return its primary db id.
   int64 CreateDownload(const DownloadCreateInfo& info);
@@ -42,10 +50,6 @@ class DownloadDatabase {
   // to do an unbounded delete in either direction. This function ignores
   // all downloads that are in progress or are waiting to be cancelled.
   void RemoveDownloadsBetween(base::Time remove_begin, base::Time remove_end);
-
-  // Search for downloads matching the search text.
-  void SearchDownloads(std::vector<int64>* results,
-                       const std::wstring& search_text);
 
  protected:
   // Returns the database for the functions in this interface.

@@ -1,20 +1,23 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_GTK_TABS_TAB_RENDERER_GTK_H_
 #define CHROME_BROWSER_GTK_TABS_TAB_RENDERER_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 #include <map>
 
 #include "app/animation.h"
+#include "app/gtk_signal.h"
 #include "app/slide_animation.h"
 #include "base/basictypes.h"
+#include "base/scoped_ptr.h"
 #include "base/string16.h"
+#include "chrome/browser/gtk/owned_widget_gtk.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
-#include "chrome/common/owned_widget_gtk.h"
 #include "gfx/canvas.h"
 #include "gfx/font.h"
 #include "gfx/rect.h"
@@ -102,9 +105,7 @@ class TabRendererGtk : public AnimationDelegate,
   // TabContents. If only the loading state was updated, the loading_only flag
   // should be specified. If other things change, set this flag to false to
   // update everything.
-  virtual void UpdateData(TabContents* contents,
-                          bool phantom,
-                          bool loading_only);
+  virtual void UpdateData(TabContents* contents, bool app, bool loading_only);
 
   // Sets the blocked state of the tab.
   void SetBlocked(bool pinned);
@@ -114,9 +115,9 @@ class TabRendererGtk : public AnimationDelegate,
   void set_mini(bool mini) { data_.mini = mini; }
   bool mini() const { return data_.mini; }
 
-  // Sets the phantom state of the tab.
-  void set_phantom(bool phantom) { data_.phantom = phantom; }
-  bool phantom() const { return data_.phantom; }
+  // Sets the app state of the tab.
+  void set_app(bool app) { data_.app = app; }
+  bool app() const { return data_.app; }
 
   // Are we in the process of animating a mini tab state change on this tab?
   void set_animating_mini_change(bool value) {
@@ -222,12 +223,12 @@ class TabRendererGtk : public AnimationDelegate,
   std::wstring GetTitle() const;
 
   // enter-notify-event handler that signals when the mouse enters the tab.
-  static gboolean OnEnterNotifyEvent(GtkWidget* widget, GdkEventCrossing* event,
-                                     TabRendererGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabRendererGtk, gboolean, OnEnterNotifyEvent,
+                       GdkEventCrossing*);
 
   // leave-notify-event handler that signals when the mouse enters the tab.
-  static gboolean OnLeaveNotifyEvent(GtkWidget* widget, GdkEventCrossing* event,
-                                     TabRendererGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabRendererGtk, gboolean, OnLeaveNotifyEvent,
+                       GdkEventCrossing*);
 
  private:
   class FavIconCrashAnimation;
@@ -256,7 +257,7 @@ class TabRendererGtk : public AnimationDelegate,
           mini(false),
           blocked(false),
           animating_mini_change(false),
-          phantom(false) {
+          app(false) {
     }
 
     SkBitmap favicon;
@@ -269,7 +270,7 @@ class TabRendererGtk : public AnimationDelegate,
     bool mini;
     bool blocked;
     bool animating_mini_change;
-    bool phantom;
+    bool app;
   };
 
   // TODO(jhawkins): Move into TabResources class.
@@ -279,6 +280,7 @@ class TabRendererGtk : public AnimationDelegate,
     SkBitmap* image_r;
     int l_width;
     int r_width;
+    int y_offset;
   };
 
   // Overridden from AnimationDelegate:
@@ -350,20 +352,18 @@ class TabRendererGtk : public AnimationDelegate,
   double GetThrobValue();
 
   // Handles the clicked signal for the close button.
-  static void OnCloseButtonClicked(GtkWidget* widget, TabRendererGtk* tab);
+  CHROMEGTK_CALLBACK_0(TabRendererGtk, void, OnCloseButtonClicked);
 
   // Handles middle clicking the close button.
-  static gboolean OnCloseButtonMouseRelease(GtkWidget* widget,
-                                            GdkEventButton* event,
-                                            TabRendererGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabRendererGtk, gboolean, OnCloseButtonMouseRelease,
+                       GdkEventButton*);
 
   // expose-event handler that redraws the tab.
-  static gboolean OnExposeEvent(GtkWidget* widget, GdkEventExpose* event,
-                                TabRendererGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabRendererGtk, gboolean, OnExposeEvent,
+                       GdkEventExpose*);
 
   // size-allocate handler used to update the current bounds of the tab.
-  static void OnSizeAllocate(GtkWidget* widget, GtkAllocation* allocation,
-                             TabRendererGtk* tab);
+  CHROMEGTK_CALLBACK_1(TabRendererGtk, void, OnSizeAllocate, GtkAllocation*);
 
   // TODO(jhawkins): Move to TabResources.
   static void InitResources();

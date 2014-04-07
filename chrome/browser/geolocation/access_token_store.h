@@ -12,12 +12,12 @@
 
 #ifndef CHROME_BROWSER_GEOLOCATION_ACCESS_TOKEN_STORE_H_
 #define CHROME_BROWSER_GEOLOCATION_ACCESS_TOKEN_STORE_H_
+#pragma once
 
 #include <map>
 
 #include "base/ref_counted.h"
 #include "base/string16.h"
-#include "base/task.h"
 #include "chrome/browser/cancelable_request.h"
 #include "googleurl/src/gurl.h"
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/history/url_database.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -66,12 +67,12 @@ class URLDatabaseTest : public testing::Test,
   sql::Connection db_;
 };
 
-// Test add and query for the URL table in the HistoryDatabase
+// Test add and query for the URL table in the HistoryDatabase.
 TEST_F(URLDatabaseTest, AddURL) {
-  // first, add two URLs
+  // First, add two URLs.
   const GURL url1("http://www.google.com/");
   URLRow url_info1(url1);
-  url_info1.set_title(L"Google");
+  url_info1.set_title(UTF8ToUTF16("Google"));
   url_info1.set_visit_count(4);
   url_info1.set_typed_count(2);
   url_info1.set_last_visit(Time::Now() - TimeDelta::FromDays(1));
@@ -80,14 +81,14 @@ TEST_F(URLDatabaseTest, AddURL) {
 
   const GURL url2("http://mail.google.com/");
   URLRow url_info2(url2);
-  url_info2.set_title(L"Google Mail");
+  url_info2.set_title(UTF8ToUTF16("Google Mail"));
   url_info2.set_visit_count(3);
   url_info2.set_typed_count(0);
   url_info2.set_last_visit(Time::Now() - TimeDelta::FromDays(2));
   url_info2.set_hidden(true);
   EXPECT_TRUE(AddURL(url_info2));
 
-  // query both of them
+  // Query both of them.
   URLRow info;
   EXPECT_TRUE(GetRowForURL(url1, &info));
   EXPECT_TRUE(IsURLRowEqual(url_info1, info));
@@ -95,27 +96,27 @@ TEST_F(URLDatabaseTest, AddURL) {
   EXPECT_TRUE(id2);
   EXPECT_TRUE(IsURLRowEqual(url_info2, info));
 
-  // update the second
-  url_info2.set_title(L"Google Mail Too");
+  // Update the second.
+  url_info2.set_title(UTF8ToUTF16("Google Mail Too"));
   url_info2.set_visit_count(4);
   url_info2.set_typed_count(1);
   url_info2.set_typed_count(91011);
   url_info2.set_hidden(false);
   EXPECT_TRUE(UpdateURLRow(id2, url_info2));
 
-  // make sure it got updated
+  // Make sure it got updated.
   URLRow info2;
   EXPECT_TRUE(GetRowForURL(url2, &info2));
   EXPECT_TRUE(IsURLRowEqual(url_info2, info2));
 
-  // query a nonexistant URL
+  // Query a nonexistent URL.
   EXPECT_EQ(0, GetRowForURL(GURL("http://news.google.com/"), &info));
 
-  // Delete all urls in the domain
+  // Delete all urls in the domain.
   // TODO(acw): test the new url based delete domain
   // EXPECT_TRUE(db.DeleteDomain(kDomainID));
 
-  // Make sure the urls have been properly removed
+  // Make sure the urls have been properly removed.
   // TODO(acw): commented out because remove no longer works.
   // EXPECT_TRUE(db.GetURLInfo(url1, NULL) == NULL);
   // EXPECT_TRUE(db.GetURLInfo(url2, NULL) == NULL);
@@ -125,7 +126,7 @@ TEST_F(URLDatabaseTest, AddURL) {
 TEST_F(URLDatabaseTest, KeywordSearchTermVisit) {
   const GURL url1("http://www.google.com/");
   URLRow url_info1(url1);
-  url_info1.set_title(L"Google");
+  url_info1.set_title(UTF8ToUTF16("Google"));
   url_info1.set_visit_count(4);
   url_info1.set_typed_count(2);
   url_info1.set_last_visit(Time::Now() - TimeDelta::FromDays(1));
@@ -134,20 +135,20 @@ TEST_F(URLDatabaseTest, KeywordSearchTermVisit) {
   ASSERT_TRUE(url_id != 0);
 
   // Add a keyword visit.
-  ASSERT_TRUE(SetKeywordSearchTermsForURL(url_id, 1, L"visit"));
+  ASSERT_TRUE(SetKeywordSearchTermsForURL(url_id, 1, UTF8ToUTF16("visit")));
 
   // Make sure we get it back.
   std::vector<KeywordSearchTermVisit> matches;
-  GetMostRecentKeywordSearchTerms(1, L"visit", 10, &matches);
+  GetMostRecentKeywordSearchTerms(1, UTF8ToUTF16("visit"), 10, &matches);
   ASSERT_EQ(1U, matches.size());
-  ASSERT_EQ(L"visit", matches[0].term);
+  ASSERT_EQ(UTF8ToUTF16("visit"), matches[0].term);
 
   // Delete the keyword visit.
   DeleteAllSearchTermsForKeyword(1);
 
   // Make sure we don't get it back when querying.
   matches.clear();
-  GetMostRecentKeywordSearchTerms(1, L"visit", 10, &matches);
+  GetMostRecentKeywordSearchTerms(1, UTF8ToUTF16("visit"), 10, &matches);
   ASSERT_EQ(0U, matches.size());
 }
 
@@ -155,7 +156,7 @@ TEST_F(URLDatabaseTest, KeywordSearchTermVisit) {
 TEST_F(URLDatabaseTest, DeleteURLDeletesKeywordSearchTermVisit) {
   const GURL url1("http://www.google.com/");
   URLRow url_info1(url1);
-  url_info1.set_title(L"Google");
+  url_info1.set_title(UTF8ToUTF16("Google"));
   url_info1.set_visit_count(4);
   url_info1.set_typed_count(2);
   url_info1.set_last_visit(Time::Now() - TimeDelta::FromDays(1));
@@ -164,14 +165,14 @@ TEST_F(URLDatabaseTest, DeleteURLDeletesKeywordSearchTermVisit) {
   ASSERT_TRUE(url_id != 0);
 
   // Add a keyword visit.
-  ASSERT_TRUE(SetKeywordSearchTermsForURL(url_id, 1, L"visit"));
+  ASSERT_TRUE(SetKeywordSearchTermsForURL(url_id, 1, UTF8ToUTF16("visit")));
 
   // Delete the url.
   ASSERT_TRUE(DeleteURLRow(url_id));
 
   // Make sure the keyword visit was deleted.
   std::vector<KeywordSearchTermVisit> matches;
-  GetMostRecentKeywordSearchTerms(1, L"visit", 10, &matches);
+  GetMostRecentKeywordSearchTerms(1, UTF8ToUTF16("visit"), 10, &matches);
   ASSERT_EQ(0U, matches.size());
 }
 

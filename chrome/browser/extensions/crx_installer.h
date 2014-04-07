@@ -4,17 +4,17 @@
 
 #ifndef CHROME_BROWSER_EXTENSIONS_CRX_INSTALLER_H_
 #define CHROME_BROWSER_EXTENSIONS_CRX_INSTALLER_H_
+#pragma once
 
 #include <string>
 
 #include "base/file_path.h"
 #include "base/ref_counted.h"
-#include "base/task.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
-#include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/extensions/sandboxed_extension_unpacker.h"
 #include "chrome/common/extensions/extension.h"
 
+class ExtensionsService;
 class SkBitmap;
 
 // This class installs a crx file into a profile.
@@ -44,6 +44,22 @@ class CrxInstaller
     : public SandboxedExtensionUnpackerClient,
       public ExtensionInstallUI::Delegate {
  public:
+
+  // This is pretty lame, but given the difficulty of connecting a particular
+  // ExtensionFunction to a resulting download in the download manager, it's
+  // currently necessary. This is the |id| of an extension to be installed
+  // *by the web store only* which should not get the permissions install
+  // prompt. This should only be called on the UI thread.
+  // crbug.com/54916
+  static void SetWhitelistedInstallId(const std::string& id);
+
+  // Returns whether |id| is whitelisted - only call this on the UI thread.
+  static bool IsIdWhitelisted(const std::string& id);
+
+  // Returns whether |id| was found and removed (was whitelisted). This should
+  // only be called on the UI thread.
+  static bool ClearWhitelistedInstallId(const std::string& id);
+
   // Constructor.  Extensions will be unpacked to |install_directory|.
   // Extension objects will be sent to |frontend|, and any UI will be shown
   // via |client|. For silent install, pass NULL for |client|.
@@ -60,8 +76,8 @@ class CrxInstaller
   void InstallUserScript(const FilePath& source_file,
                          const GURL& original_url);
 
-  // ExtensionInstallUI::Delegate
-  virtual void InstallUIProceed(bool create_app_shortcut);
+  // Overridden from ExtensionInstallUI::Delegate:
+  virtual void InstallUIProceed();
   virtual void InstallUIAbort();
 
   const GURL& original_url() const { return original_url_; }
@@ -83,11 +99,21 @@ class CrxInstaller
     allow_privilege_increase_ = val;
   }
 
-  bool force_web_origin_to_download_url() const {
-    return force_web_origin_to_download_url_;
+  bool allow_silent_install() const { return allow_silent_install_; }
+  void set_allow_silent_install(bool val) { allow_silent_install_ = val; }
+
+  bool is_gallery_install() const { return is_gallery_install_; }
+  void set_is_gallery_install(bool val) { is_gallery_install_ = val; }
+
+  // If |apps_require_extension_mime_type_| is set to true, be sure to set
+  // |original_mime_type_| as well.
+  void set_apps_require_extension_mime_type(
+      bool apps_require_extension_mime_type) {
+    apps_require_extension_mime_type_ = apps_require_extension_mime_type;
   }
-  void set_force_web_origin_to_download_url(bool val) {
-    force_web_origin_to_download_url_ = val;
+
+  void set_original_mime_type(const std::string& original_mime_type) {
+    original_mime_type_ = original_mime_type;
   }
 
  private:
@@ -95,6 +121,10 @@ class CrxInstaller
 
   // Converts the source user script to an extension.
   void ConvertUserScriptOnFileThread();
+
+  // Called after OnUnpackSuccess as a last check to see whether the install
+  // should complete.
+  bool AllowInstall(Extension* extension, std::string* error);
 
   // SandboxedExtensionUnpackerClient
   virtual void OnUnpackFailure(const std::string& error_message);
@@ -113,8 +143,6 @@ class CrxInstaller
   // Result reporting.
   void ReportFailureFromFileThread(const std::string& error);
   void ReportFailureFromUIThread(const std::string& error);
-  void ReportOverinstallFromFileThread();
-  void ReportOverinstallFromUIThread();
   void ReportSuccessFromFileThread();
   void ReportSuccessFromUIThread();
 
@@ -153,9 +181,8 @@ class CrxInstaller
   // either. Defaults to false.
   bool allow_privilege_increase_;
 
-  // If true and the installed extension uses web content, the web origin will
-  // be forced to the origin of |original_url_|. Defaults to false.
-  bool force_web_origin_to_download_url_;
+  // Whether the install originated from the gallery.
+  bool is_gallery_install_;
 
   // Whether to create an app shortcut after successful installation. This is
   // set based on the user's selection in the UI and can only ever be true for
@@ -189,6 +216,21 @@ class CrxInstaller
   // The root of the unpacked extension directory. This is a subdirectory of
   // temp_dir_, so we don't have to delete it explicitly.
   FilePath unpacked_extension_root_;
+
+  // True when the CRX being installed was just downloaded.
+  // Used to trigger extra checks before installing.
+  bool apps_require_extension_mime_type_;
+
+  // Allows for the possibility of a normal install (one in which a |client|
+  // is provided in the ctor) to procede without showing the permissions prompt
+  // dialog. Note that this will only take place if |allow_silent_install_|
+  // is true AND the unpacked id of the extension is whitelisted with
+  // SetWhitelistedInstallId().
+  bool allow_silent_install_;
+
+  // The value of the content type header sent with the CRX.
+  // Ignorred unless |require_extension_mime_type_| is true.
+  std::string original_mime_type_;
 
   DISALLOW_COPY_AND_ASSIGN(CrxInstaller);
 };

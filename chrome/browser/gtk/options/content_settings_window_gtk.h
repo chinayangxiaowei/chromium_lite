@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_GTK_OPTIONS_CONTENT_SETTINGS_WINDOW_GTK_H_
 #define CHROME_BROWSER_GTK_OPTIONS_CONTENT_SETTINGS_WINDOW_GTK_H_
+#pragma once
 
 #include <gtk/gtk.h>
 
@@ -11,7 +12,7 @@
 #include "base/scoped_ptr.h"
 #include "chrome/browser/gtk/options/cookie_filter_page_gtk.h"
 #include "chrome/browser/gtk/options/content_filter_page_gtk.h"
-#include "chrome/browser/pref_member.h"
+#include "chrome/browser/prefs/pref_member.h"
 #include "chrome/common/content_settings_types.h"
 
 class AccessibleWidgetHelper;
@@ -36,12 +37,15 @@ class ContentSettingsWindowGtk {
   CHROMEGTK_CALLBACK_2(ContentSettingsWindowGtk, void, OnSwitchPage,
                        GtkNotebookPage*, guint);
   CHROMEGTK_CALLBACK_0(ContentSettingsWindowGtk, void, OnWindowDestroy);
+  CHROMEG_CALLBACK_0(ContentSettingsWindowGtk, void, OnListSelectionChanged,
+                     GtkTreeSelection*);
 
   // The options dialog.
   GtkWidget* dialog_;
 
   // The container of the option pages.
   GtkWidget* notebook_;
+  GtkWidget* list_;
 
   // The Profile associated with these options.
   Profile* profile_;
@@ -58,6 +62,7 @@ class ContentSettingsWindowGtk {
   ContentFilterPageGtk plugin_page_;
   ContentFilterPageGtk popup_page_;
   ContentFilterPageGtk geolocation_page_;
+  ContentFilterPageGtk notifications_page_;
 
   // Helper object to manage accessibility metadata.
   scoped_ptr<AccessibleWidgetHelper> accessible_widget_helper_;

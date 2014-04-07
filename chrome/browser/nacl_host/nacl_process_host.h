@@ -1,14 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NACL_HOST_NACL_PROCESS_HOST_H_
 #define CHROME_BROWSER_NACL_HOST_NACL_PROCESS_HOST_H_
+#pragma once
 
 #include "build/build_config.h"
 
 #include "base/ref_counted.h"
-#include "chrome/browser/child_process_host.h"
+#include "chrome/browser/browser_child_process_host.h"
 #include "chrome/common/nacl_types.h"
 #include "native_client/src/shared/imc/nacl_imc.h"
 
@@ -20,7 +21,7 @@ class ResourceMessageFilter;
 // when requested by the renderer.
 // After that, most of the communication is directly between NaCl plugin
 // running in the renderer and NaCl processes.
-class NaClProcessHost : public ChildProcessHost {
+class NaClProcessHost : public BrowserChildProcessHost {
  public:
   NaClProcessHost(ResourceDispatcherHost *resource_dispatcher_host,
                   const std::wstring& url);
@@ -28,7 +29,7 @@ class NaClProcessHost : public ChildProcessHost {
 
   // Initialize the new NaCl process, returning true on success.
   bool Launch(ResourceMessageFilter* resource_message_filter,
-              const int descriptor,
+              int socket_count,
               IPC::Message* reply_msg);
 
   virtual void OnMessageReceived(const IPC::Message& msg);
@@ -68,11 +69,9 @@ class NaClProcessHost : public ChildProcessHost {
   // The reply message to send.
   IPC::Message* reply_msg_;
 
-  // The socket pair for the NaCl process.
-  nacl::Handle pair_[2];
-
-  // The NaCl specific descriptor for this process.
-  int descriptor_;
+  // Socket pairs for the NaCl process and renderer.
+  std::vector<nacl::Handle> sockets_for_renderer_;
+  std::vector<nacl::Handle> sockets_for_sel_ldr_;
 
   // Windows platform flag
   bool running_on_wow64_;

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,14 @@
 #include "app/l10n_util.h"
 #include "base/file_version_info.h"
 #include "base/string_util.h"
-#include "chrome/browser/child_process_host.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/browser_child_process_host.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/renderer_host/backing_store_manager.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
 #include "grit/chromium_strings.h"
 
@@ -62,7 +64,7 @@ ProcessData* MemoryDetails::ChromeBrowser() {
 
 void MemoryDetails::CollectProcessData(
     std::vector<ProcessMemoryInformation> child_info) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   // Clear old data.
   for (int index = 0; index < arraysize(g_process_template); index++)
@@ -100,7 +102,7 @@ void MemoryDetails::CollectProcessData(
     }
     for (int index2 = 0; index2 < arraysize(g_process_template); index2++) {
       if (_wcsicmp(process_data_[index2].process_name.c_str(),
-          process_entry.szExeFile) != 0)
+                   process_entry.szExeFile) != 0)
         continue;
       if (index2 == IE_BROWSER && is_64bit_process)
         continue;  // Should use IE_64BIT_BROWSER
@@ -120,10 +122,9 @@ void MemoryDetails::CollectProcessData(
       // Get Version Information.
       TCHAR name[MAX_PATH];
       if (index2 == CHROME_BROWSER || index2 == CHROME_NACL_PROCESS) {
-        scoped_ptr<FileVersionInfo> version_info(
-            FileVersionInfo::CreateFileVersionInfoForCurrentModule());
-        if (version_info != NULL)
-          info.version = version_info->file_version();
+        chrome::VersionInfo version_info;
+        if (version_info.is_valid())
+          info.version = ASCIIToWide(version_info.Version());
         // Check if this is one of the child processes whose data we collected
         // on the IO thread, and if so copy over that data.
         for (size_t child = 0; child < child_info.size(); child++) {
@@ -155,7 +156,7 @@ void MemoryDetails::CollectProcessData(
   } while (::Process32Next(snapshot, &process_entry));
 
   // Finally return to the browser thread.
-  ChromeThread::PostTask(
-      ChromeThread::UI, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &MemoryDetails::CollectChildInfoOnUIThread));
 }

@@ -1,6 +1,8 @@
-// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+#include <algorithm>
+#include <cctype>
 
 #include <windows.h>
 #include <winioctl.h>
@@ -10,6 +12,7 @@
 #include "sandbox/src/sandbox.h"
 #include "sandbox/src/sandbox_factory.h"
 #include "sandbox/src/sandbox_policy.h"
+#include "sandbox/src/win_utils.h"
 #include "sandbox/tests/common/controller.h"
 #include "sandbox/tests/common/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -89,7 +92,10 @@ SBOX_TESTS_COMMAND int File_CreateSys32(int argc, wchar_t **argv) {
   if (argc != 1)
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
 
-  std::wstring file = MakePathToSys(argv[0], true);
+  std::wstring file(argv[0]);
+  if (0 != _wcsnicmp(file.c_str(), kNTObjManPrefix, kNTObjManPrefixLen))
+    file = MakePathToSys(argv[0], true);
+
   UNICODE_STRING object_name;
   RtlInitUnicodeString(&object_name, file.c_str());
 
@@ -256,14 +262,30 @@ TEST(FilePolicyTest, AllowNtCreateCalc) {
   EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(L"File_CreateSys32 calc.exe"));
 }
 
+TEST(FilePolicyTest, AllowNtCreateWithNativePath) {
+  std::wstring calc = MakePathToSys(L"calc.exe", false);
+  std::wstring nt_path;
+  ASSERT_TRUE(GetNtPathFromWin32Path(calc, &nt_path));
+  TestRunner runner;
+  runner.AddFsRule(TargetPolicy::FILES_ALLOW_READONLY, nt_path.c_str());
+
+  wchar_t buff[MAX_PATH];
+  ::wsprintfW(buff, L"File_CreateSys32 %s", nt_path.c_str());
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(buff));
+
+  std::transform(nt_path.begin(), nt_path.end(), nt_path.begin(), std::tolower);
+  ::wsprintfW(buff, L"File_CreateSys32 %s", nt_path.c_str());
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(buff));
+}
+
 TEST(FilePolicyTest, AllowReadOnly) {
   TestRunner runner;
 
   // Create a temp file because we need write access to it.
   wchar_t temp_directory[MAX_PATH];
   wchar_t temp_file_name[MAX_PATH];
-  ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name), 0);
+  ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name), 0u);
 
   EXPECT_TRUE(runner.AddFsRule(TargetPolicy::FILES_ALLOW_READONLY,
                                temp_file_name));
@@ -292,8 +314,8 @@ TEST(FilePolicyTest, AllowWildcard) {
   // Create a temp file because we need write access to it.
   wchar_t temp_directory[MAX_PATH];
   wchar_t temp_file_name[MAX_PATH];
-  ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name), 0);
+  ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name), 0u);
 
   wcscat_s(temp_directory, MAX_PATH, L"*");
   EXPECT_TRUE(runner.AddFsRule(TargetPolicy::FILES_ALLOW_ANY, temp_directory));
@@ -384,15 +406,15 @@ TEST(FilePolicyTest, TestRename) {
   wchar_t temp_file_name6[MAX_PATH];
   wchar_t temp_file_name7[MAX_PATH];
   wchar_t temp_file_name8[MAX_PATH];
-  ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name1), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name2), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name3), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name4), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name5), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name6), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name7), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name8), 0);
+  ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name1), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name2), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name3), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name4), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name5), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name6), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name7), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name8), 0u);
 
 
   // Add rules to make file1->file2 succeed.
@@ -500,8 +522,8 @@ TEST(FilePolicyTest, TestReparsePoint) {
   // Create a temp file because we need write access to it.
   wchar_t temp_directory[MAX_PATH];
   wchar_t temp_file_name[MAX_PATH];
-  ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0);
-  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name), 0);
+  ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0u);
+  ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name), 0u);
 
   // Delete the file and create a directory instead.
   ASSERT_TRUE(::DeleteFile(temp_file_name));

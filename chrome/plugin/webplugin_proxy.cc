@@ -23,6 +23,9 @@
 #include "chrome/plugin/npobject_util.h"
 #include "chrome/plugin/plugin_channel.h"
 #include "chrome/plugin/plugin_thread.h"
+#if defined(OS_MACOSX)
+#include "chrome/plugin/webplugin_accelerated_surface_proxy_mac.h"
+#endif
 #include "gfx/blit.h"
 #include "gfx/canvas.h"
 #if defined(OS_WIN)
@@ -32,8 +35,15 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebBindings.h"
 #include "webkit/glue/plugins/webplugin_delegate_impl.h"
 
+#if defined(USE_X11)
+#include "app/x11_util_internal.h"
+#endif
+
 using WebKit::WebBindings;
 using webkit_glue::WebPluginResourceClient;
+#if defined(OS_MACOSX)
+using webkit_glue::WebPluginAcceleratedSurface;
+#endif
 
 typedef std::map<CPBrowsingContext, WebPluginProxy*> ContextMap;
 static ContextMap& GetContextMap() {
@@ -58,11 +68,42 @@ WebPluginProxy::WebPluginProxy(
       transparent_(false),
       host_render_view_routing_id_(host_render_view_routing_id),
       ALLOW_THIS_IN_INITIALIZER_LIST(runnable_method_factory_(this)) {
+#if defined(USE_X11)
+      windowless_shm_pixmap_ = None;
+      use_shm_pixmap_ = false;
+
+      // If the X server supports SHM pixmaps
+      // and the color depth and masks match,
+      // then consider using SHM pixmaps for windowless plugin painting.
+      Display* display = x11_util::GetXDisplay();
+      if (x11_util::QuerySharedMemorySupport(display) ==
+              x11_util::SHARED_MEMORY_PIXMAP &&
+          x11_util::BitsPerPixelForPixmapDepth(
+              display, DefaultDepth(display, 0)) == 32) {
+        Visual* vis = DefaultVisual(display, 0);
+
+        if (vis->red_mask == 0xff0000 &&
+            vis->green_mask == 0xff00 &&
+            vis->blue_mask == 0xff)
+          use_shm_pixmap_ = true;
+      }
+#endif
 }
 
 WebPluginProxy::~WebPluginProxy() {
   if (cp_browsing_context_)
     GetContextMap().erase(cp_browsing_context_);
+
+#if defined(USE_X11)
+  if (windowless_shm_pixmap_ != None)
+    XFreePixmap(x11_util::GetXDisplay(), windowless_shm_pixmap_);
+#endif
+
+#if defined(OS_MACOSX)
+  // Destroy the surface early, since it may send messages during cleanup.
+  if (accelerated_surface_.get())
+    accelerated_surface_.reset();
+#endif
 }
 
 bool WebPluginProxy::Send(IPC::Message* msg) {
@@ -112,6 +153,13 @@ void WebPluginProxy::Invalidate() {
 
 void WebPluginProxy::InvalidateRect(const gfx::Rect& rect) {
 #if defined(OS_MACOSX)
+  // If this is a Core Animation plugin, all we need to do is inform the
+  // delegate.
+  if (!windowless_context_.get()) {
+    delegate_->PluginDidInvalidate();
+    return;
+  }
+
   // Some plugins will send invalidates larger than their own rect when
   // offscreen, so constrain invalidates to the plugin rect.
   gfx::Rect plugin_rect = delegate_->GetRect();
@@ -130,8 +178,8 @@ void WebPluginProxy::InvalidateRect(const gfx::Rect& rect) {
   // This is not true because scrolling (or window resize) could occur and be
   // handled by the renderer before it receives the InvalidateRect message,
   // changing the clip rect and then not painting.
-  if (invalidate_rect.IsEmpty() ||
-      !delegate_->GetClipRect().Intersects(invalidate_rect))
+  if (damaged_rect_.IsEmpty() ||
+      !delegate_->GetClipRect().Intersects(damaged_rect_))
     return;
 
   // Only send a single InvalidateRect message at a time.  From DidPaint we
@@ -457,7 +505,7 @@ void WebPluginProxy::UpdateGeometry(
   // Send over any pending invalidates which occured when the plugin was
   // off screen.
   if (delegate_->IsWindowless() && !clip_rect.IsEmpty() &&
-      old_clip_rect.IsEmpty() && !damaged_rect_.IsEmpty()) {
+      !damaged_rect_.IsEmpty()) {
     InvalidateRect(damaged_rect_);
   }
 
@@ -560,6 +608,26 @@ void WebPluginProxy::SetWindowlessBuffer(
   } else {
     background_canvas_.reset();
   }
+
+  // If SHM pixmaps support is available, create a SHM pixmap and
+  // pass it to the delegate for windowless plugin painting.
+  if (delegate_->IsWindowless() && use_shm_pixmap_ && windowless_dib_.get()) {
+    Display* display = x11_util::GetXDisplay();
+    XID root_window = x11_util::GetX11RootWindow();
+    XShmSegmentInfo shminfo = {0};
+
+    if (windowless_shm_pixmap_ != None)
+      XFreePixmap(display, windowless_shm_pixmap_);
+
+    shminfo.shmseg = windowless_dib_->MapToX(display);
+    // Create a shared memory pixmap based on the image buffer.
+    windowless_shm_pixmap_ = XShmCreatePixmap(display, root_window,
+                                              NULL, &shminfo,
+                                              width, height,
+                                              DefaultDepth(display, 0));
+
+    delegate_->SetWindowlessShmPixmap(windowless_shm_pixmap_);
+  }
 }
 
 #endif
@@ -580,23 +648,53 @@ void WebPluginProxy::SetDeferResourceLoading(unsigned long resource_id,
 }
 
 #if defined(OS_MACOSX)
-void WebPluginProxy::BindFakePluginWindowHandle() {
-  Send(new PluginHostMsg_BindFakePluginWindowHandle(route_id_));
+void WebPluginProxy::SetImeEnabled(bool enabled) {
+  IPC::Message* msg = new PluginHostMsg_SetImeEnabled(route_id_, enabled);
+  // This message can be sent during event-handling, and needs to be delivered
+  // within that context.
+  msg->set_unblock(true);
+  Send(msg);
+}
+
+void WebPluginProxy::BindFakePluginWindowHandle(bool opaque) {
+  Send(new PluginHostMsg_BindFakePluginWindowHandle(route_id_, opaque));
+}
+
+WebPluginAcceleratedSurface* WebPluginProxy::GetAcceleratedSurface() {
+  if (!accelerated_surface_.get())
+    accelerated_surface_.reset(new WebPluginAcceleratedSurfaceProxy(this));
+  return accelerated_surface_.get();
 }
 
 void WebPluginProxy::AcceleratedFrameBuffersDidSwap(
     gfx::PluginWindowHandle window) {
-  // TODO(pinkerton): Rename this message.
   Send(new PluginHostMsg_AcceleratedSurfaceBuffersSwapped(route_id_, window));
 }
 
-void WebPluginProxy::SetAcceleratedSurface(gfx::PluginWindowHandle window,
-    int32 width,
-    int32 height,
+void WebPluginProxy::SetAcceleratedSurface(
+    gfx::PluginWindowHandle window,
+    const gfx::Size& size,
     uint64 accelerated_surface_identifier) {
-  // TODO(pinkerton): Rename this message.
   Send(new PluginHostMsg_AcceleratedSurfaceSetIOSurface(
-      route_id_, window, width, height, accelerated_surface_identifier));
+      route_id_, window, size.width(), size.height(),
+      accelerated_surface_identifier));
+}
+
+void WebPluginProxy::SetAcceleratedDIB(
+    gfx::PluginWindowHandle window,
+    const gfx::Size& size,
+    const TransportDIB::Handle& dib_handle) {
+  Send(new PluginHostMsg_AcceleratedSurfaceSetTransportDIB(
+      route_id_, window, size.width(), size.height(), dib_handle));
+}
+
+void WebPluginProxy::AllocSurfaceDIB(const size_t size,
+                                     TransportDIB::Handle* dib_handle) {
+  Send(new PluginHostMsg_AllocTransportDIB(route_id_, size, dib_handle));
+}
+
+void WebPluginProxy::FreeSurfaceDIB(TransportDIB::Id dib_id) {
+  Send(new PluginHostMsg_FreeTransportDIB(route_id_, dib_id));
 }
 #endif
 

@@ -76,7 +76,7 @@ void StatusIconMac::SetToolTip(const string16& tool_tip) {
   [item() setToolTip:base::SysUTF16ToNSString(tool_tip)];
 }
 
-// static factory method
-StatusIcon* StatusIcon::Create() {
-  return new StatusIconMac();
+void StatusIconMac::UpdatePlatformContextMenu(menus::MenuModel* menu) {
+  // TODO(atwilson): Add support for context menus for Mac when actually needed
+  // (not yet used by anything) - http://crbug.com/37375.
 }

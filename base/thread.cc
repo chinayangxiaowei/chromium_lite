@@ -4,9 +4,8 @@
 
 #include "base/thread.h"
 
-#include "base/dynamic_annotations.h"
 #include "base/lazy_instance.h"
-#include "base/string_util.h"
+#include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "base/thread_local.h"
 #include "base/waitable_event.h"
 
@@ -36,7 +35,8 @@ struct Thread::StartupData {
 };
 
 Thread::Thread(const char* name)
-    : stopping_(false),
+    : started_(false),
+      stopping_(false),
       startup_data_(NULL),
       thread_(0),
       message_loop_(NULL),
@@ -85,12 +85,16 @@ bool Thread::StartWithOptions(const Options& options) {
 
   if (!PlatformThread::Create(options.stack_size, this, &thread_)) {
     DLOG(ERROR) << "failed to create thread";
-    startup_data_ = NULL;  // Record that we failed to start.
+    startup_data_ = NULL;
     return false;
   }
 
   // Wait for the thread to start and initialize message_loop_
   startup_data.event.Wait();
+
+  // set it to NULL so we don't keep a pointer to some object on the stack.
+  startup_data_ = NULL;
+  started_ = true;
 
   DCHECK(message_loop_);
   return true;
@@ -113,14 +117,17 @@ void Thread::Stop() {
   DCHECK(!message_loop_);
 
   // The thread no longer needs to be joined.
-  startup_data_ = NULL;
+  started_ = false;
 
   stopping_ = false;
 }
 
 void Thread::StopSoon() {
   // We should only be called on the same thread that started us.
-  DCHECK_NE(thread_id_, PlatformThread::CurrentId());
+
+  // Reading thread_id_ without a lock can lead to a benign data race
+  // with ThreadMain, so we annotate it to stay silent under ThreadSanitizer.
+  DCHECK_NE(ANNOTATE_UNPROTECTED_READ(thread_id_), PlatformThread::CurrentId());
 
   if (stopping_ || !message_loop_)
     return;
@@ -144,6 +151,7 @@ void Thread::ThreadMain() {
     ANNOTATE_THREAD_NAME(name_.c_str());  // Tell the name to race detector.
     message_loop.set_thread_name(name_);
     message_loop_ = &message_loop;
+    message_loop_proxy_ = MessageLoopProxy::CreateForCurrentThread();
 
     // Let the thread do extra initialization.
     // Let's do this before signaling we are started.
@@ -163,6 +171,7 @@ void Thread::ThreadMain() {
 
     // We can't receive messages anymore.
     message_loop_ = NULL;
+    message_loop_proxy_ = NULL;
   }
   CleanUpAfterMessageLoopDestruction();
   thread_id_ = 0;

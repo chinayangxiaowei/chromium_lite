@@ -13,15 +13,23 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/environment.h"
 #include "base/file_util.h"
 #include "base/file_version_info.h"
 #include "base/registry.h"
+#include "base/scoped_ptr.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "base/win_util.h"
 #include "breakpad/src/client/windows/handler/exception_handler.h"
 #include "chrome/app/hard_error_handler_win.h"
+#include "chrome/common/child_process_logging.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/env_vars.h"
 #include "chrome/common/result_codes.h"
+#include "chrome/common/policy_constants.h"
+#include "chrome/installer/util/google_chrome_sxs_distribution.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "chrome/installer/util/install_util.h"
 
@@ -58,8 +66,11 @@ google_breakpad::ExceptionHandler* g_breakpad = NULL;
 // data updated as the state of the browser changes.
 static std::vector<google_breakpad::CustomInfoEntry>* g_custom_entries = NULL;
 static size_t g_url_chunks_offset;
+static size_t g_num_of_extensions_offset;
 static size_t g_extension_ids_offset;
 static size_t g_client_id_offset;
+static size_t g_gpu_info_offset;
+static size_t g_num_of_views_offset;
 
 // Dumps the current process memory.
 extern "C" void __declspec(dllexport) __cdecl DumpProcess() {
@@ -110,11 +121,29 @@ google_breakpad::CustomClientInfo* GetCustomInfo(const std::wstring& dll_path,
   g_custom_entries->push_back(
       google_breakpad::CustomInfoEntry(L"ptype", type.c_str()));
 
+  g_num_of_extensions_offset = g_custom_entries->size();
+  g_custom_entries->push_back(
+      google_breakpad::CustomInfoEntry(L"num-extensions", L"N/A"));
+
   g_extension_ids_offset = g_custom_entries->size();
   for (int i = 0; i < kMaxReportedActiveExtensions; ++i) {
     g_custom_entries->push_back(google_breakpad::CustomInfoEntry(
         StringPrintf(L"extension-%i", i + 1).c_str(), L""));
   }
+
+  // Add empty values for the gpu_info. We'll put the actual values
+  // when we collect them at this location.
+  g_gpu_info_offset = g_custom_entries->size();
+  g_custom_entries->push_back(
+      google_breakpad::CustomInfoEntry(L"gpu-venid", L""));
+  g_custom_entries->push_back(
+      google_breakpad::CustomInfoEntry(L"gpu-devid", L""));
+  g_custom_entries->push_back(
+      google_breakpad::CustomInfoEntry(L"gpu-driver", L""));
+  g_custom_entries->push_back(
+      google_breakpad::CustomInfoEntry(L"gpu-psver", L""));
+  g_custom_entries->push_back(
+      google_breakpad::CustomInfoEntry(L"gpu-vsver", L""));
 
   // Read the id from registry. If reporting has never been enabled
   // the result will be empty string. Its OK since when user enables reporting
@@ -125,7 +154,10 @@ google_breakpad::CustomClientInfo* GetCustomInfo(const std::wstring& dll_path,
   g_custom_entries->push_back(
       google_breakpad::CustomInfoEntry(L"guid", guid.c_str()));
 
-  if (type == L"renderer" || type == L"plugin") {
+  if (type == L"renderer" || type == L"plugin" || type == L"gpu-process") {
+    g_num_of_views_offset = g_custom_entries->size();
+    g_custom_entries->push_back(
+        google_breakpad::CustomInfoEntry(L"num-views", L""));
     // Create entries for the URL. Currently we only allow each chunk to be 64
     // characters, which isn't enough for a URL. As a hack we create 8 entries
     // and split the URL across the g_custom_entries.
@@ -135,6 +167,9 @@ google_breakpad::CustomClientInfo* GetCustomInfo(const std::wstring& dll_path,
           StringPrintf(L"url-chunk-%i", i + 1).c_str(), L""));
     }
   } else {
+    g_custom_entries->push_back(
+        google_breakpad::CustomInfoEntry(L"num-views", L"N/A"));
+
     // Browser-specific g_custom_entries.
     google_breakpad::CustomInfoEntry switch1(L"switch-1", L"");
     google_breakpad::CustomInfoEntry switch2(L"switch-2", L"");
@@ -148,6 +183,8 @@ google_breakpad::CustomClientInfo* GetCustomInfo(const std::wstring& dll_path,
         switch1.set_value(TrimToBreakpadMax(args[1]).c_str());
       if (num_args > 2)
         switch2.set_value(TrimToBreakpadMax(args[2]).c_str());
+      // The caller must free the memory allocated for |args|.
+      ::LocalFree(args);
     }
 
     g_custom_entries->push_back(switch1);
@@ -184,11 +221,11 @@ bool DumpDoneCallback(const wchar_t*, const wchar_t*, void*,
 
   // We set CHROME_CRASHED env var. If the CHROME_RESTART is present.
   // This signals the child process to show the 'chrome has crashed' dialog.
-  if (!::GetEnvironmentVariableW(ASCIIToWide(env_vars::kRestartInfo).c_str(),
-                                 NULL, 0)) {
+  scoped_ptr<base::Environment> env(base::Environment::Create());
+  if (!env->HasVar(env_vars::kRestartInfo)) {
     return true;
   }
-  ::SetEnvironmentVariableW(ASCIIToWide(env_vars::kShowRestart).c_str(), L"1");
+  env->SetVar(env_vars::kShowRestart, "1");
   // Now we just start chrome browser with the same command line.
   STARTUPINFOW si = {sizeof(si)};
   PROCESS_INFORMATION pi;
@@ -237,6 +274,9 @@ extern "C" void __declspec(dllexport) __cdecl SetActiveURL(
     const wchar_t* url_cstring) {
   DCHECK(url_cstring);
 
+  if (!g_custom_entries)
+    return;
+
   std::wstring url(url_cstring);
   size_t chunk_index = 0;
   size_t url_size = url.size();
@@ -267,9 +307,26 @@ extern "C" void __declspec(dllexport) __cdecl SetClientId(
   if (client_id == NULL)
     return;
 
+  if (!g_custom_entries)
+    return;
+
   wcscpy_s((*g_custom_entries)[g_client_id_offset].value,
            google_breakpad::CustomInfoEntry::kValueMaxLength,
            client_id);
+}
+
+static void SetIntegerValue(size_t offset, int value) {
+  if (!g_custom_entries)
+    return;
+
+  wcscpy_s((*g_custom_entries)[offset].value,
+           google_breakpad::CustomInfoEntry::kValueMaxLength,
+           StringPrintf(L"%d", value).c_str());
+}
+
+extern "C" void __declspec(dllexport) __cdecl SetNumberOfExtensions(
+    int number_of_extensions) {
+  SetIntegerValue(g_num_of_extensions_offset, number_of_extensions);
 }
 
 extern "C" void __declspec(dllexport) __cdecl SetExtensionID(
@@ -277,12 +334,59 @@ extern "C" void __declspec(dllexport) __cdecl SetExtensionID(
   DCHECK(id);
   DCHECK(index < kMaxReportedActiveExtensions);
 
+  if (!g_custom_entries)
+    return;
+
   wcscpy_s((*g_custom_entries)[g_extension_ids_offset + index].value,
            google_breakpad::CustomInfoEntry::kValueMaxLength,
            id);
 }
 
+extern "C" void __declspec(dllexport) __cdecl SetGpuInfo(
+    const wchar_t* vendor_id, const wchar_t* device_id,
+    const wchar_t* driver_version, const wchar_t* pixel_shader_version,
+    const wchar_t* vertex_shader_version) {
+  if (!g_custom_entries)
+    return;
+
+  wcscpy_s((*g_custom_entries)[g_gpu_info_offset].value,
+           google_breakpad::CustomInfoEntry::kValueMaxLength,
+           vendor_id);
+  wcscpy_s((*g_custom_entries)[g_gpu_info_offset+1].value,
+           google_breakpad::CustomInfoEntry::kValueMaxLength,
+           device_id);
+  wcscpy_s((*g_custom_entries)[g_gpu_info_offset+2].value,
+           google_breakpad::CustomInfoEntry::kValueMaxLength,
+           driver_version);
+  wcscpy_s((*g_custom_entries)[g_gpu_info_offset+3].value,
+           google_breakpad::CustomInfoEntry::kValueMaxLength,
+           pixel_shader_version);
+  wcscpy_s((*g_custom_entries)[g_gpu_info_offset+4].value,
+           google_breakpad::CustomInfoEntry::kValueMaxLength,
+           vertex_shader_version);
+}
+
+extern "C" void __declspec(dllexport) __cdecl SetNumberOfViews(
+    int number_of_views) {
+  SetIntegerValue(g_num_of_views_offset, number_of_views);
+}
+
 }  // namespace
+
+bool WrapMessageBoxWithSEH(const wchar_t* text, const wchar_t* caption,
+                           UINT flags, bool* exit_now) {
+  // We wrap the call to MessageBoxW with a SEH handler because it some
+  // machines with CursorXP, PeaDict or with FontExplorer installed it crashes
+  // uncontrollably here. Being this a best effort deal we better go away.
+  __try {
+    *exit_now = (IDOK != ::MessageBoxW(NULL, text, caption, flags));
+  } __except(EXCEPTION_EXECUTE_HANDLER) {
+    // Its not safe to continue executing, exit silently here.
+    ::ExitProcess(ResultCodes::RESPAWN_FAILED);
+  }
+
+  return true;
+}
 
 // This function is executed by the child process that DumpDoneCallback()
 // spawned and basically just shows the 'chrome has crashed' dialog if
@@ -298,40 +402,49 @@ bool ShowRestartDialogIfCrashed(bool* exit_now) {
   if (!len)
     return true;
 
-  // We wrap the call to MessageBoxW with a SEH handler because it some
-  // machines with CursorXP, PeaDict or with FontExplorer installed it crashes
-  // uncontrollably here. Being this a best effort deal we better go away.
-#pragma warning(push)
-#pragma warning(disable:4509)  // warning: SEH used but dlg_strings has a dtor.
-  __try {
-    wchar_t* restart_data = new wchar_t[len + 1];
-    ::GetEnvironmentVariableW(ASCIIToWide(env_vars::kRestartInfo).c_str(),
-                              restart_data, len);
-    restart_data[len] = 0;
-    // The CHROME_RESTART var contains the dialog strings separated by '|'.
-    // See PrepareRestartOnCrashEnviroment() function for details.
-    std::vector<std::wstring> dlg_strings;
-    SplitString(restart_data, L'|', &dlg_strings);
-    delete[] restart_data;
-    if (dlg_strings.size() < 3)
-      return true;
+  wchar_t* restart_data = new wchar_t[len + 1];
+  ::GetEnvironmentVariableW(ASCIIToWide(env_vars::kRestartInfo).c_str(),
+                            restart_data, len);
+  restart_data[len] = 0;
+  // The CHROME_RESTART var contains the dialog strings separated by '|'.
+  // See PrepareRestartOnCrashEnviroment() function for details.
+  std::vector<std::wstring> dlg_strings;
+  SplitString(restart_data, L'|', &dlg_strings);
+  delete[] restart_data;
+  if (dlg_strings.size() < 3)
+    return true;
 
-    // If the UI layout is right-to-left, we need to pass the appropriate MB_XXX
-    // flags so that an RTL message box is displayed.
-    UINT flags = MB_OKCANCEL | MB_ICONWARNING;
-    if (dlg_strings[2] == ASCIIToWide(env_vars::kRtlLocale))
-      flags |= MB_RIGHT | MB_RTLREADING;
+  // If the UI layout is right-to-left, we need to pass the appropriate MB_XXX
+  // flags so that an RTL message box is displayed.
+  UINT flags = MB_OKCANCEL | MB_ICONWARNING;
+  if (dlg_strings[2] == ASCIIToWide(env_vars::kRtlLocale))
+    flags |= MB_RIGHT | MB_RTLREADING;
 
-    // Show the dialog now. It is ok if another chrome is started by the
-    // user since we have not initialized the databases.
-    *exit_now = (IDOK != ::MessageBoxW(NULL, dlg_strings[1].c_str(),
-                                       dlg_strings[0].c_str(), flags));
-  } __except(EXCEPTION_EXECUTE_HANDLER) {
-    // Its not safe to continue executing, exit silently here.
-    ::ExitProcess(ResultCodes::RESPAWN_FAILED);
+  return WrapMessageBoxWithSEH(dlg_strings[1].c_str(), dlg_strings[0].c_str(),
+                               flags, exit_now);
+}
+
+// Determine whether configuration management allows loading the crash reporter.
+// Since the configuration management infrastructure is not initialized at this
+// point, we read the corresponding registry key directly. The return status
+// indicates whether policy data was successfully read. If it is true, |result|
+// contains the value set by policy.
+static bool MetricsReportingControlledByPolicy(bool* result) {
+  std::wstring key_name = UTF8ToWide(policy::key::kMetricsReportingEnabled);
+  DWORD value;
+  RegKey hkcu_policy_key(HKEY_LOCAL_MACHINE, policy::kRegistrySubKey, KEY_READ);
+  if (hkcu_policy_key.ReadValueDW(key_name.c_str(), &value)) {
+    *result = value != 0;
+    return true;
   }
-#pragma warning(pop)
-  return true;
+
+  RegKey hklm_policy_key(HKEY_CURRENT_USER, policy::kRegistrySubKey, KEY_READ);
+  if (hklm_policy_key.ReadValueDW(key_name.c_str(), &value)) {
+    *result = value != 0;
+    return true;
+  }
+
+  return false;
 }
 
 static DWORD __stdcall InitCrashReporterThread(void* param) {
@@ -349,9 +462,16 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
     callback = &DumpDoneCallback;
   }
 
+  // Check whether configuration management controls crash reporting.
+  bool crash_reporting_enabled = true;
+  bool controlled_by_policy =
+      MetricsReportingControlledByPolicy(&crash_reporting_enabled);
+
   const CommandLine& command = *CommandLine::ForCurrentProcess();
-  bool use_crash_service = command.HasSwitch(switches::kNoErrorDialogs) ||
-      GetEnvironmentVariable(ASCIIToWide(env_vars::kHeadless).c_str(), NULL, 0);
+  bool use_crash_service = !controlled_by_policy &&
+      ((command.HasSwitch(switches::kNoErrorDialogs) ||
+      GetEnvironmentVariable(
+          ASCIIToWide(env_vars::kHeadless).c_str(), NULL, 0)));
   bool is_per_user_install =
       InstallUtil::IsPerUserInstall(info->dll_path.c_str());
 
@@ -361,10 +481,15 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
     pipe_name = kChromePipeName;
   } else {
     // We want to use the Google Update crash reporting. We need to check if the
-    // user allows it first.
-    if (!GoogleUpdateSettings::GetCollectStatsConsent()) {
-      // The user did not allow Google Update to send crashes, we need to use
-      // our default crash handler instead, but only for the browser process.
+    // user allows it first (in case the administrator didn't already decide
+    // via policy).
+    if (!controlled_by_policy)
+      crash_reporting_enabled = GoogleUpdateSettings::GetCollectStatsConsent();
+
+    if (!crash_reporting_enabled) {
+      // Configuration managed or the user did not allow Google Update to send
+      // crashes, we need to use our default crash handler instead, but only
+      // for the browser process.
       if (callback)
         InitDefaultCrashCallback();
       return 0;
@@ -401,7 +526,8 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
     string16 channel_string;
     GoogleUpdateSettings::GetChromeChannel(!is_per_user_install,
         &channel_string);
-    if (channel_string == L"dev" || channel_string == L"beta")
+    if (channel_string == L"dev" || channel_string == L"beta" ||
+        channel_string == GoogleChromeSxSDistribution::ChannelName())
       dump_type = kLargerDumpType;
   }
 
@@ -412,8 +538,8 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
 
   if (!g_breakpad->IsOutOfProcess()) {
     // The out-of-process handler is unavailable.
-    ::SetEnvironmentVariable(ASCIIToWide(env_vars::kNoOOBreakpad).c_str(),
-                             info->process_type.c_str());
+    scoped_ptr<base::Environment> env(base::Environment::Create());
+    env->SetVar(env_vars::kNoOOBreakpad, WideToUTF8(info->process_type));
   } else {
     // Tells breakpad to handle breakpoint and single step exceptions.
     // This might break JIT debuggers, but at least it will always
@@ -436,8 +562,8 @@ void InitCrashReporterWithDllPath(const std::wstring& dll_path) {
 
     // Query the custom_info now because if we do it in the thread it's going to
     // fail in the sandbox. The thread will delete this object.
-    scoped_ptr<CrashReporterInfo> info(new CrashReporterInfo);
-    info->process_type = command.GetSwitchValue(switches::kProcessType);
+    CrashReporterInfo* info(new CrashReporterInfo);
+    info->process_type = command.GetSwitchValueNative(switches::kProcessType);
     if (info->process_type.empty())
       info->process_type = L"browser";
 
@@ -449,14 +575,14 @@ void InitCrashReporterWithDllPath(const std::wstring& dll_path) {
     // it may take some times to initialize the crash_service process.  We use
     // the Windows worker pool to make better reuse of the thread.
     if (info->process_type != L"browser") {
-      InitCrashReporterThread(info.release());
+      InitCrashReporterThread(info);
     } else {
       if (QueueUserWorkItem(
               &InitCrashReporterThread,
-              info.release(),
+              info,
               WT_EXECUTELONGFUNCTION) == 0) {
         // We failed to queue to the worker pool, initialize in this thread.
-        InitCrashReporterThread(info.release());
+        InitCrashReporterThread(info);
       }
     }
   }

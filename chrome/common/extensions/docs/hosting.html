@@ -15,7 +15,9 @@
     </script>
     <script type="text/javascript" src="js/api_page_generator.js"></script>
     <script type="text/javascript" src="js/bootstrap.js"></script>
-  <title>Hosting - Google Chrome Extensions - Google Code</title></head><body>  <div id="gc-container" class="labs">
+    <script type="text/javascript" src="js/sidebar.js"></script>
+  <title>Hosting - Google Chrome Extensions - Google Code</title></head>
+  <body>  <div id="gc-container" class="labs">
       <div id="devModeWarning">
         You are viewing extension docs in chrome via the 'file:' scheme: are you expecting to see local changes when you refresh? You'll need run chrome with --allow-file-access-from-files.
       </div>
@@ -35,6 +37,7 @@
                 <div style="display:inline">
                   (
                     <span class="optional">optional</span>
+                    <span class="enum">enumerated</span>
                     <span id="typeTemplate">
                       <span>
                         <a> Type</a>
@@ -44,6 +47,7 @@
                           array of <span><span></span></span>
                         </span>
                         <span>paramType</span>
+                        <span></span>
                       </span>
                     </span>
                   )
@@ -57,6 +61,15 @@
           <dd>
             Description of this parameter from the json schema.
           </dd>
+          <dd>
+            This parameter was added in version
+            <b><span></span></b>.
+            You must omit this parameter in earlier versions,
+            and you may omit it in any version.  If you require this
+            parameter, the manifest key
+            <a href="manifest.html#minimum_chrome_version">minimum_chrome_version</a>
+            can ensure that your extension won't be run in an earlier browser version.
+          </dd>
 
           <!-- OBJECT PROPERTIES -->
           <dd>
@@ -67,8 +80,23 @@
               </div>
             </dl>
           </dd>
+
+          <!-- FUNCTION PARAMETERS -->
+          <dd>
+            <div></div>
+          </dd>
+
         </div> <!-- /VALUE -->
 
+        <div id="functionParametersTemplate">
+          <h5>Parameters</h5>
+          <dl>
+            <div>
+              <div>
+              </div>
+            </div>
+          </dl>
+        </div>
       </div> <!-- /SUBTEMPLATES -->
 
   <a id="top"></a>
@@ -130,11 +158,13 @@
         <ul>
           <li><a href="getstarted.html">Getting Started</a></li>
           <li><a href="overview.html">Overview</a></li>
+          <li><a href="whats_new.html">What's New?</a></li>
           <li><h2><a href="devguide.html">Developer's Guide</a></h2>
             <ul>
               <li>Browser UI
                 <ul>
                   <li><a href="browserAction.html">Browser Actions</a></li>
+                  <li><a href="contextMenus.html">Context Menus</a></li>
                   <li><a href="notifications.html">Desktop Notifications</a></li>
                   <li><a href="options.html">Options Pages</a></li>
                   <li><a href="override.html">Override Pages</a></li>
@@ -145,8 +175,10 @@
               <li>Browser Interaction
                 <ul>
                   <li><a href="bookmarks.html">Bookmarks</a></li>
+                  <li><a href="cookies.html">Cookies</a></li>
                   <li><a href="events.html">Events</a></li>
                   <li><a href="history.html">History</a></li>
+                  <li><a href="management.html">Management</a></li>
                   <li><a href="tabs.html">Tabs</a></li>
                   <li><a href="windows.html">Windows</a></li>
                 </ul>
@@ -157,6 +189,7 @@
                   <li><a href="background_pages.html">Background Pages</a></li>
                   <li><a href="content_scripts.html">Content Scripts</a></li>
                   <li><a href="xhr.html">Cross-Origin XHR</a></li>
+                  <li><a href="idle.html">Idle</a></li>
                   <li><a href="i18n.html">Internationalization</a></li>
                   <li><a href="messaging.html">Message Passing</a></li>
                   <li><a href="npapi.html">NPAPI Plugins</a></li>
@@ -193,6 +226,9 @@
          <li><h2><a href="samples.html">Samples</a></h2></li>
         </ul>
       </div>
+      <script>
+        initToggles();
+      </script>
 
     <div class="g-unit" id="gc-pagecontent">
       <div id="pageTitle">
@@ -203,7 +239,7 @@
           <h2>Contents</h2>
           <ol>
             <li>
-              <a href="#gallery">Publishing to the Extensions gallery</a>
+              <a href="#gallery">Publishing to the Extensions Gallery</a>
               <ol>
                 <li style="display: none; ">
                   <a>h3Name</a>
@@ -258,20 +294,47 @@
         </div>
         <!-- /TABLE OF CONTENTS -->
 
+        <!-- Standard content lead-in for experimental API pages -->
+        <p id="classSummary" style="display: none; ">
+          For information on how to use experimental APIs, see the <a href="experimental.html">chrome.experimental.* APIs</a> page.
+        </p>
+
         <!-- STATIC CONTENT PLACEHOLDER -->
         <div id="static"><div id="pageData-name" class="pageData">Hosting</div>
 <div id="pageData-showTOC" class="pageData">true</div>
 
 <p>
-Google provides a free hosting service: the
-<a href="http://chrome.google.com/extensions">Extensions gallery</a>.
-Another option is hosting your extension on other servers,
-instead of or in addition to using Google's gallery.
+Until the
+<a href="http://code.google.com/chrome/webstore/">Chrome Web Store</a>
+is available to the public,
+you can host your extension
+using the <a href="https://chrome.google.com/extensions">Extensions Gallery</a>.
+Once the store is public,
+the gallery's contents will be merged into the store.
+Another option
+is hosting your extension on other servers.
+</p>
+
+<p>
 This page gives tips for using the gallery,
 as well as details on how to host extensions on your own server.
 </p>
 
-<h2 id="gallery">Publishing to the Extensions gallery</h2>
+<h2 id="gallery">Publishing to the Extensions Gallery</h2>
+
+<p>
+To publish extensions,
+you first need to pay a one-time
+<a href="http://blog.chromium.org/2010/08/security-improvements-and-registration.html">$5 developer registration fee</a>.
+</p>
+
+<p class="note">
+<b>Note:</b>
+If you used the Chrome Developer Dashboard before
+the first developer preview release of the Chrome Web Store —
+to publish an extension, for example —
+you don't need to pay the fee.
+</p>
 
 <p>
 Publishing to the gallery is easy,
@@ -281,7 +344,7 @@ if you take a little time to prepare:
 
 <ul>
   <li> Visit the
-    <a href="http://chrome.google.com/extensions">gallery</a>
+    <a href="https://chrome.google.com/extensions">gallery</a>
     and look at similar extensions' pages.
     Your extension's page should look at least as good as theirs. </li>
   <li> Consider creating a support site for your extension,
@@ -477,7 +540,7 @@ or try hosting the extension at another server.
                   </p>
 
                   <!-- Note: intentionally longer 80 columns -->
-                  <pre>function(<span>Type param1, Type param2</span>) <span class="subdued">{...}</span>);</pre>
+                  <pre>function(<span>Type param1, Type param2</span>) <span class="subdued">{...}</span>;</pre>
                   <dl>
                     <div>
                       <div>
@@ -487,6 +550,13 @@ or try hosting the extension at another server.
                   </div>
                 </div>
 
+                <!-- MIN_VERSION -->
+                <p>
+                  This function was added in version <b><span></span></b>.
+                  If you require this function, the manifest key
+                  <a href="manifest.html#minimum_chrome_version">minimum_chrome_version</a>
+                  can ensure that your extension won't be run in an earlier browser version.
+                </p>
               </div> <!-- /description -->
 
             </div>  <!-- /apiItem -->
@@ -531,7 +601,7 @@ or try hosting the extension at another server.
 
           <!-- TYPES -->
           <div class="apiGroup">
-            <a name="types.sort(sortByName)"></a>
+            <a name="types"></a>
             <h3 id="types">Types</h3>
 
             <!-- iterates over all types -->
@@ -559,7 +629,7 @@ or try hosting the extension at another server.
   <a rel="license" href="http://code.google.com/google_bsd_license.html">BSD License</a>.
   </p>
   <p>
-  ©2010 Google
+  ©2011 Google
   </p>
 
 <!-- begin analytics -->

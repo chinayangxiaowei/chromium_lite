@@ -7,7 +7,7 @@
 #include "chrome/browser/sync/engine/syncer_types.h"
 #include "chrome/browser/sync/sessions/sync_session.h"
 #include "chrome/browser/sync/syncable/directory_manager.h"
-#include "chrome/browser/sync/util/event_sys-inl.h"
+#include "chrome/common/deprecated/event_sys-inl.h"
 
 namespace browser_sync {
 
@@ -17,6 +17,9 @@ SyncerEndCommand::~SyncerEndCommand() {}
 void SyncerEndCommand::ExecuteImpl(sessions::SyncSession* session) {
   sessions::StatusController* status(session->status_controller());
   status->set_syncing(false);
+  session->context()->set_previous_session_routing_info(
+      session->routing_info());
+  session->context()->set_last_snapshot(session->TakeSnapshot());
 
   // This might be the first time we've fully completed a sync cycle, for
   // some subset of the currently synced datatypes.
@@ -38,10 +41,10 @@ void SyncerEndCommand::ExecuteImpl(sessions::SyncSession* session) {
     }
   }
 
-  SyncerEvent event(SyncerEvent::SYNC_CYCLE_ENDED);
+  SyncEngineEvent event(SyncEngineEvent::SYNC_CYCLE_ENDED);
   sessions::SyncSessionSnapshot snapshot(session->TakeSnapshot());
   event.snapshot = &snapshot;
-  session->context()->syncer_event_channel()->NotifyListeners(event);
+  session->context()->NotifyListeners(event);
 }
 
 }  // namespace browser_sync

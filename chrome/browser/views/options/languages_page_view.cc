@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,11 +14,12 @@
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/string_util.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/language_combobox_model.h"
 #include "chrome/browser/language_order_table_model.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/shell_dialogs.h"
 #include "chrome/browser/views/restart_message_box.h"
 #include "chrome/common/chrome_switches.h"
@@ -141,8 +142,8 @@ void AddLanguageWindowView::Layout() {
 gfx::Size AddLanguageWindowView::GetPreferredSize() {
   ResourceBundle& rb = ResourceBundle::GetSharedInstance();
   const gfx::Font& font = rb.GetFont(ResourceBundle::BaseFont);
-  return gfx::Size(font.ave_char_width() * kDefaultWindowWidthChars,
-                   font.height() * kDefaultWindowHeightLines);
+  return gfx::Size(font.GetAverageCharacterWidth() * kDefaultWindowWidthChars,
+                   font.GetHeight() * kDefaultWindowHeightLines);
 }
 
 void AddLanguageWindowView::ViewHierarchyChanged(bool is_add,
@@ -397,10 +398,10 @@ void LanguagesPageView::InitControlLayout() {
                             profile()->GetPrefs(), this);
 }
 
-void LanguagesPageView::NotifyPrefChanged(const std::wstring* pref_name) {
+void LanguagesPageView::NotifyPrefChanged(const std::string* pref_name) {
   if (!pref_name || *pref_name == prefs::kAcceptLanguages) {
     language_order_table_model_->SetAcceptLanguagesString(
-        WideToASCII(accept_languages_.GetValue()));
+        accept_languages_.GetValue());
   }
   if (!pref_name || *pref_name == prefs::kApplicationLocale) {
     int index = ui_language_model_->GetSelectedLanguageIndex(
@@ -430,10 +431,9 @@ void LanguagesPageView::NotifyPrefChanged(const std::wstring* pref_name) {
     // dictionary language in the user profile now correctly stores "fr"
     // instead of "fr-FR".
     if (index < 0) {
-      const std::string& lang_region = WideToASCII(
-          dictionary_language_.GetValue());
-      dictionary_language_.SetValue(ASCIIToWide(
-          SpellCheckCommon::GetLanguageFromLanguageRegion(lang_region)));
+      const std::string& lang_region = dictionary_language_.GetValue();
+      dictionary_language_.SetValue(
+          SpellCheckCommon::GetLanguageFromLanguageRegion(lang_region));
       index = dictionary_language_model_->GetSelectedLanguageIndex(
           prefs::kSpellCheckDictionary);
     }
@@ -546,15 +546,15 @@ void LanguagesPageView::OnMoveUpLanguage() {
 
 void LanguagesPageView::SaveChanges() {
   if (language_order_table_model_.get() && language_table_edited_) {
-    accept_languages_.SetValue(ASCIIToWide(
-        language_order_table_model_->GetLanguageList()));
+    accept_languages_.SetValue(
+        language_order_table_model_->GetLanguageList());
   }
 
   if (ui_language_index_selected_ != -1) {
     UserMetricsRecordAction(UserMetricsAction("Options_AppLanguage"),
                             g_browser_process->local_state());
-    app_locale_.SetValue(ASCIIToWide(ui_language_model_->
-        GetLocaleFromIndex(ui_language_index_selected_)));
+    app_locale_.SetValue(ui_language_model_->
+        GetLocaleFromIndex(ui_language_index_selected_));
 
     // Remove pref values for spellcheck dictionaries forcefully.
     PrefService* prefs = profile()->GetPrefs();
@@ -565,8 +565,8 @@ void LanguagesPageView::SaveChanges() {
   if (spellcheck_language_index_selected_ != -1) {
     UserMetricsRecordAction(UserMetricsAction("Options_DictionaryLanguage"),
                             profile()->GetPrefs());
-    dictionary_language_.SetValue(ASCIIToWide(dictionary_language_model_->
-        GetLocaleFromIndex(spellcheck_language_index_selected_)));
+    dictionary_language_.SetValue(dictionary_language_model_->
+        GetLocaleFromIndex(spellcheck_language_index_selected_));
   }
 
   if (enable_spellcheck_checkbox_clicked_)

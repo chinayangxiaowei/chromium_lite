@@ -17,12 +17,13 @@
 
 #ifndef CHROME_BROWSER_SYNC_SESSIONS_SYNC_SESSION_CONTEXT_H_
 #define CHROME_BROWSER_SYNC_SESSIONS_SYNC_SESSION_CONTEXT_H_
+#pragma once
 
 #include <string>
-#include "chrome/browser/chrome_thread.h"
+
+#include "base/scoped_ptr.h"
 #include "chrome/browser/sync/engine/model_safe_worker.h"
 #include "chrome/browser/sync/engine/syncer_types.h"
-#include "chrome/browser/sync/util/extensions_activity_monitor.h"
 
 namespace syncable {
 class DirectoryManager;
@@ -30,51 +31,30 @@ class DirectoryManager;
 
 namespace browser_sync {
 
-class AuthWatcher;
 class ConflictResolver;
+class ExtensionsActivityMonitor;
 class ModelSafeWorkerRegistrar;
 class ServerConnectionManager;
 
 namespace sessions {
 class ScopedSessionContextConflictResolver;
-class ScopedSessionContextSyncerEventChannel;
+struct SyncSessionSnapshot;
+class TestScopedSessionEventListener;
 
 class SyncSessionContext {
  public:
   SyncSessionContext(ServerConnectionManager* connection_manager,
-                     AuthWatcher* auth_watcher,
                      syncable::DirectoryManager* directory_manager,
-                     ModelSafeWorkerRegistrar* model_safe_worker_registrar)
-      : resolver_(NULL),
-        syncer_event_channel_(NULL),
-        connection_manager_(connection_manager),
-        auth_watcher_(auth_watcher),
-        directory_manager_(directory_manager),
-        registrar_(model_safe_worker_registrar),
-        extensions_activity_monitor_(new ExtensionsActivityMonitor()),
-        notifications_enabled_(false) {
-  }
-
-  ~SyncSessionContext() {
-    // In unittests, there may be no UI thread, so the above will fail.
-    if (!ChromeThread::DeleteSoon(ChromeThread::UI, FROM_HERE,
-                                  extensions_activity_monitor_)) {
-      delete extensions_activity_monitor_;
-    }
-  }
+                     ModelSafeWorkerRegistrar* model_safe_worker_registrar,
+                     const std::vector<SyncEngineEventListener*>& listeners);
+  ~SyncSessionContext();
 
   ConflictResolver* resolver() { return resolver_; }
   ServerConnectionManager* connection_manager() {
     return connection_manager_;
   }
-  AuthWatcher* auth_watcher() {
-    return auth_watcher_;
-  }
   syncable::DirectoryManager* directory_manager() {
     return directory_manager_;
-  }
-  SyncerEventChannel* syncer_event_channel() {
-    return syncer_event_channel_;
   }
   ModelSafeWorkerRegistrar* registrar() {
     return registrar_;
@@ -96,19 +76,38 @@ class SyncSessionContext {
   }
   const std::string& account_name() { return account_name_; }
 
+  const ModelSafeRoutingInfo& previous_session_routing_info() const {
+    return previous_session_routing_info_;
+  }
+
+  void set_previous_session_routing_info(const ModelSafeRoutingInfo& info) {
+    previous_session_routing_info_ = info;
+  }
+
+  sessions::SyncSessionSnapshot* previous_session_snapshot() {
+    return previous_session_snapshot_.get();
+  }
+
+  void set_last_snapshot(const SyncSessionSnapshot& snapshot);
+
+  void NotifyListeners(const SyncEngineEvent& event) {
+    FOR_EACH_OBSERVER(SyncEngineEventListener, listeners_,
+                      OnSyncEngineEvent(event));
+  }
+
  private:
   // Rather than force clients to set and null-out various context members, we
   // extend our encapsulation boundary to scoped helpers that take care of this
   // once they are allocated. See definitions of these below.
   friend class ScopedSessionContextConflictResolver;
-  friend class ScopedSessionContextSyncerEventChannel;
+  friend class TestScopedSessionEventListener;
 
-  // These are installed by Syncer objects when needed and may be NULL.
+  // This is installed by Syncer objects when needed and may be NULL.
   ConflictResolver* resolver_;
-  SyncerEventChannel* syncer_event_channel_;
+
+  ObserverList<SyncEngineEventListener> listeners_;
 
   ServerConnectionManager* const connection_manager_;
-  AuthWatcher* const auth_watcher_;
   syncable::DirectoryManager* const directory_manager_;
 
   // A registrar of workers capable of processing work closures on a thread
@@ -125,6 +124,13 @@ class SyncSessionContext {
 
   // The name of the account being synced.
   std::string account_name_;
+
+  // Some routing info history to help us clean up types that get disabled
+  // by the user.
+  ModelSafeRoutingInfo previous_session_routing_info_;
+
+  // Cache of last session snapshot information.
+  scoped_ptr<sessions::SyncSessionSnapshot> previous_session_snapshot_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncSessionContext);
 };
@@ -149,27 +155,6 @@ class ScopedSessionContextConflictResolver {
   SyncSessionContext* context_;
   ConflictResolver* resolver_;
   DISALLOW_COPY_AND_ASSIGN(ScopedSessionContextConflictResolver);
-};
-
-// Installs a SyncerEventChannel to a given session context for the lifetime of
-// the ScopedSessionContextSyncerEventChannel.  There should never be more than
-// one SyncerEventChannel in the context, so it is an error to use this if the
-// context already has a channel.
-class ScopedSessionContextSyncerEventChannel {
- public:
-  ScopedSessionContextSyncerEventChannel(SyncSessionContext* context,
-                                         SyncerEventChannel* channel)
-      : context_(context), channel_(channel) {
-    DCHECK(NULL == context->syncer_event_channel_);
-    context->syncer_event_channel_ = channel_;
-  }
-  ~ScopedSessionContextSyncerEventChannel() {
-    context_->syncer_event_channel_ = NULL;
-  }
- private:
-  SyncSessionContext* context_;
-  SyncerEventChannel* channel_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedSessionContextSyncerEventChannel);
 };
 
 }  // namespace sessions

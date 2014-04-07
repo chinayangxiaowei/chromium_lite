@@ -5,181 +5,156 @@
 #include "chrome/browser/cocoa/notifications/balloon_controller.h"
 
 #include "app/l10n_util.h"
+#include "app/resource_bundle.h"
 #import "base/cocoa_protocols_mac.h"
+#include "base/mac_util.h"
+#include "base/nsimage_cache_mac.h"
 #import "base/scoped_nsobject.h"
-#include "base/string_util.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/browser_window.h"
+#include "base/utf_string_conversions.h"
+#import "chrome/browser/cocoa/menu_controller.h"
 #include "chrome/browser/cocoa/notifications/balloon_view_host_mac.h"
 #include "chrome/browser/notifications/balloon.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
+#include "chrome/browser/notifications/notification_options_menu_model.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/renderer_host/render_view_host.h"
 #include "grit/generated_resources.h"
+#include "grit/theme_resources.h"
 
 namespace {
 
 // Margin, in pixels, between the notification frame and the contents
 // of the notification.
-const int kTopMargin = 2;
+const int kTopMargin = 1;
 const int kBottomMargin = 2;
 const int kLeftMargin = 2;
 const int kRightMargin = 2;
 
-// How many pixels of overlap there is between the shelf top and the
-// balloon bottom.
-const int kShelfBorderTopOverlap = 6;
-
-// Properties of the dismiss button.
-const int kDismissButtonWidth = 52;
-const int kDismissButtonHeight = 18;
-
-// Properties of the options menu.
-const int kOptionsMenuWidth = 52;
-const int kOptionsMenuHeight = 18;
-
-// Properties of the origin label.
-const int kLeftLabelMargin = 4;
-const int kLabelHeight = 16;
-
-// TODO(johnnyg): http://crbug.com/34826 Add a shadow for the frame.
-const int kLeftShadowWidth = 0;
-const int kRightShadowWidth = 0;
-const int kTopShadowWidth = 0;
-const int kBottomShadowWidth = 0;
-
-// The shelf height for the system default font size.  It is scaled
-// with changes in the default font size.
-const int kDefaultShelfHeight = 22;
-
 }  // namespace
 
-@interface BalloonController (InternalLayout)
-// The following are all internal methods to calculate the dimensions of
-// subviews.
-- (NSPoint)contentsOffset;
-- (int)shelfHeight;
-- (int)balloonFrameHeight;
-- (NSRect)contentsRectangle;
-- (NSRect)closeButtonBounds;
-- (NSRect)optionsMenuBounds;
-- (NSRect)labelBounds;
+@interface BalloonController (Private)
+- (void)updateTrackingRect;
 @end
 
 @implementation BalloonController
 
 - (id)initWithBalloon:(Balloon*)balloon {
-  NSString* sourceLabelText = l10n_util::GetNSStringF(
-      IDS_NOTIFICATION_BALLOON_SOURCE_LABEL,
-      WideToUTF16(balloon->notification().display_source()));
-  NSString* optionsText =
-      l10n_util::GetNSString(IDS_NOTIFICATION_OPTIONS_MENU_LABEL);
-  NSString* dismissText =
-      l10n_util::GetNSString(IDS_NOTIFICATION_BALLOON_DISMISS_LABEL);
-  NSString* revokeText =
-      l10n_util::GetNSStringF(IDS_NOTIFICATION_BALLOON_REVOKE_MESSAGE,
-          WideToUTF16(balloon->notification().display_source()));
-
-  balloon_ = balloon;
-
-  frameContainer_.reset([[NSWindow alloc]
-      initWithContentRect:NSZeroRect
-                styleMask:NSBorderlessWindowMask
-                  backing:NSBackingStoreBuffered
-                    defer:YES]);
-  [frameContainer_ setAlphaValue:1.0];
-  [frameContainer_ setOpaque:NO];
-  [frameContainer_ setLevel:NSFloatingWindowLevel];
-
-  if ((self = [self initWithWindow:frameContainer_.get()])) {
-    // Position of the balloon.
-    int x = balloon_->position().x();
-    int y = balloon_->position().y();
-    int w = [self desiredTotalWidth];
-    int h = [self desiredTotalHeight];
-
-    NSView* contentView = [frameContainer_ contentView];
-
-    frameView_.reset([[BalloonViewCocoa alloc]
-        initWithFrame:NSMakeRect(0,
-                                 [self shelfHeight],
-                                 w,
-                                 [self balloonFrameHeight])]);
-    [contentView addSubview:frameView_.get()];
-
-    htmlContainer_.reset(
-        [[NSView alloc] initWithFrame:[self contentsRectangle]]);
-    [htmlContainer_ setNeedsDisplay:YES];
-    [htmlContainer_ setFrame:[self contentsRectangle]];
-    [frameView_ addSubview:htmlContainer_.get()];
-
-    htmlContents_.reset(new BalloonViewHost(balloon));
+  NSString* nibpath =
+      [mac_util::MainAppBundle() pathForResource:@"Notification"
+                                          ofType:@"nib"];
+  if ((self = [super initWithWindowNibPath:nibpath owner:self])) {
+    balloon_ = balloon;
     [self initializeHost];
-
-    scoped_nsobject<NSView> shelfView([[BalloonShelfViewCocoa alloc]
-        initWithFrame:NSMakeRect(0,
-                                 0,
-                                 w,
-                                 [self shelfHeight]+kShelfBorderTopOverlap)]);
-    [contentView addSubview:shelfView.get()
-                 positioned:NSWindowBelow
-                 relativeTo:htmlContainer_.get()];
-
-    optionsMenu_.reset([[NSMenu alloc] init]);
-    [optionsMenu_ addItemWithTitle:revokeText
-                            action:@selector(permissionRevoked:)
-                     keyEquivalent:@""];
-
-
-    // Creating UI elements by hand for easier parity with other platforms.
-    // TODO(johnnyg): http://crbug.com/34627
-    // Investigate converting this to a nib.
-    scoped_nsobject<BalloonButtonCell> closeButtonCell(
-        [[BalloonButtonCell alloc] initTextCell:dismissText]);
-    scoped_nsobject<NSButton> closeButton(
-        [[NSButton alloc] initWithFrame:[self closeButtonBounds]]);
-    [shelfView addSubview:closeButton.get()];
-    [closeButton setCell:closeButtonCell.get()];
-    [closeButton setTarget:self];
-    [closeButton setAction:@selector(closeButtonPressed:)];
-    [closeButtonCell setTextColor:[NSColor whiteColor]];
-
-    scoped_nsobject<BalloonButtonCell> optionsButtonCell(
-        [[BalloonButtonCell alloc] initTextCell:optionsText]);
-    scoped_nsobject<NSButton> optionsButton(
-        [[NSButton alloc] initWithFrame:[self optionsMenuBounds]]);
-    [shelfView addSubview:optionsButton.get()];
-    [optionsButton setCell:optionsButtonCell.get()];
-    [optionsButton setTarget:self];
-    [optionsButton setAction:@selector(optionsButtonPressed:)];
-    [optionsButtonCell setTextColor:[NSColor whiteColor]];
-
-    scoped_nsobject<NSTextField> originLabel([[NSTextField alloc] init]);
-    [shelfView addSubview:originLabel.get()];
-    [originLabel setEditable:NO];
-    [originLabel setBezeled:NO];
-    [originLabel setSelectable:NO];
-    [originLabel setDrawsBackground:NO];
-    [[originLabel cell] setLineBreakMode:NSLineBreakByTruncatingTail];
-    [[originLabel cell] setTextColor:[NSColor whiteColor]];
-    [originLabel setStringValue:sourceLabelText];
-    [originLabel setFrame:[self labelBounds]];
-    [originLabel setFont:
-        [NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
-
-    [frameContainer_ setFrame:NSMakeRect(x, y, w, h) display:YES];
-    [frameContainer_ setDelegate:self];
+    menuModel_.reset(new NotificationOptionsMenuModel(balloon));
+    menuController_.reset([[MenuController alloc] initWithModel:menuModel_.get()
+                                         useWithPopUpButtonCell:NO]);
   }
   return self;
 }
 
-- (IBAction)closeButtonPressed:(id)sender {
-  [self closeBalloon:YES];
+- (void)awakeFromNib {
+  DCHECK([self window]);
+  DCHECK_EQ(self, [[self window] delegate]);
+
+  NSImage* image = nsimage_cache::ImageNamed(@"balloon_wrench.pdf");
+  [optionsButton_ setDefaultImage:image];
+  [optionsButton_ setDefaultOpacity:0.6];
+  [optionsButton_ setHoverImage:image];
+  [optionsButton_ setHoverOpacity:0.9];
+  [optionsButton_ setPressedImage:image];
+  [optionsButton_ setPressedOpacity:1.0];
+  [[optionsButton_ cell] setHighlightsBy:NSNoCellMask];
+
+  NSString* sourceLabelText = l10n_util::GetNSStringF(
+      IDS_NOTIFICATION_BALLOON_SOURCE_LABEL,
+      balloon_->notification().display_source());
+  [originLabel_ setStringValue:sourceLabelText];
+
+  // This condition is false in unit tests which have no RVH.
+  if (htmlContents_.get()) {
+    gfx::NativeView contents = htmlContents_->native_view();
+    [contents setFrame:NSMakeRect(kLeftMargin, kTopMargin, 0, 0)];
+    [[htmlContainer_ superview] addSubview:contents
+                                positioned:NSWindowBelow
+                                relativeTo:nil];
+  }
+
+  // Use the standard close button for a utility window.
+  closeButton_ = [NSWindow standardWindowButton:NSWindowCloseButton
+                                   forStyleMask:NSUtilityWindowMask];
+  NSRect frame = [closeButton_ frame];
+  [closeButton_ setFrame:NSMakeRect(6, 1, frame.size.width, frame.size.height)];
+  [closeButton_ setTarget:self];
+  [closeButton_ setAction:@selector(closeButtonPressed:)];
+  [shelf_ addSubview:closeButton_];
+  [self updateTrackingRect];
+
+  // Set the initial position without animating (the balloon should not
+  // yet be visible).
+  DCHECK(![[self window] isVisible]);
+  NSRect balloon_frame = NSMakeRect(balloon_->GetPosition().x(),
+                                    balloon_->GetPosition().y(),
+                                    [self desiredTotalWidth],
+                                    [self desiredTotalHeight]);
+  [[self window] setFrame:balloon_frame
+                  display:NO];
+}
+
+- (void)updateTrackingRect {
+  if (closeButtonTrackingTag_)
+    [shelf_ removeTrackingRect:closeButtonTrackingTag_];
+
+  closeButtonTrackingTag_ = [shelf_ addTrackingRect:[closeButton_ frame]
+                                              owner:self
+                                           userData:nil
+                                       assumeInside:NO];
+}
+
+- (BOOL)handleEvent:(NSEvent*)event {
+  BOOL eventHandled = NO;
+  if ([event type] == NSLeftMouseDown) {
+    NSPoint mouse = [shelf_ convertPoint:[event locationInWindow]
+                                fromView:nil];
+    if (NSPointInRect(mouse, [closeButton_ frame])) {
+      [closeButton_ mouseDown:event];
+
+      // Bring back the front process that is deactivated when we click the
+      // close button.
+      if (frontProcessNum_.highLongOfPSN || frontProcessNum_.lowLongOfPSN) {
+        SetFrontProcessWithOptions(&frontProcessNum_,
+                                   kSetFrontProcessFrontWindowOnly);
+        frontProcessNum_.highLongOfPSN = 0;
+        frontProcessNum_.lowLongOfPSN = 0;
+      }
+
+      eventHandled = YES;
+    } else if (NSPointInRect(mouse, [optionsButton_ frame])) {
+      [optionsButton_ mouseDown:event];
+      eventHandled = YES;
+    }
+  }
+  return eventHandled;
+}
+
+- (void) mouseEntered:(NSEvent*)event {
+  [[closeButton_ cell] setHighlighted:YES];
+
+  // Remember the current front process so that we can bring it back later.
+  if (!frontProcessNum_.highLongOfPSN && !frontProcessNum_.lowLongOfPSN)
+    GetFrontProcess(&frontProcessNum_);
+}
+
+- (void) mouseExited:(NSEvent*)event {
+  [[closeButton_ cell] setHighlighted:NO];
+
+  frontProcessNum_.highLongOfPSN = 0;
+  frontProcessNum_.lowLongOfPSN = 0;
 }
 
 - (IBAction)optionsButtonPressed:(id)sender {
-  [NSMenu popUpContextMenu:optionsMenu_
+  [NSMenu popUpContextMenu:[menuController_ menu]
                  withEvent:[NSApp currentEvent]
-                   forView:frameView_];
+                   forView:optionsButton_];
 }
 
 - (IBAction)permissionRevoked:(id)sender {
@@ -188,53 +163,60 @@ const int kDefaultShelfHeight = 22;
   service->DenyPermission(balloon_->notification().origin_url());
 }
 
-- (void)closeBalloon:(bool)byUser {
-  DCHECK(balloon_);
+- (IBAction)closeButtonPressed:(id)sender {
+  [self closeBalloon:YES];
   [self close];
-  htmlContents_->Shutdown();
-  balloon_->OnClose(byUser);
+}
+
+- (void)close {
+  if (closeButtonTrackingTag_)
+    [shelf_ removeTrackingRect:closeButtonTrackingTag_];
+
+  [super close];
+}
+
+- (void)closeBalloon:(bool)byUser {
+  if (!balloon_)
+    return;
+  [self close];
+  if (htmlContents_.get())
+    htmlContents_->Shutdown();
+  if (balloon_)
+    balloon_->OnClose(byUser);
   balloon_ = NULL;
+}
+
+- (void)updateContents {
+  DCHECK(htmlContents_.get()) << "BalloonView::Update called before Show";
+  if (htmlContents_->render_view_host())
+    htmlContents_->render_view_host()->NavigateToURL(
+        balloon_->notification().content_url());
 }
 
 - (void)repositionToBalloon {
   DCHECK(balloon_);
-  int x = balloon_->position().x();
-  int y = balloon_->position().y();
+  int x = balloon_->GetPosition().x();
+  int y = balloon_->GetPosition().y();
   int w = [self desiredTotalWidth];
   int h = [self desiredTotalHeight];
 
-  NSRect frame = NSMakeRect(x, y, w, h);
+  if (htmlContents_.get())
+    htmlContents_->UpdateActualSize(balloon_->content_size());
 
-  htmlContents_->UpdateActualSize(balloon_->content_size());
-  [htmlContainer_ setFrame:[self contentsRectangle]];
-  [frameView_ setFrame:NSMakeRect(0,
-                                  [self shelfHeight],
-                                  w,
-                                  [self balloonFrameHeight])];
-
-  [animation_ stopAnimation];
-
-  NSDictionary* dict =
-      [NSDictionary dictionaryWithObjectsAndKeys:
-           frameContainer_.get(), NSViewAnimationTargetKey,
-           [NSValue valueWithRect:frame], NSViewAnimationEndFrameKey, nil];
-
-  animation_.reset([[NSViewAnimation alloc]
-      initWithViewAnimations:[NSArray arrayWithObjects:dict, nil]]);
-  [animation_ startAnimation];
+  [[[self window] animator] setFrame:NSMakeRect(x, y, w, h)
+                             display:YES];
 }
 
 // Returns the total width the view should be to accommodate the balloon.
 - (int)desiredTotalWidth {
   return (balloon_ ? balloon_->content_size().width() : 0) +
-      kLeftMargin + kRightMargin + kLeftShadowWidth + kRightShadowWidth;
+      kLeftMargin + kRightMargin;
 }
 
 // Returns the total height the view should be to accommodate the balloon.
 - (int)desiredTotalHeight {
   return (balloon_ ? balloon_->content_size().height() : 0) +
-      kTopMargin + kBottomMargin + kTopShadowWidth + kBottomShadowWidth +
-      [self shelfHeight];
+      kTopMargin + kBottomMargin + [shelf_ frame].size.height;
 }
 
 // Returns the BalloonHost {
@@ -242,65 +224,10 @@ const int kDefaultShelfHeight = 22;
   return htmlContents_.get();
 }
 
-// Relative to the lower left of the frame, above the shelf.
-- (NSPoint)contentsOffset {
-  return NSMakePoint(kLeftShadowWidth + kLeftMargin,
-                     kBottomShadowWidth + kBottomMargin);
-}
-
-// Returns the height of the shelf in pixels.
-- (int)shelfHeight {
-  // TODO(johnnyg): add scaling here.
-  return kDefaultShelfHeight;
-}
-
-// Returns the height of the balloon contents frame in pixels.
-- (int)balloonFrameHeight {
-  return [self desiredTotalHeight] - [self shelfHeight];
-}
-
-// Relative to the lower-left of the frame.
-- (NSRect)contentsRectangle {
-  gfx::Size contentSize = balloon_->content_size();
-  NSPoint offset = [self contentsOffset];
-  return NSMakeRect(offset.x, offset.y,
-                    contentSize.width(), contentSize.height());
-}
-
-// Returns the bounds of the close button.
-- (NSRect)closeButtonBounds {
-  return NSMakeRect(
-      [self desiredTotalWidth] - kDismissButtonWidth - kRightMargin,
-      kBottomMargin,
-      kDismissButtonWidth,
-      kDismissButtonHeight);
-}
-
-// Returns the bounds of the button which opens the options menu.
-- (NSRect)optionsMenuBounds {
-  return NSMakeRect(
-      [self desiredTotalWidth] -
-          kDismissButtonWidth - kOptionsMenuWidth - kRightMargin,
-      kBottomMargin,
-      kOptionsMenuWidth,
-      kOptionsMenuHeight);
-}
-
-// Returns the bounds of the label showing the origin of the notification.
-- (NSRect)labelBounds {
-  return NSMakeRect(
-      kLeftLabelMargin,
-      kBottomMargin,
-      [self desiredTotalWidth] -
-          kDismissButtonWidth - kOptionsMenuWidth - kRightMargin,
-      kLabelHeight);
-}
-
 // Initializes the renderer host showing the HTML contents.
 - (void)initializeHost {
+  htmlContents_.reset(new BalloonViewHost(balloon_));
   htmlContents_->Init();
-  gfx::NativeView contents = htmlContents_->native_view();
-  [htmlContainer_ addSubview:contents];
 }
 
 // NSWindowDelegate notification.

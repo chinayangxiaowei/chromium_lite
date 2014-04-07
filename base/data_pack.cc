@@ -7,7 +7,9 @@
 #include <errno.h>
 
 #include "base/file_util.h"
+#include "base/histogram.h"
 #include "base/logging.h"
+#include "base/ref_counted_memory.h"
 #include "base/string_piece.h"
 
 // For details of the file layout, see
@@ -43,6 +45,18 @@ struct DataPackEntry {
 
 COMPILE_ASSERT(sizeof(DataPackEntry) == 12, size_of_header_must_be_twelve);
 
+// We're crashing when trying to load a pak file on Windows.  Add some error
+// codes for logging.
+// http://crbug.com/58056
+enum LoadErrors {
+  INIT_FAILED = 1,
+  BAD_VERSION,
+  INDEX_TRUNCATED,
+  ENTRY_NOT_FOUND,
+
+  LOAD_ERRORS_COUNT,
+};
+
 }  // anonymous namespace
 
 namespace base {
@@ -57,6 +71,8 @@ bool DataPack::Load(const FilePath& path) {
   mmap_.reset(new file_util::MemoryMappedFile);
   if (!mmap_->Initialize(path)) {
     DLOG(ERROR) << "Failed to mmap datapack";
+    UMA_HISTOGRAM_ENUMERATION("DataPack.Load", INIT_FAILED,
+                              LOAD_ERRORS_COUNT);
     return false;
   }
 
@@ -67,6 +83,8 @@ bool DataPack::Load(const FilePath& path) {
   if (version != kFileFormatVersion) {
     LOG(ERROR) << "Bad data pack version: got " << version << ", expected "
                << kFileFormatVersion;
+    UMA_HISTOGRAM_ENUMERATION("DataPack.Load", BAD_VERSION,
+                              LOAD_ERRORS_COUNT);
     mmap_.reset();
     return false;
   }
@@ -78,6 +96,8 @@ bool DataPack::Load(const FilePath& path) {
       mmap_->length()) {
     LOG(ERROR) << "Data pack file corruption: too short for number of "
                   "entries specified.";
+    UMA_HISTOGRAM_ENUMERATION("DataPack.Load", INDEX_TRUNCATED,
+                              LOAD_ERRORS_COUNT);
     mmap_.reset();
     return false;
   }
@@ -88,6 +108,8 @@ bool DataPack::Load(const FilePath& path) {
     if (entry->file_offset + entry->length > mmap_->length()) {
       LOG(ERROR) << "Entry #" << i << " in data pack points off end of file. "
                  << "Was the file corrupted?";
+      UMA_HISTOGRAM_ENUMERATION("DataPack.Load", ENTRY_NOT_FOUND,
+                                LOAD_ERRORS_COUNT);
       mmap_.reset();
       return false;
     }
@@ -96,7 +118,7 @@ bool DataPack::Load(const FilePath& path) {
   return true;
 }
 
-bool DataPack::GetStringPiece(uint32 resource_id, StringPiece* data) {
+bool DataPack::GetStringPiece(uint32 resource_id, StringPiece* data) const {
   // It won't be hard to make this endian-agnostic, but it's not worth
   // bothering to do right now.
 #if defined(__BYTE_ORDER)
@@ -119,7 +141,7 @@ bool DataPack::GetStringPiece(uint32 resource_id, StringPiece* data) {
   return true;
 }
 
-RefCountedStaticMemory* DataPack::GetStaticMemory(uint32 resource_id) {
+RefCountedStaticMemory* DataPack::GetStaticMemory(uint32 resource_id) const {
   base::StringPiece piece;
   if (!GetStringPiece(resource_id, &piece))
     return NULL;

@@ -4,6 +4,7 @@
 
 #ifndef VIEWS_WINDOW_WINDOW_WIN_H_
 #define VIEWS_WINDOW_WINDOW_WIN_H_
+#pragma once
 
 #include "views/widget/widget_win.h"
 #include "views/window/window.h"
@@ -64,6 +65,7 @@ class WindowWin : public WidgetWin,
   virtual void PushForceHidden();
   virtual void PopForceHidden();
   virtual void Activate();
+  virtual void Deactivate();
   virtual void Close();
   virtual void Maximize();
   virtual void Minimize();
@@ -155,7 +157,7 @@ class WindowWin : public WidgetWin,
     RECT window_rect;
   };
 
-  // Set the window as modal (by disabling all the other windows).
+  // Sets the window as modal (by disabling all the other windows).
   void BecomeModal();
 
   // Sets-up the focus manager with the view that should have focus when the
@@ -190,6 +192,11 @@ class WindowWin : public WidgetWin,
   // If |force| is true, the window region is reset to NULL even for native
   // frame windows.
   void ResetWindowRegion(bool force);
+
+  //  Update accessibility information via our WindowDelegate.
+  void UpdateAccessibleName(std::wstring& accessible_name);
+  void UpdateAccessibleRole();
+  void UpdateAccessibleState();
 
   // Converts a non-client mouse down message to a regular ChromeViews event
   // and handle it. |point| is the mouse position of the message in screen

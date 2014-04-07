@@ -1,19 +1,19 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_GTK_BOOKMARK_MENU_CONTROLLER_GTK_H_
 #define CHROME_BROWSER_GTK_BOOKMARK_MENU_CONTROLLER_GTK_H_
-
-#include <gtk/gtk.h>
+#pragma once
 
 #include <map>
 
+#include "app/gtk_integers.h"
 #include "app/gtk_signal.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/bookmarks/base_bookmark_model_observer.h"
 #include "chrome/browser/bookmarks/bookmark_context_menu_controller.h"
-#include "chrome/common/owned_widget_gtk.h"
+#include "chrome/browser/gtk/owned_widget_gtk.h"
 #include "webkit/glue/window_open_disposition.h"
 
 class Browser;
@@ -23,6 +23,11 @@ class PageNavigator;
 class BookmarkModel;
 class BookmarkNode;
 class MenuGtk;
+
+typedef struct _GdkDragContext GdkDragContext;
+typedef struct _GdkEventButton GdkEventButton;
+typedef struct _GtkSelectionData GtkSelectionData;
+typedef struct _GtkWidget GtkWidget;
 
 class BookmarkMenuController : public BaseBookmarkModelObserver,
                                public BookmarkContextMenuControllerDelegate {
@@ -34,8 +39,7 @@ class BookmarkMenuController : public BaseBookmarkModelObserver,
                          PageNavigator* page_navigator,
                          GtkWindow* window,
                          const BookmarkNode* node,
-                         int start_child_index,
-                         bool show_other_folder);
+                         int start_child_index);
   virtual ~BookmarkMenuController();
 
   GtkWidget* widget() { return menu_; }
@@ -114,6 +118,9 @@ class BookmarkMenuController : public BaseBookmarkModelObserver,
   // - The menu is a drag target
   // - The menu items have context menus.
   GtkWidget* menu_;
+
+  // The visual representation that follows the cursor during drags.
+  GtkWidget* drag_icon_;
 
   // Whether we should ignore the next button release event (because we were
   // dragging).

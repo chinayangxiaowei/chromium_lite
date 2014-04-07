@@ -4,6 +4,7 @@
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_MODEL_ASSOCIATOR_MOCK_H__
 #define CHROME_BROWSER_SYNC_GLUE_MODEL_ASSOCIATOR_MOCK_H__
+#pragma once
 
 #include "chrome/browser/sync/glue/model_associator.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -15,7 +16,6 @@ class ModelAssociatorMock : public AssociatorInterface {
   MOCK_METHOD0(AssociateModels, bool());
   MOCK_METHOD0(DisassociateModels, bool());
   MOCK_METHOD1(SyncModelHasUserCreatedNodes, bool(bool* has_nodes));
-  MOCK_METHOD1(ChromeModelHasUserCreatedNodes, bool(bool* has_nodes));
   MOCK_METHOD0(AbortAssociation, void());
 };
 

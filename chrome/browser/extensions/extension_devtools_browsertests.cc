@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 #include "base/ref_counted.h"
+#include "base/stringprintf.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/debugger/devtools_manager.h"
 #include "chrome/browser/debugger/devtools_client_host.h"
 #include "chrome/browser/extensions/extension_devtools_browsertest.h"
+#include "chrome/browser/extensions/extension_error_reporter.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extensions_service.h"
@@ -16,9 +18,9 @@
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/devtools_messages.h"
-#include "chrome/common/extensions/extension_error_reporter.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/ui_test_utils.h"
@@ -45,7 +47,8 @@ static ExtensionHost* FindHostWithPath(ExtensionProcessManager* manager,
 }
 
 // Tests for the experimental timeline extensions API.
-IN_PROC_BROWSER_TEST_F(ExtensionDevToolsBrowserTest, TimelineApi) {
+// TODO(johnnyg): crbug.com/52544 Test was broken by webkit r65510.
+IN_PROC_BROWSER_TEST_F(ExtensionDevToolsBrowserTest, FLAKY_TimelineApi) {
   ASSERT_TRUE(LoadExtension(
       test_data_dir_.AppendASCII("devtools").AppendASCII("timeline_api")));
 
@@ -64,10 +67,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionDevToolsBrowserTest, TimelineApi) {
 
   // Test setup.
   bool result = false;
-  std::wstring register_listeners_js = StringPrintf(L"setListenersOnTab(%d)",
-                                                    tab_id);
-  ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      host->render_view_host(), L"", register_listeners_js, &result);
+  std::wstring register_listeners_js = base::StringPrintf(
+      L"setListenersOnTab(%d)", tab_id);
+  ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
+      host->render_view_host(), L"", register_listeners_js, &result));
   EXPECT_TRUE(result);
 
   // Setting the events should have caused an ExtensionDevToolsBridge to be
@@ -80,22 +83,18 @@ IN_PROC_BROWSER_TEST_F(ExtensionDevToolsBrowserTest, TimelineApi) {
   // Test onPageEvent event.
   result = false;
 
-  DevToolsMessageData message_data;
-  message_data.class_name = "ApuAgentDelegate";
-  message_data.method_name = "dispatchToApu";
-  message_data.arguments.push_back("");
-  DevToolsClientMsg_RpcMessage pageEventMessage(message_data);
+  DevToolsClientMsg_DispatchToAPU pageEventMessage("");
   devtools_client_host->SendMessageToClient(pageEventMessage);
-  ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      host->render_view_host(), L"", L"testReceivePageEvent()", &result);
+  ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
+      host->render_view_host(), L"", L"testReceivePageEvent()", &result));
   EXPECT_TRUE(result);
 
   // Test onTabClose event.
   result = false;
   devtools_manager->UnregisterDevToolsClientHostFor(
       tab_contents->render_view_host());
-  ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      host->render_view_host(), L"", L"testReceiveTabCloseEvent()", &result);
+  ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
+      host->render_view_host(), L"", L"testReceiveTabCloseEvent()", &result));
   EXPECT_TRUE(result);
 }
 
@@ -124,10 +123,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionDevToolsBrowserTest, ProcessRefCounting) {
 
   // Test setup.
   bool result = false;
-  std::wstring register_listeners_js = StringPrintf(L"setListenersOnTab(%d)",
-                                                    tab_id);
-  ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      host_one->render_view_host(), L"", register_listeners_js, &result);
+  std::wstring register_listeners_js = base::StringPrintf(
+      L"setListenersOnTab(%d)", tab_id);
+  ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
+      host_one->render_view_host(), L"", register_listeners_js, &result));
   EXPECT_TRUE(result);
 
   // Setting the event listeners should have caused an ExtensionDevToolsBridge
@@ -136,16 +135,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionDevToolsBrowserTest, ProcessRefCounting) {
       tab_contents->render_view_host()));
 
   // Register listeners from the second extension as well.
-  std::wstring script = StringPrintf(L"registerListenersForTab(%d)", tab_id);
-  ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      host_two->render_view_host(), L"", script, &result);
+  std::wstring script = base::StringPrintf(L"registerListenersForTab(%d)",
+                                           tab_id);
+  ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
+      host_two->render_view_host(), L"", script, &result));
   EXPECT_TRUE(result);
 
   // Removing the listeners from the first extension should leave the bridge
   // alive.
   result = false;
-  ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      host_one->render_view_host(), L"", L"unregisterListeners()", &result);
+  ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
+      host_one->render_view_host(), L"", L"unregisterListeners()", &result));
   EXPECT_TRUE(result);
   ASSERT_TRUE(devtools_manager->GetDevToolsClientHostFor(
       tab_contents->render_view_host()));
@@ -153,8 +153,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionDevToolsBrowserTest, ProcessRefCounting) {
   // Removing the listeners from the second extension should tear the bridge
   // down.
   result = false;
-  ui_test_utils::ExecuteJavaScriptAndExtractBool(
-      host_two->render_view_host(), L"", L"unregisterListeners()", &result);
+  ASSERT_TRUE(ui_test_utils::ExecuteJavaScriptAndExtractBool(
+      host_two->render_view_host(), L"", L"unregisterListeners()", &result));
   EXPECT_TRUE(result);
   ASSERT_FALSE(devtools_manager->GetDevToolsClientHostFor(
       tab_contents->render_view_host()));

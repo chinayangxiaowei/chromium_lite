@@ -11,6 +11,7 @@
 #include "app/win_util.h"
 #endif  // defined(OS_WIN)
 #include "base/message_loop.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/views/event_utils.h"
 #include "chrome/browser/views/infobars/infobar_container.h"
 #include "gfx/canvas.h"
@@ -33,16 +34,9 @@ const int InfoBar::kEndOfLabelSpacing = 16;
 const int InfoBar::kCloseButtonSpacing = 12;
 const int InfoBar::kButtonInLabelSpacing = 5;
 
-static const SkColor kInfoBackgroundColorTop = SkColorSetRGB(170, 214, 112);
-static const SkColor kInfoBackgroundColorBottom = SkColorSetRGB(146, 205, 114);
-
 static const SkColor kWarningBackgroundColorTop = SkColorSetRGB(255, 242, 183);
 static const SkColor kWarningBackgroundColorBottom =
     SkColorSetRGB(250, 230, 145);
-
-static const SkColor kErrorBackgroundColorTop = kWarningBackgroundColorTop;
-static const SkColor kErrorBackgroundColorBottom =
-    kWarningBackgroundColorBottom;
 
 static const SkColor kPageActionBackgroundColorTop =
     SkColorSetRGB(218, 231, 249);
@@ -57,17 +51,9 @@ InfoBarBackground::InfoBarBackground(InfoBarDelegate::Type infobar_type) {
   SkColor top_color;
   SkColor bottom_color;
   switch (infobar_type) {
-    case InfoBarDelegate::INFO_TYPE:
-      top_color = kInfoBackgroundColorTop;
-      bottom_color = kInfoBackgroundColorBottom;
-      break;
     case InfoBarDelegate::WARNING_TYPE:
       top_color = kWarningBackgroundColorTop;
       bottom_color = kWarningBackgroundColorBottom;
-      break;
-    case InfoBarDelegate::ERROR_TYPE:
-      top_color = kErrorBackgroundColorTop;
-      bottom_color = kErrorBackgroundColorBottom;
       break;
     case InfoBarDelegate::PAGE_ACTION_TYPE:
       top_color = kPageActionBackgroundColorTop;
@@ -108,14 +94,8 @@ InfoBar::InfoBar(InfoBarDelegate* delegate)
   set_background(new InfoBarBackground(delegate->GetInfoBarType()));
 
   switch (delegate->GetInfoBarType()) {
-    case InfoBarDelegate::INFO_TYPE:
-      SetAccessibleName(l10n_util::GetString(IDS_ACCNAME_INFOBAR_INFO));
-      break;
     case InfoBarDelegate::WARNING_TYPE:
       SetAccessibleName(l10n_util::GetString(IDS_ACCNAME_INFOBAR_WARNING));
-      break;
-    case InfoBarDelegate::ERROR_TYPE:
-      SetAccessibleName(l10n_util::GetString(IDS_ACCNAME_INFOBAR_ERROR));
       break;
     case InfoBarDelegate::PAGE_ACTION_TYPE:
       SetAccessibleName(l10n_util::GetString(IDS_ACCNAME_INFOBAR_PAGE_ACTION));
@@ -136,53 +116,16 @@ InfoBar::InfoBar(InfoBarDelegate* delegate)
   AddChildView(close_button_);
 
   animation_.reset(new SlideAnimation(this));
-  animation_->SetTweenType(SlideAnimation::NONE);
+  animation_->SetTweenType(Tween::LINEAR);
 }
 
 InfoBar::~InfoBar() {
 }
 
-void InfoBar::AnimateOpen() {
-  animation_->Show();
-}
-
-void InfoBar::Open() {
-  animation_->Reset(1.0);
-  animation_->Show();
-}
-
-void InfoBar::AnimateClose() {
-  bool restore_focus = true;
-#if defined(OS_WIN)
-  // Do not restore focus (and active state with it) on Windows if some other
-  // top-level window became active.
-  if (GetWidget() &&
-      !win_util::DoesWindowBelongToActiveWindow(GetWidget()->GetNativeView())) {
-    restore_focus = false;
-  }
-#endif  // defined(OS_WIN)
-  DestroyFocusTracker(restore_focus);
-  animation_->Hide();
-}
-
-void InfoBar::Close() {
-  GetParent()->RemoveChildView(this);
-  // Note that we only tell the delegate we're closed here, and not when we're
-  // simply destroyed (by virtue of a tab switch or being moved from window to
-  // window), since this action can cause the delegate to destroy itself.
-  if (delegate_) {
-    delegate_->InfoBarClosed();
-    delegate_ = NULL;
-  }
-}
-
 // InfoBar, views::View overrides: ---------------------------------------------
 
-bool InfoBar::GetAccessibleRole(AccessibilityTypes::Role* role) {
-  DCHECK(role);
-
-  *role = AccessibilityTypes::ROLE_PANE;
-  return true;
+AccessibilityTypes::Role InfoBar::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_ALERT;
 }
 
 gfx::Size InfoBar::GetPreferredSize() {
@@ -205,6 +148,19 @@ void InfoBar::ViewHierarchyChanged(bool is_add, views::View* parent,
     } else {
       InfoBarRemoved();
     }
+  }
+
+  if (GetWidget() && GetWidget()->IsAccessibleWidget()) {
+    // For accessibility, make the close button the last child view.
+    if (parent == this && child != close_button_ &&
+        HasChildView(close_button_) &&
+        GetChildViewAt(GetChildViewCount() - 1) != close_button_) {
+      RemoveChildView(close_button_);
+      AddChildView(close_button_);
+    }
+
+    // Allow screen reader users to focus the close button.
+    close_button_->SetFocusable(true);
   }
 }
 
@@ -239,6 +195,17 @@ void InfoBar::ButtonPressed(views::Button* sender, const views::Event& event) {
   }
 }
 
+// InfoBar, views::FocusChangeListener implementation: ------------------
+
+void InfoBar::FocusWillChange(View* focused_before, View* focused_now) {
+  // This will trigger some screen readers to read the entire contents of this
+  // infobar.
+  if (focused_before && focused_now &&
+      !this->IsParentOf(focused_before) && this->IsParentOf(focused_now)) {
+    NotifyAccessibilityEvent(AccessibilityTypes::EVENT_ALERT);
+  }
+}
+
 // InfoBar, AnimationDelegate implementation: ----------------------------------
 
 void InfoBar::AnimationProgressed(const Animation* animation) {
@@ -257,6 +224,43 @@ void InfoBar::AnimationEnded(const Animation* animation) {
 
 // InfoBar, private: -----------------------------------------------------------
 
+void InfoBar::AnimateOpen() {
+  animation_->Show();
+}
+
+void InfoBar::Open() {
+  // Set the animation value to 1.0 so that GetPreferredSize() returns the right
+  // size.
+  animation_->Reset(1.0);
+  if (container_)
+    container_->InfoBarAnimated(false);
+}
+
+void InfoBar::AnimateClose() {
+  bool restore_focus = true;
+#if defined(OS_WIN)
+  // Do not restore focus (and active state with it) on Windows if some other
+  // top-level window became active.
+  if (GetWidget() &&
+      !win_util::DoesWindowBelongToActiveWindow(GetWidget()->GetNativeView())) {
+    restore_focus = false;
+  }
+#endif  // defined(OS_WIN)
+  DestroyFocusTracker(restore_focus);
+  animation_->Hide();
+}
+
+void InfoBar::Close() {
+  GetParent()->RemoveChildView(this);
+  // Note that we only tell the delegate we're closed here, and not when we're
+  // simply destroyed (by virtue of a tab switch or being moved from window to
+  // window), since this action can cause the delegate to destroy itself.
+  if (delegate_) {
+    delegate_->InfoBarClosed();
+    delegate_ = NULL;
+  }
+}
+
 void InfoBar::InfoBarAdded() {
   // The container_ pointer must be set before adding to the view hierarchy.
   DCHECK(container_);
@@ -270,6 +274,11 @@ void InfoBar::InfoBarAdded() {
                                                          GetFocusManager()));
   }
 #endif
+
+  if (GetFocusManager())
+    GetFocusManager()->AddFocusChangeListener(this);
+
+  NotifyAccessibilityEvent(AccessibilityTypes::EVENT_ALERT);
 }
 
 void InfoBar::InfoBarRemoved() {
@@ -282,6 +291,9 @@ void InfoBar::InfoBarRemoved() {
   // since no-one refers to us now.
   MessageLoop::current()->PostTask(FROM_HERE,
       delete_factory_.NewRunnableMethod(&InfoBar::DeleteSelf));
+
+  if (GetFocusManager())
+    GetFocusManager()->RemoveFocusChangeListener(this);
 }
 
 void InfoBar::DestroyFocusTracker(bool restore_focus) {
@@ -302,7 +314,7 @@ void InfoBar::DeleteSelf() {
 AlertInfoBar::AlertInfoBar(AlertInfoBarDelegate* delegate)
     : InfoBar(delegate) {
   label_ = new views::Label(
-      delegate->GetMessageText(),
+      UTF16ToWideHack(delegate->GetMessageText()),
       ResourceBundle::GetSharedInstance().GetFont(ResourceBundle::MediumFont));
   label_->SetColor(SK_ColorBLACK);
   label_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
@@ -357,12 +369,12 @@ LinkInfoBar::LinkInfoBar(LinkInfoBarDelegate* delegate)
 
   // Set up the labels.
   size_t offset;
-  std::wstring message_text = delegate->GetMessageTextWithOffset(&offset);
-  if (offset != std::wstring::npos) {
-    label_1_->SetText(message_text.substr(0, offset));
-    label_2_->SetText(message_text.substr(offset));
+  string16 message_text = delegate->GetMessageTextWithOffset(&offset);
+  if (offset != string16::npos) {
+    label_1_->SetText(UTF16ToWideHack(message_text.substr(0, offset)));
+    label_2_->SetText(UTF16ToWideHack(message_text.substr(offset)));
   } else {
-    label_1_->SetText(message_text);
+    label_1_->SetText(UTF16ToWideHack(message_text));
   }
   ResourceBundle& rb = ResourceBundle::GetSharedInstance();
   label_1_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
@@ -375,7 +387,7 @@ LinkInfoBar::LinkInfoBar(LinkInfoBarDelegate* delegate)
   AddChildView(label_2_);
 
   // Set up the link.
-  link_->SetText(delegate->GetLinkText());
+  link_->SetText(UTF16ToWideHack(delegate->GetLinkText()));
   link_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
   link_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
   link_->SetController(this);
@@ -453,20 +465,22 @@ ConfirmInfoBar::ConfirmInfoBar(ConfirmInfoBarDelegate* delegate)
       cancel_button_(NULL),
       link_(NULL),
       initialized_(false) {
-  ok_button_ = new views::NativeButton(
-      this, delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_OK));
+  ok_button_ = new views::NativeButton(this,
+      UTF16ToWideHack(delegate->GetButtonLabel(
+                          ConfirmInfoBarDelegate::BUTTON_OK)));
   ok_button_->SetAccessibleName(ok_button_->label());
   if (delegate->GetButtons() & ConfirmInfoBarDelegate::BUTTON_OK_DEFAULT)
     ok_button_->SetAppearsAsDefault(true);
   if (delegate->NeedElevation(ConfirmInfoBarDelegate::BUTTON_OK))
     ok_button_->SetNeedElevation(true);
   cancel_button_ = new views::NativeButton(
-      this, delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_CANCEL));
+      this, UTF16ToWideHack(
+          delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_CANCEL)));
   cancel_button_->SetAccessibleName(cancel_button_->label());
 
   // Set up the link.
   link_ = new views::Link;
-  link_->SetText(delegate->GetLinkText());
+  link_->SetText(UTF16ToWideHack(delegate->GetLinkText()));
   ResourceBundle& rb = ResourceBundle::GetSharedInstance();
   link_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
   link_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
@@ -542,11 +556,11 @@ void ConfirmInfoBar::Layout() {
 void ConfirmInfoBar::ViewHierarchyChanged(bool is_add,
                                           views::View* parent,
                                           views::View* child) {
-  InfoBar::ViewHierarchyChanged(is_add, parent, child);
   if (is_add && child == this && !initialized_) {
     Init();
     initialized_ = true;
   }
+  InfoBar::ViewHierarchyChanged(is_add, parent, child);
 }
 
 // ConfirmInfoBar, views::ButtonListener implementation: ---------------

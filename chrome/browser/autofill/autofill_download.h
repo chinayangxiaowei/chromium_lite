@@ -4,19 +4,18 @@
 
 #ifndef CHROME_BROWSER_AUTOFILL_AUTOFILL_DOWNLOAD_H_
 #define CHROME_BROWSER_AUTOFILL_AUTOFILL_DOWNLOAD_H_
+#pragma once
 
 #include <map>
 #include <vector>
 #include <string>
 
-#include "base/scoped_ptr.h"
 #include "base/scoped_vector.h"
-#include "base/string16.h"
 #include "base/time.h"
 #include "chrome/browser/autofill/autofill_profile.h"
 #include "chrome/browser/autofill/field_types.h"
 #include "chrome/browser/autofill/form_structure.h"
-#include "chrome/browser/net/url_fetcher.h"
+#include "chrome/common/net/url_fetcher.h"
 
 class Profile;
 
@@ -31,11 +30,9 @@ class AutoFillDownloadManager : public URLFetcher::Delegate {
   // Notifications are *not* guaranteed to be called.
   class Observer {
    public:
-    // Called when heuristic successfully received from server.
-    // |form_signatures| - the signatures of the requesting forms.
+    // Called when field types are successfully received from the server.
     // |heuristic_xml| - server response.
     virtual void OnLoadedAutoFillHeuristics(
-        const std::vector<std::string>& form_signatures,
         const std::string& heuristic_xml) = 0;
     // Called when heuristic either successfully considered for upload and
     // not send or uploaded.
@@ -45,7 +42,7 @@ class AutoFillDownloadManager : public URLFetcher::Delegate {
     // Called when there was an error during the request.
     // |form_signature| - the signature of the requesting form.
     // |request_type| - type of request that failed.
-    // |http_error| - http error code.
+    // |http_error| - HTTP error code.
     virtual void OnHeuristicsRequestError(const std::string& form_signature,
                                           AutoFillRequestType request_type,
                                           int http_error) = 0;

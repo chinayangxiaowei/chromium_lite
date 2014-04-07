@@ -15,11 +15,12 @@
 
 #include "chrome/browser/geolocation/geolocation_content_settings_map.h"
 
+#include "base/string_piece.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/chrome_thread.h"
-#include "chrome/browser/pref_service.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/scoped_pref_update.h"
 #include "chrome/browser/profile.h"
-#include "chrome/browser/scoped_pref_update.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
 #include "chrome/common/pref_names.h"
@@ -33,7 +34,7 @@ const ContentSetting
 
 GeolocationContentSettingsMap::GeolocationContentSettingsMap(Profile* profile)
     : profile_(profile) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 }
 
 // static
@@ -43,17 +44,8 @@ void GeolocationContentSettingsMap::RegisterUserPrefs(PrefService* prefs) {
   prefs->RegisterDictionaryPref(prefs::kGeolocationContentSettings);
 }
 
-// static
-std::string GeolocationContentSettingsMap::OriginToString(const GURL& origin) {
-  std::string port_component((origin.IntPort() != url_parse::PORT_UNSPECIFIED) ?
-      ":" + origin.port() : "");
-  std::string scheme_component(!origin.SchemeIs(chrome::kHttpScheme) ?
-      origin.scheme() + chrome::kStandardSchemeSeparator : "");
-  return scheme_component + origin.host() + port_component;
-}
-
 ContentSetting GeolocationContentSettingsMap::GetDefaultContentSetting() const {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   const PrefService* prefs = profile_->GetPrefs();
   const ContentSetting default_content_setting = IntToContentSetting(
       prefs->GetInteger(prefs::kGeolocationDefaultContentSetting));
@@ -64,7 +56,7 @@ ContentSetting GeolocationContentSettingsMap::GetDefaultContentSetting() const {
 ContentSetting GeolocationContentSettingsMap::GetContentSetting(
     const GURL& requesting_url,
     const GURL& embedding_url) const {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(requesting_url.is_valid() && embedding_url.is_valid());
   GURL requesting_origin(requesting_url.GetOrigin());
   GURL embedding_origin(embedding_url.GetOrigin());
@@ -76,15 +68,15 @@ ContentSetting GeolocationContentSettingsMap::GetContentSetting(
   if (all_settings_dictionary != NULL) {
     DictionaryValue* requesting_origin_settings;
     if (all_settings_dictionary->GetDictionaryWithoutPathExpansion(
-        UTF8ToWide(requesting_origin.spec()), &requesting_origin_settings)) {
+        requesting_origin.spec(), &requesting_origin_settings)) {
       int setting;
       if (requesting_origin_settings->GetIntegerWithoutPathExpansion(
-          UTF8ToWide(embedding_origin.spec()), &setting))
+          embedding_origin.spec(), &setting))
         return IntToContentSetting(setting);
       // Check for any-embedder setting
       if (requesting_origin != embedding_origin &&
           requesting_origin_settings->GetIntegerWithoutPathExpansion(
-          L"", &setting))
+          "", &setting))
         return IntToContentSetting(setting);
     }
   }
@@ -93,7 +85,7 @@ ContentSetting GeolocationContentSettingsMap::GetContentSetting(
 
 GeolocationContentSettingsMap::AllOriginsSettings
     GeolocationContentSettingsMap::GetAllOriginsSettings() const {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   AllOriginsSettings content_settings;
   const DictionaryValue* all_settings_dictionary =
       profile_->GetPrefs()->GetDictionary(prefs::kGeolocationContentSettings);
@@ -101,13 +93,13 @@ GeolocationContentSettingsMap::AllOriginsSettings
   if (all_settings_dictionary != NULL) {
     for (DictionaryValue::key_iterator i(all_settings_dictionary->begin_keys());
          i != all_settings_dictionary->end_keys(); ++i) {
-      const std::wstring& wide_origin(*i);
-      GURL origin_as_url(WideToUTF8(wide_origin));
+      const std::string& origin(*i);
+      GURL origin_as_url(origin);
       if (!origin_as_url.is_valid())
         continue;
       DictionaryValue* requesting_origin_settings_dictionary = NULL;
       bool found = all_settings_dictionary->GetDictionaryWithoutPathExpansion(
-          wide_origin, &requesting_origin_settings_dictionary);
+          origin, &requesting_origin_settings_dictionary);
       DCHECK(found);
       if (!requesting_origin_settings_dictionary)
         continue;
@@ -121,7 +113,7 @@ GeolocationContentSettingsMap::AllOriginsSettings
 
 void GeolocationContentSettingsMap::SetDefaultContentSetting(
     ContentSetting setting) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   profile_->GetPrefs()->SetInteger(prefs::kGeolocationDefaultContentSetting,
                                    setting == CONTENT_SETTING_DEFAULT ?
                                        kDefaultSetting : setting);
@@ -131,15 +123,13 @@ void GeolocationContentSettingsMap::SetContentSetting(
     const GURL& requesting_url,
     const GURL& embedding_url,
     ContentSetting setting) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(requesting_url.is_valid());
   DCHECK(embedding_url.is_valid() || embedding_url.is_empty());
   GURL requesting_origin(requesting_url.GetOrigin());
   GURL embedding_origin(embedding_url.GetOrigin());
   DCHECK(requesting_origin.is_valid());
   DCHECK(embedding_origin.is_valid() || embedding_url.is_empty());
-  std::wstring wide_requesting_origin(UTF8ToWide(requesting_origin.spec()));
-  std::wstring wide_embedding_origin(UTF8ToWide(embedding_origin.spec()));
   PrefService* prefs = profile_->GetPrefs();
   DictionaryValue* all_settings_dictionary = prefs->GetMutableDictionary(
       prefs::kGeolocationContentSettings);
@@ -148,29 +138,29 @@ void GeolocationContentSettingsMap::SetContentSetting(
   ScopedPrefUpdate update(prefs, prefs::kGeolocationContentSettings);
   DictionaryValue* requesting_origin_settings_dictionary = NULL;
   all_settings_dictionary->GetDictionaryWithoutPathExpansion(
-      wide_requesting_origin, &requesting_origin_settings_dictionary);
+      requesting_origin.spec(), &requesting_origin_settings_dictionary);
   if (setting == CONTENT_SETTING_DEFAULT) {
     if (requesting_origin_settings_dictionary) {
       requesting_origin_settings_dictionary->RemoveWithoutPathExpansion(
-          wide_embedding_origin, NULL);
+          embedding_origin.spec(), NULL);
       if (requesting_origin_settings_dictionary->empty())
         all_settings_dictionary->RemoveWithoutPathExpansion(
-            wide_requesting_origin, NULL);
+            requesting_origin.spec(), NULL);
     }
   } else {
     if (!requesting_origin_settings_dictionary) {
       requesting_origin_settings_dictionary = new DictionaryValue;
       all_settings_dictionary->SetWithoutPathExpansion(
-          wide_requesting_origin, requesting_origin_settings_dictionary);
+          requesting_origin.spec(), requesting_origin_settings_dictionary);
     }
     DCHECK(requesting_origin_settings_dictionary);
     requesting_origin_settings_dictionary->SetWithoutPathExpansion(
-        wide_embedding_origin, Value::CreateIntegerValue(setting));
+        embedding_origin.spec(), Value::CreateIntegerValue(setting));
   }
 }
 
 void GeolocationContentSettingsMap::ResetToDefault() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   PrefService* prefs = profile_->GetPrefs();
   prefs->ClearPref(prefs::kGeolocationDefaultContentSetting);
@@ -186,11 +176,11 @@ void GeolocationContentSettingsMap::GetOneOriginSettingsFromDictionary(
     OneOriginSettings* one_origin_settings) {
   for (DictionaryValue::key_iterator i(dictionary->begin_keys());
        i != dictionary->end_keys(); ++i) {
-    const std::wstring& target(*i);
+    const std::string& target(*i);
     int setting = kDefaultSetting;
     bool found = dictionary->GetIntegerWithoutPathExpansion(target, &setting);
     DCHECK(found);
-    GURL target_url(WideToUTF8(target));
+    GURL target_url(target);
     // An empty URL has a special meaning (wildcard), so only accept invalid
     // URLs if the original version was empty (avoids treating corrupted prefs
     // as the wildcard entry; see http://crbug.com/39685)

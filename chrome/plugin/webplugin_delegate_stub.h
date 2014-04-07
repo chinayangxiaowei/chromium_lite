@@ -1,15 +1,14 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_PLUGIN_WEBPLUGIN_DELEGATE_STUB_H_
 #define CHROME_PLUGIN_WEBPLUGIN_DELEGATE_STUB_H_
+#pragma once
 
-#include <queue>
 #include <string>
 #include <vector>
 
-#include "app/surface/transport_dib.h"
 #include "base/ref_counted.h"
 #include "base/shared_memory.h"
 #include "base/task.h"
@@ -65,7 +64,7 @@ class WebPluginDelegateStub : public IPC::Channel::Listener,
   void OnDidFinishLoading(int id);
   void OnDidFail(int id);
   void OnDidFinishLoadWithReason(const GURL& url, int reason, int notify_id);
-  void OnSetFocus();
+  void OnSetFocus(bool focused);
   void OnHandleInputEvent(const WebKit::WebInputEvent* event,
                           bool* handled, WebCursor* cursor);
   void OnPaint(const gfx::Rect& damaged_rect);
@@ -78,12 +77,15 @@ class WebPluginDelegateStub : public IPC::Channel::Listener,
                               bool success,
                               int notify_id);
 
+  void OnSetContentAreaFocus(bool has_focus);
 #if defined(OS_MACOSX)
   void OnSetWindowFocus(bool has_focus);
   void OnContainerHidden();
   void OnContainerShown(gfx::Rect window_frame, gfx::Rect view_frame,
                         bool has_focus);
-  void OnWindowFrameChanged(gfx::Rect window_frame, gfx::Rect view_frame);
+  void OnWindowFrameChanged(const gfx::Rect& window_frame,
+                            const gfx::Rect& view_frame);
+  void OnImeCompositionConfirmed(const string16& text);
 #endif
 
   void OnDidReceiveManualResponse(

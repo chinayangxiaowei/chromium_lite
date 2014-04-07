@@ -4,18 +4,20 @@
 
 #ifndef CHROME_BROWSER_DOWNLOAD_DRAG_DOWNLOAD_FILE_H_
 #define CHROME_BROWSER_DOWNLOAD_DRAG_DOWNLOAD_FILE_H_
+#pragma once
 
 #include "app/download_file_interface.h"
 #include "base/file_path.h"
 #include "base/linked_ptr.h"
 #include "chrome/browser/download/download_file.h"
+#include "chrome/browser/download/download_item.h"
 #include "chrome/browser/download/download_manager.h"
 #include "googleurl/src/gurl.h"
 
 class TabContents;
 
 namespace net {
-class FileSteram;
+class FileStream;
 }
 
 class DragDownloadFile : public DownloadFileProvider,
@@ -50,7 +52,6 @@ class DragDownloadFile : public DownloadFileProvider,
   // DownloadManager::Observer methods.
   // Called on UI thread.
   virtual void ModelChanged();
-  virtual void SetDownloads(std::vector<DownloadItem*>& downloads);
 
   // DownloadItem::Observer methods.
   // Called on UI thread.

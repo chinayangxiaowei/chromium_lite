@@ -1,15 +1,17 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync/glue/http_bridge.h"
 
 #include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/message_loop_proxy.h"
+#include "base/string_number_conversions.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/chrome_thread.h"
 #include "net/base/cookie_monster.h"
+#include "net/base/host_resolver.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_network_layer.h"
@@ -40,6 +42,11 @@ URLRequestContext* HttpBridge::RequestContextGetter::GetURLRequestContext() {
     context_->set_user_agent(user_agent_);
 
   return context_;
+}
+
+scoped_refptr<base::MessageLoopProxy>
+HttpBridge::RequestContextGetter::GetIOMessageLoopProxy() {
+  return BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO);
 }
 
 HttpBridgeFactory::HttpBridgeFactory(
@@ -95,9 +102,12 @@ HttpBridge::RequestContext::RequestContext(URLRequestContext* baseline_context)
   // We default to the browser's user agent. This can (and should) be overridden
   // with set_user_agent.
   user_agent_ = webkit_glue::GetUserAgent(GURL());
+
+  net_log_ = baseline_context->net_log();
 }
 
 HttpBridge::RequestContext::~RequestContext() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   delete http_transaction_factory_;
 }
 
@@ -108,6 +118,7 @@ HttpBridge::HttpBridge(HttpBridge::RequestContextGetter* context_getter)
       request_completed_(false),
       request_succeeded_(false),
       http_response_code_(-1),
+      os_error_code_(-1),
       http_post_completed_(false, false) {
 }
 
@@ -133,7 +144,7 @@ void HttpBridge::SetURL(const char* url, int port) {
       << "HttpBridge::SetURL called more than once?!";
   GURL temp(url);
   GURL::Replacements replacements;
-  std::string port_str = IntToString(port);
+  std::string port_str = base::IntToString(port);
   replacements.SetPort(port_str.c_str(),
                        url_parse::Component(0, port_str.length()));
   url_for_request_ = temp.ReplaceComponents(replacements);
@@ -163,8 +174,8 @@ bool HttpBridge::MakeSynchronousPost(int* os_error_code, int* response_code) {
   DCHECK(url_for_request_.is_valid()) << "Invalid URL for request";
   DCHECK(!content_type_.empty()) << "Payload not set";
 
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
       NewRunnableMethod(this, &HttpBridge::CallMakeAsynchronousPost));
 
   if (!http_post_completed_.Wait())  // Block until network request completes.
@@ -177,7 +188,7 @@ bool HttpBridge::MakeSynchronousPost(int* os_error_code, int* response_code) {
 }
 
 void HttpBridge::MakeAsynchronousPost() {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   DCHECK(!request_completed_);
 
   url_poster_ = new URLFetcher(url_for_request_, URLFetcher::POST, this);
@@ -214,7 +225,7 @@ void HttpBridge::OnURLFetchComplete(const URLFetcher *source, const GURL &url,
                                     int response_code,
                                     const ResponseCookies &cookies,
                                     const std::string &data) {
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
   request_completed_ = true;
   request_succeeded_ = (URLRequestStatus::SUCCESS == status.status());

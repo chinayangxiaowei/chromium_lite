@@ -7,14 +7,18 @@
 #include <algorithm>
 
 #include "app/drag_drop_types.h"
-#include "base/keyboard_codes.h"
+#include "app/keyboard_codes.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
-#include "gfx/canvas.h"
+#include "gfx/canvas_skia.h"
 #include "views/fill_layout.h"
 #include "views/focus/view_storage.h"
 #include "views/widget/widget.h"
 #include "views/window/window.h"
+
+#if defined(TOUCH_UI)
+#include "views/touchui/gesture_manager.h"
+#endif
 
 #if defined(OS_LINUX)
 #include "views/widget/widget_gtk.h"
@@ -62,6 +66,7 @@ RootView::RootView(Widget* widget)
       mouse_move_handler_(NULL),
       last_click_handler_(NULL),
       widget_(widget),
+      ALLOW_THIS_IN_INITIALIZER_LIST(focus_search_(this, false, false)),
       invalid_rect_urgent_(false),
       pending_paint_task_(NULL),
       paint_task_needed_(false),
@@ -75,6 +80,11 @@ RootView::RootView(Widget* widget)
       focus_traversable_parent_(NULL),
       focus_traversable_parent_view_(NULL),
       drag_view_(NULL)
+#if defined(TOUCH_UI)
+      ,
+      gesture_manager_(GestureManager::Get()),
+      touch_pressed_handler_(NULL)
+#endif
 #ifndef NDEBUG
       ,
       is_processing_paint_(false)
@@ -172,10 +182,10 @@ void RootView::ProcessPaint(gfx::Canvas* canvas) {
     return;
 
   // Clear the background.
-  canvas->drawColor(SK_ColorBLACK, SkXfermode::kClear_Mode);
+  canvas->AsCanvasSkia()->drawColor(SK_ColorBLACK, SkXfermode::kClear_Mode);
 
   // Save the current transforms.
-  canvas->save();
+  canvas->Save();
 
   // Set the clip rect according to the invalid rect.
   int clip_x = invalid_rect_.x() + x();
@@ -187,7 +197,7 @@ void RootView::ProcessPaint(gfx::Canvas* canvas) {
   View::ProcessPaint(canvas);
 
   // Restore the previous transform
-  canvas->restore();
+  canvas->Restore();
 
   ClearPaintRect();
 }
@@ -237,8 +247,12 @@ Widget* RootView::GetWidget() const {
   return widget_;
 }
 
-void RootView::ThemeChanged() {
-  View::ThemeChanged();
+void RootView::NotifyThemeChanged() {
+  View::PropagateThemeChanged();
+}
+
+void RootView::NotifyLocaleChanged() {
+  View::PropagateLocaleChanged();
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -283,6 +297,62 @@ void RootView::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
 void RootView::SetFocusOnMousePressed(bool f) {
   focus_on_mouse_pressed_ = f;
 }
+
+#if defined(TOUCH_UI)
+bool RootView::OnTouchEvent(const TouchEvent& e) {
+  // If touch_pressed_handler_ is non null, we are currently processing
+  // a touch down on the screen situation. In that case we send the
+  // event to touch_pressed_handler_
+
+  if (touch_pressed_handler_) {
+    TouchEvent touch_event(e, this, touch_pressed_handler_);
+    touch_pressed_handler_->ProcessTouchEvent(touch_event);
+    gesture_manager_->ProcessTouchEventForGesture(e, this, true);
+    return true;
+  }
+
+  bool handled = false;
+  // Walk up the tree until we find a view that wants the touch event.
+  for (touch_pressed_handler_ = GetViewForPoint(e.location());
+       touch_pressed_handler_ && (touch_pressed_handler_ != this);
+       touch_pressed_handler_ = touch_pressed_handler_->GetParent()) {
+    if (!touch_pressed_handler_->IsEnabled()) {
+      // Disabled views eat events but are treated as not handled by the
+      // the GestureManager.
+      handled = false;
+      break;
+    }
+
+    // See if this view wants to handle the touch
+    TouchEvent touch_event(e, this, touch_pressed_handler_);
+    handled = touch_pressed_handler_->ProcessTouchEvent(touch_event);
+
+    // The view could have removed itself from the tree when handling
+    // OnTouchEvent(). So handle as per OnMousePressed. NB: we
+    // assume that the RootView itself cannot be so removed.
+    //
+    // NOTE: Don't return true here, because we don't want the frame to
+    // forward future events to us when there's no handler.
+    if (!touch_pressed_handler_)
+      break;
+
+    // If the view handled the event, leave touch_pressed_handler_ set and
+    // return true, which will cause subsequent drag/release events to get
+    // forwarded to that view.
+    if (handled) {
+      gesture_manager_->ProcessTouchEventForGesture(e, this, handled);
+      return true;
+    }
+  }
+
+  // Reset touch_pressed_handler_ to indicate that no processing is occurring.
+  touch_pressed_handler_ = NULL;
+
+  // Give the touch event to the gesture manager.
+  gesture_manager_->ProcessTouchEventForGesture(e, this, handled);
+  return handled;
+}
+#endif
 
 bool RootView::OnMousePressed(const MouseEvent& e) {
   // This function does not normally handle non-client messages except for
@@ -450,8 +520,11 @@ void RootView::OnMouseReleased(const MouseEvent& e, bool canceled) {
 
 void RootView::OnMouseMoved(const MouseEvent& e) {
   View* v = GetViewForPoint(e.location());
-  // Find the first enabled view.
-  while (v && !v->IsEnabled())
+  // Find the first enabled view, or the existing move handler, whichever comes
+  // first.  The check for the existing handler is because if a view becomes
+  // disabled while handling moves, it's wrong to suddenly send ET_MOUSE_EXITED
+  // and ET_MOUSE_ENTERED events, because the mouse hasn't actually exited yet.
+  while (v && !v->IsEnabled() && (v != mouse_move_handler_))
     v = v->GetParent();
   if (v && v != this) {
     if (v != mouse_move_handler_) {
@@ -538,213 +611,17 @@ View* RootView::GetFocusedView() {
   View* view = focus_manager->GetFocusedView();
   if (view && (view->GetRootView() == this))
     return view;
+#if defined(TOUCH_UI)
+  // hack to deal with two root views in touch
+  // should be fixed by eliminating one of them
+  if (view)
+    return view;
+#endif
   return NULL;
 }
 
-View* RootView::FindNextFocusableView(View* starting_view,
-                                      bool reverse,
-                                      Direction direction,
-                                      bool check_starting_view,
-                                      FocusTraversable** focus_traversable,
-                                      View** focus_traversable_view) {
-  *focus_traversable = NULL;
-  *focus_traversable_view = NULL;
-
-  if (GetChildViewCount() == 0) {
-    NOTREACHED();
-    // Nothing to focus on here.
-    return NULL;
-  }
-
-  if (!starting_view) {
-    // Default to the first/last child
-    starting_view = reverse ? GetChildViewAt(GetChildViewCount() - 1) :
-                              GetChildViewAt(0);
-    // If there was no starting view, then the one we select is a potential
-    // focus candidate.
-    check_starting_view = true;
-  } else {
-    // The starting view should be part of this RootView.
-    DCHECK(IsParentOf(starting_view));
-  }
-
-  View* v = NULL;
-  if (!reverse) {
-    v = FindNextFocusableViewImpl(starting_view, check_starting_view,
-                                  true,
-                                  (direction == DOWN) ? true : false,
-                                  starting_view->GetGroup(),
-                                  focus_traversable,
-                                  focus_traversable_view);
-  } else {
-    // If the starting view is focusable, we don't want to go down, as we are
-    // traversing the view hierarchy tree bottom-up.
-    bool can_go_down = (direction == DOWN) && !starting_view->IsFocusable();
-    v = FindPreviousFocusableViewImpl(starting_view, check_starting_view,
-                                      true,
-                                      can_go_down,
-                                      starting_view->GetGroup(),
-                                      focus_traversable,
-                                      focus_traversable_view);
-  }
-
-  // Doing some sanity checks.
-  if (v) {
-    DCHECK(v->IsFocusable());
-    return v;
-  }
-  if (*focus_traversable) {
-    DCHECK(*focus_traversable_view);
-    return NULL;
-  }
-  // Nothing found.
-  return NULL;
-}
-
-// Strategy for finding the next focusable view:
-// - keep going down the first child, stop when you find a focusable view or
-//   a focus traversable view (in that case return it) or when you reach a view
-//   with no children.
-// - go to the right sibling and start the search from there (by invoking
-//   FindNextFocusableViewImpl on that view).
-// - if the view has no right sibling, go up the parents until you find a parent
-//   with a right sibling and start the search from there.
-View* RootView::FindNextFocusableViewImpl(View* starting_view,
-                                          bool check_starting_view,
-                                          bool can_go_up,
-                                          bool can_go_down,
-                                          int skip_group_id,
-                                          FocusTraversable** focus_traversable,
-                                          View** focus_traversable_view) {
-  if (check_starting_view) {
-    if (IsViewFocusableCandidate(starting_view, skip_group_id)) {
-      View* v = FindSelectedViewForGroup(starting_view);
-      // The selected view might not be focusable (if it is disabled for
-      // example).
-      if (v && v->IsFocusable())
-        return v;
-    }
-
-    *focus_traversable = starting_view->GetFocusTraversable();
-    if (*focus_traversable) {
-      *focus_traversable_view = starting_view;
-      return NULL;
-    }
-  }
-
-  // First let's try the left child.
-  if (can_go_down) {
-    if (starting_view->GetChildViewCount() > 0) {
-      View* v = FindNextFocusableViewImpl(starting_view->GetChildViewAt(0),
-                                          true, false, true, skip_group_id,
-                                          focus_traversable,
-                                          focus_traversable_view);
-      if (v || *focus_traversable)
-        return v;
-    }
-  }
-
-  // Then try the right sibling.
-  View* sibling = starting_view->GetNextFocusableView();
-  if (sibling) {
-    View* v = FindNextFocusableViewImpl(sibling,
-                                        true, false, true, skip_group_id,
-                                        focus_traversable,
-                                        focus_traversable_view);
-    if (v || *focus_traversable)
-      return v;
-  }
-
-  // Then go up to the parent sibling.
-  if (can_go_up) {
-    View* parent = starting_view->GetParent();
-    while (parent) {
-      sibling = parent->GetNextFocusableView();
-      if (sibling) {
-        return FindNextFocusableViewImpl(sibling,
-                                         true, true, true,
-                                         skip_group_id,
-                                         focus_traversable,
-                                         focus_traversable_view);
-      }
-      parent = parent->GetParent();
-    }
-  }
-
-  // We found nothing.
-  return NULL;
-}
-
-// Strategy for finding the previous focusable view:
-// - keep going down on the right until you reach a view with no children, if it
-//   it is a good candidate return it.
-// - start the search on the left sibling.
-// - if there are no left sibling, start the search on the parent (without going
-//   down).
-View* RootView::FindPreviousFocusableViewImpl(
-    View* starting_view,
-    bool check_starting_view,
-    bool can_go_up,
-    bool can_go_down,
-    int skip_group_id,
-    FocusTraversable** focus_traversable,
-    View** focus_traversable_view) {
-  // Let's go down and right as much as we can.
-  if (can_go_down) {
-    // Before we go into the direct children, we have to check if this view has
-    // a FocusTraversable.
-    *focus_traversable = starting_view->GetFocusTraversable();
-    if (*focus_traversable) {
-      *focus_traversable_view = starting_view;
-      return NULL;
-    }
-
-    if (starting_view->GetChildViewCount() > 0) {
-      View* view =
-          starting_view->GetChildViewAt(starting_view->GetChildViewCount() - 1);
-      View* v = FindPreviousFocusableViewImpl(view, true, false, true,
-                                              skip_group_id,
-                                              focus_traversable,
-                                              focus_traversable_view);
-      if (v || *focus_traversable)
-        return v;
-    }
-  }
-
-  // Then look at this view. Here, we do not need to see if the view has
-  // a FocusTraversable, since we do not want to go down any more.
-  if (check_starting_view &&
-      IsViewFocusableCandidate(starting_view, skip_group_id)) {
-    View* v = FindSelectedViewForGroup(starting_view);
-    // The selected view might not be focusable (if it is disabled for
-    // example).
-    if (v && v->IsFocusable())
-      return v;
-  }
-
-  // Then try the left sibling.
-  View* sibling = starting_view->GetPreviousFocusableView();
-  if (sibling) {
-    return FindPreviousFocusableViewImpl(sibling,
-                                         true, true, true,
-                                         skip_group_id,
-                                         focus_traversable,
-                                         focus_traversable_view);
-  }
-
-  // Then go up the parent.
-  if (can_go_up) {
-    View* parent = starting_view->GetParent();
-    if (parent)
-      return FindPreviousFocusableViewImpl(parent,
-                                           true, true, false,
-                                           skip_group_id,
-                                           focus_traversable,
-                                           focus_traversable_view);
-  }
-
-  // We found nothing.
-  return NULL;
+FocusSearch* RootView::GetFocusSearch() {
+  return &focus_search_;
 }
 
 FocusTraversable* RootView::GetFocusTraversableParent() {
@@ -769,35 +646,14 @@ void RootView::NotifyNativeViewHierarchyChanged(bool attached,
   PropagateNativeViewHierarchyChanged(attached, native_view, this);
 }
 
-// static
-View* RootView::FindSelectedViewForGroup(View* view) {
-  if (view->IsGroupFocusTraversable() ||
-      view->GetGroup() == -1)  // No group for that view.
-    return view;
-
-  View* selected_view = view->GetSelectedViewForGroup(view->GetGroup());
-  if (selected_view)
-    return selected_view;
-
-  // No view selected for that group, default to the specified view.
-  return view;
-}
-
-// static
-bool RootView::IsViewFocusableCandidate(View* v, int skip_group_id) {
-  return v->IsFocusable() &&
-      (v->IsGroupFocusTraversable() || skip_group_id == -1 ||
-       v->GetGroup() != skip_group_id);
-}
-
 bool RootView::ProcessKeyEvent(const KeyEvent& event) {
   bool consumed = false;
 
   View* v = GetFocusedView();
   // Special case to handle right-click context menus triggered by the
   // keyboard.
-  if (v && v->IsEnabled() && ((event.GetKeyCode() == base::VKEY_APPS) ||
-     (event.GetKeyCode() == base::VKEY_F10 && event.IsShiftDown()))) {
+  if (v && v->IsEnabled() && ((event.GetKeyCode() == app::VKEY_APPS) ||
+     (event.GetKeyCode() == app::VKEY_F10 && event.IsShiftDown()))) {
     v->ShowContextMenu(v->GetKeyboardContextMenuLocation(), false);
     return true;
   }
@@ -901,11 +757,8 @@ void RootView::ClearPaintRect() {
 //
 /////////////////////////////////////////////////////////////////////////////
 
-bool RootView::GetAccessibleRole(AccessibilityTypes::Role* role) {
-  DCHECK(role);
-
-  *role = AccessibilityTypes::ROLE_APPLICATION;
-  return true;
+AccessibilityTypes::Role RootView::GetAccessibleRole() {
+  return AccessibilityTypes::ROLE_APPLICATION;
 }
 
 View* RootView::GetDragView() {

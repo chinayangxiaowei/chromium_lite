@@ -4,9 +4,10 @@
 
 #ifndef CHROME_BROWSER_DOWNLOAD_DOWNLOAD_REQUEST_INFOBAR_DELEGATE_H_
 #define CHROME_BROWSER_DOWNLOAD_DOWNLOAD_REQUEST_INFOBAR_DELEGATE_H_
+#pragma once
 
 #include "base/basictypes.h"
-#include "chrome/browser/download/download_request_manager.h"
+#include "chrome/browser/download/download_request_limiter.h"
 #include "chrome/browser/tab_contents/infobar_delegate.h"
 
 class TabContents;
@@ -18,23 +19,23 @@ class TabContents;
 class DownloadRequestInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
   DownloadRequestInfoBarDelegate(
-      TabContents* tab, DownloadRequestManager::TabDownloadState* host);
+      TabContents* tab, DownloadRequestLimiter::TabDownloadState* host);
 
   virtual ~DownloadRequestInfoBarDelegate();
 
-  void set_host(DownloadRequestManager::TabDownloadState* host) {
+  void set_host(DownloadRequestLimiter::TabDownloadState* host) {
     host_ = host;
   }
 
   virtual void InfoBarClosed();
 
-  virtual std::wstring GetMessageText() const;
+  virtual string16 GetMessageText() const;
 
   virtual SkBitmap* GetIcon() const;
 
   virtual int GetButtons() const;
 
-  virtual std::wstring GetButtonLabel(
+  virtual string16 GetButtonLabel(
       ConfirmInfoBarDelegate::InfoBarButton button) const;
 
   virtual bool Accept();
@@ -42,7 +43,7 @@ class DownloadRequestInfoBarDelegate : public ConfirmInfoBarDelegate {
   virtual bool Cancel();
 
  private:
-  DownloadRequestManager::TabDownloadState* host_;
+  DownloadRequestLimiter::TabDownloadState* host_;
 
   DISALLOW_COPY_AND_ASSIGN(DownloadRequestInfoBarDelegate);
 };
